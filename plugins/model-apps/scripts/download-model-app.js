@@ -102,6 +102,84 @@ function collectSitemap(app) {
   return { entities: [...entities], icons: [...icons], customRefs: [...customRefs] };
 }
 
+// The entity logical names that are COMPONENTS of the app module, regardless of whether they appear
+// in the sitemap. `collectSitemap` can only see tables the maker placed in navigation, but a
+// model-driven app routinely includes tables reachable only through a lookup, sub-grid, or related
+// view — an app built on account/contact typically also carries task, email, appointment, phonecall,
+// systemuser, team and annotation with no sitemap entry of their own. Reconstructing entities from
+// the sitemap alone silently dropped those (ADO 6603388), so the download→edit→rebuild round trip
+// lost hidden app dependencies.
+//
+// The entity is derived from the app's VIEW / CHART / FORM components, NOT from its
+// `componenttype eq 1` (Entities) rows. That looks like the obvious source but is unusable:
+// LIVE-verified that every componenttype-1 row carries the SAME `objectid` — the MetadataId of the
+// `entity` metadata table itself — so it identifies the component *kind*, not which table. (On a
+// 2-table app both rows read `9d0f025b-…`, which resolves to the logical name `entity`.)
+// `RetrieveAppComponents` returned 0 rows on the same app, so it is not an alternative here.
+//
+// View/chart/form components DO carry usable ids: each `objectid` is a real row id whose record
+// names its owning table. An app includes its tables' views and forms, so unioning their owners
+// recovers the hidden membership.
+//   componenttype 26 → savedquery.returnedtypecode
+//   componenttype 59 → savedqueryvisualization.primaryentitytypecode
+//   componenttype 60 → systemform.objecttypecode
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
+//
+// `appId` is the appmoduleid; the parent lookup targets `appmoduleidunique`, so that is resolved
+// first. Best-effort by design: any failure returns an empty list so the caller keeps today's
+// sitemap-derived behavior rather than losing the download entirely.
+const APP_COMPONENT_ENTITY_SOURCES = [
+  { componentType: 26, set: 'savedquery', idField: 'savedqueryid', entityField: 'returnedtypecode' },
+  { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
+  { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
+];
+// Dataverse honors `$top` as a HARD cap and omits `@odata.nextLink`, so this is the point past which
+// components of one type stop being inspected. Generous for a real app (a 70-table app has ~1000
+// views), and exceeded only with a warning.
+const COMPONENT_PAGE_CAP = 1000;
+
+async function appComponentEntities(sdk, appId) {
+  if (!appId) return [];
+  try {
+    const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
+    const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
+    if (!appUniqueId) return [];
+    const parent = String(appUniqueId).replace(/[{}]/g, '');
+    const found = new Set();
+    for (const src of APP_COMPONENT_ENTITY_SOURCES) {
+      const rows = await sdk.queryRecords('appmodulecomponent', {
+        select: ['objectid', 'componenttype'],
+        filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+        top: COMPONENT_PAGE_CAP,
+      });
+      // `$top` is a HARD cap in Dataverse (the SDK refuses to combine `top` with `paginate` for
+      // exactly this reason: `@odata.nextLink` is omitted, so the tail is lost with no signal). An
+      // app with more than this many components of one type would silently lose the remainder —
+      // the same silent-drop class as ADO 6603388, just at a higher threshold — so say so rather
+      // than quietly returning a partial set.
+      if ((rows || []).length >= COMPONENT_PAGE_CAP) {
+        process.stderr.write(`WARNING: this app has at least ${COMPONENT_PAGE_CAP} ${src.set} components; only the first ${COMPONENT_PAGE_CAP} were inspected, so a table referenced only beyond that point may be missing from the spec.\n`);
+      }
+      const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
+      // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
+      for (let i = 0; i < ids.length; i += 20) {
+        const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
+        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, top: 1000 });
+        // A dashboard is a `systemform` row too, and its `objecttypecode` is NOT an entity logical
+        // name ('none' / ''). Filtering it here keeps a bogus name out of the metadata fetch loop
+        // instead of relying on that fetch 404-ing into a bare catch.
+        for (const r of recs || []) {
+          const logical = r && r[src.entityField] ? String(r[src.entityField]).toLowerCase() : '';
+          if (logical && logical !== 'none') found.add(logical);
+        }
+      }
+    }
+    return [...found];
+  } catch {
+    return []; // best-effort — never break the download over the component read
+  }
+}
+
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
 // pages[] entries with codeFile paths relative to `outDir`.
 function parseDownloadedPages(pagesRoot, outDir, nameById) {
@@ -184,12 +262,27 @@ function missingDownloads(a, b) {
 
 // Minimal entity spec (schemaName + primary name column). The build reuses existing tables/columns
 // idempotently, so column fidelity isn't required to re-apply an edit.
+//
+// The primary-name attribute MUST come from real Dataverse metadata. It used to fall back to a
+// `<first-segment-of-logical>_name` guess, which is wrong for most out-of-the-box tables — `account`
+// became `account_name` (really `name`) and `contact` became `contact_name` (really `fullname`). The
+// guess was invisible on custom tables (`co_ticket` → `co_name`, which happens to be right), so the
+// bug only surfaced on an app built from standard tables (ADO 6603392). The SDK's
+// fetchEntityMetadata now $selects and returns PrimaryNameAttribute/SchemaName, so consume those.
+//
+// `primaryAttribute` is REQUIRED by App Spec validation, so this cannot simply omit it when metadata
+// is missing — that would emit a spec the user cannot rebuild from at all. Instead the caller treats a
+// missing primary name as a hard download failure, which is actionable at the point it happens rather
+// than as a confusing validation error later. Returns `null` for `primaryAttribute` so the caller can
+// detect and report it.
 function entityFromMetadata(meta, logical) {
-  const primary = (meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName)) || `${logical.split('_')[0]}_name`;
+  const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
     displayName: (meta && meta.displayName) || logical,
-    primaryAttribute: { schemaName: primary, displayName: 'Name' },
+    // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
+    // does not have, which is exactly the bug this fixes.
+    primaryAttribute: primary ? { schemaName: primary, displayName: 'Name' } : null,
     columns: [],
     // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
     // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and
@@ -313,10 +406,14 @@ function droppedSubareaCount(app, spec) {
 // and pick the single unmanaged, non-system solution. Best-effort: returns null (caller keeps its own
 // default) on no match or any query error — never throws.
 //
-// Returns ONLY the solution `{ uniqueName }` (the teardown container). The publisher PREFIX is
-// deliberately NOT recovered here: an app can belong to SEVERAL unmanaged solutions under DIFFERENT
-// publishers, so this arbitrary `find()` pick is not an authoritative source for the app's own prefix
-// (Sol review). The caller derives the trusted prefix from the app's REAL uniquename instead.
+// Returns `{ uniqueName, publisherPrefix? }`. The publisher prefix is read from the recovered
+// solution's OWNING PUBLISHER via the SDK's `getSolution`, because it is the only authoritative
+// source: the prefix was previously guessed from the app's uniquename, which breaks whenever the app
+// name doesn't encode the solution's publisher — an app named `new_customermanagement` inside
+// publisher `contoso`, an app with no prefix at all, or a publisher prefix longer than the guess's
+// length bound all collapsed to the literal `'new'` (ADO 6603390). `getSolution` is best-effort on top
+// of best-effort: if it fails or the publisher defines no prefix, we return the uniqueName alone and
+// the caller falls back to the app-derived guess.
 async function recoverAppSolution(sdk, appId) {
   try {
     // objectid == the appmoduleid. `top:500` is a safe over-provision (an app is realistically a
@@ -332,7 +429,19 @@ async function recoverAppSolution(sdk, appId) {
     const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged'], filter, top: 500 });
     const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
     if (!real) return null;
-    return { uniqueName: real.uniquename };
+    const out = { uniqueName: real.uniquename };
+    // Authoritative publisher prefix for anything authored into THIS solution. Guarded on the method
+    // existing so an older vendored bundle (pre-getSolution) degrades to the caller's fallback instead
+    // of throwing away the solution we just recovered.
+    if (typeof sdk.getSolution === 'function') {
+      try {
+        const info = await sdk.getSolution(real.uniquename);
+        // An empty-string prefix is legitimate for some first-party publishers, but it is not usable as
+        // a customization prefix, so treat it as "not recovered" and let the caller fall back.
+        if (info && info.publisherPrefix) out.publisherPrefix = String(info.publisherPrefix).toLowerCase();
+      } catch { /* best-effort — keep the recovered uniqueName */ }
+    }
+    return out;
   } catch {
     return null; // best-effort — a recovery failure must not break the download
   }
@@ -349,8 +458,23 @@ async function recoverAppSolution(sdk, appId) {
 // dashboardReconstructionError } or { ok:false, error }.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
-async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
-  const app = await sdk.fetchArtifact('app', appId);
+async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false }) {
+  // `fetchArtifact('app')` FAILS CLOSED when the app's sitemap cannot be resolved, read, or proven to
+  // still belong to this app (SDK code `APP_SITEMAP_UNRESOLVED`) — rather than returning an app whose
+  // navigation is untrustworthy. That is a LOGICAL failure of exactly the class this function's
+  // contract says it returns rather than throws (the sitemap IS the download's membership oracle), so
+  // translate it instead of letting a raw SDK error escape. A newly created app is the common cause:
+  // an unpublished appmodule is not readable, so the caller's fix is to publish it and retry.
+  let app;
+  try {
+    app = await sdk.fetchArtifact('app', appId);
+  } catch (e) {
+    const code = e && e.code;
+    if (code === 'APP_SITEMAP_UNRESOLVED' || code === 'APP_UPDATE_NO_ETAG') {
+      return { ok: false, error: `cannot read app ${appId}: ${(e && e.message) || code}` };
+    }
+    throw e;
+  }
   const { entities: entityLogicals, icons, customRefs } = collectSitemap(app);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
@@ -461,33 +585,86 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique }) {
     }
   }
 
-  // Entities (minimal — the build reuses existing tables/columns idempotently, so column fidelity
-  // isn't required to re-apply an edit).
+  // Entities: the sitemap's navigable tables UNIONED with the app's real entity components. The
+  // sitemap alone misses tables reachable only via lookup/sub-grid/related view (ADO 6603388); the
+  // component read is best-effort, so a failure degrades to exactly today's sitemap-derived set.
+  const componentLogicals = await appComponentEntities(sdk, appId);
+  const sitemapSet = new Set(entityLogicals);
+  const allLogicals = [...new Set([...entityLogicals, ...componentLogicals])];
   const entities = [];
-  for (const logical of entityLogicals) {
-    try { entities.push(entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical)); } catch { /* skip */ }
+  const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
+  const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
+  const metadataErrors = new Map(); // logical -> error message (the read itself failed)
+  for (const logical of allLogicals) {
+    let e;
+    // A metadata READ failure is not the same as metadata that reports no primary name, and it must
+    // not be swallowed: a 429/503 on a sitemap table used to drop it silently, leaving its subarea
+    // behind so validation later complained about a "sitemap subArea references unknown entity" —
+    // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
+    // exactly like the no-primary-name case, so the user is told the table AND the reason.
+    try {
+      e = entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical);
+    } catch (err) {
+      metadataErrors.set(logical, (err && err.message) || String(err));
+      (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
+      continue;
+    }
+    // `primaryAttribute` is REQUIRED by App Spec validation, so an entity without one cannot be
+    // emitted — the spec would fail to validate and the user could not rebuild at all. Guessing the
+    // name is what caused ADO 6603392, so the only honest options are fail or drop.
+    //
+    // Which one depends on WHERE the table came from. A sitemap table is one the user explicitly
+    // navigated to: failing loudly names it and is actionable. A component-only table is a hidden
+    // dependency this download newly discovered on a best-effort basis — aborting the whole download
+    // over one (which previously downloaded fine, because it was never included) would be a
+    // regression with no override flag, so drop it and say so. NOTE the SDK returns '' (not
+    // undefined) for a missing PrimaryNameAttribute, which `entityFromMetadata` maps to null.
+    if (!e.primaryAttribute) {
+      (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
+      continue;
+    }
+    entities.push(e);
+  }
+  const withReason = (list) => list.map((l) => (metadataErrors.has(l) ? `${l} (metadata read failed: ${metadataErrors.get(l)})` : l)).join(', ');
+  if (noPrimaryName.length) {
+    // Overridable, like the dropped-subarea path: without an escape hatch a download that used to
+    // succeed produces nothing at all, which is an availability regression on a READ-ONLY command.
+    if (!allowLossy) {
+      return { ok: false, error: `could not read the primary-name column for table(s): ${withReason(noPrimaryName)} — refusing to write a spec with a guessed or missing primary attribute (re-run with --allow-lossy-download to drop them instead)` };
+    }
+    process.stderr.write(`WARNING: ${noPrimaryName.length} sitemap table(s) were DROPPED because their primary-name column could not be read (${withReason(noPrimaryName)}) — --allow-lossy-download was set. Their navigation entries are dropped too; the spec will not rebuild them.\n`);
+    for (const l of noPrimaryName) sitemapSet.delete(l);
+  }
+  if (droppedComponents.length) {
+    process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
   }
 
-  // App identity + publisher prefix come from the app's REAL, immutable uniquename (`appUnique`, captured
-  // from Dataverse as `appmodule.uniquename`; guaranteed present here because runDownload bails at the
-  // sitemap gate above when it is falsy). It IS the app's own publisher prefix and exactly what the build
-  // (appUniqueName → findArtifact) + teardown must match — NOT the mutable display name (a rename would
-  // miss the existing app) and NOT an arbitrary unmanaged solution membership (an app can belong to several,
-  // under different publishers — Sol review). Parsed BEFORE the solution-recovery I/O so a recovery failure
-  // can't lose it, with a full `<prefix>_<name>` shape check (a bare token is not a valid app uniquename —
-  // its leading segment must be followed by `_<name>`). This is the ONLY TRUSTED source for the icon
-  // own-vs-foreign classification; when it can't be parsed, prefixResolved=false makes the classifier
-  // surface (rather than silently drop) a custom nav icon it can't attribute to this app.
+  // App identity comes from the app's REAL, immutable uniquename (`appUnique`, captured from Dataverse as
+  // `appmodule.uniquename`; guaranteed present here because runDownload bails at the sitemap gate above).
+  // It is exactly what the build (appUniqueName → findArtifact) + teardown must match — NOT the mutable
+  // display name (a rename would miss the existing app). Its leading segment is ALSO parsed as a
+  // publisher-prefix FALLBACK, with a full `<prefix>_<name>` shape check (a bare token is not a valid app
+  // uniquename — its leading segment must be followed by `_<name>`).
+  //
+  // This app-derived value is only a fallback: the app's name does not reliably encode the publisher of
+  // the solution that owns it (ADO 6603390). The authoritative prefix is the recovered solution's owning
+  // publisher, read below.
   const appPrefixMatch = /^([a-z][a-z0-9]{1,7})_.+$/.exec(String(appUnique || '').toLowerCase());
-  const trustedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
+  const appDerivedPrefix = appPrefixMatch ? appPrefixMatch[1] : null;
 
   // Solution container (best-effort): the real unmanaged solution the appmodule belongs to, for a clean
-  // teardown. Falls back to the restricted 'Default' when recovery finds nothing — that fallback cannot be
-  // torn down, but teardown skips it safely (see system-solutions.js) rather than erroring. Only its
-  // uniqueName is used; the publisher prefix is the appUnique-derived `trustedPrefix` above, NOT this
-  // solution's publisher (which may belong to a different publisher).
-  const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
+  // teardown, plus its owning publisher's customization prefix. Falls back to the restricted 'Default'
+  // when recovery finds nothing — that fallback cannot be torn down, but teardown skips it safely (see
+  // system-solutions.js) rather than erroring.
   const recovered = await recoverAppSolution(sdk, appId);
+
+  // Prefix precedence: the SOLUTION's publisher (authoritative) → the app-uniquename guess (fallback).
+  // `prefixResolved` means "this prefix is trustworthy", which gates the icon own-vs-foreign
+  // classification below; it must be true for BOTH trusted sources, or a genuine own-publisher custom
+  // nav icon stops round-tripping. It stays false only for the unverified 'new' default.
+  const solutionPrefix = (recovered && recovered.publisherPrefix) || null;
+  const trustedPrefix = solutionPrefix || appDerivedPrefix;
+  const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
 
   // Icon web resources — looked up by NAME (the sitemap stores the web-resource name, not its id).
@@ -560,7 +737,7 @@ async function main() {
   const appUnique = appRows && appRows[0] && appRows[0].uniquename;
   const genpageCli = makeGenpageCli(env);
 
-  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique });
+  const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
   const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;
@@ -591,4 +768,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };

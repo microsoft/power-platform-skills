@@ -32,6 +32,7 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
+const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE } = require('./ai-app-settings.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -837,7 +838,11 @@ function validateAppSpec(spec, opts = {}) {
         const targets = ['entity', 'dashboard', 'url', 'page'].filter((k) => sa[k]);
         if (targets.length === 0) errors.push(`sitemap subArea "${sa.title || ''}" needs an entity, dashboard, url, or page`);
         else if (targets.length > 1) errors.push(`sitemap subArea "${sa.title || ''}" sets multiple targets (${targets.join(', ')}) — pick one`);
-        if (sa.entity && !entityNames.has(sa.entity)) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
+        // Case-insensitive: Dataverse logical names are lower-case while `schemaName` is cased
+        // (`Account`), and a sitemap subarea's `entity` comes from the deployed sitemap XML as a
+        // LOGICAL name. A downloaded spec therefore legitimately pairs `schemaName: "Account"` with
+        // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
+        if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
         if (sa.url && !isSafeHttpUrl(sa.url)) errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL (got '${sa.url}')`);
         // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
@@ -981,14 +986,27 @@ function validateAppSpec(spec, opts = {}) {
     if (!spec.ai || typeof spec.ai !== 'object' || Array.isArray(spec.ai)) {
       errors.push('ai must be an object');
     } else {
-      const AI_FEATURE_KEYS = new Set(['formFill', 'nlSearch', 'nlChart', 'm365']);
+      const AI_FEATURE_KEYS_LIST = [...AI_FEATURE_KEYS].join(', ');
       if (spec.ai.appFeatures !== undefined) {
         if (!spec.ai.appFeatures || typeof spec.ai.appFeatures !== 'object' || Array.isArray(spec.ai.appFeatures)) {
           errors.push('ai.appFeatures must be an object');
         } else {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
-            if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: formFill, nlSearch, nlChart, m365)`);
-            if (typeof v !== 'boolean') errors.push(`ai.appFeatures.${k}: must be a boolean`);
+            if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: ${AI_FEATURE_KEYS_LIST})`);
+            // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
+            // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
+            // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
+            // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
+            // would silently bypass the range check downstream).
+            //
+            // The upper bound MIRRORS the SDK's `MAX_SETTING_VALUE` in api/AiApi.ts. The SDK THROWS
+            // an InvalidArgumentError for an out-of-range value, so without this bound a spec would
+            // validate cleanly and then abort the build half-applied — validation must reject it up
+            // front, where the maker gets a message naming the field. `isSafeInteger` (not
+            // `isInteger`) because beyond 2^53 an "integer" double no longer round-trips.
+            if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= AI_FEATURE_MAX_VALUE)) {
+              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or 2 for "on for everyone")`);
+            }
           }
         }
       }

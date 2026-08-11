@@ -55,9 +55,11 @@ tree and teardown order both did before).
 A second skill (`/app-builder`) builds a whole **model-driven app** (tables, columns,
 relationships, adaptive forms with sub-grids, views, Choice-column charts, app module +
 sitemap) from a natural-language intent — distinct from `/genpage`, which builds generative
-*pages*. The **entire flow runs in the main conversation loop** (not via a `Task` subagent):
-subagents are headless, so `AskUserQuestion` and plan mode can't reach the user from one, and
-the whole point is the multi-turn, propose-then-confirm authoring + the live build narration.
+*pages*. The **whole flow runs in the main conversation loop, never a `Task` subagent** — subagents
+are headless, so `AskUserQuestion` and plan mode cannot reach the user. For the end-to-end flow,
+stage→phase mapping and page-identity model, see
+[`docs/architecture.md`](docs/architecture.md) → `## /app-builder — build pipeline`; that doc owns
+the pipeline and delegates each script's **behavioral spec** to the entries below.
 
 - **`references/authoring-flow.md`** — the Phase-1 authoring playbook the skill executes itself:
   validate prereqs, select the env via PAC (`pac auth list` / `pac org who`), detect existing
@@ -66,6 +68,12 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   page-intents + sample data, then access), run the `spec-lint.js` guardrail, get plan-mode approval.
   Writes `app-spec.json` (the machine contract) + `model-app-plan.md` (rendered by
   `scripts/write-app-spec-doc.js`, never hand-written).
+  **Artifact naming:** both skills derive their working directory from a slug off the user's
+  request, so they can land on the SAME folder and file names are a namespace. A file written by
+  BOTH is unprefixed (`workflow-log.md`); a file owned by ONE is prefixed with it
+  (`genpage-plan.md`, `genpage-entity-creation-log.md`, `app-builder-page-plan.md`). A name chosen
+  to prevent confusion must not *contain* the name it guards against — see
+  `scripts/write-page-plan.js` for why the app-builder page plan is not `genpage-*`.
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
@@ -124,6 +132,22 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
   falls back to a full build. Teardown tombstones+deletes the snapshot. See
   [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
+  **App TABLE components are pinned by OData REFERENCE** (ADO 6612527). The SDK sends
+  `{ '@odata.id': '<EntitySetName>(<MetadataId>)' }` per sitemap table, NOT an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old instance
+  payload pinned the `entity` TABLE and every app exported as
+  `<AppModuleComponent type="1" schemaName="entity" />`. The **set segment** decides the resulting
+  `objectid`; an unknown set 400s, so a typo cannot silently pin the wrong table. The reference form is
+  also the ONLY one that can express an abstract EDM table (`activitypointer`, `principal`), which an
+  instance payload rejects outright. Three consequences the build depends on: ONE bad component fails
+  the WHOLE `AddAppComponents` call (zero rows), so an unresolvable table **HALTS** the build naming it
+  rather than shipping an app whose nav points at content it lacks; `AddAppComponents` does NOT
+  de-duplicate (N components → N rows); and because a 204 says only that the request was *accepted*,
+  the SDK **reads the components back** and asserts each declared table has a `componenttype: 1` row
+  carrying that table's MetadataId, failing closed on an inconclusive read. That last point is the
+  general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
+  component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
+  Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
@@ -135,7 +159,20 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. The empty solution container goes last — but a **built-in
+  `app.icon`) so it doesn't leak as an orphan. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  row, with no lookup between them and no server-side cascade; the only link is
+  `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
+  forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
+  a later build of an app with the same name fails with *"The name &lt;x&gt; is already in use by an
+  existing site map"*, which the maker cannot act on. `deleteAppCascade` therefore resolves the sitemap
+  BEFORE deleting the app, deletes both rows in **one atomic OData `$batch`**, and **fails closed** — any
+  delete it cannot prove is rejected rather than guessed. This is why
+  **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
+  sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
+  that file for the wire contract and why a `$batch` is never retried). Pinned by
+  `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
+  drives a mock and would stay green through a regression here.
+  The empty solution container goes last — but a **built-in
   system solution** (`Active`/`Default`/`Basic`) is **skipped** (Dataverse 400s any delete of a restricted
   solution), so a downloaded spec whose real solution could not be recovered (and defaulted to `Default`)
   still tears down cleanly instead of erroring. Command teardown
@@ -159,10 +196,43 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   no filter isolates author views. Forms/charts/commands need structured reads the SDK doesn't expose.)
   All four survive on the live app (a rebuild preserves them by discovery), but are absent from the
   downloaded spec, so edit them in Maker or a fresh spec.
+  **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
+  FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
+  a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
+  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used, but
+  the REASON changed: apps built before the entity-component fix carry junk rows that all share one
+  `objectid` (the `entity` metadata table's own id), so on those apps the row identifies the
+  component *kind*, not which table. Newly built apps now carry CORRECT per-table objectids (see the
+  build note below), so reading them is viable — it is not done yet because a legacy app's junk rows
+  would resolve to the table literally named `entity` and have to be filtered.
+  **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
+  with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
+  `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
+  the sitemap set already IS the complete set. This union therefore only adds tables for apps built
+  or edited in the maker. **ADO 6603388 (download) is still open**, and a live attempt to construct
+  the hidden component it describes did not succeed: pinning `task` via `AddAppComponents` with the
+  now-correct reference shape returned 204 but wrote no row, before or after publish. So the
+  download-side fix cannot currently be verified end to end — do not implement it speculatively.
+  The component read is best-effort: a failure degrades
+  to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
+  real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
+  `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
+  `contact` → `fullname`) while looking plausible on custom ones, which is why it went unnoticed.
+  Because validation *requires* `primaryAttribute`, a table without one cannot simply be emitted: a
+  **sitemap** table missing it FAILS the download (actionable — the user asked for that table), while a
+  **component-only** table missing it is dropped with a warning (it arrived via a best-effort read and
+  was absent from the spec entirely before this change, so aborting over it would regress a previously
+  working download with no override flag).
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
-  down its own solution instead of targeting the restricted `Default`. Recovered **tables are flagged
+  down its own solution instead of targeting the restricted `Default`. Its **publisher prefix is read from
+  that solution's owning publisher** via the SDK's `getSolution` — NOT inferred from the app's uniquename,
+  which is silent-wrong whenever the app name doesn't encode the publisher (an app named
+  `new_customermanagement` inside publisher `contoso`, an app with no prefix, or a prefix longer than the
+  guess assumed all collapsed to a literal `new`). The app-derived value remains the fallback, and
+  `prefixResolved` is true for BOTH trusted sources — it gates the icon own-vs-foreign classification, so
+  a downgrade there silently stops custom nav icons from round-tripping. Recovered **tables are flagged
   `existing: true`**, so a teardown of a downloaded spec never deletes a table (+ its data) this build
   cannot prove it created — download can't distinguish app-created from merely-referenced tables, so it
   fails safe (an orphaned table is recoverable; deleted customer data is not).
@@ -180,14 +250,49 @@ the whole point is the multi-turn, propose-then-confirm authoring + the live bui
   view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
   column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. This is the F5
-  "convergence" mitigation: the build is additive (edits to existing artifacts aren't re-applied in
-  place — teardown + rebuild to converge), and verify makes any resulting divergence **loud**.
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. It also reconciles
+  **AI app features**: for every `ai.appFeatures` entry it proves an APP-SCOPE OVERRIDE ROW exists in
+  `appsettings` holding the requested value. Verify previously had no awareness of `spec.ai` at all, so
+  a run whose every AI feature was skipped (admin gate off) or silently not persisted still reported a
+  clean PASS. The oracle is deliberately the override row and NOT the effective value:
+  `RetrieveSetting(name, { appUniqueName })` **falls back to the environment value** when the app has no
+  override, so an effective-value compare passes whenever the environment already holds the requested
+  value — a false PASS for an app that was never configured, and the same oracle the SDK uses for its
+  `applied` bucket. It fails CLOSED when the proof cannot be read, and the check needs BOTH
+  `retrieveSetting` and `queryRecords` on the reader (an existence-only reader skips it rather than
+  degrading to the unsound compare). Note the per-app settings are DISTINCT from the org readiness gates —
+  `nlSearch`'s gate is the boolean `EnableNLGridSearch` but its per-app setting is the numeric
+  `NLGridSearchSetting`; conflating them is what let NL grid search report "applied" while writing
+  nothing. This is the F5 "convergence" mitigation: the build is additive (edits to existing artifacts
+  aren't re-applied in place — teardown + rebuild to converge), and verify makes any resulting
+  divergence **loud**.
 - **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
-  `aiskillconfigs` for per-table row summaries. All AI features are **admin-gated**: the skill preflights
+  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
+  1/0) or an explicit integer such as `2` ("on for everyone"), bounded to `0..1000000` — the same range
+  the SDK enforces, so validation rejects an out-of-range value up front instead of aborting the build
+  half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
+  (an immediate read can still return the environment fallback, which previously produced a false
+  `notPersisted` on first apply). `applied` is the ONLY success bucket; a feature otherwise lands in
+  `skipped` (org gate off), `notPersisted` (no override observed for the whole retry budget — Dataverse
+  can accept an app-scope `SaveSettingValue` with HTTP 204 and store nothing), `unverified` (the write
+  was issued but the proof could not be read) or `failed` (the write threw; the rest of the batch still
+  reports). The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
+  — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
+  silently dropped — and `--verify` fails on any of them. **An app-scope setting WRITE is a no-op until
+  the app is published** (live-measured: the write reports `notPersisted` and `appsettings` holds no row
+  at all, while publishing and re-issuing the same call applies every feature). This is not read lag, so
+  re-*proving* after publish cannot fix it — the build **re-issues** the write after publish for anything
+  the first attempt did not apply. Verification proves the override ROW, keyed by `appmoduleid`, so the
+  build passes the id it already holds rather than have the SDK resolve it by name (an unpublished
+  appmodule is not readable). See the `ai-features` phase in `scripts/lib/sdk-build.js` for the full
+  sequence and its bounds.
+  The flag set is resolved ONCE by `scripts/lib/ai-app-settings.js` and shared by the build and the
+  verifier: a spec with an `ai` block but no `ai.appFeatures` still gets defaults written, so
+  reconciling only the DECLARED features left them applied-but-unverified.
+  All AI features are **admin-gated**: the skill preflights
   and skips/warns; it cannot flip admin or tenant switches. `scripts/lib/ai-candidates.js` selects
   good-candidate tables for auto row-summary mode; `scripts/lib/ai-prompt.js` generates tailored summary
   prompts. The `ai` block in the App Spec configures the full set; see
@@ -357,7 +462,7 @@ skills/
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
 | `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
-| `/telemetry` | Enable/disable/check anonymous usage telemetry (`on \| off \| status`) |
+| `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 
 ## Agents
 
@@ -512,7 +617,10 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** anonymous, default-on. Users opt out of transmission via
+- **Privacy:** default-on usage telemetry. Events include Dataverse organization
+  and Entra tenant GUIDs when PAC is signed in, but Model Apps excludes the
+  signed-in user's Entra object ID. The local diagnostic mirror retains the same
+  event fields. Users opt out of transmission via
   `/model-apps:telemetry off`; the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
   still written. CI/automation opt out via
@@ -552,6 +660,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 ```
 
 - `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
+  **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR touching
+  `plugins/model-apps/**` or `evals/model-apps/**`, across ubuntu × windows × macos and Node 20 × 22.
+  Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
+  telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners

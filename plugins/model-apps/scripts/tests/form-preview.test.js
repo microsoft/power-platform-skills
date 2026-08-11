@@ -47,3 +47,44 @@ test('renderForms renders all forms and honors an entity filter', () => {
   assert.match(renderForms(s), /Work Order/);
   assert.strictEqual(renderForms(s, 'new_missing'), "(no forms in spec for 'new_missing')");
 });
+
+test('renderFormWireframe shows multi-tab forms, truncates wide labels, and falls back to lookup hints', () => {
+  const s = {
+    solution: { uniqueName: 'X', publisherPrefix: 'new' },
+    app: { name: 'X' },
+    entities: [{
+      schemaName: 'new_case',
+      displayName: 'Case',
+      primaryAttribute: { schemaName: 'new_name', displayName: 'Case Name' },
+      columns: [{
+        schemaName: 'new_description',
+        displayName: 'Long description 🚀 '.repeat(8),
+        type: 'Memo',
+      }, {
+        schemaName: 'new_notes',
+        displayName: 'Notes',
+        type: 'Memo',
+      }],
+    }],
+    relationships: [],
+    forms: [{
+      entity: 'new_case',
+      name: 'Case',
+      tabs: [
+        { label: 'Summary', sections: [{ label: 'Basics', fields: ['new_name'] }] },
+        { label: 'Details', sections: [
+          { label: 'Narrative', fields: ['new_description', 'new_missinglookupid'] },
+          { label: 'Notes', fields: ['new_notes'] },
+        ] },
+      ],
+    }],
+  };
+
+  const w = renderFormWireframe(s, s.forms[0]);
+
+  assert.match(w, /Tabs:\s+‹Summary›\s+Details/);
+  assert.match(w, /▾ Details/);
+  assert.match(w, /…/, 'wide labels are clipped instead of breaking the wireframe border');
+  assert.match(w, /\[text area\]/, 'Memo columns keep their multiline widget hint');
+  assert.match(w, /new_missinglookupid\s+\[lookup\]/, 'unknown fields are treated as relationship lookups');
+});
