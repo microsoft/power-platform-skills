@@ -295,9 +295,9 @@ const statusColors = {
 };
 // Stats
 document.getElementById('prefixValue').textContent = PREFIX || '—';
-document.getElementById('statNew').textContent = TABLES.filter(t => t.status === 'new').length;
-document.getElementById('statModified').textContent = TABLES.filter(t => t.status === 'modified').length;
-document.getElementById('statReused').textContent = TABLES.filter(t => t.status === 'reused').length;
+document.getElementById('statNew').textContent = TABLES.filter(t => safeStatus(t.status) === 'new').length;
+document.getElementById('statModified').textContent = TABLES.filter(t => safeStatus(t.status) === 'modified').length;
+document.getElementById('statReused').textContent = TABLES.filter(t => safeStatus(t.status) === 'reused').length;
 
 const totalColumns = TABLES.reduce((sum, t) => sum + (t.columns ? t.columns.length : 0), 0);
 const totalRelationships = TABLES.reduce((sum, t) => sum + (t.relationships ? t.relationships.length : 0), 0);
@@ -468,7 +468,7 @@ function colorErDiagram(container) {
   const entityStatusMap = {};
   TABLES.forEach(t => {
     const eid = String(t.logicalName ?? '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-    entityStatusMap[eid] = t.status;
+    entityStatusMap[eid] = safeStatus(t.status);
   });
 
   // Find entity nodes — use suffix match since Mermaid v11 prepends the SVG ID to node IDs

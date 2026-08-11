@@ -116,7 +116,7 @@ class FakeElement {
   remove() {}
 }
 
-function executeInlineRenderer(html, { skipMermaid = false } = {}) {
+function executeInlineRenderer(html, { skipMermaid = false, svg = null } = {}) {
   const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)];
   const inline = scripts.find((match) =>
     !/\bsrc\s*=/.test(match[1]) && !/\btype\s*=\s*"application\/json"/.test(match[1])
@@ -127,7 +127,7 @@ function executeInlineRenderer(html, { skipMermaid = false } = {}) {
   if (skipMermaid) {
     source = source.replace(
       /mermaid\.initialize\([\s\S]*?\);\s*renderRationale\(\);\s*renderTables\(\);\s*renderErDiagram\(\);\s*$/,
-      'renderRationale();\nrenderTables();'
+      `renderRationale();\nrenderTables();${svg ? "\ncolorErDiagram(document.getElementById('erDiagram'));" : ''}`
     );
   }
 
@@ -136,6 +136,11 @@ function executeInlineRenderer(html, { skipMermaid = false } = {}) {
     const element = new FakeElement();
     element.setSourceText(match[2]);
     elements.set(match[1], element);
+  }
+  if (svg) {
+    const erDiagram = new FakeElement();
+    erDiagram.querySelector = (selector) => selector === 'svg' ? svg : null;
+    elements.set('erDiagram', erDiagram);
   }
   const document = {
     head: new FakeElement(),
@@ -214,6 +219,44 @@ test('data model plan neutralizes hostile text in placeholders, JSON, and innerH
   const rendered = elements.get('rationaleContainer').innerHTML + elements.get('tablesContainer').innerHTML;
   assert.doesNotMatch(rendered, /<img\b|<script\b/i);
   assert.match(rendered, /&lt;img src=x onerror=&quot;globalThis\.pwned=1&quot;&gt;/);
+});
+
+test('data model plan normalizes unexpected statuses for stats, cards, and SVG colors', () => {
+  const attributes = {};
+  const fillPath = {
+    setAttribute(name, value) { attributes[`fillPath.${name}`] = value; },
+  };
+  const strokePath = {
+    getAttribute() { return '#000000'; },
+    setAttribute(name, value) { attributes[`strokePath.${name}`] = value; },
+  };
+  const headerGroup = {
+    tagName: 'g',
+    querySelectorAll(selector) { return selector === 'path' ? [fillPath, strokePath] : []; },
+  };
+  const entityNode = {
+    children: [],
+    getAttribute(name) { return name === 'id' ? 'erSvg1-entity-CR123_ORDER-0' : null; },
+    querySelector(selector) { return selector === '.outer-path' ? headerGroup : null; },
+    querySelectorAll() { return []; },
+  };
+  const svg = {
+    querySelectorAll(selector) { return selector === 'g.node' ? [entityNode] : []; },
+  };
+  const html = render('render-data-model-plan.js', {
+    ...DATA_MODEL_DATA,
+    TABLES_DATA: [{ ...DATA_MODEL_DATA.TABLES_DATA[0], status: attack }],
+  });
+
+  const elements = executeInlineRenderer(html, { skipMermaid: true, svg });
+
+  assert.equal(elements.get('statNew').textContent, '0');
+  assert.equal(elements.get('statModified').textContent, '0');
+  assert.equal(elements.get('statReused').textContent, '1');
+  assert.match(elements.get('tablesContainer').innerHTML, /status-reused">reused<\/span>/);
+  assert.equal(attributes['fillPath.fill'], '#c8e6c9');
+  assert.equal(attributes['strokePath.stroke'], '#107c10');
+  assert.ok(Object.values(attributes).every(value => value !== undefined && value !== 'undefined'));
 });
 
 test('permissions plan neutralizes hostile text, event attributes, quotes, and interpolation syntax', () => {
