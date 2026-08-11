@@ -38,20 +38,23 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
+  genpage-customapi-builder.md ← Single owner of the custom-api gate; discovers bound Custom APIs, writes ## Custom API Bindings + actions.json (create & edit flows)
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 list/detail caching pattern (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
-samples/                       ← Example .tsx files (12 samples)
+samples/                       ← Example .tsx files (13 samples)
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (detects system browser)
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
   check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
+  list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
   create-table.js              ← Creates a Dataverse custom table
   add-column.js                ← Adds a column to an existing table
   create-relationship.js       ← Creates 1:N (lookup) or N:N relationships
@@ -88,6 +91,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-page-builder` | `genpage` (create flow) | Generates one complete `.tsx` page from the plan and schema; runs in parallel with other builders for multi-page requests |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
 | `genpage-connector-builder` | `genpage` (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. Both the planner and the edit-planner delegate all connector work to it. |
+| `genpage-customapi-builder` | `genpage` (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. Both the planner and the edit-planner delegate all Custom API work to it. |
 
 ## Key Concepts
 
@@ -128,7 +132,8 @@ values in `feature-flags.json` at the plugin root.
 - **Script backstop:** connector entrypoints call the shared
   `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
   exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
-  `--connection-refs` branch of `add-page-to-solution.js`.
+  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
+  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
@@ -149,6 +154,30 @@ entry point must go through it or the helper; the checklist of places that gate:
 The **`connectors`** flag currently ships OFF: GenPage connector support needs the
 pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
 (power-platform-ux), and the maker/admin ECS setting to all be released first.
+
+**Custom API gate — the single owner is `genpage-customapi-builder`.** Every Custom API
+entry point must go through it or the helper; the checklist of places that gate:
+
+1. Discovery — `genpage-customapi-builder` runs the probe first (planner + edit-planner
+   delegate to it; they do not gate inline).
+2. Scripts — `list-custom-apis.js` (`exitIfCustomApiDisabled`).
+3. Deploy — SKILL Phase 4.6 **re-probes** the flag and treats absent/malformed
+   `## Custom API Bindings` as no bindings (a plan authored while ON must not deploy
+   Custom API bindings after OFF).
+4. ALM — none needed: `config.json`'s `actionBindings` travels inside the page's
+   `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate
+   deployment prerequisite, bound by name).
+5. Codegen — `genpage-page-builder` emits `executeAction` / `executeFunction` /
+   `listBoundActions` code only when the plan has an actual binding table (never on an
+   absent/sentinel section).
+
+The **`custom-api`** flag currently ships OFF: GenPage Custom API invocation needs the
+AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime` plus the UCI and
+Controls host runtimes, a pac CLI `model genpage upload --actions` verb
+(PowerPlatform-Scale-AdminTools) to persist `actionBindings` into `config.json`, and the
+`GenUxPluginActionAllowList` ECS setting to all be released first. Note the maker-facing name
+is "Custom API" while the shipped wire contract stays `actionBindings` / `executeAction`
+(see `references/custom-api.md`).
 
 ## Development Standards
 
