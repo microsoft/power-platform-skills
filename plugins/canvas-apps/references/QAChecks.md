@@ -10,43 +10,55 @@ width, or that a dropdown will render every option blank.
 
 - How to run the checks
 
+Each check has a stable `QACHK-...` identifier. Use that identifier when referring to a
+check from another file. Check numbers define execution and reporting order only; they
+are not part of the identifier.
+
 **Run first — these invalidate the whole file or the whole compile:**
 
-- Check 1 — `@version` suffix on a `Control:` value
-- Check 2 — property value without the `=` prefix
-- Check 3 — same property key twice in one `Properties:` block
-- Check 4 — enum qualifier or member written incorrectly
-- Check 5 — control that declares variants written without one
+- Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` — `@version` suffix on a `Control:` value
+- Check 2 — `QACHK-MISSING-FORMULA-PREFIX` — property value without the `=` prefix
+- Check 3 — `QACHK-DUPLICATE-PROPERTY-KEY` — same property key twice in one
+  `Properties:` block
+- Check 4 — `QACHK-ENUM-LITERAL` — enum qualifier or member written incorrectly
+- Check 5 — `QACHK-MISSING-VARIANT` — control that declares variants written without one
 
 **Then, in order:**
 
-- Check 6 — `LayoutMinWidth` / `LayoutMinHeight` on every `GroupContainer`
-- Check 7 — container `LayoutAlignItems` and child `AlignInContainer`
-- Check 8 — missing `FillPortions` on an AutoLayout child
-- Check 9 — `FillPortions: =1` inside a scroll container
-- Check 10 — single-line label without `Wrap: =false`
-- Check 11 — `FillPortions: =0` without an explicit `Height`
-- Check 12 — `ModernText` / `Label` padding defaults to 5
-- Check 13 — `FillPortions` and `Height` both set
-- Check 14 — `FillPortions` and `Width` both set
-- Check 15 — absolutely positioned gallery rows
-- Check 16 — hard-coded pixel width on a layout container
-- Check 17 — quoted column name instead of a per-item formula
-- Check 18 — control with no `AccessibleLabel`
-- Check 19 — horizontal row with no narrow-width strategy
-- Check 20 — screen content taller than the viewport cannot be reached
-- Check 21 — text colour not set against a coloured background
-- Check 22 — light foreground on a variant-supplied surface
-- Check 23 — `ModernCard` slot left unset
-- Check 24 — gallery `TemplateSize` smaller than its row template
-- Check 25 — GridLayout axes, row count or height disagree
-- Check 26 — duplicate search UI around `ModernDataGrid`
-- Check 27 — responsive screen content outside its root container
-- Check 28 — timer has no automatic start/reset edge
-- Check 29 — interactive control under a read-only ancestor
-- Check 30 — small bounded gallery hidden in nested scrolling
-- Check 31 — semantic display control missing its visible value binding
-- Check 32 — multiword action label does not fit its control
+- Check 6 — `QACHK-CONTAINER-MIN-SIZE` — `LayoutMinWidth` / `LayoutMinHeight` on every
+  `GroupContainer`
+- Check 7 — `QACHK-CROSS-AXIS-ALIGNMENT` — container `LayoutAlignItems` and child
+  `AlignInContainer`
+- Check 8 — `QACHK-FILLPORTIONS-DEFAULT` — missing `FillPortions` on an AutoLayout child
+- Check 9 — `QACHK-SCROLL-TRAP` — `FillPortions: =1` inside a scroll container
+- Check 10 — `QACHK-WRAP-MISSING` — single-line label without `Wrap: =false`
+- Check 11 — `QACHK-NO-HEIGHT-TRAP` — `FillPortions: =0` without an explicit `Height`
+- Check 12 — `QACHK-TEXT-PADDING` — `ModernText` / `Label` padding defaults to 5
+- Check 13 — `QACHK-FILLPORTIONS-HEIGHT-CONFLICT` — `FillPortions` and `Height` both set
+- Check 14 — `QACHK-FILLPORTIONS-WIDTH-CONFLICT` — `FillPortions` and `Width` both set
+- Check 15 — `QACHK-GALLERY-TEMPLATE-LAYOUT` — absolutely positioned gallery rows
+- Check 16 — `QACHK-FIXED-LAYOUT-WIDTH` — hard-coded pixel width on a layout container
+- Check 17 — `QACHK-ITEM-DISPLAY-TEXT` — quoted column name instead of a per-item formula
+- Check 18 — `QACHK-ACCESSIBLE-LABEL-MISSING` — control with no `AccessibleLabel`
+- Check 19 — `QACHK-NO-REFLOW` — horizontal row with no narrow-width strategy
+- Check 20 — `QACHK-ROOT-NOT-SCROLLABLE` — screen content taller than the viewport cannot
+  be reached
+- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text colour not set against a coloured background
+- Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` — light foreground on a variant-supplied
+  surface
+- Check 23 — `QACHK-CARD-PLACEHOLDER` — `ModernCard` slot left unset
+- Check 24 — `QACHK-GALLERY-ROW-FITS-CONTENT` — gallery `TemplateSize` smaller than its
+  row template
+- Check 25 — `QACHK-GRID-CONTRACT` — GridLayout axes, row count or height disagree
+- Check 26 — `QACHK-DUPLICATE-GRID-SEARCH` — duplicate search UI around `ModernDataGrid`
+- Check 27 — `QACHK-ROOT-CONTAINMENT` — responsive screen content outside its root
+  container
+- Check 28 — `QACHK-TIMER-LIFECYCLE` — timer has no automatic start/reset edge
+- Check 29 — `QACHK-READ-ONLY-ANCESTOR` — interactive control under a read-only ancestor
+- Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` — small bounded gallery hidden in nested scrolling
+- Check 31 — `QACHK-SEMANTIC-VALUE-BINDING` — semantic display control missing its visible
+  value binding
+- Check 32 — `QACHK-ACTION-LABEL-FIT` — multiword action label does not fit its control
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
 output before returning, and fix every issue inline. Report the outcome of
@@ -84,20 +96,24 @@ QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(
 - `N/A` — the construct the check targets does not appear on this screen (no gallery, no
   `ModernCard`). Use this honestly; it is not a synonym for "did not check".
 
-Checks 7, 18 and 21 apply frequently, but their outcomes still depend on the file:
+`QACHK-CROSS-AXIS-ALIGNMENT`, `QACHK-ACCESSIBLE-LABEL-MISSING` and
+`QACHK-LOW-CONTRAST-TEXT` apply frequently, but their outcomes still depend on the file:
 
-- Check 7 is `N/A` when the changed scope has no children of an AutoLayout container.
-- Check 18 is `N/A` when the changed scope contains only decorative controls.
-- Check 21 is `N/A` when the changed scope has no non-default coloured surface.
-- Check 27 is `N/A` only when the brief explicitly requires fixed ManualLayout with
-  deliberate screen-level overlays.
+- `QACHK-CROSS-AXIS-ALIGNMENT` is `N/A` when the changed scope has no children of an
+  AutoLayout container.
+- `QACHK-ACCESSIBLE-LABEL-MISSING` is `N/A` when the changed scope contains only
+  decorative controls.
+- `QACHK-LOW-CONTRAST-TEXT` is `N/A` when the changed scope has no non-default coloured
+  surface.
+- `QACHK-ROOT-CONTAINMENT` is `N/A` only when the brief explicitly requires fixed
+  ManualLayout with deliberate screen-level overlays.
 
 `PASS` is valid when every applicable control was inspected and no defect was found.
 Never infer that a check was skipped solely from the number of controls on the screen.
 
 ---
 
-## Check 1 — CONTROL-VERSION-SUFFIX (`Control:` value contains `@version`)
+## Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` (`Control:` value contains `@version`)
 
 **Problem:** Every control type resolves to exactly one template version per app. A single
 `Control: ModernText@1.5.0` anywhere in the app pins every `ModernText` instance to one
@@ -124,7 +140,7 @@ check is cheap; run it first.
 
 ---
 
-## Check 2 — MISSING-FORMULA-PREFIX (property value without `=`)
+## Check 2 — `QACHK-MISSING-FORMULA-PREFIX` (property value without `=`)
 
 **Problem:** Every `.pa.yaml` property value is a Power Fx expression. A value without the
 `=` prefix fails the whole file at parse time, and a file that does not parse reports no
@@ -169,7 +185,7 @@ not Power Fx and take no `=`.
 
 ---
 
-## Check 3 — DUPLICATE-PROPERTY-KEY (same key twice in one `Properties:` block)
+## Check 3 — `QACHK-DUPLICATE-PROPERTY-KEY` (same key twice in one `Properties:` block)
 
 **Problem:** YAML rejects the whole file, and because it is a parse failure no other
 diagnostic in that screen is reported:
@@ -189,7 +205,7 @@ first use's line and column — go there directly.
 
 ---
 
-## Check 4 — ENUM-LITERAL (enum qualifier or member written incorrectly)
+## Check 4 — `QACHK-ENUM-LITERAL` (enum qualifier or member written incorrectly)
 
 An enum literal has two parts and each fails differently. Check both.
 
@@ -263,7 +279,7 @@ Font: =Font.'Open Sans'
 
 ---
 
-## Check 5 — MISSING-VARIANT (control that declares variants written without one)
+## Check 5 — `QACHK-MISSING-VARIANT` (control that declares variants written without one)
 
 **Problem:** A control whose template declares variants has no default. Omitting the key
 fails the whole compile with a message that names neither file nor control:
@@ -292,7 +308,7 @@ whose definition in your brief includes a `Variants` section — check that a si
 
 ---
 
-## Check 6 — LayoutMinWidth / LayoutMinHeight on every GroupContainer
+## Check 6 — `QACHK-CONTAINER-MIN-SIZE` (LayoutMinWidth / LayoutMinHeight on every GroupContainer)
 
 **Problem:** Power Apps defaults `LayoutMinWidth` to 250 and `LayoutMinHeight` to
 100 on `GroupContainer`. In a sidebar, header, or narrow cell, these defaults
@@ -312,7 +328,7 @@ LayoutMinHeight: =0
 
 ---
 
-## Check 7 — CROSS-AXIS-ALIGNMENT (container `LayoutAlignItems` and child `AlignInContainer`)
+## Check 7 — `QACHK-CROSS-AXIS-ALIGNMENT` (container `LayoutAlignItems` and child `AlignInContainer`)
 
 Cross-axis sizing is decided in two places. Check the container first — one container fix
 replaces a fix on every one of its children.
@@ -369,7 +385,7 @@ in your report rather than claiming a clean pass.
 
 ---
 
-## Check 8 — FILLPORTIONS-DEFAULT (missing `FillPortions` on AutoLayout child)
+## Check 8 — `QACHK-FILLPORTIONS-DEFAULT` (missing `FillPortions` on AutoLayout child)
 
 **Problem:** Children of an AutoLayout container inherit a PA-chosen default for
 `FillPortions` that varies by control type, so the intent isn't clear.
@@ -398,7 +414,7 @@ layout intent is explicit.
 
 ---
 
-## Check 9 — SCROLL-TRAP (`FillPortions: =1` inside scroll container)
+## Check 9 — `QACHK-SCROLL-TRAP` (`FillPortions: =1` inside scroll container)
 
 **Problem:** When a container has `LayoutOverflowY: =LayoutOverflow.Scroll` and
 its direct child has `FillPortions: =1`, the child is pinned to the viewport
@@ -419,7 +435,7 @@ FillPortions: =0
 
 ---
 
-## Check 10 — WRAP-MISSING (single-line label without `Wrap: =false`)
+## Check 10 — `QACHK-WRAP-MISSING` (single-line label without `Wrap: =false`)
 
 **Problem:** Power Apps defaults `Wrap` to `true` on `Label` controls. A narrow
 nav item, breadcrumb, badge, or KPI value will wrap its text onto two lines and
@@ -449,7 +465,7 @@ comment text. These should keep the default wrapping behavior.
 
 ---
 
-## Check 11 — NO-HEIGHT-TRAP (`FillPortions: =0` without explicit `Height`)
+## Check 11 — `QACHK-NO-HEIGHT-TRAP` (`FillPortions: =0` without explicit `Height`)
 
 **Problem:** When an AutoLayout child has `FillPortions: =0` (or `FillPortions`
 is absent, which defaults to 0) and no explicit `Height`, Power Apps defaults
@@ -511,7 +527,7 @@ child that uses `AlignInContainer: =AlignInContainer.Stretch`; the parent alread
 
 ---
 
-## Check 12 — TEXT-PADDING (ModernText, Label padding defaults to 5)
+## Check 12 — `QACHK-TEXT-PADDING` (ModernText, Label padding defaults to 5)
 
 **Problem:** `ModernText` and `Label` controls default `PaddingTop`, `PaddingBottom`,
 `PaddingLeft`, and `PaddingRight` to `5`. In most UI contexts (labels in a
@@ -547,7 +563,7 @@ padding and gaps.
 
 ---
 
-## Check 13 — FILLPORTIONS-HEIGHT-CONFLICT (both set on the same control)
+## Check 13 — `QACHK-FILLPORTIONS-HEIGHT-CONFLICT` (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
 `Height: =value` on the same control within a vertical AutoLayout container confuses the layout engine.
@@ -563,7 +579,7 @@ against the parent's available space.
 
 ---
 
-## Check 14 — FILLPORTIONS-WIDTH-CONFLICT (both set on the same control)
+## Check 14 — `QACHK-FILLPORTIONS-WIDTH-CONFLICT` (both set on the same control)
 
 **Problem:** Setting both `FillPortions: =N` (where `N > 0`) and an explicit
 `Width: =value` on the same control within a horizontal AutoLayout container
@@ -580,7 +596,7 @@ against the parent's available space.
 
 ---
 
-## Check 15 — GALLERY-TEMPLATE-LAYOUT (absolutely positioned gallery rows)
+## Check 15 — `QACHK-GALLERY-TEMPLATE-LAYOUT` (absolutely positioned gallery rows)
 
 **Problem:** `Gallery` is a Classic control with no AutoLayout variant. Controls placed
 directly in its template are positioned with absolute `X`/`Y`/`Width`, so the row is
@@ -619,7 +635,7 @@ needs no shell.
 
 ---
 
-## Check 16 — FIXED-LAYOUT-WIDTH (hard-coded pixel width on a layout container)
+## Check 16 — `QACHK-FIXED-LAYOUT-WIDTH` (hard-coded pixel width on a layout container)
 
 **Problem:** A container with `Width: =1120` renders 1120px wide inside a 1024px viewport
 and clips its right edge. The screen looks correct only at the width it was authored at.
@@ -644,7 +660,7 @@ fixed-width sidebars. Keep interactive ones at 44px or larger so they remain tap
 
 ---
 
-## Check 17 — ITEM-DISPLAY-TEXT (quoted column name instead of a per-item formula)
+## Check 17 — `QACHK-ITEM-DISPLAY-TEXT` (quoted column name instead of a per-item formula)
 
 **Problem:** `ItemDisplayText` and `ItemKey` are evaluated per row with `ThisItem` in
 scope. `ItemDisplayText: ="Value"` is a constant string, not a field reference, and the
@@ -666,7 +682,7 @@ ItemDisplayText: =ThisItem.Value
 
 ---
 
-## Check 18 — ACCESSIBLE-LABEL-MISSING (control with no `AccessibleLabel`)
+## Check 18 — `QACHK-ACCESSIBLE-LABEL-MISSING` (control with no `AccessibleLabel`)
 
 **Problem:** A control that renders content or accepts input without an `AccessibleLabel`
 is unusable with a screen reader, and an interactive gallery without `TabIndex` cannot be
@@ -698,7 +714,7 @@ divider lines. Do not label those.
 
 ---
 
-## Check 19 — NO-REFLOW (horizontal row with no narrow-width strategy)
+## Check 19 — `QACHK-NO-REFLOW` (horizontal row with no narrow-width strategy)
 
 **Problem:** A horizontal AutoLayout row authored at desktop width does not reflow. At
 phone width its children squeeze to a few pixels, run off the right edge, or collapse to
@@ -738,7 +754,7 @@ carry `FillPortions` and remain legible when proportionally narrowed.
 
 ---
 
-## Check 20 — ROOT-NOT-SCROLLABLE (screen content taller than the viewport cannot be reached)
+## Check 20 — `QACHK-ROOT-NOT-SCROLLABLE` (screen content taller than the viewport cannot be reached)
 
 **Problem:** A canvas screen does not scroll by itself. If the root container is not a
 scroll container, everything below the viewport is unreachable — no scrollbar, no wheel
@@ -755,15 +771,16 @@ LayoutDirection: =LayoutDirection.Vertical
 LayoutOverflowY: =LayoutOverflow.Scroll
 ```
 
-Then re-run Check 9: a **direct** child of a scroll container must use `FillPortions: =0`,
-or it is pinned to the viewport height and the content is clipped rather than scrolled.
+Then re-run `QACHK-SCROLL-TRAP`: a **direct** child of a scroll container must use
+`FillPortions: =0`, or it is pinned to the viewport height and the content is clipped
+rather than scrolled.
 
 **Exception:** A screen whose content is genuinely fixed and fits the shortest supported
 viewport.
 
 ---
 
-## Check 21 — LOW-CONTRAST-TEXT (text colour not set against a coloured background)
+## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text colour not set against a coloured background)
 
 **Problem:** Text controls do not inherit a contrasting colour from their container. A
 container with a dark `Fill` whose child text controls omit `Color` renders near-black on
@@ -784,13 +801,14 @@ Color: =RGBA(239, 246, 250, 1)
 
 ---
 
-## Check 22 — VARIANT-SURFACE-CONTRAST (light foreground on a variant-supplied surface)
+## Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` (light foreground on a variant-supplied surface)
 
-**Problem:** Check 21 catches text that *omits* a colour. This is the opposite failure: the
-colour is set, and it is set against a surface the control derives from a **Fluent enum**
-rather than from `Fill`. The agent picks a near-white foreground for a dark theme, the
-variant supplies a near-white surface, and the control renders white-on-white — a nav
-button whose label is invisible, or a status badge that reads as an empty pill.
+**Problem:** `QACHK-LOW-CONTRAST-TEXT` catches text that *omits* a colour. This is the
+opposite failure: the colour is set, and it is set against a surface the control derives
+from a **Fluent enum** rather than from `Fill`. The agent picks a near-white foreground
+for a dark theme, the variant supplies a near-white surface, and the control renders
+white-on-white — a nav button whose label is invisible, or a status badge that reads as
+an empty pill.
 
 These are the enum values that produce a **light** surface:
 
@@ -836,7 +854,7 @@ never one from your palette and the other from an enum default.
 
 ---
 
-## Check 23 — CARD-PLACEHOLDER (`ModernCard` slot left unset)
+## Check 23 — `QACHK-CARD-PLACEHOLDER` (`ModernCard` slot left unset)
 
 **Problem:** `ModernCard` does not render unset slots as empty. It substitutes placeholder
 content: a large stock photograph for `Image`, and the literal strings `Title`, `Subtitle`
@@ -877,7 +895,7 @@ three text slots into a short fixed height.
 
 ---
 
-## Check 24 — GALLERY-ROW-FITS-CONTENT (`TemplateSize` smaller than the row template)
+## Check 24 — `QACHK-GALLERY-ROW-FITS-CONTENT` (`TemplateSize` smaller than the row template)
 
 **Problem:** `TemplateSize` fixes the row height; the template's content does not
 negotiate with it. A row sized for density — `TemplateSize: =If(Self.Width < 640, 320, 132)`
@@ -909,7 +927,7 @@ truncation is visible and the row still shows its identifying label.
 
 ---
 
-## Check 25 — GRID-CONTRACT (GridLayout axes, row count or height disagree)
+## Check 25 — `QACHK-GRID-CONTRACT` (GridLayout axes, row count or height disagree)
 
 **Problem:** GridLayout accepts incomplete or inconsistent sizing formulas. The app can
 compile while cards overlap, jump columns, leave a large blank tail, or clip shadows.
@@ -933,7 +951,7 @@ compile while cards overlap, jump columns, leave a large blank tail, or clip sha
 
 ---
 
-## Check 26 — DUPLICATE-GRID-SEARCH (`ModernDataGrid` plus separate search UI)
+## Check 26 — `QACHK-DUPLICATE-GRID-SEARCH` (`ModernDataGrid` plus separate search UI)
 
 **Problem:** `ModernDataGrid.Searchable: =true` renders a built-in search box. If the
 screen also provides a `ModernTextInput` or filter bar that filters the same rows, users
@@ -950,7 +968,7 @@ action is not duplicate UI.
 
 ---
 
-## Check 27 — ROOT-CONTAINMENT (responsive screen content outside its root container)
+## Check 27 — `QACHK-ROOT-CONTAINMENT` (responsive screen content outside its root container)
 
 **Problem:** A responsive screen can compile with a correctly configured root AutoLayout
 container while the actual header, sections and galleries are mis-indented as sibling
@@ -986,8 +1004,9 @@ Screens:
                 # ...
 ```
 
-After moving the controls, re-run Checks 8, 9, 13, 14 and 20 because their parent
-AutoLayout context has changed.
+After moving the controls, re-run `QACHK-FILLPORTIONS-DEFAULT`, `QACHK-SCROLL-TRAP`,
+`QACHK-FILLPORTIONS-HEIGHT-CONFLICT`, `QACHK-FILLPORTIONS-WIDTH-CONFLICT` and
+`QACHK-ROOT-NOT-SCROLLABLE` because their parent AutoLayout context has changed.
 
 **Exception:** A brief that explicitly requires a fixed ManualLayout screen with
 deliberate screen-level overlays may use multiple top-level controls. Do not infer this
@@ -995,7 +1014,7 @@ exception from the YAML; it must be stated in the brief.
 
 ---
 
-## Check 28 — TIMER-LIFECYCLE (timer has no automatic start/reset edge)
+## Check 28 — `QACHK-TIMER-LIFECYCLE` (timer has no automatic start/reset edge)
 
 **Problem:** A Timer with `AutoStart: =false` does not reliably start when its `Start`
 variable was already set to true before navigation. It needs a false-to-true transition
@@ -1043,7 +1062,7 @@ and a workflow that does not block while it is stopped.
 
 ---
 
-## Check 29 — READ-ONLY-ANCESTOR (interactive control under a read-only ancestor)
+## Check 29 — `QACHK-READ-ONLY-ANCESTOR` (interactive control under a read-only ancestor)
 
 **Problem:** `DisplayMode` is inherited. A Gallery or container set to
 `DisplayMode.View` makes every descendant button, input and toggle non-interactive even
@@ -1072,7 +1091,7 @@ Set `DisplayMode` only on the individual action when it genuinely needs to be di
 
 ---
 
-## Check 30 — HIDDEN-BOUNDED-LIST (small bounded gallery hidden in nested scrolling)
+## Check 30 — `QACHK-HIDDEN-BOUNDED-LIST` (small bounded gallery hidden in nested scrolling)
 
 **Problem:** A short, known roster is placed in a fixed-height Gallery inside an already
 scrollable screen. The Gallery creates a second scroll region and silently hides rows;
@@ -1082,7 +1101,8 @@ four of six people and have no cue that more exist.
 **Detect:** For every Gallery inside a root scroll container:
 
 1. If its Items source is a bounded local collection with roughly ten or fewer rows,
-   compare `Height` with `CountRows(Items) * TemplateSize` plus template padding.
+   compare `Height` with
+   `AllItemsCount * TemplateHeight + ((AllItemsCount + 1) * TemplatePadding)`.
 2. Flag it when the fixed height is smaller than the full list, regardless of
    `ShowScrollbar`.
 3. Flag a list that can open at a non-zero internal scroll position without an explicit
@@ -1091,7 +1111,7 @@ four of six people and have no cue that more exist.
 **Fix:** Let small bounded lists grow and rely on the root scroll:
 
 ```yaml
-Height: =CountRows(Self.AllItems) * Self.TemplateSize
+Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
 ShowScrollbar: =false
 ```
 
@@ -1103,7 +1123,7 @@ intentional and visibly discoverable.
 
 ---
 
-## Check 31 — SEMANTIC-VALUE-BINDING (semantic display control missing its visible value)
+## Check 31 — `QACHK-SEMANTIC-VALUE-BINDING` (semantic display control missing its visible value)
 
 **Problem:** Semantic controls can render sample placeholder text when the property that
 drives their visible value is absent. A `Badge` with a correct `AccessibleLabel`,
@@ -1114,7 +1134,8 @@ for every row while the accessibility tree announces the real status.
 
 - `Badge`: `Content`
 - `Avatar`: its name/text/image property from the exact control definition
-- `ModernCard`: Title, Subtitle, Description and image slots per Check 23
+- `ModernCard`: Title, Subtitle, Description and image slots per
+  `QACHK-CARD-PLACEHOLDER`
 - Any other semantic control: the content/value property returned by `describe_control`
 
 An `AccessibleLabel` is not the visible value binding.
@@ -1134,7 +1155,7 @@ visible value.
 
 ---
 
-## Check 32 — ACTION-LABEL-FIT (multiword action label does not fit its control)
+## Check 32 — `QACHK-ACTION-LABEL-FIT` (multiword action label does not fit its control)
 
 **Problem:** A multiword button or link with no explicit width uses a small platform
 default. Labels such as `Add to my itinerary`, `Back to speakers`, or `CSV import setup`

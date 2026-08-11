@@ -111,9 +111,10 @@ Before writing plans:
    - Compute a toggle's next value once before `Patch` or `UpdateIf`, then reuse that value
      for both the write and its confirmation text. Do not inspect the mutated `ThisItem`
      afterward to decide what action occurred.
-   - When failed-submit validation becomes visible, clear it from each relevant input's
-     `OnChange`, or gate visibility on the fields still being invalid. Do not leave an
-     error visible after all required inputs are valid.
+   - Derive validation visibility and submit availability from the current input values.
+     If validation must wait for a submit attempt, combine one attempt flag with the
+     current invalid expression; do not maintain or clear separate validity flags in each
+     input's `OnChange`.
 7. Define data-field semantics once and reuse them. If a task has `ScheduledDate`,
    `DueDate` and `CompletedDate`, state which field drives calendar placement, which date
    the task list displays, and which field the monthly report groups by. Seed data,
@@ -163,7 +164,7 @@ For every screen brief, state explicitly:
   breakpoint consistently; when none is specified, use 640 for phone and 1024 for tablet.
 - That responsive layout properties derive directly from `App.Width`, `Parent.Width` or
   `Self.Width`. Do not initialize layout variables such as `varIsMobile` or `varColumns`
-  in `OnVisible`; they can be unset in Studio and stale after resize.
+  in `OnVisible`; they can be unset in Studio and become stale after resize.
 - That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
 - That the screen-level `Children:` list contains only that root, with every visible
   section nested under the root's `Children:` list.
@@ -198,8 +199,9 @@ can prevent one.
 1. Assign every dispatch row a short, distinct `Name Prefix` derived from its screen
    (`Disc`, `Detail`, `Itin`, `Spk`, `Guide`). No two rows share a prefix.
 2. Record the prefix in the dispatch table and in that screen's brief.
-3. Name every control in a brief with its prefix already applied — `DiscNavBar`,
-   `DetailNavBar` — never a bare `NavBar`.
+3. Follow the standard control-type abbreviation, then apply the screen prefix as a
+   namespace — `conDiscNavBar`, `conDetailNavBar`, `btnDiscBack` — never a bare `NavBar`
+   or `btnBack`.
 4. When a UI block repeats across screens (nav bars, headers, toolbars), describe it
    once in the shared plan as a **pattern**, and state explicitly that each screen
    instantiates it under its own prefix. Never hand builders a literal block of shared
@@ -293,8 +295,8 @@ Each brief contains only what that builder needs:
 - For every control type used on that screen: the complete list of valid input
   property names, plus the full `Enum name:` and the **compile-ready enum literal** for
   each enum property the screen actually sets
-- Every literal seed value the screen needs: dropdown `Items` that are not bound to a
-  collection, `Default` values, static option lists, seeded names
+- Every inline literal value the screen writes directly: screen-local `Items`, `Default`
+  values, and static option lists
 
 Two things a builder cannot recover on its own, and both cost a full round trip:
 
@@ -302,9 +304,9 @@ Two things a builder cannot recover on its own, and both cost a full round trip:
   not `values: 0, 1, 2, 3, 4, 5, Auto`. A member list is transcribed verbatim, and a member
   starting with a digit then fails to compile with `Expected operator` — a diagnostic that
   never mentions enums.
-- **Enumerate literal data instead of describing it.** A builder has no discovery tools and
-  cannot read `App.pa.yaml`. "The six seeded speaker names" is unresolvable and returns
-  `Status: Blocked`; the six names are not.
+- **Write inline literal data instead of describing an unstated set.** When a screen owns
+  a small local table, include its exact records in the brief. When App owns the records,
+  bind to the named collection instead of duplicating or paraphrasing its seed data.
 
 Do not paste the whole `describe_control` response. The property-name list is what
 prevents `Unknown property`, and the `Enum name:` lines are what prevent

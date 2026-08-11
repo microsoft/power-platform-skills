@@ -101,7 +101,7 @@ OnSelect: |-
   Set(currentPlayer, If(currentPlayer = "X", "O", "X"))
 ```
 
-### Confirm the action and clear the state that caused it
+### Confirm data changes and derive validation from current values
 
 An action that changes data must say so, and must leave the form in a clean state. Two
 defects show up constantly in generated apps: a quantity silently changes with no
@@ -112,16 +112,25 @@ about was successfully saved.
 OnSelect: |-
   =Patch(colInventory, ThisItem, {Quantity: ThisItem.Quantity - varAdjustBy});
   Notify("Issued " & varAdjustBy & " units", NotificationType.Success);
-  Set(varAdjustBy, 0);
-  Set(varShowValidation, false)
+  Set(varAdjustBy, 0)
 ```
 
 - Use `Notify(...)` or a transient in-screen message after every create, update, or delete.
-- Reset the inputs and the flags that drove validation in the same handler.
-- Gate validation text on a variable you clear on success, not on the raw field value.
-- After a failed submit shows validation, clear that flag from every relevant input's
-  `OnChange`, or keep the message visible only while the required fields remain invalid.
-  An error must not remain visible once the user has corrected all fields.
+- Reset inputs after a successful action.
+- Derive validation text and submit availability directly from the current input values:
+
+  ```yaml
+  # Validation message
+  Visible: =IsBlank(Trim(NameInput.Value))
+
+  # Submit action
+  DisplayMode: =If(IsBlank(Trim(NameInput.Value)), DisplayMode.Disabled, DisplayMode.Edit)
+  ```
+
+- When validation must wait until the first submit attempt, combine one attempt flag with
+  the current invalid expression: `Visible: =varSubmitAttempted && IsBlank(...)`. Do not
+  maintain separate validity flags or clear them from every input's `OnChange`; correcting
+  the input must make the formula false declaratively.
 
 ### Toggle once, report the same next value
 
@@ -130,11 +139,16 @@ Compute the next value once and use it for both the write and the confirmation:
 
 ```yaml
 OnSelect: |-
-  =Set(varNextCheckedIn, !ThisItem.CheckedIn);
-  Patch(colMembers, ThisItem, {CheckedIn: varNextCheckedIn});
-  Notify(
-    ThisItem.Name & If(varNextCheckedIn, " checked in", " marked not ready"),
-    NotificationType.Success
+  =With(
+    {
+      member: ThisItem,
+      nextCheckedIn: !ThisItem.CheckedIn
+    },
+    Patch(colMembers, member, {CheckedIn: nextCheckedIn});
+    Notify(
+      member.Name & If(nextCheckedIn, " checked in", " marked not ready"),
+      NotificationType.Success
+    )
   )
 ```
 
@@ -172,11 +186,11 @@ For a small, read-only table used by only one control, keep it local instead:
 
 ```yaml
 Items: |-
-  =Table(
+  =[
     {Title: "Draft"},
     {Title: "Review"},
     {Title: "Publish"}
-  )
+  ]
 ```
 
 Use an `App.OnStart` collection when several screens share the records or interactions

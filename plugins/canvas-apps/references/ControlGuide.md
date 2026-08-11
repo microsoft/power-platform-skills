@@ -16,6 +16,9 @@ Choosing a control type, and writing properties and enum values that the compile
 - Option set values
 - Colour and button-state patterns
 - Timer lifecycle
+- Read-only ancestors
+- Cross-screen navigation
+- Semantic display values
 - Common property reference
 - Troubleshooting
 
@@ -328,16 +331,22 @@ initial value until the user clicks it. For timers that gate a workflow:
 - Do not use the timer surface as an unlabeled pause button. Add a separate labelled
   control when pause/resume is required.
 
+## Read-only ancestors
+
 `DisplayMode` is inherited. Do not put row action buttons inside a Gallery or container
 set to `DisplayMode.View`; the descendants become disabled even when they look enabled.
 Use `Selectable: =false` to prevent Gallery selection while leaving the Gallery in
 `DisplayMode.Edit`.
+
+## Cross-screen navigation
 
 `ModernTabList` is for tabs that switch panels within one screen. Do not use its
 `OnChange` to navigate between screens: the selected tab can update while `Navigate`
 does not, leaving the highlight and visible screen out of sync. For cross-screen primary
 navigation, use a row of ModernButtons whose `OnSelect` performs the navigation and whose
 appearance is derived from the current screen.
+
+## Semantic display values
 
 Semantic controls need their visible value property. `Badge.AccessibleLabel` does not
 replace `Badge.Content`; omitting Content can render placeholder text such as `AB`.

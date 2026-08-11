@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.0
+version: 3.0.1
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -99,24 +99,26 @@ unrecognized. Confirm it matches a remaining dispatch row and leave it in place.
 
 After all builders finish:
 
-- Check each builder's `QA:` line. It must list an outcome for all 32 checks in
+- Check each builder's `QA:` line. It must list an outcome for every check in
   `${PLUGIN_ROOT}/references/QAChecks.md`. Treat these as unrun and return the existing
   screen to the builder for self-QA only:
-  - a missing or truncated line, a line omitting any check 1-32, or a bare fix count;
-  - an outcome contradicted by the screen structure, such as check 7 `N/A` despite
-    AutoLayout children, check 18 `N/A` despite content controls, check 21 `N/A` despite
-    a coloured surface, check 24 `N/A` despite a Gallery, or check 32 `N/A` despite a
-    newly created `ModernDataGrid`;
-  - check 27 `PASS` while a responsive root has screen-level siblings;
-  - check 32 `PASS` while a multiword action directly under vertical AutoLayout lacks
-    `Width: =Parent.Width`.
+  - a missing or truncated line, a line omitting any check listed in
+    `${PLUGIN_ROOT}/references/QAChecks.md`, or a bare fix count;
+  - an outcome contradicted by the screen structure, such as
+    `QACHK-CROSS-AXIS-ALIGNMENT` `N/A` despite AutoLayout children,
+    `QACHK-ACCESSIBLE-LABEL-MISSING` `N/A` despite content controls,
+    `QACHK-LOW-CONTRAST-TEXT` `N/A` despite a coloured surface, or
+    `QACHK-ROOT-CONTAINMENT` `PASS` while a responsive root has screen-level siblings;
+  - `QACHK-GALLERY-ROW-FITS-CONTENT` `N/A` despite the screen containing a Gallery;
+  - `QACHK-ACTION-LABEL-FIT` `PASS` while a multiword action directly under vertical
+    AutoLayout lacks `Width: =Parent.Width`.
 - A self-QA follow-up is not a rebuild. Ask the builder to inspect and repair the existing
   target file, then return the corrected `QA:` line.
 - Compare every repeated navigation block against `canvas-app-shared.md`: same items,
   order, wordmark, colours, and narrow-width behavior. Builders cannot perform this
   app-wide comparison because each sees only one screen.
-- Reject check 23 `PASS` when a `ModernCard` displays Title, Subtitle and Description with
-  `Height < 180`; return that screen for self-QA.
+- Reject `QACHK-CARD-PLACEHOLDER` `PASS` when a `ModernCard` displays Title, Subtitle and
+  Description with `Height < 180`; return that screen for self-QA.
 - If a builder returns `Status: Blocked`, re-invoke the planner to repair only that screen
   brief, then rerun only that builder.
 - `Status: Blocked` is the only reason to rerun screen generation. Repair compile
@@ -130,9 +132,10 @@ After all builders finish:
 1. Never guess control properties. Use `describe_control`; only write properties returned
    for that exact control type or already present on that exact existing control.
 2. Use exact RGBA values and shared variable names from approved plans.
-3. Control names are unique across the entire app, not per screen. Every new control a
-   builder writes carries that screen's assigned prefix, especially repeated nav bars,
-   headers, toolbars, and badges.
+3. Control names are unique across the entire app, not per screen. Every new control uses
+   the standard control-type abbreviation followed by the screen prefix, such as
+   `conDiscNavBar` or `btnDetailBack`, especially for repeated nav bars, headers,
+   toolbars, and badges.
 4. Never write a version suffix on `Control:`. Write `Control: ModernText`, never
    `Control: ModernText@1.5.0`. One suffixed instance can produce hundreds of false
    `Unknown property` diagnostics throughout the app.

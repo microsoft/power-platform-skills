@@ -105,8 +105,9 @@ variables.]
 [Variables, named formulas, collections, and ownership]
 
 ## Control Naming
-[Per-screen name prefixes and the rule that repeated UI blocks are instantiated under
-each screen's own prefix]
+[Standard control-type abbreviations followed by the per-screen namespace, such as
+`conDiscNavBar` and `btnDetailBack`, plus the rule that repeated UI blocks are
+instantiated under each screen's own namespace]
 
 ## Cross-Screen Contracts
 [Navigation targets and shared state expectations. For repeated navigation blocks, list
@@ -170,15 +171,6 @@ Give each enum property the **compile-ready literal**, not a list of members. Wr
 `Precision: =DecimalPrecision.'1'`, never `Enum name: DecimalPrecision; values: 0, 1, 2`.
 A member list is transcribed literally by the builder and a member starting with a digit
 then fails to compile.]
-
-## Literal Seed Data
-[Every fixed literal the builder must type out: `Items` for a dropdown that is not bound
-to a collection, `Default` values, static option lists, seeded names.
-
-Write the values themselves. The builder has no discovery tools, cannot read
-`App.pa.yaml`, and cannot resolve a description like "the six seeded speaker names" —
-it will return `Status: Blocked` and cost a full replan round-trip. Omit this section only
-when the screen binds entirely to named collections.]
 ```
 
 ## Screen Brief — MODIFY
@@ -222,9 +214,4 @@ Variants section; omit if none]
 already present in the app: valid input property names, plus the full enum name and
 compile-ready literal for each enum property this edit sets. Write
 `Precision: =DecimalPrecision.'1'`, not a bare member list; omit if none]
-
-## Literal Seed Data
-[Every fixed literal this edit introduces or changes: dropdown `Items` not bound to a
-collection, `Default` values, static option lists, seeded names. Write the exact values,
-not a description of them; omit if none]
 ```

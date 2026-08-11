@@ -31,8 +31,8 @@ Create or edit a Canvas App. Automatically detects whether to generate a new app
 or edit an existing one based on the current app state.
 
 Planned work uses progressive per-screen briefs and builder waves of at most three. Each
-screen runs 32 runtime QA checks before the app is compiled, and compile repairs follow a
-bounded diagnostic-convergence workflow instead of regenerating completed screens.
+screen runs the named runtime QA checks before the app is compiled, and compile repairs
+follow a bounded diagnostic-convergence workflow instead of regenerating completed screens.
 
 **Usage:** Invoke directly with `/canvas-app`, or use natural language to trigger it:
 

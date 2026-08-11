@@ -72,7 +72,7 @@ with the edit tool instead — the action is still `Create` in the sense that yo
 whole screen.
 
 Use meaningful child-control names derived from the logical screen, each carrying your
-assigned control name prefix.
+assigned control name prefix after the standard control-type abbreviation.
 
 ### Modify
 
@@ -90,10 +90,11 @@ Do not fix unrelated pre-existing issues.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
-  and headers: write `[Prefix]NavBar`, never a bare `NavBar`, even when the shared plan
-  shows the pattern without a prefix. In `Modify`, preserve the existing names of controls
-  you are not adding, even when they do not carry the prefix; renaming them breaks every
-  formula that references them.
+  and headers: write `[TypePrefix][ScreenPrefix]NavBar` such as `conDiscNavBar`, never a
+  bare `NavBar` or `conNavBar`, even when the shared plan shows the pattern without a
+  screen prefix. In `Modify`, preserve the existing names of controls you are not adding,
+  even when they do not carry the prefix; renaming them breaks every formula that
+  references them.
 - Use exact properties from the screen brief's control definitions.
 - Write the bare control name: `Control: ModernText`, never `Control: ModernText@1.5.0`.
   A version suffix on one control makes every property of every other version report as
@@ -153,13 +154,13 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
-QA: 1 [outcome] · 2 [outcome] · … · 32 [outcome]
+QA: 1 [outcome] · 2 [outcome] · …
 - [fix summary, or "clean"]
 Status: Done
 ```
 
-The `QA:` line must list all 32 checks. A return without it is incomplete, and the
-orchestrator will send the screen back.
+The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return
+without it is incomplete, and the orchestrator will send the screen back.
 
 ## Constraints
 
@@ -177,5 +178,6 @@ orchestrator will send the screen back.
   not make the rendered control fill the row.
 - Never pair a light `Color`/`FontColor` with a surface supplied by an `Appearance` or
   `ThemeColor` enum — set `Fill` or `BasePaletteColor` too.
-- Never write a **new** control name that does not start with your assigned prefix.
+- Never write a **new** control name that omits the assigned screen prefix after its
+  standard control-type abbreviation.
 - Do not ask questions; resolve details from the assigned plans.

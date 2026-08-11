@@ -73,7 +73,8 @@ For flexible, responsive designs:
             FillPortions: =1    # Proportional share of the remaining space
 ```
 
-1. **Dynamic gallery height:** `Height: =CountRows(Self.AllItems) * Self.TemplateHeight`
+1. **Dynamic gallery height:**
+   `Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)`
 2. **Container scrolling:** `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout child properties:** `AlignInContainer`, `FillPortions`,
    `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
@@ -205,8 +206,12 @@ those descendants also size from the parent; use collection counts and constants
 directly.
 
 Small bounded lists should not create a second hidden scroll region. For a local roster
-of roughly ten or fewer rows inside a scrollable root, set gallery height from
-`CountRows(Self.AllItems) * Self.TemplateSize` and let the root scroll.
+of roughly ten or fewer rows inside a scrollable root, include every row and its template
+padding in the gallery height, then let the root scroll:
+
+```yaml
+Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
+```
 
 ## Give labelled controls room for their longest value
 
