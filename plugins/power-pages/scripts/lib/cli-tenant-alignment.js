@@ -35,21 +35,29 @@ function tenantIdFromToken(token) {
   return normalizeGuid(payload && payload.tid);
 }
 
-function runCli(command, args, { execFile = execFileSync, platform = process.platform } = {}) {
+function runPacAuthWho({ execFile = execFileSync, platform = process.platform } = {}) {
   if (platform === 'win32') {
-    // On Windows, `az` is commonly an `az.cmd` shim, while PAC installs as
-    // `pac.exe`. Node's execFile can miss shell-resolved shims even when the same
-    // command works interactively. Route through cmd.exe with fixed,
-    // code-controlled arguments so the helper matches what users run manually.
-    const executable = command === 'pac' ? 'pac.exe' : `${command}.cmd`;
-    return execFile('cmd.exe', ['/d', '/s', '/c', executable, ...args], { encoding: 'utf8', timeout: 15000 });
+    // PAC installs as pac.exe on Windows. Route through cmd.exe so PATH lookup
+    // matches the user's terminal while keeping the executable literal fixed for
+    // the secure-process validator.
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'pac.exe', 'auth', 'who'], { encoding: 'utf8', timeout: 15000 });
   }
-  return execFile(command, args, { encoding: 'utf8', timeout: 15000 });
+  return execFile('pac', ['auth', 'who'], { encoding: 'utf8', timeout: 15000 });
+}
+
+function runAzAccountShowTenant({ execFile = execFileSync, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    // Azure CLI installs an az.cmd shim on Windows. Route through cmd.exe so PATH
+    // lookup matches the user's terminal while keeping the executable literal
+    // fixed for the secure-process validator.
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'az.cmd', 'account', 'show', '--query', 'tenantId', '-o', 'tsv'], { encoding: 'utf8', timeout: 15000 });
+  }
+  return execFile('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], { encoding: 'utf8', timeout: 15000 });
 }
 
 function getPacTenantId(execFile = execFileSync, platform = process.platform) {
   try {
-    return parsePacTenantId(runCli('pac', ['auth', 'who'], { execFile, platform }));
+    return parsePacTenantId(runPacAuthWho({ execFile, platform }));
   } catch {
     return null;
   }
@@ -57,7 +65,7 @@ function getPacTenantId(execFile = execFileSync, platform = process.platform) {
 
 function getAzAccountTenantId(execFile = execFileSync, platform = process.platform) {
   try {
-    return normalizeGuid(runCli('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], { execFile, platform }));
+    return normalizeGuid(runAzAccountShowTenant({ execFile, platform }));
   } catch {
     return null;
   }
@@ -106,7 +114,8 @@ function validateCliTenantAlignment({ envUrl, token, pacTenantId, azTenantId, to
 module.exports = {
   decodeJwtPayload,
   parsePacTenantId,
-  runCli,
+  runAzAccountShowTenant,
+  runPacAuthWho,
   tenantIdFromToken,
   validateCliTenantAlignment,
 };
