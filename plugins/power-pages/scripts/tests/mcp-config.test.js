@@ -32,8 +32,15 @@ require('node:child_process').spawn = (command, args, options) => {
   return preloadPath;
 }
 
-function runBootstrap({ cwd, pluginRoot: pluginRootValue, claudePluginRoot, preloadPath } = {}) {
+function runBootstrap({
+  cwd,
+  pluginRoot: pluginRootValue,
+  claudePluginRoot,
+  preloadPath,
+  statFailure,
+} = {}) {
   const env = { ...process.env };
+  let args = [...server.args];
   delete env.PLUGIN_ROOT;
   delete env.CLAUDE_PLUGIN_ROOT;
 
@@ -43,10 +50,22 @@ function runBootstrap({ cwd, pluginRoot: pluginRootValue, claudePluginRoot, prel
   if (claudePluginRoot !== undefined) {
     env.CLAUDE_PLUGIN_ROOT = claudePluginRoot;
   }
+  if (statFailure) {
+    // Patch the child process's fs module so access errors are deterministic across platforms.
+    const bootstrapIndex = args.indexOf('-e') + 1;
+    const prelude = [
+      "const injectedFs=require('node:fs');",
+      'const originalStatSync=injectedFs.statSync;',
+      `const injectedStatTarget=${JSON.stringify(path.resolve(statFailure.target))};`,
+      `const injectedStatCode=${JSON.stringify(statFailure.code)};`,
+      "injectedFs.statSync=function(target,...options){if(require('node:path').resolve(String(target))===injectedStatTarget){const error=new Error('injected statSync failure');error.code=injectedStatCode;throw error;}return originalStatSync.call(this,target,...options);};",
+    ].join(' ');
+    args[bootstrapIndex] = `${prelude} ${args[bootstrapIndex]}`;
+  }
 
-  const args = preloadPath
-    ? ['--require', preloadPath, ...server.args]
-    : server.args;
+  if (preloadPath) {
+    args = ['--require', preloadPath, ...args];
+  }
 
   return spawnSync(server.command, args, {
     cwd,
@@ -55,6 +74,36 @@ function runBootstrap({ cwd, pluginRoot: pluginRootValue, claudePluginRoot, prel
     timeout: 5_000,
   });
 }
+
+test('playwright MCP bootstrap wraps root stat errors with a clear diagnostic', () => {
+  const root = fs.realpathSync(pluginRoot);
+  const result = runBootstrap({
+    cwd: pluginRoot,
+    pluginRoot,
+    statFailure: { target: root, code: 'EACCES' },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /\[Power Pages Playwright MCP\] Could not inspect declared plugin root: .+ \(EACCES\)\./,
+  );
+});
+
+test('playwright MCP bootstrap wraps launcher stat errors with a clear diagnostic', () => {
+  const launcher = fs.realpathSync(path.join(pluginRoot, 'scripts', 'launch-playwright-mcp.js'));
+  const result = runBootstrap({
+    cwd: pluginRoot,
+    pluginRoot,
+    statFailure: { target: launcher, code: 'EPERM' },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /\[Power Pages Playwright MCP\] Could not inspect resolved launcher: .+ \(EPERM\)\./,
+  );
+});
 
 test('playwright MCP bootstrap requires a host-provided plugin root', () => {
   const result = runBootstrap({ cwd: pluginRoot });
