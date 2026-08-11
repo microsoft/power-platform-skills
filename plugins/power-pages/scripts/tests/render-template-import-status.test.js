@@ -73,10 +73,10 @@ test('renderTemplateImportStatus renders scaffold-style slideshow, progress, and
   assert.match(html, /renderPhase/);
   assert.match(html, /status\.phase/);
   assert.match(html, /phaseSolution\.textContent = 'Imported solution'/);
-  assert.match(html, /Imported Supplier Portal template/);
-  assert.match(html, /Seeding Supplier Portal template data/);
-  assert.match(html, /Activating Supplier Portal template site/);
-  assert.match(html, /Supplier Portal template is ready/);
+  assert.match(html, /'Imported ' \+ TEMPLATE_NAME \+ ' template'/);
+  assert.match(html, /'Seeding ' \+ TEMPLATE_NAME \+ ' template data'/);
+  assert.match(html, /'Activating ' \+ TEMPLATE_NAME \+ ' template site'/);
+  assert.match(html, /TEMPLATE_NAME \+ ' template is ready'/);
   assert.match(html, /status\.state === 'succeeded' && status\.redirectUrl/);
   assert.match(html, /max-height: calc\(100vh - 390px\)/);
   assert.match(html, /@media \(max-height: 760px\)/);

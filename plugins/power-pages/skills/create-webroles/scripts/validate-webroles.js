@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates that new web role YAML files were created in .powerpages-site/web-roles/.
-// Runs as a Stop hook to verify the skill produced output.
+// Runs as a PostToolUse(Skill) hook to verify the skill produced output.
 
 const path = require('path');
 const { approve, block, runValidation, findPowerPagesSiteDir } = require('../../../scripts/lib/validation-helpers');

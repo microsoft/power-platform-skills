@@ -216,8 +216,9 @@
   </div>
 
   <script>
-    const PREVIEWS = __PREVIEW_IMAGES_JSON__;
-    const STATUS_URL = __STATUS_URL_JSON__;
+    const PREVIEWS = __JSON_PREVIEW_IMAGES__;
+    const STATUS_URL = __JSON_STATUS_URL__;
+    const TEMPLATE_NAME = __JSON_TEMPLATE_NAME__;
 
     (function () {
       var particlesEl = document.getElementById('particles');
@@ -310,13 +311,13 @@
           phaseSolution.classList.add('done');
           phaseSolution.textContent = 'Imported solution';
           phaseSeed.classList.add('active');
-          if (mainHeading) mainHeading.textContent = 'Seeding __TEMPLATE_NAME__ template data';
+          if (mainHeading) mainHeading.textContent = 'Seeding ' + TEMPLATE_NAME + ' template data';
           return;
         }
         if (phase === 'solutionDone') {
           phaseSolution.classList.add('done');
           phaseSolution.textContent = 'Imported solution';
-          if (mainHeading) mainHeading.textContent = 'Imported __TEMPLATE_NAME__ template';
+          if (mainHeading) mainHeading.textContent = 'Imported ' + TEMPLATE_NAME + ' template';
           return;
         }
         if (phase === 'activation') {
@@ -325,7 +326,7 @@
           phaseSeed.classList.add('done');
           phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('active');
-          if (mainHeading) mainHeading.textContent = 'Activating __TEMPLATE_NAME__ template site';
+          if (mainHeading) mainHeading.textContent = 'Activating ' + TEMPLATE_NAME + ' template site';
           return;
         }
         if (phase === 'done') {
@@ -335,11 +336,11 @@
           phaseSeed.textContent = 'Seeded data';
           phaseActivation.classList.add('done');
           phaseActivation.textContent = 'Activated site';
-          if (mainHeading) mainHeading.textContent = '__TEMPLATE_NAME__ template is ready';
+          if (mainHeading) mainHeading.textContent = TEMPLATE_NAME + ' template is ready';
           return;
         }
         phaseSolution.classList.add('active');
-        if (mainHeading) mainHeading.textContent = 'Importing __TEMPLATE_NAME__ template';
+        if (mainHeading) mainHeading.textContent = 'Importing ' + TEMPLATE_NAME + ' template';
       }
 
       function showStatus(index) {

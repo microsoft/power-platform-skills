@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { fileURLToPath, pathToFileURL } = require('url');
-const { renderTemplate, escapeHtml } = require('./lib/render-template');
+const { renderTemplate } = require('./lib/render-template');
 const { openInDefaultBrowser } = require('./lib/default-browser');
 
 function parseArgs(argv) {
@@ -68,11 +68,11 @@ function renderTemplateImportStatus({ templateName, statusPath, outputPath, prev
     templatePath,
     outputPath,
     dataObject: {
-      TEMPLATE_NAME: escapeHtml(templateName),
-      STATUS_URL_JSON: jsonForScript(statusUrl),
-      PREVIEW_IMAGES_JSON: localizePreviewImages(previewImages, outputPath),
+      TEMPLATE_NAME: templateName,
+      STATUS_URL: statusUrl,
+      PREVIEW_IMAGES: localizePreviewImages(previewImages, outputPath),
     },
-    requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL_JSON', 'PREVIEW_IMAGES_JSON'],
+    requiredKeys: ['TEMPLATE_NAME', 'STATUS_URL', 'PREVIEW_IMAGES'],
     emitStatus: false,
   });
   if (open) {

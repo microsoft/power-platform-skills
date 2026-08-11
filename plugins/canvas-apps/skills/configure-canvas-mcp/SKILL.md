@@ -32,19 +32,20 @@ Parse the following from the studio URL:
 - **ENV_ID**: the path segment between `/e/` and the next `/` (e.g. `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`).
 - **APP_ID**: URL-decode the `app-id` query parameter value, then take the last segment after the final `/` (e.g. `6fc3e3d1-292b-4281-8826-577f78512e56`)
 - **MAKER_HOSTNAME**: the hostname of the URL (e.g. `make.powerapps.com`)
-- **CLUSTER_CATEGORY**: determined from MAKER_HOSTNAME (see table below)
+- **ENVIRONMENT_CATEGORY**: determined from MAKER_HOSTNAME (see table below)
 
-**Determine CLUSTER_CATEGORY from MAKER_HOSTNAME:**
+**Determine ENVIRONMENT_CATEGORY from MAKER_HOSTNAME:**
 
-| MAKER_HOSTNAME               | CLUSTER_CATEGORY |
-| ---------------------------- | ---------------- |
-| `make.powerapps.com`         | `prod`           |
-| `make.preview.powerapps.com` | `prod`           |
-| `make.gov.powerapps.us`      | `gov`            |
-| `make.high.powerapps.us`     | `high`           |
-| `make.apps.appsplatform.us`  | `dod`            |
-| `make.powerapps.cn`          | `china`          |
-| Any other hostname           | `test`           |
+| MAKER_HOSTNAME               | ENVIRONMENT_CATEGORY |
+| ---------------------------- | -------------------- |
+| `make.powerapps.com`         | `prod`               |
+| `make.preview.powerapps.com` | `prod`               |
+| `make.preprod.powerapps.com` | `preprod`            |
+| `make.gov.powerapps.us`      | `gov`                |
+| `make.high.powerapps.us`     | `high`               |
+| `make.apps.appsplatform.us`  | `dod`                |
+| `make.powerapps.cn`          | `china`              |
+| Any other hostname           | `test`               |
 
 **Example:**
 
@@ -53,7 +54,7 @@ Example URL: `https://make.powerapps.com/e/Default-91bee3d9-0c15-4f17-8624-c92bb
 - ENV_ID → `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`
 - APP_ID → `6fc3e3d1-292b-4281-8826-577f78512e56`
 - MAKER_HOSTNAME → `make.powerapps.com`
-- CLUSTER_CATEGORY → `prod`
+- ENVIRONMENT_CATEGORY → `prod`
 
 ### 3. Configure the MCP server
 
@@ -63,7 +64,7 @@ Call the `connect` MCP tool to connect the server to the user's coauthoring sess
 mcp__canvas-authoring__connect(
   environment_id: ENV_ID,
   app_id: APP_ID,
-  cluster_category: CLUSTER_CATEGORY,
+  environment_category: ENVIRONMENT_CATEGORY,
   // Optional — include only if the user has expressed a preference or a prior sign-in failed (see below):
   auth_flow: "broker" | "browser" | "devicecode",
   login_hint: "user@contoso.com",

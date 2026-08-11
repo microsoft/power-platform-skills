@@ -9,6 +9,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+
+const PLACEHOLDER_RE = /__(?:(HTML|ATTR|JSON|RAW)_)?([A-Z][A-Z0-9_]*)__/g;
 
 /**
  * @param {Object} options
@@ -17,10 +20,9 @@ const path = require('path');
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
- * @param {boolean} [options.escapeStringValues=false] - Escape string values for HTML text contexts
  * @param {boolean} [options.emitStatus=true] - Print JSON status after writing the file
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, escapeStringValues = false, emitStatus = true }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, emitStatus = true }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -46,22 +48,24 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     process.exit(1);
   }
 
-  // Replace all __KEY__ placeholders with corresponding values from the data object.
-  // For non-string values (arrays/objects serialized to JSON), escape `<` as `\u003c`
-  // so a literal `</script>` inside string data cannot close a containing <script> tag.
-  // Templates that place string placeholders in HTML text contexts can opt in to
-  // string escaping with escapeStringValues.
-  let result = template;
-  for (const [key, value] of Object.entries(data)) {
-    const placeholder = `__${key}__`;
-    const replacement = typeof value === 'string'
-      ? (escapeStringValues ? escapeHtml(value) : value)
-      : JSON.stringify(value).replace(/</g, '\\u003c');
-    result = result.split(placeholder).join(replacement);
-  }
+  // Context is part of the placeholder because one source value can appear in both
+  // HTML and JavaScript. Bare string placeholders default to HTML text encoding;
+  // structured values default to JSON. RAW is reserved for code-owned markup.
+  const templateData = {
+    ...data,
+    CSP_NONCE: crypto.randomBytes(16).toString('base64'),
+  };
+  const result = template.replace(PLACEHOLDER_RE, (placeholder, explicitContext, key) => {
+    if (!(key in templateData)) {
+      return placeholder;
+    }
+
+    const context = explicitContext || (typeof templateData[key] === 'string' ? 'HTML' : 'JSON');
+    return renderValue(templateData[key], context);
+  });
 
   // Warn about any unreplaced placeholders (helps catch typos)
-  const remaining = result.match(/__[A-Z][A-Z0-9_]+__/g);
+  const remaining = result.match(PLACEHOLDER_RE);
   if (remaining) {
     const unique = [...new Set(remaining)];
     console.error(`Warning: unreplaced placeholders: ${unique.join(', ')}`);
@@ -104,12 +108,48 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
 }
 
 function escapeHtml(value) {
-  return String(value ?? '')
+  return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttribute(value) {
+  return escapeHtml(value)
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/'/g, '&#39;')
+    .replace(/`/g, '&#96;');
+}
+
+function serializeJson(value) {
+  const json = JSON.stringify(value);
+  if (json === undefined) {
+    throw new TypeError('Template values in JSON contexts must be JSON-serializable');
+  }
+
+  // HTML parses script end tags before JavaScript or application/json content.
+  // Neutralizing these characters keeps strings such as "</script>" inside JSON.
+  return json
+    .replace(/&/g, '\\u0026')
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function renderValue(value, context) {
+  switch (context) {
+    case 'HTML':
+      return escapeHtml(value);
+    case 'ATTR':
+      return escapeHtmlAttribute(value);
+    case 'JSON':
+      return serializeJson(value);
+    case 'RAW':
+      return String(value);
+    default:
+      throw new TypeError(`Unsupported template placeholder context: ${context}`);
+  }
 }
 
 function parseArgs(argv) {
@@ -122,4 +162,10 @@ function parseArgs(argv) {
   return args;
 }
 
-module.exports = { renderTemplate, parseArgs, escapeHtml };
+module.exports = {
+  renderTemplate,
+  parseArgs,
+  escapeHtml,
+  escapeHtmlAttribute,
+  serializeJson,
+};

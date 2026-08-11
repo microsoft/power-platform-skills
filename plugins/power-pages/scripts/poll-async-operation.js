@@ -44,9 +44,6 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 
-if (!args.asyncJobId) output({ error: 'Missing required argument: --asyncJobId' });
-if (!args.envUrl) output({ error: 'Missing required argument: --envUrl' });
-
 function normalizeEnvUrl(value) {
   return String(value || '').replace(/\/+$/, '').replace(/\/api\/data\/v[0-9.]+$/i, '');
 }
@@ -55,17 +52,6 @@ function normalizeAsyncJobId(value) {
   const match = String(value || '').match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
   return match ? match[0].toLowerCase() : '';
 }
-
-const envUrl = normalizeEnvUrl(args.envUrl);
-const asyncJobId = normalizeAsyncJobId(args.asyncJobId);
-if (!asyncJobId) output({ error: `Invalid async operation id: ${args.asyncJobId}` });
-const intervalMs = parseInt(args.intervalMs || '5000', 10);
-const maxAttempts = parseInt(args.maxAttempts || '60', 10);
-const tokenResource = args.tokenResource || envUrl;
-
-// Token may be passed in directly (to avoid redundant az CLI calls) or refreshed each cycle
-let token = args.token || null;
-const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs)); // refresh every ~60s
 
 // Dataverse asyncoperations statecode/statuscode reference:
 //   statecode 0: Open (0=Ready, 20=InProgress, 30=Pausing, 40=Canceling)
@@ -78,24 +64,40 @@ const SUCCESS_STATUSCODES = new Set([30]);
 const FAILURE_STATUSCODES = new Set([31]);
 const CANCELED_STATUSCODES = new Set([32]);
 
-const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
-
-function writeStatus(status) {
-  if (!args.statusFile) return;
+function writeStatus(statusFile, status) {
+  if (!statusFile) return;
   try {
-    fs.writeFileSync(args.statusFile, JSON.stringify({ updatedAt: new Date().toISOString(), ...status }, null, 2), 'utf8');
+    fs.writeFileSync(statusFile, JSON.stringify({ updatedAt: new Date().toISOString(), ...status }, null, 2), 'utf8');
   } catch {
     // The status page is best-effort; polling must never fail because the user
     // closed a temp folder or the status file could not be updated.
   }
 }
 
-(async () => {
+async function pollAsyncOperation(rawArgs, deps = {}) {
+  if (!rawArgs.asyncJobId) return { error: 'Missing required argument: --asyncJobId' };
+  if (!rawArgs.envUrl) return { error: 'Missing required argument: --envUrl' };
+
+  const envUrl = normalizeEnvUrl(rawArgs.envUrl);
+  const asyncJobId = normalizeAsyncJobId(rawArgs.asyncJobId);
+  if (!asyncJobId) return { error: `Invalid async operation id: ${rawArgs.asyncJobId}` };
+  const intervalMs = parseInt(rawArgs.intervalMs || '5000', 10);
+  const maxAttempts = parseInt(rawArgs.maxAttempts || '60', 10);
+  const tokenResource = rawArgs.tokenResource || envUrl;
+  const pollUrl = `${envUrl}/api/data/v9.2/asyncoperations(${asyncJobId})?$select=statecode,statuscode,message,friendlymessage,errorcode`;
+  const getToken = deps.getAuthToken || getAuthToken;
+  const request = deps.makeRequest || makeRequest;
+  const wait = deps.sleep || sleep;
+
+  // Token may be passed in directly (to avoid redundant az CLI calls) or refreshed each cycle.
+  let token = rawArgs.token || null;
+  const tokenRefreshEvery = Math.max(1, Math.floor(60000 / intervalMs)); // refresh every ~60s
+
   // Acquire initial token if not provided
   if (!token) {
-    token = getAuthToken(tokenResource);
+    token = getToken(tokenResource);
     if (!token) {
-      output({ error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` });
+      return { error: `Azure CLI token not available for ${tokenResource}. Run "az login" first.` };
     }
   }
 
@@ -103,13 +105,13 @@ function writeStatus(status) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Refresh token periodically
     if (attempt > 1 && attempt % tokenRefreshEvery === 0) {
-      const refreshed = getAuthToken(tokenResource);
+      const refreshed = getToken(tokenResource);
       if (refreshed) token = refreshed;
     }
 
     let pollBody;
     try {
-      const result = await makeRequest({
+      const result = await request({
         url: pollUrl,
         method: 'GET',
         headers: {
@@ -122,33 +124,33 @@ function writeStatus(status) {
 
       if (result.error) {
         // Network error — wait and retry (don't fail on transient issues)
-        writeStatus({ state: 'running', message: 'Waiting for Dataverse import status', attempt });
-        await sleep(intervalMs);
+        writeStatus(rawArgs.statusFile, { state: 'running', message: 'Waiting for Dataverse import status', attempt });
+        await wait(intervalMs);
         continue;
       }
 
       if (result.statusCode === 401) {
         // Auth expired mid-poll — refresh and retry immediately
-        const refreshed = getAuthToken(tokenResource);
+        const refreshed = getToken(tokenResource);
         if (refreshed) token = refreshed;
         continue;
       }
 
       if (result.statusCode !== 200 || !result.body) {
         lastHttpStatus = result.statusCode;
-        writeStatus({
+        writeStatus(rawArgs.statusFile, {
           state: 'running',
           message: 'Waiting for Dataverse import status',
           detail: `Dataverse async operation lookup returned HTTP ${result.statusCode}`,
           attempt,
         });
-        await sleep(intervalMs);
+        await wait(intervalMs);
         continue;
       }
 
       pollBody = JSON.parse(result.body);
     } catch {
-      await sleep(intervalMs);
+      await wait(intervalMs);
       continue;
     }
 
@@ -159,40 +161,46 @@ function writeStatus(status) {
 
     if (!TERMINAL_STATECODES.has(statecode)) {
       // Still running — wait and poll again
-      writeStatus({ state: 'running', message: friendlyMessage || message || 'Import is still running', attempt });
-      await sleep(intervalMs);
+      writeStatus(rawArgs.statusFile, { state: 'running', message: friendlyMessage || message || 'Import is still running', attempt });
+      await wait(intervalMs);
       continue;
     }
 
     // Terminal state reached
     if (SUCCESS_STATUSCODES.has(statuscode)) {
-      writeStatus({ state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', attempt });
-      output({ status: 'Succeeded', asyncJobId, attempts: attempt });
+      writeStatus(rawArgs.statusFile, { state: 'succeeded', message: 'Template import completed. Check the agent terminal for the next step.', attempt });
+      return { status: 'Succeeded', asyncJobId, attempts: attempt };
     }
 
     if (CANCELED_STATUSCODES.has(statuscode)) {
-      writeStatus({ state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', attempt });
-      output({ status: 'Canceled', asyncJobId, message, attempts: attempt });
+      writeStatus(rawArgs.statusFile, { state: 'canceled', message: message || 'Template import was canceled. Check the agent terminal.', attempt });
+      return { status: 'Canceled', asyncJobId, message, attempts: attempt };
     }
 
     // Failed (statuscode 31 or unknown terminal)
-    writeStatus({ state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', attempt });
-    output({
+    writeStatus(rawArgs.statusFile, { state: 'failed', message: friendlyMessage || message || 'Template import failed. Check the agent terminal.', attempt });
+    return {
       status: 'Failed',
       asyncJobId,
       message,
       friendlyMessage,
       statuscode,
       attempts: attempt,
-    });
+    };
   }
 
   // Timed out
-  writeStatus({ state: 'timeout', message: 'Template import is still running. Check the agent terminal.', attempt: maxAttempts });
-  output({
+  writeStatus(rawArgs.statusFile, { state: 'timeout', message: 'Template import is still running. Check the agent terminal.', attempt: maxAttempts });
+  return {
     status: 'Timeout',
     asyncJobId,
     lastHttpStatus,
     message: `Async operation still running after ${maxAttempts} attempts (~${Math.round(maxAttempts * intervalMs / 60000)} minutes). Check operation status manually.`,
-  });
-})();
+  };
+}
+
+if (require.main === module) {
+  pollAsyncOperation(args).then(output);
+}
+
+module.exports = { normalizeAsyncJobId, normalizeEnvUrl, parseArgs, pollAsyncOperation };

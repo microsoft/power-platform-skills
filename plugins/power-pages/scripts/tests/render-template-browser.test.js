@@ -64,7 +64,7 @@ test('renderTemplateBrowser renders static template details and preview images',
 
   assert.deepEqual(result, { status: 'ok', output: outputPath, opened: false });
   assert.match(html, /Browse Power Pages templates/);
-  assert.match(html, /Company &quot;Portal&quot;/);
+  assert.match(html, /Company "Portal"/);
   assert.match(html, /311 Portal/);
   assert.match(html, /home\.png/);
   assert.match(html, /detail\.png/);
@@ -75,7 +75,7 @@ test('renderTemplateBrowser renders static template details and preview images',
   assert.match(html, /class="preview-boundary"/);
   assert.match(html, /<figcaption>Preview 2<\/figcaption>/);
   assert.match(html, /class="preview-image"/);
-  assert.match(html, /Preview 2 of Company &quot;Portal&quot;/);
+  assert.match(html, /Preview 2 of Company "Portal"/);
   assert.match(html, /Citizen service request portal/);
   assert.doesNotMatch(html, /data-carousel/);
   assert.doesNotMatch(html, /carousel/);

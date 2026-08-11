@@ -104,7 +104,7 @@ td.col-fixed{width:38%;white-space:nowrap;}
 <body>
 <div class="topbar">
   <div class="topbar-left">
-    <img class="logo" src="./power-pages-icon.png" alt="" onerror="this.style.display='none'"/>
+    <img id="report-logo" class="logo" src="./power-pages-icon.png" alt=""/>
     <div>
       <div class="topbar-title">Authentication Setup Report</div>
       <div class="topbar-sub">setup-auth · Power Pages</div>
@@ -201,17 +201,17 @@ td.col-fixed{width:38%;white-space:nowrap;}
 <footer style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;color:#605e5c;border-top:1px solid #c8c6c4;background:#ffffff;z-index:100;">AI-generated content may be incorrect</footer>
 
 <script>
-// All user-controlled data goes through .textContent — never innerHTML with
-// unsanitized values. META.nextStepsHtml is the one exception: it's authored by
-// the skill (not the user) and intentionally renders as HTML.
+// Structured report values are inserted with DOM APIs. The legacy nextStepsHtml
+// field is parsed into an allowlisted DOM tree so existing formatted reports stay
+// compatible without carrying event handlers or arbitrary elements forward.
 
-const META = __META_DATA__;
-const PROVIDERS = __PROVIDERS_DATA__;
-const LOCAL_AUTH = __LOCAL_AUTH_DATA__;
-const OPTIONAL_FEATURES = __OPTIONAL_FEATURES_DATA__;
-const SITE_SETTINGS = __SITE_SETTINGS_DATA__;
-const TABLE_PERMISSIONS = __TABLE_PERMISSIONS_DATA__;
-const FILES = __FILES_DATA__;
+const META = __JSON_META_DATA__;
+const PROVIDERS = __JSON_PROVIDERS_DATA__;
+const LOCAL_AUTH = __JSON_LOCAL_AUTH_DATA__;
+const OPTIONAL_FEATURES = __JSON_OPTIONAL_FEATURES_DATA__;
+const SITE_SETTINGS = __JSON_SITE_SETTINGS_DATA__;
+const TABLE_PERMISSIONS = __JSON_TABLE_PERMISSIONS_DATA__;
+const FILES = __JSON_FILES_DATA__;
 
 const SITE_NAME = META.siteName || '';
 const REPORT_DATE = META.reportDate || '';
@@ -220,6 +220,9 @@ const NEXT_STEPS_HTML = META.nextStepsHtml || '';
 
 document.title = 'Authentication Setup Report — ' + (SITE_NAME || 'Power Pages');
 document.getElementById('topbar-date').textContent = REPORT_DATE;
+document.getElementById('report-logo').addEventListener('error', (event) => {
+  event.currentTarget.style.display = 'none';
+});
 
 function el(tag, props, ...children) {
   const e = document.createElement(tag);
@@ -234,6 +237,48 @@ function el(tag, props, ...children) {
     else e.appendChild(c);
   }
   return e;
+}
+
+function appendSafeMarkup(container, markup) {
+  const allowedTags = new Set(['P', 'OL', 'UL', 'LI', 'CODE', 'STRONG', 'EM', 'BR', 'A']);
+  const template = document.createElement('template');
+  template.innerHTML = String(markup || '');
+
+  function cloneSafe(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return document.createTextNode(node.textContent || '');
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return document.createDocumentFragment();
+    }
+
+    const output = allowedTags.has(node.tagName)
+      ? document.createElement(node.tagName.toLowerCase())
+      : document.createDocumentFragment();
+
+    if (node.tagName === 'A' && output.nodeType === Node.ELEMENT_NODE) {
+      const rawHref = node.getAttribute('href') || '';
+      try {
+        const url = new URL(rawHref, location.href);
+        if (url.protocol === 'https:' || url.protocol === 'http:') {
+          output.setAttribute('href', url.href);
+          output.setAttribute('target', '_blank');
+          output.setAttribute('rel', 'noopener');
+        }
+      } catch {
+        // A malformed link remains readable text without becoming navigable.
+      }
+    }
+
+    for (const child of node.childNodes) {
+      output.appendChild(cloneSafe(child));
+    }
+    return output;
+  }
+
+  for (const child of template.content.childNodes) {
+    container.appendChild(cloneSafe(child));
+  }
 }
 
 function kv(label, value, isCode) {
@@ -453,8 +498,13 @@ if (FILES.length === 0) {
   filesEl.appendChild(t);
 }
 
-// --- Next steps (HTML, skill-authored) ---
-document.getElementById('next-steps').innerHTML = NEXT_STEPS_HTML || '<p class="empty">No follow-up actions recorded.</p>';
+// --- Next steps ---
+const nextStepsEl = document.getElementById('next-steps');
+if (NEXT_STEPS_HTML) {
+  appendSafeMarkup(nextStepsEl, NEXT_STEPS_HTML);
+} else {
+  nextStepsEl.appendChild(el('p', { class: 'empty', text: 'No follow-up actions recorded.' }));
+}
 
 // --- Tab switching ---
 const navButtons = document.querySelectorAll('.nav-btn');

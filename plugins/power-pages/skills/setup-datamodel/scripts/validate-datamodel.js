@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Validates Dataverse data model creation output.
-// Runs as a Stop hook to verify tables and columns were properly created.
+// Runs as a PostToolUse(Skill) hook to verify tables and columns were properly created.
 // Reads .datamodel-manifest.json (written by the setup-datamodel skill) and
 // queries the Dataverse OData API to confirm each table/column exists.
 

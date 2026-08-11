@@ -15,8 +15,7 @@ Manage Power Automate Desktop (RPA) flows, machine groups, and run sessions.
 
 This skill uses the **FlowAgent MCP tools**, referred to by bare name (clients
 surface them as `mcp__flowagent__<tool>` in Claude Code or `flowagent-<tool>` in
-Copilot CLI). If MCP tools aren't available, run `/setup` to wire the FlowAgent
-MCP server.
+Copilot CLI). If no MCP tools are present, the plugin is not wired up — run the `setup` skill.
 
 | Tool | Purpose |
 |------|---------|
