@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const {
   sha256, formProjection, formProjectionHash, sitemapProjection, sitemapProjectionHash,
+  cellProjection, normId,
 } = require('../lib/projection.js');
 
 // Minimal NEW-topology form intent: tabs → columns → sections → rows → cells.
@@ -118,4 +119,42 @@ test('#3 sitemap: an out-of-band ADDED dashboard subarea (the drift case) compar
   const expected = sm([{ entity: 'new_a' }]);
   const liveDrifted = sm([{ entity: 'new_a' }, { type: 'Dashboard', dashboardId: 'dash-ops' }]); // Maker added a dashboard
   assert.notStrictEqual(sitemapProjectionHash(expected), sitemapProjectionHash(liveDrifted), 'drift must be detected');
+});
+
+test('form projection treats quick-view and timeline controls as controls, not fields', () => {
+  const quickView = cellProjection({
+    control: {
+      classId: '{5c5600e0-1d6e-4205-a272-be80da87fd42}',
+      fieldName: 'New_CustomerId',
+      label: 'Customer card',
+    },
+  });
+  assert.deepStrictEqual(quickView, {
+    control: '5C5600E0-1D6E-4205-A272-BE80DA87FD42',
+    field: 'new_customerid',
+    label: 'Customer card',
+  });
+
+  const timeline = cellProjection({
+    control: {
+      classId: '{06375649-c143-495e-a496-c962e5b4488e}',
+      label: 'Notes',
+    },
+  });
+  assert.deepStrictEqual(timeline, { control: '06375649-C143-495E-A496-C962E5B4488E', label: 'Notes' });
+});
+
+test('projections tolerate malformed fetched shapes without fabricating identity', () => {
+  assert.strictEqual(normId(null), '');
+  assert.deepStrictEqual(formProjection(null), { entity: '', formType: 'Main', tabs: [] });
+
+  // Fetched sitemap fragments can contain placeholders like `{}` or `null` when an adapter could not
+  // classify a SubArea; projecting them as `unknown` keeps the verifier deterministic instead of
+  // throwing and skipping the rest of the sitemap comparison.
+  assert.deepStrictEqual(sitemapProjection({ areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [null, {}] }] }] }), {
+    areas: [{ label: 'A', groups: [{ label: 'G', subAreas: [
+      { type: 'unknown', ref: '' },
+      { type: 'unknown', ref: '' },
+    ] }] }],
+  });
 });

@@ -4,7 +4,7 @@
 /**
  * PreToolUse(Skill) telemetry hook for the model-apps plugin.
  *
- * Emits an anonymous `skill_started` event when a tracked model-apps skill is
+ * Emits a `skill_started` usage event when a tracked model-apps skill is
  * invoked via the Skill tool. Uses the shared 1DS library copied into this plugin
  * at scripts/lib/telemetry/lib. Mirrors the power-pages pretool hook — the only
  * plugin-specific bits are the pluginName ("model-apps"), the hook-utils import,

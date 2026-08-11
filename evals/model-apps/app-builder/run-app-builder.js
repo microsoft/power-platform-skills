@@ -14,22 +14,15 @@ const { TapReporter } = require('../genpage/lib/reporter.js');
 const { stageFacts } = require('./lib/facts.js');
 const { ASSERTIONS } = require('./lib/assertions.js');
 
+// Known tiers, so a typo is rejected with the valid choices instead of silently matching no
+// fixture and reporting "no fixtures matched the filter" (which blames the fixtures, not the arg).
+// The parser is shared with the genpage runners — all three had the same silent-default defect.
+const { parseEvalArgs } = require('../lib/eval-args.js');
+
 function parseArgs(argv) {
-  const args = { fixtures: null, eval: null, tier: null };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--fixtures') { args.fixtures = argv[++i]; }
-    else if (a === '--eval') { args.eval = parseInt(argv[++i], 10); }
-    else if (a === '--tier') { args.tier = argv[++i]; }
-    else if (a === '--help' || a === '-h') {
-      process.stdout.write('Usage: run-app-builder.js [--fixtures <dir>] [--eval <id>] [--tier <smoke|full>]\n');
-      process.exit(0);
-    } else {
-      console.error(`Unknown argument: ${a}`);
-      process.exit(2);
-    }
-  }
-  return args;
+  return parseEvalArgs(argv, {
+    printHelp: () => process.stdout.write('Usage: run-app-builder.js [--fixtures <dir>] [--eval <id>] [--tier <smoke|full>]\n'),
+  });
 }
 
 function loadEvals() {

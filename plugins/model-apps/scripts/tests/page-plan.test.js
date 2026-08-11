@@ -253,6 +253,43 @@ test('CLI fails with usage when a required flag has no value', () => {
   assert.match(res.stderr, /Usage:/);
 });
 
+test('CLI refuses to write a plan when a referenced sample is absent', (t) => {
+  const dir = fs.mkdtempSync(path.join(__dirname, '.tmp-pageplan-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const specPath = path.join(dir, 'app-spec.json');
+  const outPath = path.join(dir, 'app-builder-page-plan.md');
+  fs.writeFileSync(specPath, JSON.stringify(spec()), 'utf8');
+
+  const cliPath = path.join(__dirname, '..', 'write-page-plan.js');
+  const { main } = require(cliPath);
+  const originalArgv = process.argv;
+  const originalExit = process.exit;
+  const originalStderrWrite = process.stderr.write;
+  const originalExistsSync = fs.existsSync;
+  let stderr = '';
+
+  try {
+    process.argv = [process.execPath, cliPath, '--spec', '@' + specPath, '--working-dir', dir, '--out', outPath];
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    process.exit = (code) => { throw new Error(`process.exit(${code})`); };
+    fs.existsSync = (p) => (
+      String(p).endsWith(path.join('samples', '9-list-with-caching.tsx'))
+        ? false
+        : originalExistsSync.call(fs, p)
+    );
+
+    assert.throws(() => main(), /process\.exit\(1\)/);
+  } finally {
+    fs.existsSync = originalExistsSync;
+    process.argv = originalArgv;
+    process.exit = originalExit;
+    process.stderr.write = originalStderrWrite;
+  }
+
+  assert.match(stderr, /page plan references sample\(s\) that do not exist/);
+  assert.ok(!fs.existsSync(outPath), 'the partial plan is not written after sample validation fails');
+});
+
 test('the projection does NOT default to genpage-plan.md — that filename belongs to /genpage', () => {
   // Both skills derive their working directory from a slug off the user's request, so they can land
   // on the same folder. `genpage-plan.md` is what standalone /genpage treats as its authoritative

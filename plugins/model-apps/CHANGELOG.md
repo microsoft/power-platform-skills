@@ -2,7 +2,107 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.0
+## [Unreleased] — 2.4.2
+
+Fixes a malformed app module: generated apps did not actually contain their tables.
+
+### Fixed
+- **Generated apps contained invalid `entity` table components instead of their real tables**
+  (ADO 6612527). An exported app read `<AppModuleComponent type="1" schemaName="entity" />` where it
+  should have listed `account`, `contact`, `activitypointer` — and the malformed app then broke
+  unrelated app-processing and metadata-discovery paths. Tables are now pinned by OData **reference**
+  (`{ '@odata.id': '<EntitySetName>(<MetadataId>)' }`) instead of as an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old payload
+  pinned the `entity` table exactly as asked. The reference form is also the only one that can express
+  an abstract EDM table such as `activitypointer`.
+- **A table that cannot be resolved now halts the build, naming it.** One bad component fails the
+  whole `AddAppComponents` call, so a silently-skipped table previously emptied the app's component
+  list rather than degrading it.
+- **App components are read back and verified after the write.** `AddAppComponents` returned 204 for
+  every corrupt app — a 2xx means the request was accepted, not which rows it wrote — and
+  `ValidateApp` reported success too. The build now asserts every declared table has a
+  `componenttype: 1` row carrying that table's MetadataId, and fails closed if it cannot check.
+
+### Changed
+- **Re-vendored `cds-maker-sdk`** with the above.
+
+### Tests
+- `app-entity-components-real-bundle.test.js` drives the shipped bundle: tables sent as references,
+  an unresolvable table refused, the read-back catching both a missing component and the exact
+  6612527 corruption (rows present but pointing at `entity`). 6 of its 7 tests fail against the
+  previous bundle.
+
+### Known limitations
+- **ADO 6603388 (download drops entity components not in the sitemap) is still open.** A live attempt
+  to construct the hidden component it describes did not succeed — pinning a table with no sitemap
+  entry returned 204 but wrote no row, before or after publish — so the download-side change cannot
+  be verified end to end yet.
+
+### Eval harness
+- **A value-less or malformed runner flag is now rejected instead of silently changing scope.**
+  `argv[++i]` is `undefined` for a trailing flag and `undefined` is falsy, so `--tier` alone became
+  "no tier filter" and `--fixtures` alone fell back to the built-in fixtures — the run then reported
+  PASS for a scope the caller never asked for. `--eval 1.5` was truncated to fixture `1` and graded
+  the wrong one; an unknown `--tier` produced "no fixtures matched the filter", blaming the fixtures
+  rather than the argument. All three runners (app-builder + genpage layers 1/2) shipped a
+  byte-identical copy of this parser, so it is now shared at `evals/model-apps/lib/eval-args.js`.
+- **A malformed fixture names the fixture.** A bare `JSON.parse` reported only a character offset,
+  which tells an operator running a corpus nothing about which fixture to fix. A UTF-8 BOM (the
+  Windows editor default) no longer fails an otherwise-valid file, and a spec that is `null`, an
+  array, a string or a number is rejected up front instead of surfacing later as an opaque
+  stage-facts error.
+
+## 2.4.1
+
+Bug fixes for apps built on **out-of-the-box** tables, and the matching `cds-maker-sdk` uptake.
+No change to any skill's public surface.
+
+### Fixed
+- **AI app features had no effect on a newly built app** — an app-scope setting write is a no-op
+  until the app is published, so the build wrote nothing while reporting success. The write is now
+  re-issued after publish.
+- **`--verify` PASSed when AI features were skipped or never applied** — it now proves an app-scope
+  override row in `appsettings`. Reading the setting back is unsound: `RetrieveSetting` falls back
+  to the environment value when an app has no override.
+- **`ai.appFeatures` could not express non-boolean values** such as `2` ("on for everyone") — a
+  value may now be a boolean or an integer `0..1000000`.
+- **Download invented primary-name columns** (`account_name`, `contact_name` — neither exists) —
+  now read from Dataverse metadata, never synthesized. Because a spec *requires* `primaryAttribute`,
+  a table whose metadata does not supply one can no longer be emitted: a table reached from the app's
+  **navigation** now **fails** the download naming it (`--allow-lossy-download` drops it instead),
+  while a table found only as a hidden component is dropped with a warning.
+- **Download replaced the solution's publisher prefix with `new`** — now read from the solution's
+  owning publisher.
+- **Download dropped tables with no sitemap entry** — the entity set is now the sitemap set unioned
+  with tables owned by the app's view/chart/form components.
+- **Teardown could permanently burn an app's unique name** — an app is two rows (`appmodule` +
+  `sitemaps`) with no server-side cascade, so deleting only the app module stranded the sitemap and
+  reserved its name forever. Both rows are now deleted atomically in one OData `$batch`, and any
+  delete that cannot be proven refuses rather than guessing.
+- **An unreadable app produced a raw SDK throw** instead of the download's documented
+  `{ ok: false, error }`.
+
+### Changed
+- **Re-vendored `cds-maker-sdk`.** An injected `HttpClient` must now implement `postRaw` (verbatim
+  multipart body out, raw response string back) for the atomic `$batch`; without it app deletion
+  fails with `APP_DELETE_NOT_ATOMIC`. The plugin's client implements it and does not retry a
+  `$batch` — it carries record deletes, and a racing retry wedges the row.
+
+### Tests
+- 1266 → 1340 tests; coverage 92.7 → 93.9% line, 82.7 → 83.6% branch.
+- **model-apps now runs in CI** (`model-apps-script-tests`, ubuntu × windows × macos, Node 20 × 22,
+  plus the offline evals) — previously every test workflow was scoped to `plugins/power-pages/**`,
+  so this suite never ran on a PR.
+- Real-bundle suites (`ai-app-features-real-bundle`, `app-delete-real-bundle`) drive the shipped
+  vendored bundle, including one test that wires the real HTTP transport to it — the SDK's own Jest
+  suite cannot run here (Node-20-ABI `canvas`).
+
+### Known limitations
+- **Table (`entity`) app components cannot be pinned via `AddAppComponents`** — the documented shape
+  returns 204 but records a component pointing at the metadata table named `entity`. Platform defect
+  **AB#39140211**; until it is fixed a table with no sitemap entry cannot be added to an app.
+
+## 2.4.0
 
 A new **`/app-builder`** skill (Preview) that builds and edits whole model-driven apps,
 plus local-dev ergonomics, sample coverage, and an automated eval suite. Builds on v2.3;
