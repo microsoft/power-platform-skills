@@ -75,7 +75,6 @@ if (args['data-inline']) {
     outputPath: path.resolve(args.output),
     dataObject: withDerivedTemplateData(dataObject),
     requiredKeys,
-    escapeStringValues: true,
   });
 } else {
   const dataPath = path.resolve(args.data);
@@ -97,6 +96,5 @@ if (args['data-inline']) {
     outputPath: path.resolve(args.output),
     dataObject: withDerivedTemplateData(dataObject),
     requiredKeys,
-    escapeStringValues: true,
   });
 }

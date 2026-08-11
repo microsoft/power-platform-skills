@@ -136,11 +136,27 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 </div>
 
 <script>
-const WEB_ROLES = __WEB_ROLES_DATA__;
-const CLOUD_FLOWS = __CLOUD_FLOWS_DATA__;
-const RATIONALE = __RATIONALE_DATA__;
+const WEB_ROLES = __JSON_WEB_ROLES_DATA__;
+const CLOUD_FLOWS = __JSON_CLOUD_FLOWS_DATA__;
+const RATIONALE = __JSON_RATIONALE_DATA__;
 
-function esc(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function esc(str) { const d = document.createElement('div'); d.textContent = str == null ? '' : String(str); return d.innerHTML; }
+function safeIcon(value) {
+  const icon = String(value ?? '');
+  if (!/^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon)) return esc(icon);
+
+  let valid = true;
+  const decoded = icon.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, decimal) => {
+    const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      valid = false;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
+  });
+  return valid ? esc(decoded) : esc(icon);
+}
+function safeColor(value) { return /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? value : '#8890a4'; }
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -164,7 +180,7 @@ function getAssignedRoleDetails(flow) {
 
 function stateChip(state) {
   const cls = state === 'Active' ? 'state-active' : 'state-draft';
-  return `<span class="state-chip ${cls}">${state}</span>`;
+  return `<span class="state-chip ${cls}">${esc(state)}</span>`;
 }
 
 // Topbar
@@ -180,17 +196,17 @@ document.getElementById('statNew').textContent = newRolesCount;
 // Flow summary chips
 const flowSummaryEl = document.getElementById('flowSummary');
 flowSummaryEl.innerHTML = CLOUD_FLOWS.length
-  ? CLOUD_FLOWS.map(f => `<span class="flow-chip">${f.displayName || f.name}</span>`).join('')
+  ? CLOUD_FLOWS.map(f => `<span class="flow-chip">${esc(f.displayName || f.name)}</span>`).join('')
   : '<span class="flow-chip">No flows planned</span>';
 
 // Rationale
 const rationaleContainer = document.getElementById('rationaleContainer');
 rationaleContainer.innerHTML = RATIONALE.map(r => `
   <div class="principle">
-    <div class="principle-icon">${r.icon}</div>
+    <div class="principle-icon">${safeIcon(r.icon)}</div>
     <div>
-      <div class="principle-title">${r.title}</div>
-      <div class="principle-desc">${r.desc}</div>
+      <div class="principle-title">${esc(r.title)}</div>
+      <div class="principle-desc">${esc(r.desc)}</div>
     </div>
   </div>
 `).join('');
@@ -211,7 +227,7 @@ const rolesContainer = document.getElementById('rolesContainer');
 rolesContainer.innerHTML = WEB_ROLES.map(role => {
   const assigned = CLOUD_FLOWS.filter(f => getAssignedRoleDetails(f).some(e => e.id === role.id));
   const assignedMarkup = assigned.length
-    ? assigned.map(f => `<span class="flow-chip">${f.displayName || f.name}</span>`).join('')
+    ? assigned.map(f => `<span class="flow-chip">${esc(f.displayName || f.name)}</span>`).join('')
     : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">Not assigned to any flow</span>';
 
   const anonWarning = role.isAnonymous
@@ -221,11 +237,11 @@ rolesContainer.innerHTML = WEB_ROLES.map(role => {
   return `<div class="card"${role.isNew ? ' style="background:var(--accent-bg);border-color:var(--accent-border);"' : ''}>
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
       <div style="display:flex;align-items:flex-start;gap:10px;">
-        <div style="width:10px;height:10px;border-radius:50%;background:${role.color || '#8890a4'};flex-shrink:0;margin-top:6px;"></div>
+        <div style="width:10px;height:10px;border-radius:50%;background:${safeColor(role.color)};flex-shrink:0;margin-top:6px;"></div>
         <div>
-          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${role.name}</span>
+          <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${esc(role.name)}</span>
           ${role.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : role.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
-          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${role.desc || ''}</div>
+          <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${esc(role.desc || '')}</div>
         </div>
       </div>
     </div>
@@ -251,10 +267,10 @@ flowsContainer.innerHTML = CLOUD_FLOWS.map(flow => {
     ? roles.map(role => `
       <div class="fn-item">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${role.name}</div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-bright);">${esc(role.name)}</div>
               ${role.builtin ? '<span class="builtin-badge">Built-in</span>' : role.isNew ? '<span class="new-badge">Proposed</span>' : '<span class="existing-badge">Existing</span>'}
         </div>
-        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${role.reasoning || 'No reasoning provided.'}</div>
+        <div style="font-size:12px;color:var(--text-dim);margin-top:8px;">${esc(role.reasoning || 'No reasoning provided.')}</div>
         ${role.isAnonymous ? '<div class="warn-banner" style="margin-top:8px;">⚠ Anonymous Users role — any unauthenticated visitor can trigger this flow.</div>' : ''}
       </div>
     `).join('')
@@ -263,17 +279,17 @@ flowsContainer.innerHTML = CLOUD_FLOWS.map(flow => {
   return `<div class="card" style="background:var(--accent-bg);border-color:var(--accent-border);">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
       <div>
-        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${flow.displayName || flow.name}</span>
+        <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${esc(flow.displayName || flow.name)}</span>
         ${stateChip(flow.state || 'Active')}
-        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span style="text-transform:uppercase;letter-spacing:0.4px;font-size:10px;font-weight:600;">Process ID</span> <span class="mono">${flow.flowId || ''}</span></div>
-        ${flow.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${flow.description}</div>` : ''}
+        <div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><span style="text-transform:uppercase;letter-spacing:0.4px;font-size:10px;font-weight:600;">Process ID</span> <span class="mono">${esc(flow.flowId || '')}</span></div>
+        ${flow.description ? `<div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${esc(flow.description)}</div>` : ''}
       </div>
     </div>
 
     <div class="meta-grid">
       <div>
         <div class="field-label">Scenario</div>
-        <div style="font-size:13px;">${flow.scenario || 'Not specified'}</div>
+        <div style="font-size:13px;">${esc(flow.scenario || 'Not specified')}</div>
       </div>
       <div>
         <div class="field-label">Flow State</div>
@@ -283,7 +299,7 @@ flowsContainer.innerHTML = CLOUD_FLOWS.map(flow => {
 
     <div style="margin-top:12px;">
       <div class="field-label">Rationale</div>
-      <div class="reason-box">${flow.rationale || 'No rationale provided.'}</div>
+      <div class="reason-box">${esc(flow.rationale || 'No rationale provided.')}</div>
     </div>
 
     <div style="margin-top:12px;">
