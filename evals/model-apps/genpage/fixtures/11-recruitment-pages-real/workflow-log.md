@@ -8,7 +8,7 @@
 v20.18.2
 
 `pac help`
-PAC CLI Version 2.7.4+g06bb2eb (.NET 10.0.8)
+PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8)
 
 `pac auth list`
 Index Active Kind      Name User                                          Cloud  Type            Environment       Environment Url
@@ -76,7 +76,7 @@ User response: approved
 
 ### Decisions
 - Environment: AuroraBAPEnv610b3 (https://aurorabapenv610b3.crmtest.dynamics.com/)
-- PAC CLI: 2.7.4 (>= 2.7.0 requirement met)
+- PAC CLI: 2.11.0 (> 2.10.0 requirement met)
 - Node: v20.18.2
 - Languages: English only — no localization code needed
 - Both target entities (contact, appointment) confirmed as Standard tables in the environment

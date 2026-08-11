@@ -100,10 +100,21 @@ test('node --version and pac help: pass when both recorded separately', () => {
   const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `## Phase 1
 - node --version → v20
-- pac help → PAC CLI Version 2.7.3
+- pac help → PAC CLI Version 2.11.0
 `;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'pass');
+});
+
+test('node --version and pac help: fail when the recorded version is <= 2.10.0', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
+  const log = `## Phase 1
+- node --version → v20
+- pac help → PAC CLI Version 2.7.3
+`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+  assert.match(result.reason, /2\.10\.0/);
 });
 
 test('node --version and pac help: fail when chained with &&', () => {

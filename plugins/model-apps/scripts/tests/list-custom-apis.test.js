@@ -70,8 +70,11 @@ test('bindingTypeLabel maps the option set and defaults to Global', () => {
 });
 
 test('buildCustomApiFilter includes Global plus the page tables, escaping quotes', () => {
+  // No tables → Global only (bindingtype 0), NOT every entity-bound API.
   const none = buildCustomApiFilter([]);
   assert.match(none, /bindingtype eq 0/);
+  assert.doesNotMatch(none, /bindingtype ne 0/);
+  assert.doesNotMatch(none, /boundentitylogicalname/);
 
   const scoped = buildCustomApiFilter(['account', 'contact']);
   assert.match(scoped, /bindingtype eq 0/);

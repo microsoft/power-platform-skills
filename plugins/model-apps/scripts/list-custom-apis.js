@@ -14,7 +14,9 @@
 // Usage:
 //   node list-custom-apis.js <envUrl> [--entities <logicalName1,logicalName2>]
 //     --entities  Restrict entity-bound results to these table logical names (the page's tables).
-//                 When omitted, every Global API plus every entity-bound API is returned.
+//                 When omitted, ONLY Global APIs are returned (a page that needs entity-bound
+//                 operations knows its own table(s) and passes them here); this keeps the result set
+//                 and the follow-up parameter query bounded.
 //
 // Output:
 //   { "ok": true, "customApis": [ { name, displayName, isFunction, bindingType,
@@ -69,13 +71,17 @@ function escapeODataString(value) {
   return String(value).replace(/'/g, "''");
 }
 
-// Builds the $filter for the customapi query: every Global API (bindingtype 0), plus every
-// entity-bound API — optionally narrowed to the page's tables when `entities` is non-empty.
+// Builds the $filter for the customapi query: every Global API (bindingtype 0), plus the entity-bound
+// APIs for the page's tables when `entities` is non-empty. When NO tables are supplied, return ONLY
+// Global APIs — returning every entity-bound API in the environment can explode the result set (and
+// make the follow-up request-parameter query URL, an OR of per-API ids, too long). A page that wants
+// entity-bound operations always knows its own table(s) and passes them via --entities.
 function buildCustomApiFilter(entities) {
   const list = (entities || []).map((e) => String(e).trim()).filter(Boolean);
   if (list.length === 0) {
-    // No page tables supplied: Global + all entity-bound (let the builder/maker filter).
-    return 'bindingtype eq 0 or bindingtype ne 0';
+    // No page tables supplied: Global only (see above). This matches the genpage-customapi-builder
+    // contract — omit --entities for a mock/global-only page.
+    return 'bindingtype eq 0';
   }
   const bound = list
     .map((e) => `boundentitylogicalname eq '${escapeODataString(e)}'`)
@@ -139,7 +145,12 @@ async function main() {
         `&$filter=${filter}`
     );
     ensureOk(apisRes, 'List custom APIs');
-    const apis = (apisRes.data?.value || []).filter((a) => a.uniquename);
+    const apis = (apisRes.data?.value || [])
+      .filter((a) => a.uniquename)
+      // Exclude EntityCollection-bound APIs (bindingtype 2). The generated-page runtime's boundTo is a
+      // single record ({ entityName, id }); there is no collection-bound invocation shape, so surfacing
+      // one would only let the builder emit a binding that fails. See genpage-customapi-builder.md.
+      .filter((a) => Number(a.bindingtype) !== 2);
 
     // Fetch request parameters for exactly the matched APIs in one call (an OR of id equalities),
     // then group by API. Skip entirely when nothing matched so we don't issue an empty `in ()` filter.

@@ -8,7 +8,7 @@
 
 ### Prereq checks
 - `node --version` → v20.11.0
-- `pac help` → PAC CLI Version 2.8.2 (>= 2.7.0 verified)
+- `pac help` → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 - (Commands run separately, not chained with &&)
 
 ### Auth check

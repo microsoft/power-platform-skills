@@ -105,8 +105,15 @@ WORKFLOW_ASSERTIONS.set(
     if (/node\s+--version\s*&&\s*pac\s+help/.test(log)) {
       return fail('node --version and pac help are chained with && (forbidden)');
     }
-    if (!/2\.\s*7|>=\s*2\.7|version\s+\d+\.\d+/i.test(log)) {
-      return fail('no PAC CLI version verification recorded');
+    // Parse the recorded PAC CLI version and enforce the contract (> 2.10.0), rather than merely
+    // matching version-shaped text — an older pac (e.g. 2.7.x) must fail this assertion. Accepts the
+    // forms pac emits, e.g. "PAC CLI Version 2.11.0", "Version: 2.11.0+g06bb2eb (.NET 10.0.8)".
+    const m = /version[:\s]+v?(\d+)\.(\d+)(?:\.(\d+))?/i.exec(log);
+    if (!m) return fail('no PAC CLI version recorded (expected e.g. "PAC CLI Version 2.11.0")');
+    const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3] || 0)];
+    const gtMin = major > 2 || (major === 2 && (minor > 10 || (minor === 10 && patch > 0)));
+    if (!gtMin) {
+      return fail(`recorded PAC CLI version ${major}.${minor}.${patch} does not satisfy > 2.10.0`);
     }
     return pass();
   }

@@ -8,7 +8,7 @@
 
 ### Prereq checks
 - `node --version` → v20.11.0
-- `pac help` → PAC CLI Version 2.7.3 (>= 2.7.0 verified)
+- `pac help` → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 
 ### Auth check
 - `pac auth list` → active profile aurora365-user1@auroratstgeo.onmicrosoft.com

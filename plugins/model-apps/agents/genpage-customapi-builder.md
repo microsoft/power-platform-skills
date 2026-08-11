@@ -117,9 +117,14 @@ governance the runtime enforces before dispatch (see `custom-api.md`):
 
 - **Kind** (`isFunction`): an Action is called with `executeAction`; a Function with
   `executeFunction`. A mismatch is rejected with `wrong_operation_kind`. Never "offer both".
-- **Binding**: `bindingType: 'Entity'` ⇒ record `boundEntityLogicalName`; the page MUST pass a
-  `boundTo` whose `entityName` equals it. `bindingType: 'Global'` ⇒ omit
-  `boundEntityLogicalName`; the page must NOT pass `boundTo`.
+- **Binding**: `bindingType: 'Global'` ⇒ omit `boundEntityLogicalName`; the page must NOT pass
+  `boundTo`. `bindingType: 'Entity'` ⇒ record `boundEntityLogicalName`; the page MUST pass a
+  `boundTo` whose `entityName` equals it. `bindingType: 'EntityCollection'` ⇒ **skip it — do not add
+  it as a binding.** The runtime's `boundTo` is a single record (`{ entityName, id }`); there is no
+  collection-bound invocation shape, so a page cannot call a collection-bound Custom API. If the maker
+  explicitly needs one, tell them it is not supported by the generated-page runtime rather than
+  emitting a binding that will fail. (`list-custom-apis.js` already filters these out; this is the
+  rule if you ever see one.)
 - **`parameterKinds`**: keep every discovered request parameter and its kind. The runtime has
   no other source for parameter types; a missing or wrong kind causes `invalid_parameter`.
 

@@ -8,7 +8,7 @@
 v20.18.2
 
 `pac help`
-Microsoft PowerPlatform CLI Version: 2.7.4+g06bb2eb (.NET 10.0.8) — PAC CLI Version 2.7.4 (>= 2.7.0 required) — OK.
+Microsoft PowerPlatform CLI Version: 2.11.0+g06bb2eb (.NET 10.0.8) — PAC CLI Version 2.11.0 (> 2.10.0 required) — OK.
 
 ### Authentication
 
