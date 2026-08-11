@@ -73,7 +73,8 @@ Derive a short folder name from the user's requirements:
 
 1. Extract the page name or a 2-4 word summary from `$ARGUMENTS`
 2. Convert to kebab-case (e.g., "Candidate Tracker" → `candidate-tracker`)
-3. Create the folder: `mkdir -p <folder-name>`
+3. Create the folder: `mkdir -p <folder-name>` (bash/PowerShell; on cmd use `mkdir <folder-name>`,
+   which has no `-p` and errors if the folder exists)
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
 ### Phase 0.5: Initialize Local-Dev Manifest
@@ -272,7 +273,7 @@ The entity-builder reads `Solution` and `Publisher Prefix` directly from the
 plan's `## Environment` — no need to re-thread them here.
 
 Wait for completion. The builder writes a transactional log at
-`<working-dir>/entity-creation-log.md` for recovery on failure.
+`<working-dir>/genpage-entity-creation-log.md` for recovery on failure.
 
 ### Phase 3: App Creation/Selection
 

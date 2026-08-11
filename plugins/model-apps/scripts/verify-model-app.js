@@ -89,6 +89,12 @@ function readerFor(sdk, appUnique, opts) {
       const items = await sdk.resolveArtifact('command', { entity: String(entity).toLowerCase() });
       return !!(items && items[0] && items[0].id);
     },
+    // retrieveSetting(name, { appUniqueName }): the EFFECTIVE app-scoped value of a Dataverse setting,
+    // for the AI app-feature reconcile. Wired here (not in the pure core) so the reader stays injectable
+    // and existence-only callers skip the check entirely. Errors PROPAGATE: verifySpec catches them per
+    // feature and reports the read failure as a not-present check, which is the fail-closed direction —
+    // a verify that cannot prove a feature is in effect must not claim it is.
+    retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },

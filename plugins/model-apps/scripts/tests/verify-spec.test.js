@@ -521,3 +521,257 @@ test('verifySpec: a missing persona role (or a foreign same-name role) is a loud
   assert.ok(r.missing.some((m) => m.kind === 'role' && m.name === 'Agent'));
 });
 
+
+// ── AI app features (ADO 6603383 / 6560699) ────────────────────────────────────────────────────
+// verifySpec had NO awareness of spec.ai, so a build whose every requested AI feature was skipped
+// (admin gate off) or silently not persisted still reported a clean PASS.
+//
+// The oracle is the APP-SCOPE OVERRIDE ROW in `appsettings`, NOT the effective value:
+// `RetrieveSetting(name, { appUniqueName })` falls back to the ENVIRONMENT value when the app has no
+// override, so an effective-value compare passes whenever the environment happens to already hold the
+// requested value — a false PASS for an app that was never configured. This mirrors the oracle the
+// SDK's own `setAppAiFeatures` uses to populate its `applied` bucket.
+
+const AI_BASE = {
+  solution: { uniqueName: 'S', publisherPrefix: 'co' },
+  app: { name: 'A', uniqueName: 'co_a' },
+  entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+};
+// `overrides` maps the PER-APP setting name -> the value held by its APP-SCOPE override row (present
+// key == a row exists). `effective` maps setting name -> what RetrieveSetting reports for the app,
+// which includes environment fallback; it defaults to `overrides` and is context only. Note these are
+// the app settings, NOT the org readiness gates: nlSearch's gate is the boolean `EnableNLGridSearch`
+// but its per-app setting is the numeric `NLGridSearchSetting` — conflating them is what made NL grid
+// search silently no-op.
+const aiRead = (overrides, effective, opts = {}) => {
+  const eff = effective || overrides;
+  return {
+    findTable: async () => null,
+    findColumns: async () => [],
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      const filter = (o && o.filter) || '';
+      if (set === 'appmodule') return opts.noApp ? [] : [{ appmoduleid: 'APPID' }];
+      if (set === 'settingdefinition') {
+        if (opts.noDef) return [];
+        const m = /uniquename eq '([^']+)'/.exec(filter);
+        return [{ settingdefinitionid: `DEF-${m && m[1]}` }];
+      }
+      if (set === 'appsetting') {
+        if (opts.proofThrows) throw new Error('403 forbidden');
+        const m = /_settingdefinitionid_value eq DEF-(.+)$/.exec(filter);
+        const name = m && m[1];
+        return Object.prototype.hasOwnProperty.call(overrides, name) ? [{ value: overrides[name] }] : [];
+      }
+      return [];
+    },
+    retrieveSetting: async (name) => ({ value: eff[name], dataType: opts.dataType }),
+  };
+};
+const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
+const ALL_SETTINGS_ON = {
+  FormFillBarUXEnabled: '1',
+  NLGridSearchSetting: '1',
+  NLChartDataVisualizationSetting: '1',
+  m365copilotmodelappenabled: '1',
+};
+// The overrides a DEFAULT build writes: `resolveAiFlags` seeds formFill/nlSearch/nlChart on and
+// m365 off for any spec carrying `ai`, and verify reconciles that whole set — so a test focusing on
+// ONE feature must still satisfy the other three or it is asserting on unrelated misses.
+const DEFAULT_SETTINGS = {
+  FormFillBarUXEnabled: '1',
+  NLGridSearchSetting: '1',
+  NLChartDataVisualizationSetting: '1',
+  m365copilotmodelappenabled: '0',
+};
+const aiMissing = (r, feature) => r.missing.find((m) => m.kind === 'ai-feature' && m.name === feature);
+// The override proof retries the ABSENT case with real backoff; these tests drive that path
+// constantly, so they opt out of the delay. Retry BEHAVIOUR has its own dedicated test below.
+const verifyAi = (spec, read) => verifySpec(spec, read, { proofDelayMs: 0 });
+
+test('verifySpec: requested AI features that are NOT in effect fail verify (no more false PASS)', async () => {
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}));
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.missing.filter((m) => m.kind === 'ai-feature').length, 4);
+});
+
+test('verifySpec: AI features in effect verify clean', async () => {
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead(ALL_SETTINGS_ON));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature' && c.present).length, 4);
+});
+
+test('verifySpec: an ENV-fallback value that matches the request is NOT a pass (no app override)', async () => {
+  // The regression this oracle exists for: RetrieveSetting at app scope returns the ENVIRONMENT value
+  // when the app has no override. Every requested feature reads back exactly as requested, yet the app
+  // itself was never configured — an effective-value compare reported PASS for a build the SDK itself
+  // classified as notPersisted/skipped.
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({}, ALL_SETTINGS_ON));
+  assert.strictEqual(r.ok, false, 'env fallback must not satisfy an app-scope request');
+  assert.strictEqual(r.missing.filter((m) => m.kind === 'ai-feature').length, 4);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /NO app-scope override/);
+  // The effective value is still reported, as context for the maker.
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /environment fallback/);
+});
+
+test('verifySpec: reads the PER-APP setting, not the org readiness gate, for nlSearch', async () => {
+  // Only the ORG gate is on; the per-app setting has no override. Verify must NOT pass.
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { nlSearch: true } } }, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: undefined, EnableNLGridSearch: 'true' }));
+  assert.strictEqual(r.ok, false);
+  assert.match(aiMissing(r, 'nlSearch').detail, /NLGridSearchSetting/);
+});
+
+test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared verbatim', async () => {
+  const want2 = { ...AI_BASE, ai: { appFeatures: { formFill: 2 } } };
+  const mismatch = await verifyAi(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
+  assert.strictEqual(mismatch.ok, false, 'requested 2 but the override holds 1 must fail');
+  assert.match(aiMissing(mismatch, 'formFill').detail, /requested '2'/);
+  const match = await verifyAi(want2, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
+  assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
+});
+
+test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
+  assert.strictEqual(r.ok, false);
+  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
+  const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '0' }));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not present)', async () => {
+  // We could look and looking failed, so we must not claim PASS on the strength of an effective value
+  // that may simply be the environment default — even though it matches the request here.
+  const read = aiRead({ FormFillBarUXEnabled: '1' }, { FormFillBarUXEnabled: '1' }, { proofThrows: true });
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /could not prove/);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /403 forbidden/);
+});
+
+test('verifySpec: an unresolvable app module fails CLOSED rather than proving against the wrong app', async () => {
+  const read = aiRead(ALL_SETTINGS_ON, ALL_SETTINGS_ON, { noApp: true });
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.missing.find((m) => m.kind === 'ai-feature').detail, /no app module with unique name 'co_a'/);
+});
+
+test('verifySpec: a spec with ai but NO appFeatures still verifies every feature the build writes', async () => {
+  // DR-P1-SK-001 / DR-P1-AR-001: the build seeds a default for EVERY feature whenever `spec.ai`
+  // exists, but verify used to iterate `spec.ai.appFeatures` — so `{ ai: { summaries: {...} } }`
+  // had three features written and ZERO verified, and `--verify` reported a clean PASS for features
+  // the platform may never have stored. That is ADO 6603383 surviving in the shipped artifact.
+  const spec = { ...AI_BASE, ai: { summaries: { default: 'auto' } } };
+  const none = await verifyAi(spec, aiRead({}));
+  assert.strictEqual(none.checks.filter((c) => c.kind === 'ai-feature').length, 4, 'all four defaults are reconciled');
+  assert.strictEqual(none.ok, false, 'unwritten defaults must fail verify');
+  // ...and the same spec passes once the defaults really are in place (m365 defaults OFF).
+  const ok = await verifyAi(spec, aiRead(DEFAULT_SETTINGS));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+test('verifySpec: an undeclared feature is still checked when the spec declares only one', async () => {
+  // The partial-declaration half of the same hole: `{ appFeatures: { m365: true } }` still causes
+  // the build to write formFill/nlSearch/nlChart.
+  const spec = { ...AI_BASE, ai: { appFeatures: { m365: true } } };
+  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '1' }));
+  assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 4);
+  assert.ok(aiMissing(r, 'formFill'), 'the undeclared formFill default is reconciled');
+  assert.strictEqual(r.ok, false);
+});
+
+test('verifySpec: an override row that appears late is retried, not reported as a false FAIL', async () => {
+  // Observed live: an override row can lag briefly behind the write that created it (the SDK
+  // reported a feature not persisted on first apply and clean on a re-run, with the value correct
+  // all along). Verify gates the build's exit code, so a single read would turn that lag into a
+  // false FAIL. Only the ABSENT case is retried — a read ERROR is a different condition.
+  let attempts = 0;
+  const base = aiRead(DEFAULT_SETTINGS);
+  const read = {
+    ...base,
+    queryRecords: async (set, o) => {
+      if (set === 'appsetting') { attempts += 1; if (attempts < 2) return []; }
+      return base.queryRecords(set, o);
+    },
+  };
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: true } } }, read);
+  assert.ok(attempts > 1, 'the absent read must be retried');
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+});
+
+test('verifySpec: the AI check is reader-gated and absent-spec-safe (existing callers unaffected)', async () => {
+  // No ai block at all -> no ai checks.
+  const noAi = await verifyAi(AI_BASE, aiRead(ALL_SETTINGS_ON));
+  assert.strictEqual(noAi.checks.filter((c) => c.kind === 'ai-feature').length, 0);
+  // ai requested but the reader cannot read settings -> skipped, not a false failure.
+  const noSupport = { findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '' };
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noSupport);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 0);
+  // ...and equally when it can read settings but cannot run the override PROOF: the check needs both
+  // capabilities, and degrading to the unsound effective-value compare is exactly the false PASS.
+  const noQuery = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '', retrieveSetting: async () => ({ value: '1' }) };
+  const r2 = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, noQuery);
+  assert.strictEqual(r2.checks.filter((c) => c.kind === 'ai-feature').length, 0);
+});
+
+test('verifySpec: AI settings are read at the APP scope the BUILD wrote under, not the env scope', () => {
+  // Regression guard for a false PASS: when a spec carries no explicit app.uniqueName (neither shipped
+  // sample does), reading `spec.app.uniqueName` yields undefined, the SDK then omits the AppUniqueName
+  // path segment, and RetrieveSetting returns the ENVIRONMENT value. Comparing that against the request
+  // can pass while the app itself has the feature off. The identity must be `appUniqueName(spec)`.
+  const seen = [];
+  const appFilters = [];
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'Project Tracker' },            // <- no uniqueName, like the real samples
+    entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    ai: { appFeatures: { formFill: true } },
+  };
+  const base = aiRead(DEFAULT_SETTINGS);
+  const read = {
+    ...base,
+    queryRecords: async (set, o) => {
+      if (set === 'appmodule') appFilters.push(o.filter);
+      return base.queryRecords(set, o);
+    },
+    retrieveSetting: async (name, opts) => { seen.push({ name, opts }); return { value: '1' }; },
+  };
+  return verifyAi(spec, read).then((r) => {
+    assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+    // Every feature the BUILD writes is reconciled, not only the one the spec named — the build
+    // seeds defaults for all four, so checking fewer would leave the rest silently unverified.
+    assert.strictEqual(seen.length, 4);
+    for (const s of seen) {
+      // Same derivation the build uses for setAppAiFeatures: `<publisherPrefix>_<app.name>` sanitized.
+      assert.strictEqual(s.opts.appUniqueName, 'new_projecttracker');
+    }
+    // ...and the override proof must resolve THE SAME app, or it would prove against another app.
+    assert.ok(appFilters.length >= 1);
+    for (const f of appFilters) assert.strictEqual(f, "uniquename eq 'new_projecttracker'");
+  });
+});
+
+test('verifySpec: a Boolean-spelled override value compares as on/off, independent of any dataType read', () => {
+  // Dataverse dataType 2 == Boolean, whose value is the string 'true'/'false'. An exact '1' compare
+  // would report a genuinely-enabled feature as not-in-effect (a false FAIL on a correct build).
+  // The normalization is deliberately UNCONDITIONAL: branching on a `dataType` read made the
+  // authoritative comparison depend on a second request that can fail independently, so a transport
+  // error on that read silently flipped a correctly-applied feature to FAIL.
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
+  return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' })).then(async (on) => {
+    assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
+    const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'false' }));
+    assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
+  });
+});
+
+test('verifySpec: a failing context read cannot flip a proven feature to FAIL', () => {
+  // Regression guard: `retrieveSetting` is context only. When the override row proves the feature,
+  // a throwing context read must not change the verdict (it previously supplied `dataType`, which
+  // silently decided the comparison).
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
+  const read = { ...aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' }), retrieveSetting: async () => { throw new Error('429 too many requests'); } };
+  return verifyAi(spec, read).then((r) => {
+    assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
+  });
+});

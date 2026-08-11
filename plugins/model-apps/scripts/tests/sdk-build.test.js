@@ -1834,6 +1834,284 @@ test('ai-features phase: spec without spec.ai is a no-op', async () => {
   assert.strictEqual(find(calls, 'configureRowSummary').length, 0, 'configureRowSummary not called without spec.ai');
 });
 
+// ── AI app-feature non-success buckets (ADO 6603383) ───────────────────────────────────────────
+// `setAppAiFeatures` reports FIVE buckets and `applied` is the ONLY success one. The build must
+// surface every non-success bucket: silently dropping one reproduces the false PASS this fix exists
+// to remove (a feature the platform never stored being reported as a clean build). `unverified` and
+// `failed` were added by a later SDK revision, so this pins that they are surfaced too — not just
+// the original `notPersisted`.
+const aiProblemSpec = () => makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+const withAiResult = (result) => {
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return result; };
+  return { sdk, calls };
+};
+
+test('ai-features phase: notPersisted / unverified / failed are each surfaced as a warning event', async () => {
+  const { sdk } = withAiResult({
+    applied: ['nlChart'], skipped: ['m365'],
+    notPersisted: ['formFill'], unverified: ['nlSearch'], failed: ['other'],
+    outcomes: [],
+  });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /NOT PERSISTED: formFill/.test(e.label)), 'notPersisted surfaced');
+  assert.ok(warnings.some((e) => /UNVERIFIED: nlSearch/.test(e.label)), 'unverified surfaced');
+  assert.ok(warnings.some((e) => /FAILED: other/.test(e.label)), 'failed surfaced');
+});
+
+test('ai-features phase: an all-applied result emits no warning events', async () => {
+  const { sdk } = withAiResult({ applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0);
+});
+
+test('ai-features phase: a result missing the newer buckets does not throw (older SDK shape)', async () => {
+  // The vendored bundle and the plugin are versioned together, but a partial result must degrade to
+  // "nothing to warn about" rather than crash the whole build on a missing array.
+  const { sdk } = withAiResult({ applied: ['formFill'], skipped: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'error').length, 0, 'no error events');
+});
+
+test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {
+  // Regression guard for a live false `notPersisted`: this phase runs moments after app-shell CREATED
+  // the app module, and the SDK's default budget (4 attempts / 500ms linear ~= 3s) expired before the
+  // appsettings override row became queryable -- a build of a brand-new app reported notPersisted for
+  // every feature while the rows demonstrably existed seconds later.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  const opts = find(calls, 'setAppAiFeatures')[0].args[2];
+  assert.ok(opts.verifyAttempts > 4, `expected a raised attempt budget, got ${opts.verifyAttempts}`);
+  assert.ok(opts.verifyDelayMs >= 1000, `expected a raised backoff, got ${opts.verifyDelayMs}`);
+  // The solution scope must survive alongside the new knobs.
+  assert.ok(opts.solutionUniqueName, 'solutionUniqueName still passed');
+});
+
+test('ai-features phase: passes the appmoduleid it just created so the write is provable PRE-publish', async () => {
+  // A freshly created appmodule is not readable until it is PUBLISHED, so the SDK's by-NAME lookup
+  // (the only piece of verification that needs it) fails here and every feature lands `unverified`.
+  // The build already holds the id from app-shell, so it must hand it over rather than make the SDK
+  // guess. Run BOTH phases so app-shell populates result.created.app first.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const opts = find(calls, 'setAppAiFeatures')[0].args[2];
+  assert.ok(result.created.app, 'app-shell produced an app id');
+  assert.strictEqual(opts.appModuleId, result.created.app, 'the created app id must be passed through');
+});
+
+test('ai-features phase: omits appModuleId when the app was not created in this run', async () => {
+  // A partial run (--from ai-features) has no app id. Passing `null` would be rejected by the SDK's
+  // GUID validation and fail the whole phase, so it must be omitted and the SDK left to resolve by
+  // name — which works, because an app that predates this run is published and therefore readable.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  const opts = find(calls, 'setAppAiFeatures')[0].args[2];
+  assert.strictEqual(opts.appModuleId, undefined, 'no app id in this run means the option is absent, not null');
+});
+
+test('ai-features phase: the post-publish retry FETCHES and PUBLISHES the app before re-writing', async () => {
+  // The exact sequence measured to work live, in order. Publishing without first fetching the app,
+  // or writing without publishing, both left the override rows absent — so the ordering is the fix,
+  // not an incidental detail.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  let call = 0;
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    call += 1;
+    return call === 1
+      ? { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] }
+      : { applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] };
+  };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const idxOf = (pred) => calls.findIndex(pred);
+  const firstWrite = idxOf((c) => c.name === 'setAppAiFeatures');
+  const fetchIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app');
+  const pubIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'publishArtifact' && c.args[0] === 'app');
+  const retryIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'setAppAiFeatures');
+  assert.ok(fetchIdx > -1, 'the app is re-fetched before the retry');
+  assert.ok(pubIdx > fetchIdx, 'the publish follows the fetch');
+  assert.ok(retryIdx > pubIdx, 'the retry write follows the publish');
+  assert.strictEqual(calls[pubIdx].args[1], result.created.app, 'the app built in this run is the one published');
+});
+
+test('ai-features phase: a failing post-publish retry leaves the original verdict standing', async () => {
+  // Best-effort: a throw during the fetch/publish/retry must not fail the build. The original
+  // non-success verdict simply stands and is reported.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] };
+  };
+  sdk.publishArtifact = async (type, id) => { calls.push({ name: 'publishArtifact', args: [type, id] }); throw new Error('publish is throttled'); };
+  const events = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.ok(result.ok, 'the build still completes');
+  assert.ok(
+    events.some((e) => e.phase === 'ai-features' && e.status === 'skip' && /NOT PERSISTED: formFill/.test(e.label)),
+    'the unapplied feature is still reported'
+  );
+});
+
+test('ai-features phase: RE-ISSUES the write after publish for anything that did not apply', async () => {
+  // LIVE-MEASURED, on two different apps, changing only this variable: a write issued while the app
+  // is freshly created returns `notPersisted` and a direct `appsettings` query shows NO override row
+  // at all — the write itself is a no-op, not a slow read. Fetching + publishing that same app and
+  // re-issuing the IDENTICAL call produced all four `applied` and four real rows. Merely re-PROVING
+  // after publish therefore cannot fix it (there is nothing to find); the write must be re-issued.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  let call = 0;
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    // First (pre-publish) write no-ops the way the platform does; the retry after publish lands.
+    call += 1;
+    return call === 1
+      ? { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed' }] }
+      : { applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'applied', appOverrideExists: true }] };
+  };
+  const events = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const writes = find(calls, 'setAppAiFeatures');
+  assert.strictEqual(writes.length, 2, `expected a post-publish retry write, got ${writes.length}`);
+  // The retry must be scoped to the features that did NOT apply — re-writing an applied feature is
+  // needless churn against a rate-limited settings API.
+  assert.deepStrictEqual(Object.keys(writes[1].args[1]), ['formFill'], 'the retry targets only the unapplied features');
+  const af = result.created.ai.appFeatures;
+  assert.deepStrictEqual(af.applied, ['formFill'], 'the corrected verdict is reflected in the result');
+  assert.deepStrictEqual(af.notPersisted, [], 'the stale non-success bucket is cleared');
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0, 'no warning once the retry succeeds');
+});
+
+test('ai-features phase: a retry that still fails is reported honestly, not swallowed', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed' }] };
+  };
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /NOT PERSISTED: formFill/.test(e.label)), 'a genuinely failing feature still warns');
+});
+
+test('ai-features phase: the recovery reason names the path that actually recovered the feature', async () => {
+  // Two recovery paths land in the same bucket: the post-publish RE-ISSUE, and the override-row
+  // PROOF. Reporting "applied by the re-issue" for something the proof merely found would be the
+  // same report-what-you-did-not-verify failure this phase exists to remove.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  // The retry never applies anything, so recovery can only come from the proof path.
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted' }] };
+  };
+  // ...but the override row IS present, so the proof recovers it.
+  sdk.queryRecords = async (logical) => {
+    if (logical === 'appmodule') return [{ appmoduleid: 'app-guid' }];
+    if (logical === 'settingdefinition') return [{ settingdefinitionid: 'def-guid' }];
+    if (logical === 'appsetting') return [{ value: '1' }];
+    return [];
+  };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const outcome = (result.created.ai.appFeatures.outcomes || []).find((o) => o.feature === 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.match(outcome.reason, /override-row proof/, `the proof path must not claim the re-issue applied it: ${outcome.reason}`);
+});
+
+test('ai-features phase: a not-persisted warning carries a real sequential step index, not `total`', async () => {
+  // Regression guard for a reviewed defect: this warning was once emitted by hand with
+  // `n: runner.total`, so the CLI printed `[total/total]` for it and the progress counter jumped.
+  // `runner.skip` shares the same monotonic counter as `runner.run`, which is why the warning must
+  // go through it rather than a bespoke emit.
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+  const { sdk, calls } = mockSdk();
+  sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
+    calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
+    return { applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] };
+  };
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const warn = events.find((e) => e.phase === 'ai-features' && e.status === 'skip' && /NOT PERSISTED/.test(e.label));
+  assert.ok(warn, 'the warning is emitted');
+  assert.ok(Number.isInteger(warn.n) && warn.n > 0, `step index must be a real number, got ${warn.n}`);
+  // Every terminal event shares one counter, so the warning's index must be strictly greater than
+  // the step before it — the exact property a hard-coded `total` destroys.
+  const terminal = events.filter((e) => e.status === 'ok' || e.status === 'skip' || e.status === 'error');
+  const idx = terminal.indexOf(warn);
+  assert.ok(idx > 0, 'the warning is not the first terminal event');
+  assert.strictEqual(warn.n, terminal[idx - 1].n + 1, `expected a sequential index, got ${terminal[idx - 1].n} -> ${warn.n}`);
+});
+
+test('ai-features phase: a bucket the plugin does not know about is still reported, not dropped', async () => {
+  // The buckets are derived from the RESULT, not a fixed list: a non-success bucket added by a
+  // future SDK revision must surface verbatim rather than vanish, which is the very bug class this
+  // phase exists to remove. (A fixed three-key table silently dropped anything new.)
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: [], unverified: [], failed: [], rejected: ['formFill'], outcomes: [] });
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warnings.some((e) => /REJECTED: formFill/.test(e.label)), `unknown bucket not surfaced: ${JSON.stringify(warnings.map((w) => w.label))}`);
+});
+
+test('ai-features phase: a feature the SDK mis-reports is RE-PROVEN against the override row', async () => {
+  // Live-driven: the SDK's build-time proof returns `notPersisted` with appOverrideExists:false for
+  // a fresh build while `appsettings` demonstrably holds every requested value (re-running it
+  // out-of-band reports all four applied). Printing that as NOT PERSISTED is a false alarm that
+  // also contradicts --verify, which proves the same rows and passes. So anything not in `applied`
+  // is re-proved here against the identical oracle the verifier uses.
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed' }] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return [{ value: '1' }]; // the row IS there
+    return [];
+  };
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0, 'no false NOT PERSISTED warning');
+  assert.ok(r.ok, 'build still succeeds');
+});
+
+test('ai-features phase: re-proving does NOT mask a feature that genuinely did not persist', async () => {
+  // The re-confirmation must only ever UPGRADE a proven feature. When the override row really is
+  // absent the warning has to survive, or the fix would reinstate the false PASS.
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: 'no override observed for FormFillBarUXEnabled' }] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    return []; // no override row
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  const warn = events.find((e) => e.phase === 'ai-features' && e.status === 'skip');
+  assert.ok(warn, 'a genuinely unpersisted feature must still warn');
+  // ...and it must carry the SDK's OWN reason, not a canned bucket description.
+  assert.match(warn.label, /no override observed for FormFillBarUXEnabled/);
+});
+
+test('ai-features phase: an override holding the WRONG value is not treated as proven', async () => {
+  const { sdk } = withAiResult({ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [] });
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return [{ value: '0' }]; // requested true -> '1'
+    return [];
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
+  assert.ok(events.some((e) => e.phase === 'ai-features' && e.status === 'skip'), 'a wrong-valued override must still warn');
+});
+
 test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {
   const spec = makeSpec({ ai: { appFeatures: { formFill: true }, summaries: { default: 'auto' } } });
   const items = planFor(spec, { phases: ['ai-features'] });

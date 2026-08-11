@@ -120,7 +120,7 @@ If `identitiesMatch: false`, log a one-line warning in the transaction log
 
 ## Step 3 — Open the Transaction Log
 
-Before any writes, create `<working-dir>/entity-creation-log.md` with a header:
+Before any writes, create `<working-dir>/genpage-entity-creation-log.md` with a header:
 
 ```markdown
 # Entity Creation Log
@@ -305,7 +305,7 @@ The script outputs structured JSON:
 If `ok: false`, the output includes `{ "ok": false, "error": "...", "phase": "..." }`.
 Surface the error to the user and abort.
 
-Parse the successful result and populate `entity-creation-log.md` with the
+Parse the successful result and populate `genpage-entity-creation-log.md` with the
 following structure:
 
 ### Created Tables Section
@@ -475,7 +475,7 @@ The CLI output includes:
 }
 ```
 
-Update the `## Commands` section in `entity-creation-log.md` to reflect the
+Update the `## Commands` section in `genpage-entity-creation-log.md` to reflect the
 `--sample-data` flag:
 
 ```markdown
@@ -509,7 +509,7 @@ Entity creation complete.
 |-------|---------------------|---------|---------------|----------------|
 | [display] | [actual_name] | [N] | [description] | [N or "skipped"] |
 
-Log: <working-dir>/entity-creation-log.md
+Log: <working-dir>/genpage-entity-creation-log.md
 Ready for RuntimeTypes generation.
 ```
 

@@ -62,29 +62,29 @@ az account get-access-token --resource https://service.flow.microsoft.com --outp
 ## Step 4: Check the FlowAgent tools are wired
 
 The plugin talks to Power Automate through the **FlowAgent MCP server**, which is
-launched automatically from the plugin's `.mcp.json` via a small Node
-bootstrap that resolves `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` and imports
-`server/mcp.mjs`.
+registered as `flowagent` in the plugin's `.mcp.json` and started automatically.
+`.mcp.json` loads the bundled `server/mcp.mjs` through a small Node bootstrap
+that resolves the plugin's installation directory (`PLUGIN_ROOT`, else
+`CLAUDE_PLUGIN_ROOT`, else the current directory) and prints an actionable error
+if the bundle can't be found.
 
 - **If `flowagent-*` / `mcp__flowagent__*` tools appear in your tool list**: tell
   them "The Power Automate tools are connected" and move on.
-- **If they're missing**: the MCP server isn't registered. Ask the user for
-  confirmation before fixing:
+- **If they're missing**: the MCP server isn't registered. Fix it automatically:
 
-  **Tell them**: "The FlowAgent MCP server isn't wired up yet. I can fix this
-  by adding it to your `~/.copilot/mcp-config.json`. Shall I go ahead?"
-
-  **If they confirm**, fix it:
-
-  1. **Locate the installed plugin's MCP bundle.** Run:
+  1. **Locate the installed plugin's MCP bundle.** This only matches a bundle
+     inside a `power-automate` plugin directory, so it can't pick up another
+     plugin's MCP server:
      ```bash
-     node -e "const fs=require('fs'),p=require('path'),d=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');try{const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs'&&dir.split(p.sep).includes('power-automate'))return dir}return null};const r=find(d);if(r)console.log(JSON.stringify({found:true,serverDir:r,mcpMjs:p.join(r,'mcp.mjs')}));else console.log(JSON.stringify({found:false}))}catch(e){console.log(JSON.stringify({found:false,error:e.message}))}"
+     node -e "const fs=require('fs'),p=require('path'),d=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');const find=(dir)=>{let out=[];for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory()){try{out=out.concat(find(f))}catch{}}else if(e.name==='mcp.mjs'&&p.basename(p.dirname(dir))==='power-automate'){out.push(dir)}}return out};try{const hits=find(d);if(hits.length===1)console.log(JSON.stringify({found:true,serverDir:hits[0],mcpMjs:p.join(hits[0],'mcp.mjs')}));else if(hits.length>1)console.log(JSON.stringify({found:false,reason:'multiple power-automate bundles',candidates:hits}));else console.log(JSON.stringify({found:false}))}catch(e){console.log(JSON.stringify({found:false,error:e.message}))}"
      ```
+     If it reports `multiple power-automate bundles`, show the candidates and ask
+     the user which one to register rather than guessing.
 
-  2. **If found**, read `~/.copilot/mcp-config.json`, add the `flowagent` MCP
-     entry, and write it back:
+  2. **If exactly one was found**, read `~/.copilot/mcp-config.json`, add the
+     `flowagent` MCP entry, and write it back:
      ```bash
-     node -e "const fs=require('fs'),p=require('path');const cfgPath=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','mcp-config.json');let cfg;try{cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'))}catch{cfg={mcpServers:{}}};if(!cfg.mcpServers)cfg.mcpServers={};if(cfg.mcpServers.flowagent){console.log('already registered');process.exit(0)}const pluginDir=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');const find=(dir)=>{for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory())try{const r=find(f);if(r)return r}catch{}if(e.name==='mcp.mjs'&&dir.split(p.sep).includes('power-automate'))return dir}return null};const srvDir=find(pluginDir);if(!srvDir){console.log('mcp.mjs not found');process.exit(1)}const mcpPath=p.join(srvDir,'mcp.mjs');cfg.mcpServers.flowagent={command:'node',args:[mcpPath]};fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2)+'\n');console.log('registered flowagent MCP at '+mcpPath)"
+     node -e "const fs=require('fs'),p=require('path');const home=process.env.HOME||process.env.USERPROFILE;const cfgPath=p.join(home,'.copilot','mcp-config.json');let cfg;try{cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'))}catch{cfg={mcpServers:{}}};if(!cfg.mcpServers)cfg.mcpServers={};if(cfg.mcpServers.flowagent){console.log('already registered');process.exit(0)}const d=p.join(home,'.copilot','installed-plugins');const find=(dir)=>{let out=[];for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory()){try{out=out.concat(find(f))}catch{}}else if(e.name==='mcp.mjs'&&p.basename(p.dirname(dir))==='power-automate'){out.push(dir)}}return out};const hits=find(d);if(hits.length!==1){console.log(hits.length?'ambiguous: '+JSON.stringify(hits):'mcp.mjs not found');process.exit(1)}const mcpPath=p.join(hits[0],'mcp.mjs');cfg.mcpServers.flowagent={command:'node',args:[mcpPath]};fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2)+'\n');console.log('registered flowagent MCP at '+mcpPath)"
      ```
 
   3. **Tell the user** to restart the agent (Copilot CLI: `/restart`, Claude Code:
@@ -94,9 +94,8 @@ bootstrap that resolves `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` and imports
      plugin first:
      ```
      /plugin marketplace add microsoft/power-platform-skills
-     /plugin install power-automate@power-platform-skills
      ```
-     Then run `/setup` again.
+     Then select `power-automate` and run `/setup` again.
 
 ## Step 5: Smoke Test
 

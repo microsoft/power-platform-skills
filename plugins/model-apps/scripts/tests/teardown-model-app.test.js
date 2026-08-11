@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
+const vm = require('node:vm');
 const { teardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
@@ -104,6 +105,49 @@ test('apply --allow-destructive performs the deletes', async () => {
   assert.ok(sdk.calls.some((c) => c.method === 'deleteAppCascade'), 'app deleted');
 });
 
+test('deleteAppCascade rejection is reported as a failed app step and teardown continues', async () => {
+  const sdk = presentSdk();
+  sdk.deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
+    sdk.calls.push({ method: 'deleteAppCascade', appModuleId, appModuleIdUnique });
+    throw new Error('delete not confirmed: generative page is shared by another app');
+  };
+  const cap = logCapture();
+
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk, log: cap.log });
+
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => e.step === 'app module "Support Desk"' && /delete not confirmed/.test(e.message)));
+  assert.ok(cap.logs.some((l) => /✗ app module "Support Desk" — delete not confirmed/.test(l)));
+  assert.ok(sdk.calls.some((c) => c.method === 'deleteSolution'), 'later steps still run after the app refusal');
+  assert.ok(cap.logs.some((l) => /teardown finished with errors/.test(l)), 'the summary stays visibly non-clean');
+});
+
+test('deleteAppCascade resolved success:false reports orphaned generative-page children', async () => {
+  const sdk = presentSdk();
+  sdk.deleteAppCascade = async (appModuleId, appModuleIdUnique) => {
+    sdk.calls.push({ method: 'deleteAppCascade', appModuleId, appModuleIdUnique });
+    return {
+      success: false,
+      deleted: [{ type: 'app', id: appModuleId }],
+      failures: [
+        { operation: 'delete', type: 'genPageFile', id: 'file-1', error: new Error('file remained') },
+        { operation: 'delete', type: 'genPage', id: 'page-1', error: new Error('page remained') },
+      ],
+    };
+  };
+  const cap = logCapture();
+
+  const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk, log: cap.log });
+  const message = r.errors.map((e) => e.message).join('\n');
+
+  assert.strictEqual(r.ok, false);
+  assert.match(message, /app "App" deleted, but 2 cascade cleanup step\(s\) failed \(orphaned rows remain\)/);
+  assert.match(message, /delete genPageFile file-1: file remained/);
+  assert.match(message, /delete genPage page-1: page remained/);
+  assert.doesNotMatch(message, /sitemap/i, 'the app sitemap is no longer reported as a separate cascade target');
+  assert.ok(cap.logs.some((l) => /✗ app module "Support Desk"/.test(l) && /orphaned rows remain/.test(l)));
+});
+
 test('apply threads through to the engine (deletes issued) and returns ok', async () => {
   const sdk = presentSdk();
   const r = await teardownModelApp(desk, { apply: true, allowDestructive: true }, { sdk });
@@ -143,6 +187,223 @@ test('cliEmit: an error event with no detail has no dangling separator', () => {
   const withDetail = logs.find((l) => /thing2/.test(l));
   assert.ok(!/—\s*$/.test(noDetail) && !noDetail.includes(' — '), `no dangling separator: ${JSON.stringify(noDetail)}`);
   assert.ok(withDetail.includes(' — boom'), 'detail still rendered with separator');
+});
+
+function loadTeardownCli({
+  parseResult,
+  validation = { ok: true },
+  runResult = { ok: true, dryRun: false },
+  runThrows = null,
+  sdkThrows = null,
+  workspaceExists = true,
+  invokeAsMain = false,
+  emitThrows = false,
+}) {
+  const scriptPath = path.join(__dirname, '..', 'teardown-model-app.js');
+  const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
+  const events = [];
+  const stderr = [];
+  const mod = { exports: {} };
+  const sdkTemp = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\teardown-sdk';
+  const fakeFs = {
+    mkdtempSync: (prefix) => {
+      events.push({ type: 'mkdtempSync', prefix });
+      return sdkTemp;
+    },
+    rmSync: (dir, opts) => events.push({ type: 'rmSync', dir, opts }),
+    existsSync: (dir) => {
+      events.push({ type: 'existsSync', dir });
+      return workspaceExists;
+    },
+  };
+  const customRequire = (id) => {
+    if (id === 'node:fs') return fakeFs;
+    if (id === 'node:path') return path;
+    if (id === 'node:os') return { tmpdir: () => 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace' };
+    if (id === './lib/app-spec.js') {
+      return {
+        validateAppSpec: () => validation,
+        migrateAppSpec: (spec) => {
+          events.push({ type: 'migrateAppSpec', spec });
+          return { ...spec, migrated: true };
+        },
+      };
+    }
+    if (id === './lib/sdk-teardown.js') {
+      return {
+        runTeardown: async (spec, opts, deps) => {
+          events.push({ type: 'runTeardown', spec, opts });
+          if (runThrows) throw runThrows;
+          deps.emit({ phase: 'app', status: runResult.ok ? 'ok' : 'error', label: 'app module "Support Desk"', n: 1, total: 1, detail: runResult.ok ? '' : 'refused' });
+          return runResult;
+        },
+      };
+    }
+    if (id === './lib/op-diff.js') {
+      return { classifyOps: () => ({ hasDestructive: false, destructive: [] }) };
+    }
+    if (id === './lib/sdk-http-client.js') {
+      return { createAzHttpClient: (env) => ({ env }) };
+    }
+    if (id === './lib/dataverse-auth.js') {
+      return {
+        parseArgs: () => parseResult,
+        readJsonArg: (arg) => {
+          events.push({ type: 'readJsonArg', arg });
+          return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
+        },
+        emitResult: (ok, payload) => {
+          events.push({ type: 'emitResult', ok, payload });
+          if (emitThrows) {
+            const err = new Error(`emitResult(${ok})`);
+            err.exitCode = ok ? 0 : 1;
+            throw err;
+          }
+        },
+      };
+    }
+    if (id === './lib/apply-snapshot-store.js') {
+      return {
+        tombstoneSnapshot: (workspaceDir) => { events.push({ type: 'tombstoneSnapshot', workspaceDir }); return { ok: true }; },
+        deleteSnapshot: (workspaceDir) => events.push({ type: 'deleteSnapshot', workspaceDir }),
+      };
+    }
+    if (id === './vendor/cds-maker-sdk.cjs') {
+      return {
+        createMakerSdk: (cfg) => {
+          events.push({ type: 'createMakerSdk', cfg });
+          if (sdkThrows) throw sdkThrows;
+          return {
+            initWorkspace: () => events.push({ type: 'initWorkspace' }),
+            resolveArtifact: async () => [],
+          };
+        },
+      };
+    }
+    return require(id);
+  };
+  customRequire.main = invokeAsMain ? mod : {};
+  const sandboxProcess = {
+    argv: ['node', scriptPath],
+    stderr: { write: (message) => stderr.push(message) },
+    exit: (code) => {
+      const err = new Error(`process.exit(${code})`);
+      err.exitCode = code;
+      throw err;
+    },
+  };
+  vm.runInNewContext(source, {
+    require: customRequire,
+    module: mod,
+    exports: mod.exports,
+    process: sandboxProcess,
+    Buffer,
+    setImmediate,
+  }, { filename: scriptPath });
+  return { main: mod.exports.__mainForTest, events, stderr, sdkTemp, settle: () => new Promise((resolve) => setImmediate(resolve)) };
+}
+
+test('teardown CLI rejects usage errors before creating the destructive SDK client', async () => {
+  const harness = loadTeardownCli({
+    parseResult: { positional: [], flags: { env: 'https://org.example', spec: '@app-spec.json', workspace: true } },
+  });
+
+  await assert.rejects(harness.main(), (err) => err.exitCode === 1);
+  assert.match(harness.stderr.join(''), /Usage: node scripts\/teardown-model-app\.js/);
+  assert.ok(!harness.events.some((e) => e.type === 'createMakerSdk'), 'usage failures do not initialize the SDK');
+});
+
+test('teardown CLI applies, clears the local workspace only after a clean run, and cleans the SDK temp dir before emit', async () => {
+  const workspaceDir = 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace\\teardown-local';
+  const harness = loadTeardownCli({
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+        'clear-workspace': true,
+        workspace: workspaceDir,
+      },
+    },
+  });
+
+  await harness.main();
+  const emitIndex = harness.events.findIndex((e) => e.type === 'emitResult');
+  const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
+  const workspaceCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === workspaceDir);
+
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === harness.sdkTemp));
+  assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === true));
+  assert.ok(harness.events.some((e) => e.type === 'tombstoneSnapshot' && e.workspaceDir === workspaceDir));
+  assert.ok(harness.events.some((e) => e.type === 'deleteSnapshot' && e.workspaceDir === workspaceDir));
+  assert.ok(workspaceCleanupIndex > -1, '--clear-workspace removes the caller workspace only after clean apply');
+  assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex, 'emitResult exits, so SDK cleanup must happen first');
+  assert.match(harness.stderr.join(''), /cleared workspace/);
+  assert.strictEqual(harness.events[emitIndex].ok, true);
+});
+
+test('teardown CLI dry-runs a positional spec with the default workspace and no destructive cleanup', async () => {
+  const specPath = 'D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json';
+  const harness = loadTeardownCli({
+    parseResult: { positional: [specPath], flags: { env: 'https://org.example' } },
+    runResult: { ok: true, dryRun: true, plan: ['app module "Support Desk"'] },
+  });
+
+  await harness.main();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+
+  assert.ok(harness.events.some((e) => e.type === 'runTeardown' && e.opts.apply === false));
+  assert.ok(!harness.events.some((e) => e.type === 'tombstoneSnapshot'), 'dry-runs do not touch changed-only snapshots');
+  assert.ok(!harness.events.some((e) => e.type === 'existsSync'), 'dry-runs never clear the caller workspace');
+  assert.strictEqual(emitted.ok, true);
+  assert.strictEqual(emitted.payload.dryRun, true);
+});
+
+test('teardown CLI emits an engine failure only after cleaning the SDK temp workspace', async () => {
+  const harness = loadTeardownCli({
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+        apply: true,
+        'allow-destructive': true,
+      },
+    },
+    runThrows: new Error('engine failed'),
+    emitThrows: true,
+  });
+
+  await assert.rejects(harness.main(), (err) => err.exitCode === 1);
+  const emitIndex = harness.events.findIndex((e) => e.type === 'emitResult');
+  const sdkCleanupIndex = harness.events.findIndex((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp);
+
+  assert.ok(sdkCleanupIndex > -1 && sdkCleanupIndex < emitIndex);
+  assert.strictEqual(harness.events[emitIndex].ok, false);
+  assert.match(harness.events[emitIndex].payload.message, /engine failed/);
+});
+
+test('teardown CLI entrypoint reports SDK startup failures after removing the throwaway workspace', async () => {
+  const harness = loadTeardownCli({
+    parseResult: {
+      positional: [],
+      flags: {
+        env: 'https://org.example',
+        spec: '@D:\\Projects\\power-platform-skills-sdk\\plugins\\model-apps\\samples\\app-spec.support-desk.json',
+      },
+    },
+    sdkThrows: new Error('SDK init failed'),
+    invokeAsMain: true,
+  });
+
+  await harness.settle();
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+
+  assert.ok(harness.events.some((e) => e.type === 'rmSync' && e.dir === harness.sdkTemp));
+  assert.strictEqual(emitted.ok, false);
+  assert.match(emitted.payload.message, /SDK init failed/);
 });
 
 // ---- #changed-only snapshot lifecycle: tombstone-before-delete + delete-after-clean-teardown ----------
