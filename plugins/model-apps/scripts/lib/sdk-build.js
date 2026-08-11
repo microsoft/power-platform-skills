@@ -69,6 +69,7 @@ const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
+const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 
@@ -1728,14 +1729,76 @@ async function runSdkBuild(spec, opts = {}) {
   // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
   //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
   //     skips features whose admin gate is off; it never throws.
+  // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
+  // ai-features phase for why the verdict cannot honestly be decided at write time).
+  const pendingAiReconfirm = [];
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
-    const flags = Object.assign({ formFill: true, nlSearch: true, nlChart: true, m365: false }, (spec.ai.appFeatures || {}));
+    const flags = resolveAiFlags(spec);
+    // NOTE: this first write frequently NO-OPS. An app-scope setting write does nothing until the
+    // app is published, and this phase runs moments after `app-shell` created it (the `publish`
+    // phase is later, and is opt-in). It is still issued here so an ALREADY-published app — the
+    // common case on a rebuild/edit — applies immediately and needs no retry. Anything it does not
+    // apply is re-issued after publish by the block at the end of this function, which replicates
+    // the fetch → publish → write sequence measured to work live.
     await runner.run('ai-features', 'enable app AI features', async () => {
-      const r = await provision.setAppAiFeatures(appUnique, flags, { solutionUniqueName });
+      // The SDK confirms each app-scope write by polling for its `appsettings` override row, keyed by
+      // appmoduleid. That id is normally resolved from the app's unique NAME — but a freshly created
+      // appmodule is not readable until it is PUBLISHED (Dataverse omits it from list queries and 404s
+      // the by-id retrieve), and this phase runs moments after `app-shell` created it. The by-name
+      // lookup is the ONLY piece that fails pre-publish; the `appsettings` proof query itself works
+      // fine. Passing the id we already hold skips the lookup entirely and lets the write be proven
+      // here, in the same phase that made it.
+      //
+      // The SDK still re-checks the id against the published app when the app IS readable, so a stale
+      // or wrong id is rejected rather than silently used to configure another app.
+      //
+      // A modest retry budget still helps: on an established app the override row is queryable ~580ms
+      // after the write (measured live), so the SDK's 4-attempt/500ms default is tight but the budget
+      // is only ever spent when the row is genuinely absent.
+      const r = await provision.setAppAiFeatures(appUnique, flags, {
+        solutionUniqueName,
+        appModuleId: result.created.app || undefined,
+        verifyAttempts: 8,
+        verifyDelayMs: 1000,
+      });
       result.created.ai.appFeatures = r;
-      return (r.applied && r.applied.length) ? `applied: ${r.applied.join(', ')}${r.skipped && r.skipped.length ? '; skipped (admin gate off): ' + r.skipped.join(', ') : ''}` : '(none \u2014 admin gate off)';
+      // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
+      // override row is proven present holding the requested value. Every other bucket is a
+      // non-success the build must surface, because reporting them as plain success was the
+      // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
+      //   notPersisted — the write returned 204 but no override was observed for the whole retry
+      //                  budget; Dataverse can accept an app-scope write and store nothing.
+      //   unverified   — the write was issued but the proof could not be READ (no access to
+      //                  appsettings/settingdefinitions/appmodules, or a transport error).
+      //   failed       — the write (or its org-gate read) threw. The SDK keeps going so the rest
+      //                  of the batch still reports, so this arrives as data, never as an exception.
+      //
+      // RE-CONFIRMATION (safety net): with `appModuleId` supplied above, the SDK can prove the
+      // override row here, pre-publish, so the normal path decides the verdict in this phase. The
+      // deferral below remains for the residual cases the proof genuinely cannot settle yet — a
+      // transient read failure, or a row that has not materialized inside the retry budget. Deciding
+      // "NOT PERSISTED" on those would print a scary and WRONG verdict that `--verify` then
+      // contradicts in the same run, so the buckets are recorded and re-proved after publish (see
+      // `reconfirmAiFeatures` below) against the identical override-row oracle the verifier uses.
+      // The re-proof can only ever UPGRADE a feature, never hide a real failure.
+      //
+      // Derive the non-success buckets from the RESULT, not a fixed list: a bucket added by a future
+      // SDK revision is then reported verbatim rather than silently dropped (which is the very bug
+      // class this phase exists to remove). `outcomes` is per-feature detail, not a bucket.
+      const problemKeys = Object.keys(r || {}).filter((k) => k !== 'applied' && k !== 'skipped' && k !== 'outcomes' && Array.isArray(r[k]) && r[k].length);
+      for (const key of problemKeys) {
+        for (const feature of r[key]) {
+          const outcome = (r.outcomes || []).find((o) => o && o.feature === feature);
+          pendingAiReconfirm.push({ feature, bucket: key, reason: outcome && outcome.reason });
+        }
+      }
+      const parts = [];
+      if (r.applied && r.applied.length) parts.push(`applied: ${r.applied.join(', ')}`);
+      if (r.skipped && r.skipped.length) parts.push(`skipped (admin gate off): ${r.skipped.join(', ')}`);
+      if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
+      return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
     const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
     for (const logical of tables) {
@@ -1811,6 +1874,86 @@ async function runSdkBuild(spec, opts = {}) {
       await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
       if (result.created.app) await provision.publishArtifact('app', result.created.app);
     });
+  }
+
+  // 8b. AI feature re-issue + re-confirmation. An app-scope setting write is a NO-OP on a freshly
+  //     created app: measured live on two different apps, the write returned `notPersisted` and a
+  //     direct `appsettings` query showed no override row at ALL, while fetching + publishing that
+  //     same app and re-issuing the identical call produced every feature `applied` with real rows
+  //     holding the requested values. So this pass RE-ISSUES the write (re-proving alone cannot help
+  //     — there is nothing to find), then falls back to proving the override row for anything the
+  //     retry still did not claim. It can only ever UPGRADE a feature, never hide a real failure.
+  if (pendingAiReconfirm.length) {
+    const flags = resolveAiFlags(spec);
+    const appUnique = appUniqueName(spec);
+    const BUCKET_LABELS = {
+      notPersisted: ['NOT PERSISTED', 'Dataverse accepted the write but no app-scope override holding the requested value was observed'],
+      unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
+      failed: ['FAILED', 'the write or its org-gate read threw'],
+    };
+    // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
+    // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
+    // the build, it just leaves the original non-success verdict standing and reported.
+    const retryApplied = new Set();
+    if (result.created.app) {
+      const retryFlags = {};
+      for (const p of pendingAiReconfirm) if (flags && Object.prototype.hasOwnProperty.call(flags, p.feature)) retryFlags[p.feature] = flags[p.feature];
+      if (Object.keys(retryFlags).length) {
+        try {
+          await provision.fetchArtifact('app', result.created.app);
+          await provision.publishArtifact('app', result.created.app);
+          const retry = await provision.setAppAiFeatures(appUnique, retryFlags, {
+            solutionUniqueName: spec.solution && spec.solution.uniqueName,
+            appModuleId: result.created.app,
+            verifyAttempts: 6,
+            verifyDelayMs: 1000,
+          });
+          for (const f of (retry && retry.applied) || []) retryApplied.add(f);
+        } catch { /* leave the original verdict standing; it is reported below */ }
+      }
+    }
+    const app = await resolveAppModuleId(provision, appUnique);
+    const stillBad = [];
+    const reproven = [];
+    // Track HOW each feature was recovered so the reported reason is true for that path. Claiming a
+    // re-issue applied something the proof merely found is the same "report what you did not verify"
+    // failure this whole phase exists to remove.
+    const reprovenBy = new Map();
+    for (const p of pendingAiReconfirm) {
+      if (retryApplied.has(p.feature)) {
+        reproven.push(p.feature);
+        reprovenBy.set(p.feature, 'applied by the post-publish re-issue (an app-scope write is a no-op before the app is published)');
+        continue;
+      }
+      const setting = AI_APP_SETTING[p.feature];
+      let proof = { error: app.error };
+      if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
+      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature]))) {
+        reproven.push(p.feature);
+        reprovenBy.set(p.feature, 'confirmed present after publish by the build\u2019s own override-row proof');
+        continue;
+      }
+      const [label, why] = BUCKET_LABELS[p.bucket] || [String(p.bucket).toUpperCase(), 'reported by the SDK as a non-success outcome'];
+      // Prefer the SDK's OWN per-feature reason: it carries the real error text for `failed`, which
+      // a canned bucket description throws away.
+      stillBad.push({ feature: p.feature, label, why: p.reason || proof.error || why });
+    }
+    // Reflect the corrected verdict in the machine-readable result too, so a caller reading
+    // `created.ai.appFeatures` is not told a feature failed when it demonstrably did not.
+    const af = result.created.ai && result.created.ai.appFeatures;
+    if (af && reproven.length) {
+      af.applied = [...(af.applied || []), ...reproven];
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'skipped') af[key] = af[key].filter((f) => !reproven.includes(f));
+      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
+    }
+    // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
+    // advances the step counter correctly, which a hand-built `runner.emit` did not.
+    const byLabel = new Map();
+    for (const b of stillBad) {
+      if (!byLabel.has(b.label)) byLabel.set(b.label, { names: [], why: b.why });
+      byLabel.get(b.label).names.push(b.feature);
+    }
+    for (const [label, info] of byLabel) runner.skip('ai-features', `${label}: ${info.names.join(', ')} \u2014 ${info.why}`);
   }
 
   return result;

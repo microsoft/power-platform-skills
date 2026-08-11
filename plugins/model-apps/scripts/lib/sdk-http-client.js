@@ -15,7 +15,7 @@ const { getAuthToken, makeRequest } = require('./dataverse-auth.js');
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
  * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }
- * @returns {{get,post,patch,delete,put}}
+ * @returns {{get,post,patch,delete,put,postRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
   const clean = String(orgUrl).replace(/\/+$/, '');
@@ -77,7 +77,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
     }
   }
 
-  async function call(method, url, body, options) {
+  /**
+   * @param {object} [ctl] - transport controls, independent of the OData semantics:
+   *   `rawBody` returns the response body as the decoded string it arrived as, skipping parseBody.
+   */
+  async function call(method, url, body, options, ctl = {}) {
     assertSameOrigin(url); // never attach the org's bearer token to a foreign origin
     const hasBody = body !== undefined && body !== null;
     const bodyStr = hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
@@ -90,9 +94,15 @@ function createAzHttpClient(orgUrl, deps = {}) {
     //    retry: Dataverse's "More than one concurrent Delete requests detected" guard PERMANENTLY
     //    wedges the record when a retry races the still-in-flight first delete (web-resource deletes
     //    SQL-time-out under load and trip exactly this). One delete keeps the failure re-runnable.
+    //  - A `$batch` change set is a POST, but it CARRIES record deletes (the SDK deletes an app and
+    //    its sitemap in one atomic change set), so it inherits the record-delete hazard above. It is
+    //    also ambiguous on failure: the server may have committed while the response was lost, so a
+    //    blind re-issue is exactly the racing retry that wedges the row. Issue it once and let the
+    //    SDK surface the unknown outcome to the caller.
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
-    const noRetry = method_ === 'DELETE' && !isMetadataDelete;
+    const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
+    const noRetry = (method_ === 'DELETE' && !isMetadataDelete) || isBatch;
 
     // Retry: refresh the token once on 401 (no backoff); back off on transient 5xx/429.
     // 6 attempts with capped jittered backoff rides out a per-entity customization lock that
@@ -125,7 +135,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
         await sleep(backoffMs(attempt));
         continue;
       }
-      return { status: res.statusCode, headers: res.headers || {}, body: parseBody(res.body) };
+      return {
+        status: res.statusCode,
+        headers: res.headers || {},
+        body: ctl.rawBody ? res.body : parseBody(res.body),
+      };
     }
     /* istanbul ignore next */
     throw new Error('Unreachable retry loop');
@@ -137,6 +151,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
     patch: (url, body, options) => call('PATCH', url, body, options),
     delete: (url, options) => call('DELETE', url, undefined, options),
     put: (url, body, options) => call('PUT', url, body, options),
+    // The SDK's atomic multi-row writes (OData `$batch` change sets) need a transport that does NOT
+    // touch the payload in either direction: the request body is a multipart/mixed envelope whose
+    // CRLF boundaries are significant, and the response is a multipart envelope the SDK scans for
+    // each operation's `HTTP/1.1 <status>` line. JSON-serializing the request or JSON-parsing the
+    // response breaks that — the SDK rejects a non-string response body with a ConnectionError.
+    // The boundary-bearing Content-Type comes from `options.headers` (call() only defaults a JSON
+    // Content-Type when the caller supplied none), so it passes through untouched.
+    // Contract: cds-maker-sdk src/types/httpClient.ts (postRaw). Without this method the SDK refuses
+    // to delete an app that owns a sitemap (APP_DELETE_NOT_ATOMIC) rather than strand a row.
+    postRaw: (url, body, options) => call('POST', url, body, options, { rawBody: true }),
   };
 }
 

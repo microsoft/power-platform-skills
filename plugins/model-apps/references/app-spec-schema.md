@@ -499,11 +499,17 @@ entirely optional; omitting it leaves every AI feature at its platform default.
 
 ```jsonc
 "ai": {
-  // appFeatures: opt specific AI features in or out for this app (all optional booleans).
+  // appFeatures: opt specific AI features in or out for this app (all optional).
+  // Values are `true`/`false` (the ergonomic spellings of the underlying numeric settings' 1/0) or an
+  // explicit integer between 0 and 1000000 for a platform-defined value — notably `2` = "on for
+  // everyone". The bound mirrors the SDK's own, so an out-of-range value is rejected here rather
+  // than aborting the build half-applied.
+  // These write PER-APP settings, which are distinct from the org-level admin gates the build
+  // preflights; a feature whose org gate is off is skipped with a warning and never silently applied.
   "appFeatures": {
     "formFill":  true,   // Copilot-assisted form fill (data entry)
     "nlSearch":  true,   // natural-language grid/view search (data exploration)
-    "nlChart":   true,   // natural-language chart / AI data visualization
+    "nlChart":   2,      // natural-language chart / AI data visualization — on for everyone
     "m365":      false   // M365 Copilot integration (opt-in; defaults false)
   },
   // summaries: configure the row-summary (Copilot summary card) feature per table.
@@ -542,7 +548,8 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - State an **explicit output shape**: a short paragraph is the recommended default.
 
 **Validation rules** (`validateAppSpec` / `lintAppSpec`):
-- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be booleans (hard error).
+- `ai.appFeatures` keys must be one of `formFill · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. `true`/`false` mean the underlying numeric setting's `1`/`0`; use an explicit integer (e.g. `2`) for a platform value like "on for everyone".
+- Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on and `m365` off, and `--verify` reconciles that whole resolved set.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).

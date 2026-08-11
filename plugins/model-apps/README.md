@@ -175,7 +175,7 @@ validator blocks a single tool call (the agent reworks it) — never the whole s
 | Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a model-apps authoring session (a `genpage-plan.md`, `app-spec.json`, or `model-app-plan.md` at/under cwd, so it covers both `/genpage` and `/app-builder`). Never blocks; silent in unrelated projects. |
 | Icon validator | after a generated `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. Fires for both skills (gated on the `export default GeneratedComponent` marker, or a sibling `genpage-plan.md` / `model-app-plan.md`). |
 | Skill validator | after a skill runs | Runs the skill's `validate*.js` if it has one. |
-| Telemetry | on skill start / prompt | Emits anonymous `skill_started` (see [Telemetry](#telemetry)). |
+| Telemetry | on skill start / prompt | Emits `skill_started` usage telemetry (see [Telemetry](#telemetry)). |
 
 **Escape hatches** (environment variables — set to `1` or `true`):
 
@@ -196,19 +196,21 @@ export MODEL_APPS_DISABLE_HOOKS=1
 
 ## Telemetry
 
-model-apps ships anonymous, opt-out usage telemetry (1DS). The committed config ships
+model-apps ships opt-out usage telemetry (1DS). The committed config ships
 **disabled** (`disabled: true`) — it emits nothing until go-live, even though it now
 carries the provisioned model-apps key + stream (staged, not yet enabled). `disabled:
 true` is the active guard; the placeholder-key check is only a secondary guard for
 un-provisioned copies. Once enabled it is **on by default** (you opt out).
 
-- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions, and
-  Dataverse org/tenant GUIDs when signed in. **Never** file paths, prompts, tool
-  inputs, entity/table names, URLs, credentials, usernames, hostnames, or any
-  user-level identifier (no Entra object id).
+- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
+  session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when
+  PAC is signed in. Model Apps excludes the signed-in user's Entra object ID.
+  Events do not include file paths, prompts, tool inputs, entity/table names, URLs,
+  credentials, usernames, or hostnames.
 - **Local diagnostic mirror:** every event is also written to
   `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl` (even
-  when you've opted out of transmission) — hand over that one file when filing an issue.
+  when you've opted out of transmission) and retains the same event fields.
+  Hand over that one file when filing an issue.
 - **Opt out** per-user with `/model-apps:telemetry off` (re-enable with `on`, check
   with `status`), or for CI/automation set
   `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).
