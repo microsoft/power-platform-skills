@@ -97,7 +97,7 @@ test('workflow-log.md present: pass when content exceeds threshold', () => {
 // ---------- Phase 1 prereq checks ----------
 
 test('node --version and pac help: pass when both recorded separately', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `## Phase 1
 - node --version → v20
 - pac help → PAC CLI Version 2.7.3
@@ -107,7 +107,7 @@ test('node --version and pac help: pass when both recorded separately', () => {
 });
 
 test('node --version and pac help: fail when chained with &&', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `node --version && pac help → 2.7.3`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
@@ -115,7 +115,7 @@ test('node --version and pac help: fail when chained with &&', () => {
 });
 
 test('node --version and pac help: fail when version not verified', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `- node --version\n- pac help`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');

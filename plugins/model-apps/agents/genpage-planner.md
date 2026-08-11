@@ -49,7 +49,7 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
 - The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
+  for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
   form).
 
 Decisions and outcomes can be summarized at the end of the section, but they
@@ -70,9 +70,10 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
-user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(required for `pac model create` support and the genpage `upload` connector/Custom API
+flags). If the version is older, instruct the user to update:
+`dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
 Do NOT proceed until prerequisites are met.

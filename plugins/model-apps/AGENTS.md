@@ -9,7 +9,7 @@ A plugin for building and deploying Power Apps generative pages (genux) for mode
 The `/genpage` skill orchestrates specialist agents: a planner (requirements + plan approval), an optional entity builder (Dataverse entity creation via the plugin's own Node.js Web API scripts), and parallel page builders (code generation).
 
 **Requirements:**
-- **PAC CLI ≥ 2.7.0** — for app and page deploy operations
+- **PAC CLI > 2.10.0** — for app and page deploy operations (incl. the genpage `upload` connector/Custom API flags)
 - **Azure CLI (`az`)** — used by entity-builder for Dataverse Web API auth; must be logged in with the same identity as the active `pac` profile
 
 No Dataverse Skills plugin or Python dependency.

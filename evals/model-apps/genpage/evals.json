@@ -4,7 +4,7 @@
   "common_workflow_assertions": [
     "A workflow-log.md file is saved to the working directory documenting all phases attempted",
     "Phase 0: A working directory is created with a kebab-case name derived from the user's description",
-    "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified",
+    "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified",
     "Phase 1 (Planner): pac auth list is run and the active environment is identified and reported to the user",
     "Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion",
     "Phase 1 (Planner): genpage-plan.md ALWAYS contains 'Solution:' and 'Publisher Prefix:' lines in ## Environment; default fallback is 'Solution: Default' + 'Publisher Prefix: new' for code-only flows",

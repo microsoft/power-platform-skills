@@ -20,7 +20,7 @@ This plugin creates **pages within existing** model-driven apps — it cannot cr
 - Install: `dotnet tool install --global Microsoft.PowerApps.CLI.Tool`
 - Update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`
 - Or download from the [Microsoft Power Platform CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) page
-- Verify: `pac help` (version must be >= 2.7.0)
+- Verify: `pac help` (version must be > 2.10.0)
 
 ---
 

@@ -95,7 +95,7 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 > NOT inline the planner's questions yourself with `AskUserQuestion`.**
 >
 > The planner is not optional or skippable. It runs:
-> 1. Prerequisite validation (`node --version`, `pac help` version >= 2.7.0)
+> 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (via `AskUserQuestion`
 >    inside the planner subagent, not here)

@@ -96,7 +96,7 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified',
+  'Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified',
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
