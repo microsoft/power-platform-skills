@@ -4,13 +4,21 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, droppedSubareaCount } = require('../download-model-app.js');
+const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
   assert.strictEqual(await resolveAppId({}, guid), guid);
   const sdk = { queryRecords: async (l, o) => { assert.match(o.filter, /uniquename eq 'new_app'/); return [{ appmoduleid: 'app-1' }]; } };
   assert.strictEqual(await resolveAppId(sdk, 'new_app'), 'app-1');
+});
+
+test('resolveAppId escapes apostrophes and returns undefined for a missing app', async () => {
+  const calls = [];
+  const sdk = { queryRecords: async (logical, opts) => { calls.push({ logical, opts }); return []; } };
+  assert.strictEqual(await resolveAppId(sdk, "new_bob's_app"), undefined);
+  assert.strictEqual(calls[0].logical, 'appmodule');
+  assert.match(calls[0].opts.filter, /uniquename eq 'new_bob''s_app'/);
 });
 
 test('collectSitemap gathers distinct entities + icons from the sitemap', () => {
@@ -159,13 +167,89 @@ test('droppedSubareaCount counts subareas the spec could not round-trip (e.g. da
   assert.strictEqual(droppedSubareaCount(app, same), 0);
 });
 
+test('readDashboards reconstructs supported tile shapes and skips unreadable dashboards', async () => {
+  const DASH = '{AAAAAAAA-0000-4000-8000-000000000001}';
+  const SKIP = '{BBBBBBBB-0000-4000-8000-000000000002}';
+  const app = { siteMap: { areas: [{ groups: [{ subAreas: [
+    { type: 'DashBoard', dashboardId: DASH, title: 'Sitemap title' },
+    { type: 'DashBoard', dashboardId: SKIP, title: 'Broken dashboard' },
+  ] }] }] } };
+  const sdk = {
+    fetchArtifact: async (type, id) => {
+      if (String(id).toLowerCase() === SKIP.toLowerCase()) throw new Error('dashboard deleted while downloading');
+      return {
+        components: [
+          { type: 'chart', name: 'Revenue', parameters: { TargetEntityType: 'account', ViewId: '{11111111-0000-4000-8000-000000000001}', VisualizationId: '{22222222-0000-4000-8000-000000000002}' } },
+          { type: 'list', name: 'Open Accounts', parameters: { TargetEntityType: 'account', ViewId: '{33333333-0000-4000-8000-000000000003}' } },
+          { type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } },
+          { type: 'webresource', name: 'Help', parameters: { WebResourceName: 'new_help.htm' } },
+          { type: 'chart', name: 'Incomplete chart', parameters: { TargetEntityType: 'account' } },
+        ],
+      };
+    },
+    queryRecords: async () => [{ name: 'Executive Dashboard' }],
+  };
+
+  const dashboards = await readDashboards(sdk, app);
+
+  assert.strictEqual(dashboards.length, 1);
+  assert.strictEqual(dashboards[0].name, 'Executive Dashboard');
+  assert.deepStrictEqual(dashboards[0].tiles, [
+    { type: 'chart', name: 'Revenue', entity: 'account', viewId: '11111111-0000-4000-8000-000000000001', visualizationId: '22222222-0000-4000-8000-000000000002' },
+    { type: 'list', name: 'Open Accounts', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
+    { type: 'iframe', name: 'Portal', url: 'https://contoso.example' },
+    { type: 'webresource', name: 'Help', webResource: 'new_help.htm' },
+  ]);
+});
+
+test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
+    queryRecords: async () => { throw new Error('systemform read throttled'); },
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  });
+  assert.strictEqual(dashboards[0].name, 'Operations');
+});
+
 // ── Task 11: assignPageKeys + missingDownloads + full round-trip ──────────────
-const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution } = require('../download-model-app.js');
+const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appComponentEntities } = require('../download-model-app.js');
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
+
+test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
+  // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
+  // navigation is untrustworthy. The sitemap IS this function's membership oracle, so that is a
+  // LOGICAL failure of the class its contract says it RETURNS rather than throws — otherwise the CLI
+  // surfaces an opaque SDK error for the very ordinary case of an unpublished app.
+  for (const code of ['APP_SITEMAP_UNRESOLVED', 'APP_UPDATE_NO_ETAG']) {
+    const err = new Error('app sitemap could not be resolved');
+    err.code = code;
+    const sdk = { fetchArtifact: async () => { throw err; } };
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
+    const res = await runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' });
+    assert.strictEqual(res.ok, false, `${code} must return ok:false`);
+    assert.match(res.error, /cannot read app app-1/, `${code} error names the app`);
+    assert.match(res.error, /sitemap could not be resolved/, `${code} keeps the underlying reason`);
+  }
+});
+
+test('runDownload still propagates a genuinely unexpected error (no blanket swallow)', async () => {
+  // Only the two fail-closed read codes are translated. An unexpected I/O error must keep propagating
+  // to main().catch, or a real defect would be reported as an ordinary "download failed".
+  const err = new Error('EACCES: permission denied');
+  err.code = 'EACCES';
+  const sdk = { fetchArtifact: async () => { throw err; } };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, pages: [] }), download: async () => true };
+  await assert.rejects(
+    runDownload({ sdk, genpageCli, outDir: __dirname, appId: 'app-1', appUnique: 'new_app' }),
+    (caught) => caught && caught.code === 'EACCES'
+  );
+});
 
 test('assignPageKeys: reuses the manifest key + v2 semantics for a reconcile-bound page, mints fresh keys otherwise (I3/§7.3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
@@ -362,7 +446,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // existing app even after a display-name rename) and the publisher prefix is derived FROM it.
     assert.strictEqual(spec.app.uniqueName, APP_UNIQUE, 'the app real uniquename round-trips into spec.app.uniqueName');
     assert.strictEqual(spec.solution.uniqueName, 'ContosoSln', 'the real unmanaged solution uniquename is recovered for teardown');
-    assert.strictEqual(spec.solution.publisherPrefix, 'test', 'the publisher prefix is derived from the app uniquename (test_roundtrip → test), NOT the recovered solution (Sol F2)');
+    assert.strictEqual(spec.solution.publisherPrefix, 'test', 'this mock SDK exposes no getSolution, so the prefix falls back to the app uniquename (test_roundtrip → test); when getSolution IS available the solution publisher wins — see the recoverAppSolution tests');
     assert.strictEqual(appUniqueName(spec), APP_UNIQUE, 'appUniqueName resolves the REAL uniquename (identity lookup finds the existing app, no duplicate) even though the display name is "Test App"');
     assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
   } finally {
@@ -430,4 +514,186 @@ test('recoverAppSolution returns null when the app has no solution components (c
 test('recoverAppSolution never throws — a query error resolves to null (best-effort)', async () => {
   const sdk = { queryRecords: async () => { throw new Error('boom'); } };
   assert.strictEqual(await recoverAppSolution(sdk, 'app'), null);
+});
+
+// ── OOB-table round-trip fixes (ADO 6603392 / 6603390 / 6603388) ───────────────────────────────
+// All three surfaced on an app built from STANDARD Dataverse tables. Each was masked on custom
+// tables, which is why they survived earlier testing.
+
+test('entityFromMetadata uses the REAL primary-name attribute for OOB tables (no <entity>_name guess)', () => {
+  // The old fallback produced `account_name` / `contact_name`, neither of which exists. It looked
+  // plausible on a custom table (`co_ticket` -> `co_name`), which is exactly why it went unnoticed.
+  const account = entityFromMetadata({ logicalName: 'account', schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }, 'account');
+  assert.strictEqual(account.primaryAttribute.schemaName, 'name');
+  const contact = entityFromMetadata({ logicalName: 'contact', schemaName: 'Contact', displayName: 'Contact', primaryNameAttribute: 'fullname' }, 'contact');
+  assert.strictEqual(contact.primaryAttribute.schemaName, 'fullname');
+});
+
+test('entityFromMetadata reports a NULL primaryAttribute rather than synthesizing one', () => {
+  // Emitting a fabricated attribute name yields a spec that references a column Dataverse does not
+  // have. Omitting the field entirely is no better — `primaryAttribute` is REQUIRED by App Spec
+  // validation, so the spec would simply fail to validate later with a confusing error. Signalling
+  // null lets runDownload fail the download loudly, naming the table.
+  const e = entityFromMetadata({ logicalName: 'account', displayName: 'Account' }, 'account');
+  assert.strictEqual(e.primaryAttribute, null, 'must not invent a primary attribute');
+  assert.strictEqual(e.existing, true, 'still flagged pre-existing (teardown protection)');
+});
+
+test('a downloaded entity WITH real metadata validates as an App Spec entity', () => {
+  // Guards the regression the null-signalling above could otherwise introduce: the normal path must
+  // still produce a spec that actually validates and can be rebuilt.
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  const account = entityFromMetadata({ logicalName: 'account', schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }, 'account');
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'co' },
+    app: { name: 'Customer Management', uniqueName: 'contoso_customermanagement' },
+    entities: [account],
+    views: [], charts: [], forms: [], commands: [], dashboards: [], pages: [],
+    webResources: [], appShell: { areas: [] },
+  };
+  const r = validateAppSpec(spec);
+  assert.ok(r.ok, JSON.stringify(r.errors));
+});
+
+test('recoverAppSolution recovers the publisher prefix from the SOLUTION, not the app name', async () => {
+  const sdk = {
+    queryRecords: async (set) => {
+      if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      return [];
+    },
+    getSolution: async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' }),
+  };
+  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', publisherPrefix: 'contoso' });
+});
+
+test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be recovered', async () => {
+  const base = {
+    queryRecords: async (set) => {
+      if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      return [];
+    },
+  };
+  // (a) an older vendored bundle with no getSolution at all
+  assert.deepStrictEqual(await recoverAppSolution(base, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+  // (b) getSolution throws
+  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => { throw new Error('boom'); } }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+  // (c) a first-party publisher with no customization prefix -> not usable, so not reported
+  assert.deepStrictEqual(await recoverAppSolution({ ...base, getSolution: async () => ({ publisherPrefix: '' }) }, 'app-1'), { uniqueName: 'ContosoCustomerManagement' });
+});
+
+// The nine entities from the filed repro: an app on account/contact also carries activity, user and
+// note tables that have no sitemap entry of their own. Their membership is recovered from the app's
+// VIEW/CHART/FORM components — componenttype 1 (Entities) is unusable because every such row carries
+// the same objectid (the `entity` metadata table's own id), LIVE-verified.
+const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
+const componentSdk = (opts = {}) => {
+  const entities = opts.entities || NINE;
+  // Give every entity one view, one chart and one form component, with a distinguishable row id.
+  const viewId = (n) => `1000${NINE.indexOf(n)}000-0000-4000-8000-000000000001`;
+  const chartId = (n) => `2000${NINE.indexOf(n)}000-0000-4000-8000-000000000002`;
+  const formId = (n) => `3000${NINE.indexOf(n)}000-0000-4000-8000-000000000003`;
+  return {
+    queryRecords: async (set, o) => {
+      const filter = (o && o.filter) || '';
+      if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
+      if (set === 'appmodulecomponent') {
+        assert.match(filter, /_appmoduleidunique_value eq appuniq-1/);
+        if (/componenttype eq 26/.test(filter)) return entities.map((n) => ({ objectid: viewId(n), componenttype: 26 }));
+        if (/componenttype eq 59/.test(filter)) return entities.map((n) => ({ objectid: chartId(n), componenttype: 59 }));
+        if (/componenttype eq 60/.test(filter)) return entities.map((n) => ({ objectid: formId(n), componenttype: 60 }));
+        // componenttype 1 must NOT be consulted — it cannot identify a table.
+        assert.fail(`unexpected componenttype filter: ${filter}`);
+      }
+      // Resolve each component id back to its owning entity via that table's own entity field.
+      if (set === 'savedquery') return entities.filter((n) => filter.includes(viewId(n))).map((n) => ({ savedqueryid: viewId(n), returnedtypecode: n }));
+      if (set === 'savedqueryvisualization') return entities.filter((n) => filter.includes(chartId(n))).map((n) => ({ savedqueryvisualizationid: chartId(n), primaryentitytypecode: n }));
+      if (set === 'systemform') return entities.filter((n) => filter.includes(formId(n))).map((n) => ({ formid: formId(n), objecttypecode: n }));
+      return [];
+    },
+  };
+};
+
+test('appComponentEntities recovers ALL app entity components, not just sitemap-visible ones', async () => {
+  const got = await appComponentEntities(componentSdk(), 'app-1');
+  assert.deepStrictEqual(got.slice().sort(), NINE.slice().sort());
+});
+
+test('appComponentEntities is best-effort — every failure path yields [] so download still works', async () => {
+  assert.deepStrictEqual(await appComponentEntities(componentSdk(), null), []);
+  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => { throw new Error('x'); } }, 'app-1'), []);
+  // An app whose components resolve to nothing.
+  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), 'app-1'), []);
+  // An app row without appmoduleidunique (the lookup parent) cannot be queried.
+  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => [{}] }, 'app-1'), []);
+});
+
+test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a component-only one is dropped', async () => {
+  // The riskiest new behaviour (hard-failing a previously-working download) had no executable
+  // coverage — the old test only called entityFromMetadata directly, so the branch it named
+  // (`sitemapSet.has(logical) ? noPrimaryName : droppedComponents`) would have passed inverted.
+  const APP_ID = '5111e0f2-0000-4000-8000-00000000000a';
+  const APP_UNIQ_VALUE = '5111e0f2-0000-4000-8000-00000000000b';
+  const APP_UNIQUE = 'test_roundtrip';
+  const VIEW_ID = '5111e0f2-0000-4000-8000-00000000000c';
+  const SM_ID = '5111e0f2-0000-4000-8000-00000000000d';
+  const SM_XML = '<SiteMap><Area><Group><SubArea Entity="account" Title="Accounts"/></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-pn-'));
+  // `account` is in the sitemap; `annotation` is reachable ONLY as a view component. Neither has a
+  // primary name, so they must take different branches.
+  const mkSdk = () => ({
+    fetchArtifact: async () => ({
+      name: 'PN App', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'account' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') {
+        const m = filter.match(/uniquename eq '([^']+)'/);
+        if (m) return m[1] === APP_UNIQUE ? [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE }] : [];
+        return [{ appmoduleid: APP_ID, appmoduleidunique: APP_UNIQ_VALUE, uniquename: APP_UNIQUE }];
+      }
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 26/.test(filter)) return [{ objectid: VIEW_ID, componenttype: 26 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [{ objectid: SM_ID, componenttype: 62 }];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'savedquery') return [{ savedqueryid: VIEW_ID, returnedtypecode: 'annotation' }];
+      if (logical === 'webresource') return [];
+      return [];
+    },
+    // Both report an EMPTY PrimaryNameAttribute (the shape the SDK really returns).
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' }),
+  });
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  try {
+    const failed = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    assert.strictEqual(failed.ok, false, 'a sitemap table with no primary name must abort the download');
+    assert.match(failed.error, /account/, 'the failure names the offending sitemap table');
+    assert.ok(!/annotation/.test(failed.error), 'a component-only table must NOT be named as a hard failure');
+    assert.match(failed.error, /--allow-lossy-download/, 'the hard failure advertises its override');
+    // ...and with the override it degrades to a warning instead of producing nothing at all.
+    const lossy = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE, allowLossy: true });
+    assert.strictEqual(lossy.ok, true, `--allow-lossy-download must let the download complete: ${JSON.stringify(lossy)}`);
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('a COMPONENT-only table with no primary name is dropped with a warning, not a hard download failure', async () => {
+  // appComponentEntities is best-effort by contract, so its output must not be able to abort the whole
+  // download. A hidden component table (never in the sitemap, so it did not appear in the spec at all
+  // before this change) that Dataverse reports with no PrimaryNameAttribute would otherwise regress a
+  // previously-working download — and there is no --allow-lossy override for it.
+  const sitemapOnly = new Set(['account']);
+  const metaFor = (logical) => (sitemapOnly.has(logical)
+    ? { logicalName: logical, schemaName: 'Account', displayName: 'Account', primaryNameAttribute: 'name' }
+    // The SDK returns '' (not undefined) when PrimaryNameAttribute is absent.
+    : { logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' });
+  const good = entityFromMetadata(metaFor('account'), 'account');
+  const bad = entityFromMetadata(metaFor('annotation'), 'annotation');
+  assert.strictEqual(good.primaryAttribute.schemaName, 'name');
+  assert.strictEqual(bad.primaryAttribute, null, 'an empty PrimaryNameAttribute must not become a guessed name');
 });

@@ -263,8 +263,21 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   // capture the sitemapxml the push serializes.
   let sitemapXml = '';
   const ws = mkTempWorkspace('sdk-esc-');
+  // This test is about XML ESCAPING, not component pinning — but the push now resolves each sitemap
+  // table to an OData reference and reads the components back, both fail-closed. Answer those reads
+  // so an unrelated refusal cannot masquerade as an escaping failure.
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
   const httpClient = {
-    get: async () => ({ status: 200, headers: {}, body: {} }),
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
     post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) sitemapXml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
     patch: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
@@ -280,30 +293,54 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(sitemapXml), 'no raw unescaped ampersand inside a Title');
 });
 
-test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned sitemap/genpage rows)', async () => {
-  // The app delete succeeds but the cascaded sitemap delete fails (a locked/500 row). The old
-  // void contract swallowed this; the skill's teardown now reads result.failures to flag the
-  // orphan, so the bundle MUST keep returning the structured result after a re-vendor.
+test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned genpage rows)', async () => {
+  // The app (and its sitemap) delete atomically, but a cascaded GENERATIVE-PAGE delete fails (a
+  // locked/500 row). The old void contract swallowed this; the skill's teardown reads
+  // result.failures to flag the orphan, so the bundle MUST keep returning the structured result
+  // after a re-vendor.
+  //
+  // The sitemap is deliberately NOT the failing row here: it is no longer an independently
+  // addressable cascade target — it is deleted in the SAME atomic $batch change set as the app, so
+  // a sitemap failure rejects the whole call instead of landing in failures[].
   const APP_ID = '77777777-7777-7777-7777-777777777777';
   const APP_UNIQUE = '88888888-8888-8888-8888-888888888888';
   const SITEMAP_ID = '99999999-9999-9999-9999-999999999999';
+  const GENPAGE_ID = '55555555-5555-5555-5555-555555555555';
   const client = {
     get: async (url) => {
       if (/EntityDefinitions\(LogicalName=/i.test(url)) {
         const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
         return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln } };
       }
-      // appmodulecomponent (type 62) resolves the app's sitemap id...
-      if (/\/appmodulecomponents\?/.test(url)) return { status: 200, headers: {}, body: { value: [{ objectid: SITEMAP_ID, componenttype: 62 }] } };
-      // ...and the sitemap row has no GenPageId, so there are no generative pages to cascade.
-      if (/\/sitemaps\?/.test(url)) return { status: 200, headers: {}, body: { value: [{ sitemapxml: '<SiteMap></SiteMap>' }] } };
+      // The app row supplies the uniquename the sitemap is linked by + the ETag the conditional
+      // delete is issued against; both are mandatory now (the SDK refuses to guess).
+      if (/\/appmodules\([^)]+\)/.test(url)) {
+        return { status: 200, headers: {}, body: { '@odata.etag': 'W/"1"', appmoduleid: APP_ID, appmoduleidunique: APP_UNIQUE, uniquename: 'new_cascadeapp', name: 'Cascade App' } };
+      }
+      // Only a navigational <SubArea GenPageId="…"> counts as a live generative-page reference.
+      if (/\/sitemaps/.test(url)) {
+        return {
+          status: 200,
+          headers: {},
+          body: { value: [{ '@odata.etag': 'W/"2"', sitemapid: SITEMAP_ID, sitemapnameunique: 'new_cascadeapp', sitemapxml: `<SiteMap><Area><Group><SubArea Id="s1" GenPageId="${GENPAGE_ID}" /></Group></Area></SiteMap>` }] },
+        };
+      }
+      // The generative page owns one file row, which cascades before its parent.
+      if (/\/uxagentprojectfiles\?/.test(url)) return { status: 200, headers: {}, body: { value: [{ uxagentprojectfileid: '66666666-6666-6666-6666-666666666666' }] } };
       return { status: 200, headers: {}, body: { value: [] } };
     },
     post: async () => ({ status: 204, headers: {}, body: {} }),
+    // The app + sitemap go out as one atomic change set; echo a well-formed multipart response so
+    // both operations read as 204 and the cascade proceeds to its generative-page children.
+    postRaw: async (_url, body) => {
+      const ids = [...String(body).matchAll(/^Content-ID:\s*(\S+)/gim)].map((m) => m[1]);
+      const parts = ids.flatMap((id) => ['--csr', 'Content-Type: application/http', `Content-ID: ${id}`, '', 'HTTP/1.1 204 No Content', '']);
+      return { status: 200, headers: {}, body: ['--br', 'Content-Type: multipart/mixed; boundary=csr', '', ...parts, '--csr--', '--br--', ''].join('\r\n') };
+    },
     patch: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async (url) => {
-      // The DELETE /sitemaps(<id>) child cleanup fails; the DELETE /appmodules(<id>) primary succeeds.
-      if (/\/sitemaps\(/.test(url)) return { status: 500, headers: {}, body: { error: { message: 'sitemap locked' } } };
+      // The DELETE /uxagentprojects(<id>) child cleanup fails; every other delete succeeds.
+      if (/\/uxagentprojects\(/.test(url)) return { status: 500, headers: {}, body: { error: { message: 'generative page locked' } } };
       return { status: 204, headers: {}, body: {} };
     },
     put: async () => ({ status: 204, headers: {}, body: {} }),
@@ -313,7 +350,7 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
   assert.ok(result && typeof result === 'object', 'deleteAppCascade returns a structured result (not void)');
   assert.strictEqual(result.success, false, 'a failed child cleanup makes success=false');
   assert.ok(Array.isArray(result.deleted) && result.deleted.some((d) => d.type === 'app'), 'the primary app delete is reported in deleted[]');
-  assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'sitemap'), 'the orphaned sitemap cleanup failure is surfaced in failures[]');
+  assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'genPage'), 'the orphaned generative-page cleanup failure is surfaced in failures[]');
 });
 
 test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids] } } (the sample-data phase reads createdIds to bind children)', async () => {

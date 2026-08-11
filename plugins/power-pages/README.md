@@ -404,12 +404,12 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 
 > "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
 
-Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+Enables, disables, or checks the status of usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
 
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -513,10 +513,10 @@ This Dataverse relationship check is intended for local validation only and shou
 
 ## Telemetry & privacy
 
-This plugin sends **anonymous** usage telemetry by default to help Microsoft
-improve it. **No personal data is ever collected** — only things like skill name,
-plugin version, OS, and Node version. It never includes file paths, prompts, tool
-inputs, site names, URLs, credentials, usernames, or hostnames.
+This plugin sends usage telemetry by default to help Microsoft improve it.
+Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
+When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**
 
@@ -526,7 +526,8 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 /power-pages:telemetry on       # resume sending telemetry
 ```
 
-When **off**, nothing leaves your machine. A local diagnostic copy of each event
+When **off**, nothing leaves your machine. A local diagnostic copy containing the
+same event fields, including available organization, tenant, and Entra object IDs,
 is still written under
 `~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
 so you can see exactly what would have been sent; delete it anytime. Run

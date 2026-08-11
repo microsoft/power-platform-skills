@@ -15,7 +15,7 @@ function mockDeps() {
     createTable: async (o) => { calls.push('createTable'); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
     updateTable: async () => { calls.push('updateTable'); return {}; },
     createColumn: async (l, o) => { calls.push('createColumn'); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
-    createGlobalOptionSet: async () => ({ metadataId: 'g' }), insertStatusValue: async () => 1, createAlternateKey: async () => ({}), 
+    createGlobalOptionSet: async () => ({ metadataId: 'g' }), insertStatusValue: async () => 1, createAlternateKey: async () => ({}),
     createCustomerColumn: async (l, o) => ({ logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }),
     createRecordsBulk: async (e, rows) => rows.map((_, i) => `${e}-${i}`),
     createRelationship: async (o) => ({ schemaName: o.schemaName, metadataId: `rel-${o.schemaName}` }),
@@ -77,4 +77,105 @@ test('quick-create: the enable step is planned AND counted so [n/total] never dr
 test('no quick-create step is planned/counted without the flag (regression guard)', async () => {
   const dry = await provisionEntities(input, { apply: false }, mockDeps());
   assert.ok(!dry.plan.some((p) => /enable quick create/.test(p)), 'no quick-create step without the opt-in');
+});
+
+test('dry-run plan includes non-trivial provision steps and skips non-actions', async () => {
+  const rich = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    globalChoices: [{ name: 'cr_priority', options: ['Low', 'High'] }],
+    entities: [
+      {
+        schemaName: 'cr_parent',
+        displayName: 'Parent',
+        primaryAttribute: { schemaName: 'cr_name' },
+        columns: [
+          { schemaName: 'cr_priority', type: 'Choice', globalChoice: 'cr_priority' },
+          { schemaName: 'cr_childid', type: 'Lookup' },
+        ],
+        statusReasons: [{ label: 'Archived', state: 'Inactive' }],
+        alternateKeys: [{ schemaName: 'cr_parent_key', columns: ['cr_name'] }],
+      },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+    ],
+    sampleData: { cr_parent: [{ cr_name: 'A' }, { cr_name: 'B' }], cr_child: [] },
+  };
+
+  const dry = await provisionEntities(rich, { apply: false, sampleData: true }, mockDeps());
+
+  assert.deepStrictEqual(dry.plan, [
+    'solution Default',
+    'global choice cr_priority',
+    'table cr_parent',
+    'column cr_parent.cr_priority (Choice)',
+    'status reason cr_parent: Archived',
+    'alt key cr_parent.cr_parent_key',
+    'table cr_child',
+    'relationship 1:N cr_parent->cr_child',
+    'relationship N:N cr_parent<->cr_child',
+    '2 record(s) -> cr_parent',
+  ]);
+});
+
+test('apply surfaces fallback metadata for existing columns and relationships', async () => {
+  const existingInput = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', primaryAttribute: { schemaName: 'cr_name' }, columns: [{ schemaName: 'cr_code', type: 'Text' }] },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+    ],
+  };
+  const d = mockDeps();
+  d.provision.findTables = async (schemaName) => [{ logicalName: schemaName.toLowerCase(), entitySetName: `${schemaName.toLowerCase()}s` }];
+  d.provision.findColumns = async () => [{ logicalName: 'cr_code' }];
+  d.provision.fetchEntityMetadata = async (logical) => ({
+    logicalName: logical,
+    entitySetName: `${logical}s`,
+    relationships: [
+      { schemaName: 'cr_parent_children' },
+      { schemaName: 'cr_parent_child_nn' },
+    ],
+  });
+
+  const r = await provisionEntities(existingInput, { apply: true }, { sdk: d.sdk, provision: d.provision });
+
+  assert.deepStrictEqual(r.columns, [{ table: 'cr_parent', schemaName: 'cr_code', logicalName: 'cr_code' }]);
+  assert.deepStrictEqual(r.relationships, [
+    { kind: '1n', schemaName: 'cr_parent_children' },
+    { kind: 'nn', schemaName: 'cr_parent_child_nn' },
+  ]);
+  assert.ok(!d.calls.includes('createColumn'), 'existing columns are not recreated');
+});
+
+test('apply seeds requested sample data and returns created record ids', async () => {
+  const seedInput = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_parent',
+      displayName: 'Parent',
+      primaryAttribute: { schemaName: 'cr_name' },
+      columns: [],
+      alternateKeys: [{ schemaName: 'cr_parent_key', columns: ['cr_name'] }],
+    }],
+    relationships: [],
+    sampleData: { cr_parent: [{ cr_name: 'A' }, { cr_name: 'B' }] },
+  };
+  const d = mockDeps();
+  let seedGroup;
+  d.sdk.seedRecordGraph = async (groups) => {
+    [seedGroup] = groups;
+    return { createdIds: { cr_parent: ['id-a', 'id-b'] } };
+  };
+
+  const r = await provisionEntities(seedInput, { apply: true, sampleData: true }, { sdk: d.sdk, provision: d.provision });
+
+  assert.strictEqual(seedGroup.matchOn, 'cr_name', 'a single-column alternate key makes sample seeding idempotent');
+  assert.deepStrictEqual(r.records, { cr_parent: ['id-a', 'id-b'] });
 });

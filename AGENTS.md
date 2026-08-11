@@ -41,6 +41,25 @@ claude --plugin-dir /path/to/plugins/<plugin-name>
 
 No root-level build, lint, or test commands exist. Build/test tooling lives inside each plugin.
 
+## CI
+
+**Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
+Both are repo-wide and enforce metadata/marketplace rules, not behavior.
+
+**Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`). This is deliberate — a PR should not
+spend CI on a plugin it never touched — but it has a corollary: *a green PR does not mean the repo is
+green*, only that the paths you touched are.
+
+**A test suite with no workflow silently never runs.** When you add tests to a plugin, add or extend
+that plugin's own path-filtered workflow in the same PR; do not widen another plugin's filter to
+cover yours.
+
+A plugin that has adopted telemetry must also set its opt-out env var on any job that could execute a
+telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
+`POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"`. It suppresses transmission only, so it
+cannot change what a test asserts.
+
 ## Plugin Conventions
 
 Each plugin follows this structure:
@@ -72,6 +91,8 @@ This keeps the skill discoverable in each plugin while preserving install-time p
 1DS telemetry code for all plugins lives at `shared/telemetry/`. Each adopting plugin keeps a physical copy of the library in its own tree at `plugins/<plugin>/scripts/lib/telemetry/lib`, alongside that plugin's real `ikey.json`. Do not use Git symlinks for this copy; plugin hosts may not dereference them reliably.
 
 Edit `shared/telemetry/` first, then refresh every adopting plugin's copied `scripts/lib/telemetry/lib` directory in the same change so the canonical source and bundled plugin content stay in sync.
+
+`eventInfo` is a dynamic escape hatch whose nested keys are not enforced by `FIELD_TYPES`. Follow the approved schema in `shared/telemetry/README.md`; do not add nested fields or arbitrary payloads without privacy review and coordinated disclosure, schema, and test updates.
 
 **Never reuse another plugin's instrumentation key or event stream.** When adopting telemetry in a new plugin, copy only the routing-agnostic library (`shared/telemetry/lib` → `plugins/<plugin>/scripts/lib/telemetry/lib`) — do **not** copy an existing adopter's real `ikey.json` (or its `resolver.js`). Each plugin's `ikey.json` carries that plugin's own instrumentation key(s), collector routing, and `event_stream_name`; start from the placeholder `shared/telemetry/ikey.json` (every region key is `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` and it ships `disabled: true`) and provision a fresh, plugin-specific key before shipping. Copying a key already committed to another plugin (e.g. lifting `power-pages`'s `ikey.json` wholesale) mis-attributes the new plugin's events to the other plugin's Kusto stream and pollutes it — the copy step must bring over library code only, never another plugin's provisioned `ikey.json`/`resolver.js`.
 

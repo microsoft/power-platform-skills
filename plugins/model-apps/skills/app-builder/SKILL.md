@@ -104,7 +104,9 @@ Rules:
 
 ### Phase 0 — Working directory
 1. Derive a short kebab-case slug from `$ARGUMENTS` (e.g. "Project Tracker" → `project-tracker`).
-2. `mkdir -p <slug>`; resolve its absolute path. It holds `app-spec.json`, `model-app-plan.md`, and `workflow-log.md`.
+2. Create the directory (`mkdir -p <slug>` on bash/PowerShell; `mkdir <slug>` on cmd, which has no
+   `-p` and errors if it exists) and resolve its absolute path. It holds `app-spec.json`,
+   `model-app-plan.md`, and `workflow-log.md`.
 
 ### Phase 1 — Author the App Spec (interactive, main loop)
 

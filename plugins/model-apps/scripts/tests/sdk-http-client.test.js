@@ -158,3 +158,108 @@ test('rejects a non-https or malformed org URL at construction (fail-closed cred
   assert.throws(() => createAzHttpClient('http://org.crm.dynamics.com', { getToken: () => 'TOK' }), /https/);
   assert.throws(() => createAzHttpClient('not-a-url', { getToken: () => 'TOK' }), /https/);
 });
+
+// --- postRaw: the multipart/mixed $batch transport ------------------------------------------
+// The SDK makes multi-row writes atomic via an OData `$batch` change set, and it will NOT
+// degrade to sequential requests: without postRaw, deleting an app that owns a sitemap fails
+// with APP_DELETE_NOT_ATOMIC rather than risk stranding a row between two calls.
+// See the HttpClient contract in the SDK: src/types/httpClient.ts.
+
+// A realistic multipart/mixed $batch response. The SDK parses each operation's status line out
+// of this string, so the envelope must survive the transport byte-for-byte:
+//   --batchresponse_<guid>
+//   Content-Type: multipart/mixed; boundary=changesetresponse_<guid>
+//
+//   --changesetresponse_<guid>
+//   Content-Type: application/http
+//   Content-ID: 1
+//
+//   HTTP/1.1 204 No Content
+//   ...
+const BATCH_RESPONSE = [
+  '--batchresponse_b1',
+  'Content-Type: multipart/mixed; boundary=changesetresponse_c1',
+  '',
+  '--changesetresponse_c1',
+  'Content-Type: application/http',
+  'Content-ID: 1',
+  '',
+  'HTTP/1.1 204 No Content',
+  '',
+  '--changesetresponse_c1--',
+  '',
+  '--batchresponse_b1--',
+  '',
+].join('\r\n');
+
+test('postRaw sends the body VERBATIM and returns the multipart response as a raw STRING', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 200, headers: {}, body: BATCH_RESPONSE });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const body = '--batch_a1\r\nContent-Type: application/http\r\n\r\nDELETE /x HTTP/1.1\r\n\r\n--batch_a1--';
+  const res = await http.postRaw('https://org.crm.dynamics.com/api/data/v9.2/$batch', body, {
+    headers: { 'Content-Type': 'multipart/mixed;boundary=batch_a1' },
+  });
+  assert.strictEqual(calls[0].method, 'POST');
+  assert.strictEqual(calls[0].body, body, 'the multipart payload must not be re-serialized');
+  assert.strictEqual(
+    calls[0].headers['Content-Type'],
+    'multipart/mixed;boundary=batch_a1',
+    "the caller's boundary-bearing Content-Type must win over the JSON default"
+  );
+  assert.strictEqual(typeof res.body, 'string', 'the SDK reads status lines out of the raw envelope');
+  assert.strictEqual(res.body, BATCH_RESPONSE);
+  assert.strictEqual(res.status, 200);
+});
+
+test('postRaw never JSON-parses a body that happens to be valid JSON', async () => {
+  // parseBody() would turn this into an object and the SDK would throw ConnectionError
+  // ("body is not a string"). postRaw must bypass parsing unconditionally, not by accident.
+  const { request } = fakeTransport({ statusCode: 200, headers: {}, body: '{"not":"multipart"}' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request });
+  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  assert.strictEqual(typeof res.body, 'string');
+  assert.strictEqual(res.body, '{"not":"multipart"}');
+});
+
+test('postRaw does NOT retry a $batch on a transient status (the change set contains DELETEs)', async () => {
+  // Same hazard as a bare record DELETE: Dataverse's "More than one concurrent Delete requests
+  // detected" guard permanently wedges a row when a retry races the still-in-flight first delete.
+  // A $batch carries DELETEs inside a POST, so the method-based noRetry rule must cover it too.
+  const { request, calls } = fakeTransport({ statusCode: 503, headers: {}, body: 'busy' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  assert.strictEqual(calls.length, 1, 'a $batch is issued exactly once');
+  assert.strictEqual(res.status, 503, 'the transient status is surfaced, not retried away');
+});
+
+test('postRaw does NOT retry a $batch on a network error either', async () => {
+  const { request, calls } = fakeTransport({ error: 'ETIMEDOUT' });
+  const http = createAzHttpClient('https://org', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await assert.rejects(
+    () => http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } }),
+    /Request failed/
+  );
+  assert.strictEqual(calls.length, 1, 'an ambiguous batch outcome is never re-issued blindly');
+});
+
+test('postRaw still refreshes the token once on 401 (rejected before processing, so it is safe)', async () => {
+  const { request, calls } = fakeTransport(() =>
+    calls.length <= 1 ? { statusCode: 401, headers: {}, body: '' } : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }
+  );
+  let tokens = 0;
+  const http = createAzHttpClient('https://org', { getToken: () => `TOK${++tokens}`, request, sleep: async () => {} });
+  const res = await http.postRaw('https://org/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } });
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[1].headers.Authorization, 'Bearer TOK2', 'the retry carries a fresh token');
+  assert.strictEqual(res.body, BATCH_RESPONSE);
+});
+
+test('postRaw enforces the same-origin credential guard', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 200, headers: {}, body: BATCH_RESPONSE });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  await assert.rejects(
+    () => http.postRaw('https://evil.example.com/api/data/v9.2/$batch', 'x', { headers: { 'Content-Type': 'multipart/mixed;boundary=b' } }),
+    /different origin/
+  );
+  assert.strictEqual(calls.length, 0);
+});
