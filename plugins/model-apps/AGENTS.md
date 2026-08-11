@@ -148,11 +148,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
   component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
   Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
-  The same rule binds **tests and evals**: derive an expectation from the value the code under test
-  actually emits, never from a hand-written fixture of what it *should* emit. `smoke-eval.js` asserted
-  a `VectorIcon` the builder deliberately drops, and its unit test hand-wrote sitemap XML containing
-  that value — so the offline suite was green while every live run failed. Assertions now come from
-  `appDef`, and `vendor-sdk-smoke.test.js` checks the bytes the real vendored SDK serializes.
+  The same rule binds **tests and evals**, with a distinction that is easy to get backwards:
+  an EXPECTATION must come from the CONTRACT, independent of the code under test, while the FIXTURE
+  that stands in for the environment should be generated from the builder's real output so it cannot
+  drift from what ships. `smoke-eval.js` got both wrong at once: it asserted a `VectorIcon` the
+  builder deliberately drops, and its unit test hand-wrote sitemap XML containing that value — so the
+  offline suite stayed green while every live run failed. Deriving the expectation from `appDef`
+  instead is the opposite failure and is just as bad: when the builder stops emitting a value, a
+  derived "must be present" check silently becomes "must be absent" and still passes, leaving the
+  eval unable to contradict the very code it exists to check. Assertions are therefore fixed by
+  contract, the offline fixture is rendered from `appDef`, and `vendor-sdk-smoke.test.js` checks the
+  bytes the real vendored SDK serializes.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security

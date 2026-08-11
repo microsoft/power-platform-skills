@@ -11,10 +11,26 @@ Fixes four crash paths and a smoke-eval assertion that could never pass live.
   and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
   (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona
   privilege's `access` was a scalar rather than an array. These are work-in-progress shapes an author
-  hits constantly, and a crash killed the authoring flow instead of reporting the problem.
+  hits constantly, and a crash killed the authoring flow instead of reporting the problem. Coverage
+  is now a single recursive descriptor shared by both gates (`lib/spec-shape.js`), reaching nested
+  collections too — `entities[].columns`, `views[].filters`, `forms[].tabs[].sections`,
+  `pages[].dataSources`, `commands[].buttons[].children`, and the `appShell.areas → groups →
+  subAreas` chain — and errors name the exact path (`appShell.areas[0].groups must be an array`).
+- **A malformed collection can no longer pass validation and then crash mid-build.** Validation
+  inspects a normalized copy while the caller keeps the original, so a silently-repaired
+  `appShell.areas: [null]` reported PASS and then threw inside the build — *after* the solution and
+  data model had been written to Dataverse. A null entry is now a blocking error, so the failure
+  happens at the gate with nothing deployed.
+- **`migrateAppSpec` no longer crashes ahead of the gate.** Every CLI entry point migrates the spec
+  it just read *before* validating it, so a malformed collection threw a raw `TypeError` before the
+  validator that exists to report it ever ran. Migration is now defensive but does **not** repair —
+  repairing would hand the gate a clean spec and the real problem would vanish.
 - **`verify-model-app` no longer surfaces a raw Dataverse HTTP 400 for a missing table.** A declared
   table that does not exist makes the saved-view query 400 (`returnedtypecode` names an unknown
   entity); the read error is now captured and reported as a structured missing-artifact finding.
+  Both the verify CLI and the build's verify step now print the failure `detail`, so a read that
+  failed (throttling, auth expiry, a 5xx) is distinguishable from an artifact that is genuinely
+  absent instead of both rendering as a bare `✗ view: <name>`.
 - **The live smoke eval asserted an outcome the builder never produces.** Its spec put a bare Fluent
   `vectorIcon` ("Grid") on an *entity* subarea — the one shape the builder deliberately drops,
   because it breaks the modern app-designer property pane — while asserting the deployed sitemap
