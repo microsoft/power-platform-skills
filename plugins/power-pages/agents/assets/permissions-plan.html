@@ -250,7 +250,18 @@ function esc(value) {
 
 function safeIcon(value) {
   const icon = String(value ?? '');
-  return /^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon) ? icon : esc(icon);
+  if (!/^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon)) return esc(icon);
+
+  let valid = true;
+  const decoded = icon.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, decimal) => {
+    const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      valid = false;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
+  });
+  return valid ? esc(decoded) : esc(icon);
 }
 
 function safeScope(value) {

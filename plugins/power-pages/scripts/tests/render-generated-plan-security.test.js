@@ -8,6 +8,15 @@ const { spawnSync } = require('node:child_process');
 
 const scriptsDir = path.join(__dirname, '..');
 const attack = '<img src=x onerror="globalThis.pwned=1"> \' "</script><script>globalThis.pwned=2</script> ` ${globalThis.pwned=3}';
+const encodedTagAttack = [...'<img src=x onerror="globalThis.pwned=1">']
+  .map(character => `&#${character.codePointAt(0)};`)
+  .join('');
+const ICON_RATIONALE_DATA = [
+  { icon: encodedTagAttack, title: 'Encoded tag', desc: 'Must render as text.' },
+  { icon: '&#9881;', title: 'Numeric glyph', desc: 'Must render as a glyph.' },
+  { icon: '&#9881;<img src=x>', title: 'Mixed input', desc: 'Must remain escaped text.' },
+  { icon: '&#xZZ;', title: 'Malformed entity', desc: 'Must remain escaped text.' },
+];
 
 const DATA_MODEL_DATA = {
   SITE_NAME: 'Contoso Portal',
@@ -257,6 +266,66 @@ test('data model plan normalizes unexpected statuses for stats, cards, and SVG c
   assert.equal(attributes['fillPath.fill'], '#c8e6c9');
   assert.equal(attributes['strokePath.stroke'], '#107c10');
   assert.ok(Object.values(attributes).every(value => value !== undefined && value !== 'undefined'));
+});
+
+test('all icon renderers decode numeric glyphs to text before HTML escaping', () => {
+  const reports = [
+    {
+      script: 'render-data-model-plan.js',
+      data: { ...DATA_MODEL_DATA, RATIONALE_DATA: ICON_RATIONALE_DATA },
+      options: { skipMermaid: true },
+    },
+    {
+      script: 'render-permissions-plan.js',
+      data: { ...PERMISSIONS_DATA, RATIONALE_DATA: ICON_RATIONALE_DATA },
+    },
+    {
+      script: 'render-backend-plan.js',
+      data: {
+        SITE_NAME: 'Contoso Portal',
+        PLAN_TITLE: 'Backend Integration Plan',
+        SUMMARY: 'Backend plan.',
+        ITEMS_DATA: [],
+        RATIONALE_DATA: ICON_RATIONALE_DATA,
+        DATA_FLOWS_DATA: [],
+      },
+    },
+    {
+      script: 'render-serverlogic-plan.js',
+      data: {
+        SITE_NAME: 'Contoso Portal',
+        PLAN_TITLE: 'Server Logic Plan',
+        SUMMARY: 'Server logic plan.',
+        WEB_ROLES_DATA: [],
+        SERVER_LOGICS_DATA: [],
+        RATIONALE_DATA: ICON_RATIONALE_DATA,
+        SECRETS_DATA: null,
+      },
+    },
+    {
+      script: 'render-cloudflow-plan.js',
+      data: {
+        SITE_NAME: 'Contoso Portal',
+        PLAN_TITLE: 'Cloud Flow Plan',
+        SUMMARY: 'Cloud flow plan.',
+        WEB_ROLES_DATA: [],
+        CLOUD_FLOWS_DATA: [],
+        RATIONALE_DATA: ICON_RATIONALE_DATA,
+      },
+    },
+  ];
+
+  for (const report of reports) {
+    const html = render(report.script, report.data);
+    const elements = executeInlineRenderer(html, report.options);
+    const rendered = elements.get('rationaleContainer').innerHTML;
+
+    assert.doesNotMatch(rendered, /<img\b/i, report.script);
+    assert.match(rendered, /&lt;img src=x onerror=&quot;globalThis\.pwned=1&quot;&gt;/, report.script);
+    assert.match(rendered, /<div class="principle-icon">⚙<\/div>/, report.script);
+    assert.match(rendered, /&amp;#9881;&lt;img src=x&gt;/, report.script);
+    assert.match(rendered, /&amp;#xZZ;/, report.script);
+  }
 });
 
 test('permissions plan neutralizes hostile text, event attributes, quotes, and interpolation syntax', () => {
