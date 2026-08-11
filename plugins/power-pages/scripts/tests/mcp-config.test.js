@@ -37,6 +37,7 @@ function runBootstrap({
   pluginRoot: pluginRootValue,
   claudePluginRoot,
   preloadPath,
+  realpathOverride,
   statFailure,
 } = {}) {
   const env = { ...process.env };
@@ -49,6 +50,18 @@ function runBootstrap({
   }
   if (claudePluginRoot !== undefined) {
     env.CLAUDE_PLUGIN_ROOT = claudePluginRoot;
+  }
+  if (realpathOverride) {
+    // Patch only the launcher lookup so the canonical root still follows the real filesystem.
+    const bootstrapIndex = args.indexOf('-e') + 1;
+    const prelude = [
+      "const injectedFs=require('node:fs');",
+      'const originalRealpathSync=injectedFs.realpathSync;',
+      `const injectedRealpathTarget=${JSON.stringify(path.resolve(realpathOverride.target))};`,
+      `const injectedRealpathResult=${JSON.stringify(path.resolve(realpathOverride.result))};`,
+      "injectedFs.realpathSync=function(target,...options){if(require('node:path').resolve(String(target))===injectedRealpathTarget)return injectedRealpathResult;return originalRealpathSync.call(this,target,...options);};",
+    ].join(' ');
+    args[bootstrapIndex] = `${prelude} ${args[bootstrapIndex]}`;
   }
   if (statFailure) {
     // Patch the child process's fs module so access errors are deterministic across platforms.
@@ -196,6 +209,32 @@ test('playwright MCP bootstrap rejects a launcher that resolves outside the plug
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Resolved launcher escapes the declared plugin root/);
   assert.equal(fs.existsSync(markerPath), false);
+});
+
+test('playwright MCP bootstrap rejects a launcher resolving to the exact parent directory', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'power-pages-mcp-parent-escape-'));
+  const declaredRoot = path.join(tempDir, 'plugin');
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  fs.mkdirSync(declaredRoot);
+  const canonicalRoot = fs.realpathSync(declaredRoot);
+  const candidate = path.join(canonicalRoot, 'scripts', 'launch-playwright-mcp.js');
+  const exactParent = path.dirname(canonicalRoot);
+
+  const result = runBootstrap({
+    cwd: tempDir,
+    pluginRoot: declaredRoot,
+    realpathOverride: { target: candidate, result: exactParent },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /Error: \[Power Pages Playwright MCP\] Resolved launcher escapes the declared plugin root:/,
+  );
+  assert.doesNotMatch(
+    result.stderr,
+    /Error: \[Power Pages Playwright MCP\] Resolved launcher is not a file:/,
+  );
 });
 
 test('playwright MCP bootstrap supports installed-plugin root environment conventions', async (t) => {
