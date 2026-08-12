@@ -687,6 +687,9 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
 - Use progressive disclosure: SKILL.md for workflow, reference files for details
 - Link to references inline: `See [troubleshooting.md](../../references/troubleshooting.md)`
+- Immediately after the frontmatter of every user-invocable skill, run
+  `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before
+  proceeding. The check is best-effort and must never block skill execution.
 
 ## Building & Testing
 

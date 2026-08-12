@@ -2,9 +2,16 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.3
+## [Unreleased] — 2.4.4
 
-Fixes four crash paths and a smoke-eval assertion that could never pass live.
+Adds plugin update notices, fixes four crash paths, and corrects a smoke-eval
+assertion that could never pass live.
+
+### Added
+- **Automatic plugin update notice.** Every user-invocable skill now runs the
+  non-blocking `scripts/check-version.js` preflight, which compares the installed
+  Model Apps version with `origin/main` and shows update commands for the active
+  GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
 - **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`

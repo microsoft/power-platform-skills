@@ -1,12 +1,14 @@
 ---
 name: app-builder
-version: 0.8.0
+version: 0.8.1
 description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # app-builder — intent → model-driven app
 
