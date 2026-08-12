@@ -1,6 +1,6 @@
 ---
 name: add-connector
-description: Use when the user wants to add a Power Platform connector to a mobile app and there is no dedicated /add-* skill for that connector (Dataverse and SharePoint have their own skills).
+description: Use when adding a Power Platform connector to an Expo/React Native Power Apps mobile app and no dedicated mobile connector skill exists.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet

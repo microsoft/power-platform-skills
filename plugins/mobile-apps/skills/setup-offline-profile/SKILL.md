@@ -27,7 +27,7 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run `/enable-tables-offline` if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
@@ -316,12 +316,12 @@ configReview: accepted
 
 > **Design rationale.** The original Step 3.5 used free-text replies ("type `accept` or describe edits in English") to keep things conversational. In practice users typed responses the regex parsers didn't recognise — `change scope of contact to teamonly`, `set sync to 10`, etc. — and the skill either silently dropped the edit or asked a clarifying question that drove additional confusion. The `AskUserQuestion` flow above eliminates parsing risk for the enumerable fields (scope, sync interval, top-level decision) while preserving the free-text path for the genuinely free-form fields (name, description, column lists). Net result: zero ambiguous interactions for the common adjustments, fewer typing-induced errors, parity with `/create-mobile-app`'s plan-gate UX.
 
-### Step 4 — Run `/enable-tables-offline` if needed
+### Step 4 — Run the internal `enable-tables-offline` workflow if needed
 
-If Gate 1 identified any table needing change, invoke `/enable-tables-offline` as a sub-skill with the list:
+If Gate 1 identified any table needing change, read and execute `${CLAUDE_SKILL_DIR}/../enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
 
 ```text
-/enable-tables-offline cr123_note,cr123_visit
+$ARGUMENTS: cr123_note,cr123_visit
 ```
 
 Wait for it to return. Expected final line: `DONE` or `DONE_WITH_CONCERNS:`.

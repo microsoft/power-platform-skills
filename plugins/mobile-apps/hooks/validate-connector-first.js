@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: enforce connector-first rule.
+ * Explicit validator: enforce the connector-first rule.
  *
  * Blocks writes to .ts / .tsx / .js / .jsx files that bypass the generated
  * connector services by calling Microsoft Graph, Azure REST, or arbitrary

@@ -1,12 +1,14 @@
 ---
 name: screen-builder
 description: Use when an orchestrator needs ONE screen of a Power Apps mobile app implemented from a per-screen spec in native-app-plan.md. Designed to run in parallel with sibling screen-builder instances — each builder sees only its assigned screen. Called by /create-mobile-app and /edit-app; not invoked directly by users.
+user-invocable: false
 color: green
 model: sonnet
 tools:
   - Read
   - Write
   - Edit
+  - Bash
   - Grep
   - Glob
 ---
@@ -36,7 +38,6 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   Do NOT define `function LoadingState()`, `function formatDate()`, `function Field()`, `function Section()`, or status color maps inside your screen. Do NOT write the `useState(loading) + useFocusEffect(load) + onRefresh` pattern manually — use `useListData` instead.
 - **App-specific custom components.** If the orchestrator generated app-specific components in `src/components/` (e.g. `InspectionCard.tsx`, `EquipmentRow.tsx`), import them via `import { InspectionCard } from '@/components/InspectionCard'`. Check what's in `src/components/` before writing your screen — if a component exists for your entity, use it.
 - **Screen skeleton exists — fill it in, don't overwrite.** The orchestrator pre-writes a typed skeleton at your `target_file` with all imports, hook calls, and `return null`. Your job: replace `return null` with the real JSX layout. Do NOT discard the skeleton's imports — they are pre-resolved from the Generated Services table, the per-screen `**Data**` field, and Standard Imports for the screen's archetype. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. If a skeleton does NOT exist at your `target_file` (older orchestrator version), proceed from scratch using the `**Data**` field + Generated Services table to resolve service imports yourself.
-- **Fast-wave mode.** During Step 11, the orchestrator may defer deterministic style-hook blocking until the Step 11.4 sweep. Still write good mobile UI on the first pass, but do not spend extra self-repair passes chasing raw hex/token/a11y/style-hook heuristics unless they also break TypeScript, routing, data access, or obvious usability. Step 11.4 runs the batch validators across all screens and owns those deterministic cleanup edits.
 - **Older-orchestrator fallback.** If the skeleton is absent AND no `### Standard Imports` / `#### Resolved Imports` blocks exist in the plan, resolve imports yourself from the `**Data**` field + Generated Services table.
 - **NEVER write `_layout.tsx` files.** The orchestrator owns all `_layout.tsx` files at Step 10b — both the outer `app/(app)/_layout.tsx` (Tabs/Drawer) and per-folder inner ones (`app/(app)/<folder>/_layout.tsx`). If your `target_file` IS a `_layout.tsx`, your assigned task is wrong — STOP and report `BLOCKED [<screen_name>]: target_file is a _layout.tsx (<path>) — orchestrator owns layouts, not builders`. Two parallel builders writing the same folder's `_layout.tsx` would race; only the orchestrator can serialize that. **You also do not need to declare the route in any `_layout.tsx`** — the orchestrator already wrote the `<Stack.Screen name="<your-name>">` line for you. Just write your screen's content.
 - **Your `target_file` may be nested.** With the folder-grouped navigation pattern, paths like `app/(app)/inspections/[id].tsx` and `app/(app)/inspections/new.tsx` are normal. The folder is guaranteed to exist (orchestrator created it at Step 10b.2). Just write to whatever absolute path you were given. Do NOT modify the path or strip the folder.
@@ -199,6 +200,8 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **Dataverse image rendering rule (detail/list screens).** If a screen displays a Dataverse Image column, include the real image/base64 field in `select` and render a `data:image/<mime>;base64,...` URI when base64 is present. Do not rely on guessed URL/display pseudo-fields alone.
 
 - **Native capabilities: use `src/native/` wrappers, NOT raw Expo modules.** `/add-native` creates typed wrappers under `src/native/` (e.g., `camera.ts`, `cameraUpload.ts`, `secureStore.ts`, `documentPicker.ts`, `pdfReport.ts`, `pdfViewer.ts`, `penInput.ts`, `geolocation.ts`). For non-Dataverse native workflows, always import from these wrappers — never import `expo-camera`, `expo-image-picker`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, or `@microsoft/power-apps-native-bglocation` directly in screen files. The wrappers handle permissions, iOS/Android platform differences, URL validation, and return discriminated-union results (`{ ok: true, ... } | { ok: false, reason }`). If a wrapper doesn't exist yet, write the screen with the expected import path and a `// TODO(native-not-yet-added): run /add-native <capability> to create src/native/<wrapper>.ts` comment. For `camera.ts`, use `/add-native camera`; for `barcodeScanner.tsx`, use `/add-native barcode-scanner`; for `pdfReport.ts`, use `/add-native pdf-report`; for `pdfViewer.ts`, use `/add-native pdf-viewer` or `/add-native @microsoft/power-apps-native-pdf-viewer`; for `penInput.ts`, use `/add-native pen-input` or `/add-native @microsoft/power-apps-native-pen-input`; for `geolocation.ts`, use `/add-native geolocation` or `/add-native @microsoft/power-apps-native-bglocation`. **`expo-notifications` and `expo-haptics` are NOT available** — per AGENTS.md §2 and the HARD RULE below for haptics. If the plan tells you to use an unavailable capability, return `NEEDS_CONTEXT` — do not import it.
+
+- **Planned pure-JavaScript dependencies may be imported directly.** Follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`'s Builder Contract. Before importing any non-template package, verify it appears with an exact version in `## Screens → ### JavaScript Dependencies` and in the project's `package.json` `dependencies`, and that `require.resolve('<package>', { paths: [working_dir] })` succeeds. If the plan lists it but installation is missing, return `BLOCKED [<screen_name>]: approved JavaScript dependency <package>@<version> is not installed — orchestrator must install dependencies before builders run.` If it is not in the approved table, return `NEEDS_CONTEXT` instead of adding it yourself. Builders never select packages, edit `package.json`, or run installs. Import and use only the package APIs named by the approved per-screen spec.
 
 - **PDF and pen capability behavior.** Native PDF viewer actions MUST call `openHttpsPdf(url)`, which supports `https://` URLs and local `file://` URIs with viewer 0.2.9+. Reject or disable actions for `content://`, `blob:`, `http://`, or empty inputs. Pen capture cancellation (`USER_CANCELLED`) is not an error; leave the screen state unchanged. Handle `NATIVE_MODULE_MISSING`, `VIEWER_FAILED`, `CAPTURE_FAILED`, `uploadFailed`, and `invalidUrl` with visible inline states rather than silent returns.
 
@@ -1122,13 +1125,23 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
     Without layout animations, new rows appear instantly and deleted rows leave a gap that closes with a jump — the #2 tell that an app isn't native (iOS `UITableView` animates by default). `LinearTransition` makes sibling rows shift smoothly when one is added or removed. Cap `entering` delay at index 5 (rest render instantly — avoids slow initial paint on long lists).
 
-44. **Native date/time pickers — NEVER use a Sheet calendar or plain Input for date fields.** If a form field maps to a `datetime` or `DateOnly` Dataverse column, you MUST use `@react-native-community/datetimepicker` (already in template). The recipe in rule 27 (DateTimePicker component) is the ONLY acceptable pattern. The planner spec may say "date picker Sheet" or "date picker" — both mean the native picker, not a custom Tamagui Sheet with a calendar grid. Specifically forbidden:
+44. **Native date/time pickers — NEVER use a Sheet calendar or plain Input for date fields.** If a form field maps to a `datetime` or `DateOnly` Dataverse column, you MUST use `@react-native-community/datetimepicker` (already in template). The recipe in rule 27 (DateTimePicker component) is the ONLY acceptable form-field pattern. This does not prohibit an approved `react-native-calendars` calendar-management screen; that library is for browsing/managing schedules, not editing one Dataverse date field. The planner spec may say "date picker Sheet" or "date picker" — both mean the native picker, not a custom Tamagui Sheet with a calendar grid. Specifically forbidden:
     - `<Sheet>` containing a custom calendar component
     - `<Input type="date">` (not a React Native date control)
     - `<Input>` with manual date string parsing
     - Any third-party calendar picker library
 
-## Step 4 — Return Status
+## Step 4 — Validate the written screen
+
+Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+```
+
+If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.
+
+## Step 5 — Return Status
 
 You MUST return your final message to the orchestrator with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The orchestrator parses the first line to decide what to do next. After the status line, leave a blank line, then write the one-line summary below.
 

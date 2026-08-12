@@ -4,8 +4,8 @@ function detectSlashCommand(promptText, { pluginName, trackedSkills } = {}) {
   if (typeof promptText !== "string" || !promptText) return null;
   if (!pluginName || !trackedSkills) return null;
 
-  // Match both the namespaced form (`/power-pages:add-seo`) and the bare form
-  // (`/add-seo`). The `pluginName:` prefix is optional because the host tool
+  // Match both the namespaced form (`/<plugin>:<skill>`) and the bare form
+  // (`/<skill>`). The `pluginName:` prefix is optional because the host tool
   // controls how the slash command is surfaced in the prompt and may emit the
   // bare form without the plugin namespace. Either way the captured skill name
   // is validated against trackedSkills below, so a bare `/foo` only counts when

@@ -1,7 +1,8 @@
 ---
 name: edit-offline-profile
-description: Use when the user wants to change ONE aspect of an existing offline profile (row scope for a table, column list, sync frequency) without re-running the full /setup-offline-profile wizard. Mirrors the /edit-app gated edit pattern.
+description: Internal mobile-app workflow read and executed only by mobile orchestrators to change one table's scope, columns, or sync settings in a Mobile Offline Profile.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

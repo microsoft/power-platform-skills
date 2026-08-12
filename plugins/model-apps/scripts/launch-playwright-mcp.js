@@ -5,73 +5,63 @@
 // then falls back to Playwright's bundled Chromium.
 // Self-contained — no external dependencies required.
 
-const { execSync, spawn } = require('child_process');
-const fs = require('fs');
+const { spawn } = require('child_process');
 const path = require('path');
-const os = require('os');
+const { detectBrowser } = require('./lib/detect-browser');
 
-function exists(filePath) {
-  try { return fs.existsSync(filePath); } catch { return false; }
-}
-
-function whichExists(cmd) {
-  try {
-    execSync(`which ${cmd}`, { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function detectBrowser() {
-  const platform = os.platform();
+function quoteShellArg(value, platform = process.platform) {
+  const argument = String(value);
 
   if (platform === 'win32') {
-    const localAppData = process.env.LOCALAPPDATA || '';
-    const programFiles = process.env.PROGRAMFILES || '';
-    const programFilesX86 = process.env['PROGRAMFILES(X86)'] || '';
-
-    // Edge — pre-installed on all Windows 10/11 machines
-    const edgePaths = [
-      path.join(programFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-      path.join(programFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-      path.join(localAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    ];
-    for (const p of edgePaths) {
-      if (exists(p)) return 'msedge';
+    if (argument.includes('"')) {
+      throw new Error('Cannot quote an argument containing double quotes for cmd.exe.');
     }
 
-    // Chrome
-    const chromePaths = [
-      path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      path.join(programFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      path.join(programFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    ];
-    for (const p of chromePaths) {
-      if (exists(p)) return 'chrome';
-    }
-  } else if (platform === 'darwin') {
-    // macOS
-    if (exists('/Applications/Google Chrome.app')) return 'chrome';
-    if (exists('/Applications/Microsoft Edge.app')) return 'msedge';
-  } else {
-    // Linux
-    if (whichExists('google-chrome')) return 'chrome';
-    if (whichExists('google-chrome-stable')) return 'chrome';
-    if (whichExists('microsoft-edge')) return 'msedge';
-    if (whichExists('microsoft-edge-stable')) return 'msedge';
-    if (whichExists('chromium-browser')) return 'chromium';
-    if (whichExists('chromium')) return 'chromium';
+    return `"${argument}"`;
   }
 
-  // Fallback: Playwright's bundled Chromium (requires `npx playwright install chromium`)
-  return 'chromium';
+  return `'${argument.replace(/'/g, "'\\''")}'`;
 }
 
-const browser = detectBrowser();
-const child = spawn('npx', ['@playwright/mcp@latest', '--browser', browser], {
-  stdio: 'inherit',
-  shell: true,
-});
+function buildMcpArgs(browser, {
+  configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
+  platform = process.platform,
+} = {}) {
+  return [
+    '-y',
+    '@playwright/mcp@latest',
+    '--browser',
+    browser,
+    '--config',
+    quoteShellArg(configPath, platform),
+  ];
+}
 
-child.on('exit', (code) => process.exit(code || 0));
+function launch({
+  browser = detectBrowser(),
+  spawnFn = spawn,
+  onExit = (code) => process.exit(code || 0),
+  onError = (err) => {
+    // `spawn` emits 'error' (not 'exit') when npx itself can't be launched
+    // (ENOENT, EACCES, ...). Without a handler Node throws the error as an
+    // uncaught exception; surface it and exit non-zero so the MCP host sees the
+    // server failed to start.
+    process.stderr.write(`Failed to launch Playwright MCP server: ${err && err.message ? err.message : err}\n`);
+    process.exit(1);
+  },
+} = {}) {
+  const child = spawnFn('npx', buildMcpArgs(browser), {
+    stdio: 'inherit',
+    shell: true,
+  });
+
+  child.on('exit', onExit);
+  child.on('error', onError);
+  return child;
+}
+
+if (require.main === module) {
+  launch();
+}
+
+module.exports = { buildMcpArgs, launch, quoteShellArg };

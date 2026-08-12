@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Use when the user wants to deploy / publish / push a Power Apps mobile app to a Power Platform tenant so others can run it.
+description: Use to deploy, publish, or push an Expo/React Native Power Apps mobile app to a Power Platform tenant.
 user-invocable: true
 allowed-tools: Read, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
@@ -96,7 +96,7 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 
 Options:
 
-- **Update the offline profile now (recommended)** — invoke `/add-table-to-offline-profile` for each `missingTables[]` entry (or once with `--all-new`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry, following the ordering in the reconciliation reference. Then re-run the delta check; when it reports `in-sync`, continue to Step 3.
+- **Update the offline profile now (recommended)** — read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for each `missingTables[]` entry (or once with `--all-new`), then read and execute `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry. Follow the ordering in the reconciliation reference, then re-run the delta check; when it reports `in-sync`, continue to Step 3.
 - **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
 
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).

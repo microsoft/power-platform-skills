@@ -19,7 +19,7 @@ import {
 // Connector page — fetches documents from SharePoint Online via the
 // new_uxtest_sharepoint connection reference. Follows the connector runtime
 // pattern in references/connectors.md: cast dataApi to an optional connector
-// shape, presence-check before calling, wrap in try/catch, and fall back to
+// shape, presence-check before calling, handle rejected calls, and fall back to
 // inline mock data when the connector method is unavailable or the call fails.
 
 // All fields are OPTIONAL because connector rows are dynamically typed and
@@ -44,6 +44,9 @@ const FALLBACK_DOCS: SharePointDoc[] = [
 const CONNECTOR_LOGICAL_NAME = 'new_uxtest_sharepoint';
 const DATASET_URL = 'https://contoso.sharepoint.com/sites/team';
 const TABLE_GUID = '5709dd6f-c73e-4079-ad23-2334e45e0e13';
+const winAny = window as any;
+const CACHE_KEY = '__ppSharePointDocsQueryCache';
+const INFLIGHT_KEY = '__ppSharePointDocsQueryInflight';
 
 const useStyles = makeStyles({
     root: {
@@ -139,49 +142,89 @@ const GeneratedComponent = (props: { dataApi?: unknown; pageInput?: { data?: Rec
     const { dataApi, pageInput } = props;
     void pageInput;
     const styles = useStyles();
-    const [documents, setDocuments] = useState<SharePointDoc[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const connectorApi = dataApi as unknown as {
+        queryConnectorTable?: (
+            connectorLogicalName: string,
+            dataset: string,
+            table: string,
+            options: Record<string, unknown>
+        ) => Promise<{ rows: SharePointDoc[] }>;
+    };
+    const dataReady = !!dataApi;
+    const [{ documents, loading, error }, setData] = useState<{
+        documents: SharePointDoc[];
+        loading: boolean;
+        error: string | null;
+    }>(() => {
+        const cached = winAny[CACHE_KEY] as SharePointDoc[] | undefined;
+        return { documents: cached ?? [], loading: cached === undefined, error: null };
+    });
     const [searchTerm, setSearchTerm] = useState('');
 
     useEffect(() => {
-        // Cast dataApi to the connector API shape from references/connectors.md.
-        // Always presence-check the method before calling — the runtime may not
-        // have populated it if the connection reference is not yet active.
-        const connectorApi = dataApi as unknown as {
-            queryConnectorTable?: (
-                connectorLogicalName: string,
-                dataset: string,
-                table: string,
-                options: Record<string, unknown>
-            ) => Promise<{ rows: SharePointDoc[] }>;
-        };
+        if (!dataReady) return;
 
-        if (typeof connectorApi.queryConnectorTable !== 'function') {
-            // Method unavailable — fall back to inline mock data so the page
-            // renders something useful while the binding is being set up.
-            setDocuments(FALLBACK_DOCS);
-            setLoading(false);
+        const cached = winAny[CACHE_KEY] as SharePointDoc[] | undefined;
+        if (cached !== undefined) {
+            if (documents !== cached) {
+                setData({ documents: cached, loading: false, error: null });
+            }
             return;
         }
 
-        (async () => {
-            try {
-                const result = await connectorApi.queryConnectorTable(
+        // Always presence-check the method before calling — the runtime may not
+        // have populated it if the connection reference is not yet active.
+        if (typeof connectorApi?.queryConnectorTable !== 'function') {
+            // Method unavailable — fall back to inline mock data so the page
+            // renders something useful while the binding is being set up.
+            setData({ documents: FALLBACK_DOCS, loading: false, error: null });
+            return;
+        }
+
+        let cancelled = false;
+        let inflight = winAny[INFLIGHT_KEY] as Promise<SharePointDoc[]> | undefined;
+        if (!inflight) {
+            inflight = connectorApi
+                .queryConnectorTable(
                     CONNECTOR_LOGICAL_NAME,
                     DATASET_URL,
                     TABLE_GUID,
                     { top: 50 }
-                );
-                setDocuments(result.rows);
-            } catch (err) {
-                setError('Failed to load documents from SharePoint. Showing sample data.');
-                setDocuments(FALLBACK_DOCS);
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, []); // dataApi is stable for the component lifetime; no re-fetch needed
+                )
+                .then((result) => {
+                    winAny[CACHE_KEY] = result.rows;
+                    return result.rows;
+                })
+                .finally(() => {
+                    if (winAny[INFLIGHT_KEY] === inflight) {
+                        delete winAny[INFLIGHT_KEY];
+                    }
+                });
+            winAny[INFLIGHT_KEY] = inflight;
+        }
+
+        inflight
+            .then((rows) => {
+                if (!cancelled) {
+                    setData({ documents: rows, loading: false, error: null });
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setData({
+                        documents: FALLBACK_DOCS,
+                        loading: false,
+                        error: 'Failed to load documents from SharePoint. Showing sample data.',
+                    });
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+        // dataApi is a new reference on each render, so depend on readiness only.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataReady]);
 
     const filtered = searchTerm.trim()
         ? documents.filter((d) =>

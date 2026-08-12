@@ -66,11 +66,11 @@ The Power Apps CLI is installed automatically via `npm install` from the app tem
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
 
-**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `npx power-apps add-data-source -a <connector> -c <connection-id>`.
+**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `pa app add data-source --connector <connector> -c <connection-id>`.
 
 ### Generated Code Pattern
 
-Code apps use `npx power-apps add-data-source` to generate typed services:
+Code apps use `pa app add data-source` to generate typed services:
 - `src/generated/models/{Table}Model.ts` -- TypeScript interfaces
 - `src/generated/services/{Table}Service.ts` -- CRUD methods
 
@@ -89,7 +89,7 @@ npm install
 After scaffolding, initialize:
 
 ```bash
-npx power-apps init -n '{app-name}' -e <environment-id>
+pa app init -n '{app-name}' -e <environment-id>
 ```
 
 ### Dataverse Gotchas
@@ -106,7 +106,7 @@ npx power-apps init -n '{app-name}' -e <environment-id>
 - **Azure DevOps**: HttpRequest method requires renaming `parameters` to `body` in 3 generated files.
 - **SharePoint/Excel**: Tabular datasources need `--dataset` and `--table` parameters when adding.
 - **Excel Online**: Body is a flat key-value object -- no `{ items: ... }` wrapper.
-- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector — the connection is created with `npx power-apps create-connection` (browser OAuth) and it needs the `McpSession` wrapper (send **no** session id on `initialize`). See the `/add-workiq` skill for setup steps.
+- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector — the connection is created with `pa connection create` (browser OAuth) and it needs the `McpSession` wrapper (send **no** session id on `initialize`). See the `/add-workiq` skill for setup steps.
 
 ### Default Environment
 
@@ -114,25 +114,25 @@ Check `power.config.json` in the project root for an `environmentId` — use it 
 
 ### CLI Commands
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. Use `npx power-apps` from within the project directory — works natively in bash on all platforms:
+The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [cli-binary.md](../shared/cli-binary.md) before running any command**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory (works natively in bash on all platforms). Commands below are shown in the canonical grouped `pa` form:
 
 ```bash
-npx power-apps push                               # Deploy
-npx power-apps add-data-source -a <api> -c <id>  # Add connector
-npx power-apps list-connections                   # List connections
-npx power-apps list-datasets -a <api> -c <id>    # List datasets
-npx power-apps list-tables -a <api> -c <id> -d <ds>  # List tables
-npx power-apps logout                             # Log out
+pa app push                               # Deploy
+pa app add data-source --connector <api> -c <id>  # Add connector
+pa connection list                   # List connections
+pa connector list-datasets --connector <api> -c <id>    # List datasets
+pa connector list-tables --connector <api> -c <id> -d <ds>  # List tables
+pa auth logout                             # Log out
 ```
 
 **Auth**: MSAL-based — browser popup on first command requiring auth. No separate auth setup needed.
 
-**Environment**: Set once via `npx power-apps init -e <env-id>`, stored in `power.config.json`.
+**Environment**: Set once via `pa app init -e <env-id>`, stored in `power.config.json`.
 
 ### Build Requirements
 
 Key rules:
-- Always `npm run build` before `npx power-apps push`
+- Always `npm run build` before `pa app push`
 - Remove unused imports (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 - Node.js 22+ required — `add-data-source` rejects older versions

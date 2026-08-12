@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: catch contrast-failing color usage in TS/TSX files.
+ * Explicit validator: catch contrast-failing color usage in TS/TSX files.
  *
  * Fires after Write / Edit / MultiEdit. Scans the resulting content for
  * patterns that historically fail WCAG AA in this plugin's generated apps:
@@ -76,19 +76,6 @@ function isWatchedFile(filePath) {
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
-}
-
-function hasDeferredStyleHooksMarker(filePath) {
-  if (typeof filePath !== 'string' || !filePath) return false;
-
-  let dir = path.dirname(path.resolve(filePath));
-  for (let depth = 0; depth < 12; depth += 1) {
-    if (fs.existsSync(path.join(dir, '.tmp', 'defer-style-hooks'))) return true;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return false;
 }
 
 function extractContent(toolName, toolInput) {
@@ -313,11 +300,6 @@ function main() {
 
     const filePath = toolInput.file_path || toolInput.filePath;
     if (!isWatchedFile(filePath)) process.exit(0);
-
-    // Skip gates set by env var or a project-local marker. The marker is used
-    // only during Step 11 fast screen-builder waves; Step 11.4 report mode still
-    // scans the same files and owns the deferred cleanup.
-    if (process.env.CODE_APPS_NATIVE_SKIP_CONTRAST_HOOK === '1' || hasDeferredStyleHooksMarker(filePath)) process.exit(0);
 
     const content = extractContent(toolName, toolInput);
     if (!content) process.exit(0);

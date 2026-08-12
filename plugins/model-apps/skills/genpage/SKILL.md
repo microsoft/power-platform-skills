@@ -1,7 +1,7 @@
 ---
 name: genpage
-version: 2.2.0
-description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux".
+version: 2.3.0
+description: Creates, updates, and deploys Power Apps generative pages for model-driven apps using React v17, TypeScript, and Fluent UI V9. Orchestrates specialist agents for planning, entity creation, and code generation. Use it when user asks to build, retrieve, or update a page in an existing Microsoft Power Apps model-driven app. Use it when user mentions "generative page", "page in a model-driven", or "genux". This skill stands alone and does not require /app-builder — but if the user wants a whole app built (tables, forms, views, sitemap) rather than pages for an app that already exists, use /app-builder instead.
 author: Microsoft Corporation
 argument-hint: "<page description> | edit"
 user-invocable: true
@@ -17,23 +17,32 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, Task, AskUserQuest
 
 ## Overview
 
-This skill orchestrates four specialist agents across the create and edit flows:
+This skill orchestrates specialist agents across the create and edit flows:
 
 **Create flow:**
 1. **`genpage-planner`** — validates prerequisites, gathers requirements, detects what
-   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`
-2. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
+   entities and apps exist, presents a plan for approval, writes `genpage-plan.md`.
+   May pause and return `connector_discovery_required` (see 2).
+2. **`genpage-connector-builder`** — top-level orchestrator dispatch for connector
+   feature-gating and discovery; writes `connector-bindings.md` + `connectors.json`.
+   Runs **after** the planner has resolved create-vs-edit and the target environment
+   (discovery is mutating), then the planner is re-invoked with its contract.
+3. **`genpage-entity-builder`** — creates Dataverse entities (tables, columns,
    relationships, choices, sample data) via the plugin's Node.js Web API scripts
-3. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
+4. **`genpage-page-builder`** — generates one complete `.tsx` file per page; multiple
    builders run in parallel for multi-page requests
 
 **Edit flow:**
 
-4. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
+5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
+   replaces, discovers, or clears connector bindings; preserves unchanged bindings
+   when the feature gate is OFF
+6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
    requirements, presents an edit plan, writes `genpage-edit-plan.md`
 
-You (the skill) coordinate the agents and own app creation, RuntimeTypes generation,
-deployment, browser verification, and the inline application of planned edits.
+You (the skill) coordinate the agents and own connector dispatch, app creation,
+RuntimeTypes generation, deployment, browser verification, and the inline
+application of planned edits.
 
 ## References
 
@@ -64,7 +73,8 @@ Derive a short folder name from the user's requirements:
 
 1. Extract the page name or a 2-4 word summary from `$ARGUMENTS`
 2. Convert to kebab-case (e.g., "Candidate Tracker" → `candidate-tracker`)
-3. Create the folder: `mkdir -p <folder-name>`
+3. Create the folder: `mkdir -p <folder-name>` (bash/PowerShell; on cmd use `mkdir <folder-name>`,
+   which has no `-p` and errors if the folder exists)
 4. Resolve its absolute path — this is the **working directory** for all subsequent phases
 
 ### Phase 0.5: Initialize Local-Dev Manifest
@@ -118,10 +128,48 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" <working-dir> <kebab-slu
 
 #### Steps
 
-1. Invoke `genpage-planner` via `Task` with the prompt below.
+1. Invoke `genpage-planner` via `Task` with the prompt below. Connector discovery
+   has **not** run yet, so tell the planner the contract is the literal
+   `No connector bindings.` and that discovery is available on request (see 1a).
 2. Wait for it to finish (it returns a summary).
-3. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
-4. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+3. If the return includes `{ "action": "connector_discovery_required" }`, invoke
+   `genpage-connector-builder` with the returned intent — **Mode: `create`** for a
+   new page, **Mode: `edit`** if the planner also reported an edit — using the
+   environment URL the planner resolved, then invoke `genpage-planner` again with
+   the builder's `## Connector Bindings` contract and `connectors.json` status.
+4. If the return includes `{ "action": "edit" }`, jump to the **Edit Flow** section.
+5. Otherwise the planner has written `genpage-plan.md`. Proceed to Phase 2.
+
+#### 1a. Connector discovery is orchestrator-owned and never speculative
+
+`genpage-connector-builder` is dispatched only by this top-level orchestrator,
+not by `genpage-planner`. This keeps the connectors feature gate in one agent
+while avoiding nested `Task` calls from the planner.
+
+**Never run discovery before the planner returns** — not even when `$ARGUMENTS`
+obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
+Discovery is a **mutating** operation: it can create a connection reference. The
+planner is what resolves (a) create vs. edit and (b) which environment, and it may
+resolve either differently from the active `pac auth` profile. A connection
+reference created in the wrong environment, or in create mode for what turns out
+to be an edit, **cannot be undone** by discarding the local outputs.
+
+So the sequence is always: plan first, then discover, then re-plan.
+
+- Every first planner invocation gets the literal contract `No connector bindings.`
+  and is told discovery has not run.
+- When the planner determines connector-backed data is needed — from `$ARGUMENTS`
+  or from its own user clarification — it returns
+  `{ "action": "connector_discovery_required", "intent": "..." }` **together with
+  the resolved action and environment URL**.
+- Only then dispatch `genpage-connector-builder` with that mode, that environment
+  URL, the working directory and `${PLUGIN_ROOT}`. Read
+  `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
+  is a bare JSON array, then re-run the planner with the refreshed contract.
+
+The builder remains the single owner of the connectors flag: it probes first,
+writes `No connector bindings.` + `[]` when the flag is OFF, and performs all
+connection discovery only when the flag is ON.
 
 #### Invocation prompt
 
@@ -130,6 +178,11 @@ Pass a prompt that includes:
 - The user's requirements: `$ARGUMENTS`
 - The working directory (absolute path from Phase 0)
 - The plugin root path: `${PLUGIN_ROOT}`
+- The connector contract: the full body of `<working-dir>/connector-bindings.md`,
+  or the literal `No connector bindings.` when discovery was not needed or the
+  feature gate was OFF
+- The connector upload file status: `<working-dir>/connectors.json` exists and is
+  a bare JSON array, or `no connectors.json; omit --connectors`
 
 Example:
 
@@ -139,6 +192,21 @@ Example:
 >
 > Working directory: [absolute path from Phase 0]
 > Plugin root: ${PLUGIN_ROOT}
+>
+> Connector discovery is orchestrator-owned. Do **not** invoke
+> `genpage-connector-builder` from inside the planner. Use this as the entire
+> `## Connector Bindings` section of the plan:
+>
+> [paste connector-bindings.md body, or `No connector bindings.`]
+>
+> Connector upload file: [absolute path to connectors.json, or `none — omit --connectors`]
+>
+> If your clarification questions reveal connector-backed data that is not covered
+> by the connector contract above, stop and return
+> `{ "action": "connector_discovery_required", "intent": "<connector need>",
+> "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }`
+> instead of trying to discover connectors yourself. `resolvedAction` and `envUrl`
+> are required — discovery is dispatched against exactly those.
 >
 > Follow the instructions in your agent file. Validate prereqs, confirm auth, ask
 > the new/edit question via AskUserQuestion, then proceed accordingly. Write
@@ -162,9 +230,11 @@ auth, and the `az` and `pac` identities should normally match. Run the
 consolidated pre-flight:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/check-auth.js"
+node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
 ```
 
+Genpage deploys pages via `pac model genpage`, so pass `--require-pac` to keep a missing pac login
+a hard blocker (the app-builder skill omits the flag — its build path only needs the az token).
 It returns a single JSON object:
 
 ```json
@@ -173,6 +243,7 @@ It returns a single JSON object:
   "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
                  | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
   "message": "human-readable next step",
+  "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
   "identitiesMatch": true | false,
   "whoAmI": { "ok": true, "userId": "...", "organizationId": "..." }
@@ -202,7 +273,7 @@ The entity-builder reads `Solution` and `Publisher Prefix` directly from the
 plan's `## Environment` — no need to re-thread them here.
 
 Wait for completion. The builder writes a transactional log at
-`<working-dir>/entity-creation-log.md` for recovery on failure.
+`<working-dir>/genpage-entity-creation-log.md` for recovery on failure.
 
 ### Phase 3: App Creation/Selection
 
@@ -260,6 +331,14 @@ create or pass `connectors.json`, and never add `--connectors` on upload —
 **regardless of what the plan's `## Connector Bindings` section says**. (Backstop:
 `list-connections.js` / `create-connection-reference.js` also fail closed with
 exit 3 if invoked while OFF.)
+
+**Carry this decision into code generation.** The probe result is `Connectors:
+disabled` / `Connectors: enabled` for the rest of the run, and Phase 5 **must** pass
+it verbatim in every page-builder dispatch. When it is `disabled`, every downstream
+step treats the plan's `## Connector Bindings` section as if it read
+`No connector bindings.` — otherwise the generated page would call a connector that
+this run deliberately never binds, and the page fails at runtime instead of simply
+omitting the feature.
 
 **If it prints `enabled`:** read the plan's `## Connector Bindings` section and
 treat it as bindings **only when it contains an actual binding table** (a
@@ -343,10 +422,11 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. Only when the plan's `## Connector Bindings` section contains an **actual
-   binding table** (a `| Logical Name | …` header with at least one data row),
-   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
-   `No connector bindings.` sentinel, or an empty/missing/malformed section, as
+3. Only when the Phase 4.5 probe printed `enabled` **and** the plan's
+   `## Connector Bindings` section contains an **actual binding table** (a
+   `| Logical Name | …` header with at least one data row), also read
+   `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
+   sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
 3b. Only when the plan's `## Custom API Bindings` section contains an **actual
    binding table** (a `| Name | Kind | …` header with at least one data row),
@@ -381,6 +461,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
+- **Connectors: `enabled` or `disabled`** — the Phase 4.5 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
 
@@ -391,6 +472,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **dataverse**
+> - Connectors: **[enabled|disabled from Phase 4.5]**
 > - RuntimeTypes: [absolute path to RuntimeTypes.ts]
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
@@ -405,6 +487,7 @@ For each page, pass a prompt that includes:
 > - Target file: [filename].tsx
 > - Plan document: [absolute path to genpage-plan.md]
 > - Data mode: **mock**
+> - Connectors: **[enabled|disabled from Phase 4.5]**
 > - Working directory: [absolute path from Phase 0]
 > - Plugin root: ${PLUGIN_ROOT}
 >
@@ -557,7 +640,11 @@ Runs only when the plan's `## Solution Packaging` has `Package into solution: tr
 Adds the deployed app, the GenPage(s), and any connection references to the
 target solution so they travel cross-environment.
 
-1. Ensure the solution exists (create via `scripts/create-solution.js` if needed).
+1. Ensure the solution exists — create it only if it doesn't already exist:
+   `node ${PLUGIN_ROOT}/scripts/provision-solution.js <envUrl> <solutionUniqueName> "<Friendly Name>" [--publisher <uniqueName>]`
+   It prints `{ "ok": true, "solutionId": …, "uniqueName": …, "publisherPrefix": … }`;
+   `uniqueName` must start with a letter and contain only letters, digits, and
+   underscores. Without `--publisher` it resolves the environment's default publisher.
 2. Add the app + GenPage(s) + connection references (pass the page-id(s) returned
    by Phase 6 as `--page-ids` — the GenPage is added explicitly, it does NOT travel
    with the app on its own):

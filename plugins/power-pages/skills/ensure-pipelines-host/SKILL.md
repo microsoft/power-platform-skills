@@ -1051,7 +1051,7 @@ Existing helpers reused (no changes):
 
 ## Validation script
 
-`skills/ensure-pipelines-host/scripts/validate-ensure-host.js` (PostToolUse Stop hook, registered via `TRACKED_SKILLS` in `scripts/lib/powerpages-hook-utils.js`):
+`skills/ensure-pipelines-host/scripts/validate-ensure-host.js` (run by the centralized PostToolUse hook on the `Skill` tool; the skill is tracked automatically because `skills/ensure-pipelines-host/SKILL.md` exists — see `scripts/lib/powerpages-hook-utils.js`):
 
 - If no `docs/alm/last-host-check.json` in cwd → exit 0 (not an ensure-host session).
 - If present: validate `schemaVersion === 1` or `2` (forward-compatible); required fields populated (`tenantId`, `sourceEnvUrl`, `resolutionStatus`); `ready === true` for non-terminal-error statuses; `finalHostEnvUrl` populated when `ready === true`.

@@ -1,7 +1,8 @@
 ---
 name: add-table-to-offline-profile
-description: Use when the user wants to add ONE table (typically a newly-added Dataverse table) to an existing offline profile without re-running the full /setup-offline-profile wizard. Parallel to /add-dataverse — same single-table flow.
+description: Internal mobile-app workflow read and executed only by mobile orchestrators to add one Dataverse table to an existing Mobile Offline Profile.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

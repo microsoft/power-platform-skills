@@ -200,34 +200,56 @@ If any entities need creating, note that entity creation requires:
 Detection uses `pac model list-tables` natively; creation runs through the
 plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
 
-### Connector Detection (delegated to genpage-connector-builder)
+### Connector Detection (handled by the orchestrator, not by you)
 
 If the request implies a non-Dataverse source (SharePoint, Teams, weather,
-Office 365, SQL via connector, or a custom REST connector), delegate ALL
-connector work to the `genpage-connector-builder` agent via the `Task` tool. Do
-**not** run the feature-gate probe or any connector discovery inline — that agent
-is the single owner of the connectors feature gate, connection / connection-ref
-discovery, connection-reference creation, and the binding contract.
+Office 365, SQL via connector, or a custom REST connector), **do not dispatch any
+agent and do not run the feature-gate probe or any connector discovery inline.**
+You have no `Task` tool, and `genpage-connector-builder` asks the user questions —
+it cannot run headless inside a sub-agent. It is dispatched by the top-level
+`/genpage` orchestrator.
 
-Invoke `genpage-connector-builder` with a prompt containing:
+Discovery is **mutating** (it can create a connection reference), and it is *you*
+who resolves create-vs-edit and the target environment — so discovery always runs
+AFTER you, never before. Your first invocation therefore always carries the
+sentinel `No connector bindings.`.
 
-- **Mode:** `create`
-- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
-- **Intent:** the source(s) the request implies (e.g. "SharePoint documents",
-  "current weather")
+Two cases:
 
-It writes two files into the working directory:
+1. **The orchestrator already forwarded connector results** — you are being
+   re-invoked after discovery, so your prompt carries a `## Connector Bindings`
+   block (or the sentinel `No connector bindings.`) and/or a `connectors.json`
+   path. Consume it as-is: copy the block verbatim into the plan's
+   `## Connector Bindings` section. Never re-derive or edit it.
+2. **A connector need is present or surfaces during clarification** — do NOT
+   attempt discovery. Stop and return
+
+   ```json
+   { "action": "connector_discovery_required", "intent": "<the source(s) implied>",
+     "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }
+   ```
+
+   `resolvedAction` and `envUrl` are **required**: the orchestrator dispatches the
+   builder against exactly those, and a connection reference created in the wrong
+   environment or the wrong mode cannot be undone. Return this only after your
+   auth/environment steps have run, so both values are real.
+
+`genpage-connector-builder` remains the single owner of the connectors feature gate,
+connection / connection-ref discovery, connection-reference creation, and the binding
+contract. When no connectors are involved, write the exact sentinel
+`No connector bindings.` into the plan.
+
+When the orchestrator forwards results it provides:
 
 - `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
-  section (either `No connector bindings.` or the binding table).
+section (either `No connector bindings.` or the binding table).
 - `connectors.json` — the bare-array binding file for deployment.
 
 Read `connector-bindings.md` and splice its contents verbatim into the
 `## Connector Bindings` section of `genpage-plan.md`.
 
 If the request implies **only** Dataverse and/or mock data (no connector source),
-skip the agent entirely and write `## Connector Bindings` as exactly
-`No connector bindings.`.
+write `## Connector Bindings` as exactly `No connector bindings.`.
 
 ### Custom API Detection (delegated to genpage-customapi-builder)
 
@@ -352,7 +374,7 @@ in the plan's `## Environment`. Specifics:
   ```bash
   PUB=$(node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
     "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+  node "${PLUGIN_ROOT}/scripts/provision-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
@@ -448,10 +470,13 @@ prefix you embed in a column name is a silent footgun.
 `crb2b_playerresult.crb2b_playername`), but write only suffixes in the document.
 
 For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
-(exact key, with space) per page: `true` for list pages, detail pages, or any
-page where the user is likely to navigate away and return; `false` for forms,
-single-visit dashboards, or mock-data pages. The page-builder reads this field
-to decide whether to load `references/data-caching.md`.
+(exact key, with space) per page: `true` for any page that **fetches data on
+mount** through a real host read — Dataverse `dataApi` calls OR connector calls
+such as `queryConnectorTable` / `executeConnectorOperation`. Lists, details, and
+single-visit overviews/dashboards all need the in-flight de-dupe that survives
+the host double-mount. Set `false` only for pages that render inline mock arrays
+and forms with no initial fetch. The page-builder reads this field to decide
+whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
 from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card

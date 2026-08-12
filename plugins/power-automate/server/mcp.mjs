@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FlowAgent MCP v2.2.0 — JSON coercion, get_flow path param, CDS fallback, callback fallback
+// FlowAgent MCP v2.5.0
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -368,6 +368,43 @@ function validateDefinition(definition, connectionReferences) {
     }
     const actionHost = inputs?.host;
     const actionOperationId = actionHost?.operationId;
+    const DEPRECATED_OPERATIONS = {
+      // Teams
+      PostUserNotification: "PostMessageToConversation",
+      PostChannelNotification: "PostMessageToConversation",
+      PostMessageToChannel: "PostMessageToConversation",
+      PostMessageToChannelV2: "PostMessageToConversation",
+      PostMessageToChannelV3: "PostMessageToConversation",
+      PostReplyToMessage: "PostReplyToMessageV2",
+      PostUserAdaptiveCard: "PostCardToConversation",
+      PostChannelAdaptiveCard: "PostCardToConversation",
+      SubscribeUserFlowContinuation: "PostCardAndWaitForResponse",
+      SubscribeChannelFlowContinuation: "PostCardAndWaitForResponse",
+      // Outlook
+      SendEmail: "SendEmailV2",
+      OnNewEmail: "OnNewEmailV3",
+      OnNewEmailV2: "OnNewEmailV3",
+      ReplyTo: "ReplyToV3",
+      ReplyToV2: "ReplyToV3",
+      ForwardEmail: "ForwardEmailV2",
+      // Planner
+      CreateTask: "CreateTask_V3",
+      CreateTask_V2: "CreateTask_V3",
+      ListTasks: "ListTasks_V2",
+      ListBuckets: "ListBuckets_V2",
+      GetTask: "GetTask_V2",
+      // Forms
+      GetFormResponses: "CreateFormWebhook",
+      // Notifications
+      SendEmailNotification: "(RETIRED - use shared_office365 SendEmailV2)"
+    };
+    if (actionOperationId && DEPRECATED_OPERATIONS[actionOperationId] && actionOperationId !== "approvalSubscribeV2" && actionOperationId !== "approvalSubscribe") {
+      errors.push({
+        rule: "deprecated-operation",
+        message: `Operation "${actionOperationId}" is deprecated. Use "${DEPRECATED_OPERATIONS[actionOperationId]}" instead.`,
+        path: `actions.${name3}.inputs.host.operationId`
+      });
+    }
     if (actionOperationId === "StartAndWaitForAnApproval" || actionOperationId === "approvalSubscribeV2" || actionOperationId === "approvalSubscribe") {
       if (actionOperationId === "approvalSubscribeV2" || actionOperationId === "approvalSubscribe") {
         errors.push({
@@ -12214,7 +12251,7 @@ var require_lodash5 = __commonJS({
     function isObjectLike(value) {
       return !!value && typeof value == "object";
     }
-    function isPlainObject3(value) {
+    function isPlainObject4(value) {
       if (!isObjectLike(value) || objectToString.call(value) != objectTag || isHostObject(value)) {
         return false;
       }
@@ -12225,7 +12262,7 @@ var require_lodash5 = __commonJS({
       var Ctor = hasOwnProperty.call(proto, "constructor") && proto.constructor;
       return typeof Ctor == "function" && Ctor instanceof Ctor && funcToString.call(Ctor) == objectCtorString;
     }
-    module.exports = isPlainObject3;
+    module.exports = isPlainObject4;
   }
 });
 
@@ -12338,7 +12375,7 @@ var require_sign = __commonJS({
     var isBoolean = require_lodash2();
     var isInteger = require_lodash3();
     var isNumber = require_lodash4();
-    var isPlainObject3 = require_lodash5();
+    var isPlainObject4 = require_lodash5();
     var isString = require_lodash6();
     var once = require_lodash7();
     var { KeyObject, createSecretKey, createPrivateKey } = __require("crypto");
@@ -12357,7 +12394,7 @@ var require_sign = __commonJS({
         return isString(value) || Array.isArray(value);
       }, message: '"audience" must be a string or array' },
       algorithm: { isValid: includes.bind(null, SUPPORTED_ALGS), message: '"algorithm" must be a valid string enum value' },
-      header: { isValid: isPlainObject3, message: '"header" must be an object' },
+      header: { isValid: isPlainObject4, message: '"header" must be an object' },
       encoding: { isValid: isString, message: '"encoding" must be a string' },
       issuer: { isValid: isString, message: '"issuer" must be a string' },
       subject: { isValid: isString, message: '"subject" must be a string' },
@@ -12374,7 +12411,7 @@ var require_sign = __commonJS({
       nbf: { isValid: isNumber, message: '"nbf" should be a number of seconds' }
     };
     function validate(schema, allowUnknown, object3, parameterName) {
-      if (!isPlainObject3(object3)) {
+      if (!isPlainObject4(object3)) {
         throw new Error('Expected "' + parameterName + '" to be a plain object.');
       }
       Object.keys(object3).forEach(function(key) {
@@ -27929,6 +27966,7 @@ async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES) {
 }
 
 // packages/core/dist/api/flow-diff.js
+import { createHash } from "node:crypto";
 function jsonEqual(a, b) {
   if (a === b)
     return true;
@@ -28086,14 +28124,19 @@ function diffFlow(current, proposed) {
   diff.summary = buildSummary(diff);
   return diff;
 }
-function hashProposal(body) {
-  const stable = stableStringify(body);
-  let h = 2166136261;
-  for (let i = 0; i < stable.length; i++) {
-    h ^= stable.charCodeAt(i);
-    h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
-  }
-  return ("0000000" + h.toString(16)).slice(-8);
+function hashUpdateBody(body) {
+  const p = body?.properties ?? {};
+  const normalized = {};
+  if (p.definition !== void 0)
+    normalized.definition = p.definition;
+  if (p.connectionReferences !== void 0)
+    normalized.connectionReferences = p.connectionReferences;
+  if (p.displayName !== void 0)
+    normalized.displayName = p.displayName;
+  if (p.state !== void 0)
+    normalized.state = p.state;
+  const stable = stableStringify(normalized);
+  return createHash("sha256").update(stable).digest("hex");
 }
 function stableStringify(v) {
   if (v === null || v === void 0 || typeof v !== "object")
@@ -28168,6 +28211,205 @@ function redeemToken(token, expected) {
   return { ok: true };
 }
 
+// packages/core/dist/api/flow-edit.js
+var FlowEditError = class extends Error {
+  code;
+  path;
+  constructor(code, message, path5) {
+    super(message);
+    this.code = code;
+    this.path = path5;
+    this.name = "FlowEditError";
+  }
+};
+function isPlainObject2(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function parsePath(path5) {
+  return path5.split("/").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+function deepClone(v) {
+  if (typeof structuredClone === "function")
+    return structuredClone(v);
+  return JSON.parse(JSON.stringify(v));
+}
+function deepMerge(target, source) {
+  for (const [k, v] of Object.entries(source)) {
+    const existing = target[k];
+    if (isPlainObject2(existing) && isPlainObject2(v)) {
+      deepMerge(existing, v);
+    } else {
+      target[k] = v;
+    }
+  }
+  return target;
+}
+function resolveParent(root, segments, fullPath) {
+  let node = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (!isPlainObject2(node)) {
+      throw new FlowEditError("PathNotObject", `Cannot descend into "${segments.slice(0, i).join("/")}" \u2014 not an object.`, fullPath);
+    }
+    if (!(segments[i] in node)) {
+      throw new FlowEditError("PathNotFound", `Path segment "${segments[i]}" does not exist (in "${fullPath}").`, fullPath);
+    }
+    node = node[segments[i]];
+  }
+  if (!isPlainObject2(node)) {
+    throw new FlowEditError("PathNotObject", `Parent of "${fullPath}" is not an object.`, fullPath);
+  }
+  return { parent: node, key: segments[segments.length - 1] };
+}
+function getNode(root, segments, fullPath) {
+  let node = root;
+  for (const seg of segments) {
+    if (!isPlainObject2(node) || !(seg in node)) {
+      throw new FlowEditError("PathNotFound", `Path "${fullPath}" not found (stopped at "${seg}").`, fullPath);
+    }
+    node = node[seg];
+  }
+  return node;
+}
+function assertNoOrphanRunAfter(definition) {
+  const actions = definition.actions;
+  if (!isPlainObject2(actions))
+    return;
+  const names = new Set(Object.keys(actions));
+  const orphans = [];
+  for (const [name3, action] of Object.entries(actions)) {
+    if (!isPlainObject2(action))
+      continue;
+    const runAfter = action.runAfter;
+    if (!isPlainObject2(runAfter))
+      continue;
+    for (const dep of Object.keys(runAfter)) {
+      if (!names.has(dep)) {
+        orphans.push(`${name3}.runAfter \u2192 "${dep}" (missing)`);
+      }
+    }
+  }
+  if (orphans.length > 0) {
+    throw new FlowEditError("OrphanRunAfter", `Edit would leave dangling runAfter dependencies: ${orphans.join("; ")}. Re-point or remove the dependent action(s) in the same edit.`);
+  }
+}
+function applyFlowEdits(definition, operations) {
+  if (!Array.isArray(operations) || operations.length === 0) {
+    throw new FlowEditError("EmptyOperations", "No edit operations supplied.");
+  }
+  const next = deepClone(definition);
+  const applied = [];
+  for (const operation of operations) {
+    const { op, path: path5 } = operation;
+    if (op !== "set" && op !== "add" && op !== "remove" && op !== "merge") {
+      throw new FlowEditError("InvalidOp", `Unknown op "${op}". Use one of: set, add, remove, merge.`, path5);
+    }
+    const segments = parsePath(path5 ?? "");
+    if (op === "merge") {
+      const value = operation.value;
+      if (!isPlainObject2(value)) {
+        throw new FlowEditError("MergeValueNotObject", `merge "${path5}" requires an object value.`, path5);
+      }
+      const targetNode = segments.length === 0 ? next : getNode(next, segments, path5);
+      if (!isPlainObject2(targetNode)) {
+        throw new FlowEditError("MergeTargetNotObject", `merge target "${path5}" is not an object.`, path5);
+      }
+      deepMerge(targetNode, value);
+      applied.push({ op, path: path5 });
+      continue;
+    }
+    if (segments.length === 0) {
+      throw new FlowEditError("EmptyPath", `"${op}" requires a non-empty path.`, path5);
+    }
+    const { parent, key } = resolveParent(next, segments, path5);
+    if (op === "remove") {
+      if (!(key in parent)) {
+        throw new FlowEditError("PathNotFound", `remove "${path5}" \u2014 key "${key}" does not exist.`, path5);
+      }
+      delete parent[key];
+    } else if (op === "add") {
+      if (key in parent) {
+        throw new FlowEditError("KeyExists", `add "${path5}" \u2014 key "${key}" already exists. Use op:"set" to overwrite.`, path5);
+      }
+      parent[key] = operation.value;
+    } else {
+      parent[key] = operation.value;
+    }
+    applied.push({ op, path: path5 });
+  }
+  assertNoOrphanRunAfter(next);
+  return { definition: next, applied };
+}
+
+// packages/core/dist/connection-refs.js
+function extractConnectorKeysFromDefinition(definition) {
+  const keys = /* @__PURE__ */ new Set();
+  function scanActions(actions) {
+    if (!actions || typeof actions !== "object")
+      return;
+    for (const action of Object.values(actions)) {
+      const connName = action?.inputs?.host?.connectionName;
+      if (connName)
+        keys.add(connName);
+      if (action?.actions)
+        scanActions(action.actions);
+      if (action?.else?.actions)
+        scanActions(action.else.actions);
+      if (action?.cases) {
+        for (const c of Object.values(action.cases)) {
+          if (c?.actions)
+            scanActions(c.actions);
+        }
+      }
+      if (action?.default?.actions)
+        scanActions(action.default.actions);
+    }
+  }
+  scanActions(definition.actions);
+  const triggers = definition.triggers;
+  if (triggers) {
+    for (const trigger of Object.values(triggers)) {
+      const connName = trigger?.inputs?.host?.connectionName;
+      if (connName)
+        keys.add(connName);
+    }
+  }
+  return keys;
+}
+async function enrichRefsWithLogicalNames(client, envId, refs, log) {
+  const needsEnrichment = Object.values(refs).some((r) => !r.connectionReferenceLogicalName);
+  if (!needsEnrichment)
+    return refs;
+  let dvRefs;
+  try {
+    dvRefs = await client.listConnections(envId);
+  } catch {
+    log?.("Dataverse connection references unavailable; using direct connections");
+    return refs;
+  }
+  const connectorToLogical = {};
+  for (const dv of dvRefs) {
+    if (dv.connectorid && dv.connectionreferencelogicalname) {
+      connectorToLogical[dv.connectorid] = dv.connectionreferencelogicalname;
+    }
+  }
+  const enriched = { ...refs };
+  let count = 0;
+  for (const [key, ref] of Object.entries(enriched)) {
+    if (ref.connectionReferenceLogicalName)
+      continue;
+    const connectorId = ref.id ?? `/providers/Microsoft.PowerApps/apis/${key}`;
+    const logicalName = connectorToLogical[connectorId];
+    if (logicalName) {
+      enriched[key] = { ...ref, connectionReferenceLogicalName: logicalName };
+      count++;
+    }
+  }
+  if (count > 0) {
+    log?.(`Resolved ${count} connection reference logical name(s) from Dataverse`);
+  }
+  return enriched;
+}
+
 // packages/core/dist/api/flow-client.js
 import { execFile } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
@@ -28198,8 +28440,8 @@ function createSha256ContentDigest(value) {
     return "00000000";
   }
 }
-var MAX_RETRIES = 3;
-var INITIAL_DELAY_MS = 1e3;
+var MAX_RETRIES = 2;
+var INITIAL_DELAY_MS = 500;
 var APIHUB_RESOURCE = "https://apihub.azure.com";
 function extractLogicalNamesFromFlow(flow) {
   const refs = flow?.properties?.connectionReferences;
@@ -28222,9 +28464,34 @@ var FlowClient = class _FlowClient {
    * Flow RP API instead of PPAPI (issues #269, #271, #274, #276, #278, #281, #282).
    */
   ppapiUnavailableEnvs = /* @__PURE__ */ new Set();
+  /** Connection cache: key = `${envId}:${connector}`, TTL = 5 minutes. */
+  connectionCache = /* @__PURE__ */ new Map();
+  static CONNECTION_CACHE_TTL_MS = 5 * 60 * 1e3;
   constructor(auth2, config3) {
     this.auth = auth2;
     this.config = config3;
+  }
+  /** Get cached connections or null if expired/missing. */
+  getCachedConnections(envId, connector) {
+    const key = `${envId}:${connector ?? "*"}`;
+    const entry = this.connectionCache.get(key);
+    if (entry && Date.now() < entry.expiresAt)
+      return entry.value;
+    if (entry)
+      this.connectionCache.delete(key);
+    return null;
+  }
+  /** Cache a connection list. */
+  setCachedConnections(envId, connector, value) {
+    const key = `${envId}:${connector ?? "*"}`;
+    this.connectionCache.set(key, { value, expiresAt: Date.now() + _FlowClient.CONNECTION_CACHE_TTL_MS });
+  }
+  /** Invalidate connection cache for an environment (after create/delete/fix). */
+  invalidateConnectionCache(envId, connector) {
+    if (connector) {
+      this.connectionCache.delete(`${envId}:${connector}`);
+    }
+    this.connectionCache.delete(`${envId}:*`);
   }
   /** Resolve the PPAPI base URL for an environment, respecting config overrides. */
   ppapiBase(envId) {
@@ -28347,8 +28614,202 @@ var FlowClient = class _FlowClient {
     }
     await this.assertNotManaged(envId, flowId, "update_flow", opts);
     await this.snapshotBeforeMutation(envId, flowId, "update_flow", opts);
+    let autoMerged = [];
+    if (opts.autoResolveConnectionRefs !== false && body.properties?.definition) {
+      autoMerged = await this.autoMergeConnectionRefs(envId, flowId, body);
+    }
+    if (body.properties?.definition) {
+      try {
+        const ctx = await this.getFlowContext(envId, flowId);
+        if (ctx.inSolution && ctx.workflowId && !ctx.warning) {
+          const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, body);
+          if (updated) {
+            if (autoMerged.length)
+              updated._autoMergedConnectionRefs = autoMerged;
+            return updated;
+          }
+        }
+      } catch {
+        logger.debug(`updateFlow: Dataverse path failed, falling through to PPAPI`);
+      }
+    }
+    this.stripInjectedAuthentication(body);
     const path5 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    return this.ppapiRequestWithFallback(envId, path5, "PATCH", body);
+    const result = await this.ppapiRequestWithFallback(envId, path5, "PATCH", body);
+    if (autoMerged.length)
+      result._autoMergedConnectionRefs = autoMerged;
+    return result;
+  }
+  /**
+   * Detect connectors in the new definition that aren't in the current flow's
+   * connectionReferences. Auto-resolve by finding a connected connection for
+   * each missing connector. Fails on ambiguity (multiple candidates).
+   */
+  async autoMergeConnectionRefs(envId, flowId, body) {
+    const def = body.properties?.definition;
+    if (!def)
+      return [];
+    let currentRefs;
+    try {
+      const current = await this.getFlow(envId, flowId);
+      currentRefs = current.properties?.connectionReferences ?? {};
+    } catch {
+      return [];
+    }
+    const neededKeys = extractConnectorKeysFromDefinition(def);
+    const suppliedRefs = body.properties?.connectionReferences ?? {};
+    const effectiveRefs = { ...currentRefs, ...suppliedRefs };
+    const missing = [];
+    for (const key of neededKeys) {
+      if (!effectiveRefs[key])
+        missing.push(key);
+    }
+    if (missing.length === 0)
+      return [];
+    const resolved = {};
+    for (const connectorKey of missing) {
+      const connectorName = connectorKey.startsWith("shared_") ? connectorKey : `shared_${connectorKey}`;
+      try {
+        const conns = await this.listConnections(envId, { connector: connectorName });
+        const connected = conns.filter((c) => c.statuses?.[0]?.status === "Connected" || c.status === "Connected");
+        if (connected.length === 1) {
+          const conn = connected[0];
+          resolved[connectorKey] = {
+            connectionName: conn.connectionName ?? conn.name,
+            source: "Embedded",
+            id: `/providers/Microsoft.PowerApps/apis/${connectorName}`,
+            tier: "NotSpecified"
+          };
+          logger.info(`[auto-merge] Resolved ${connectorKey} \u2192 ${conn.connectionName ?? conn.name}`);
+        } else if (connected.length > 1) {
+          throw new Error(`Multiple connections available for ${connectorKey} (${connected.length} candidates). Pass explicit connectionRefs or use connectionSelection to disambiguate.`);
+        } else {
+          throw new Error(`No connected connection found for ${connectorKey}. Create one with: create-connection --env=${envId} --connector=${connectorName}`);
+        }
+      } catch (err) {
+        if (err.message?.includes("Multiple connections") || err.message?.includes("No connected connection")) {
+          throw err;
+        }
+        logger.debug(`[auto-merge] Could not resolve ${connectorKey}: ${err.message}`);
+      }
+    }
+    if (Object.keys(resolved).length > 0) {
+      if (!body.properties.connectionReferences) {
+        body.properties.connectionReferences = { ...currentRefs };
+      }
+      Object.assign(body.properties.connectionReferences, resolved);
+    }
+    return Object.keys(resolved);
+  }
+  /**
+   * Update a solution flow by PATCHing its Dataverse clientdata directly.
+   * This bypasses PPAPI validation issues with connectionName/connectionReferenceName
+   * round-trip (#314 finding 2).
+   */
+  async updateFlowViaDataverse(envId, flowId, workflowId, body) {
+    let instanceUrl;
+    try {
+      instanceUrl = await this.getDataverseInstanceUrl(envId);
+    } catch {
+      return null;
+    }
+    const dvToken = await this.auth.getAccessToken(instanceUrl);
+    const url = `${instanceUrl}/api/data/v9.2/workflows(${workflowId})?$select=clientdata`;
+    const wf = await this.dataverseGet(url, dvToken);
+    const clientdata = JSON.parse(wf.clientdata);
+    if (body.properties?.definition) {
+      clientdata.properties.definition = body.properties.definition;
+    }
+    if (body.properties?.displayName) {
+      clientdata.properties.displayName = body.properties.displayName;
+    }
+    if (body.properties?.connectionReferences) {
+      clientdata.properties.connectionReferences = body.properties.connectionReferences;
+    }
+    const patchUrl = `${instanceUrl}/api/data/v9.2/workflows(${workflowId})`;
+    await this.dataversePatch(patchUrl, { clientdata: JSON.stringify(clientdata) }, dvToken);
+    return this.getFlow(envId, flowId);
+  }
+  /**
+   * Remove `authentication` fields that PPAPI injects into action inputs on read.
+   * These cause WorkflowRunActionInputsInvalidProperty on write.
+   * Also translate `host.connectionName` to `host.connectionReferenceName` for
+   * solution flows where PPAPI returns connectionName but the API requires
+   * connectionReferenceName (#314 finding 2).
+   */
+  stripInjectedAuthentication(body, connectionReferences) {
+    const def = body.properties?.definition;
+    if (!def)
+      return;
+    const refs = connectionReferences ?? body.properties?.connectionReferences;
+    const connRefMap = {};
+    if (refs && typeof refs === "object") {
+      for (const [key, ref] of Object.entries(refs)) {
+        if (ref?.connectionReferenceLogicalName) {
+          connRefMap[key] = ref.connectionReferenceLogicalName;
+        }
+      }
+    }
+    const fixHost = (inputs) => {
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
+        return;
+      const inp = inputs;
+      if ("authentication" in inp)
+        delete inp.authentication;
+      const host = inp.host;
+      if (host && host.connectionName && !host.connectionReferenceName) {
+        const logicalName = connRefMap[host.connectionName];
+        if (logicalName) {
+          host.connectionReferenceName = logicalName;
+          delete host.connectionName;
+        }
+      }
+    };
+    const actions = def.actions;
+    if (actions) {
+      for (const action of Object.values(actions)) {
+        fixHost(action?.inputs);
+      }
+    }
+    const triggers = def.triggers;
+    if (triggers) {
+      for (const trigger of Object.values(triggers)) {
+        fixHost(trigger?.inputs);
+      }
+    }
+  }
+  /**
+   * Apply targeted edits to an existing flow's definition. Gets the current
+   * flow, applies operations via `applyFlowEdits`, then either previews
+   * (dry run) or commits via `updateFlow`.
+   */
+  async editFlow(envId, flowId, operations, opts = {}) {
+    const current = await this.getFlow(envId, flowId);
+    const currentDef = current.properties?.definition;
+    if (!currentDef) {
+      throw new Error("Flow has no definition to edit");
+    }
+    const { definition: newDef, applied } = applyFlowEdits(currentDef, operations);
+    const body = {
+      properties: { definition: newDef }
+    };
+    if (opts.dryRun) {
+      const preview = await this.previewUpdate(envId, flowId, body);
+      return {
+        mode: "preview",
+        applied,
+        diff: preview.diff,
+        token: preview.token,
+        expiresAt: preview.expiresAt,
+        note: preview.note
+      };
+    }
+    const flow = await this.updateFlow(envId, flowId, body, {
+      forceManaged: opts.forceManaged,
+      previewToken: opts.previewToken,
+      backupNote: `edit_flow: ${applied.map((a) => `${a.op} ${a.path}`).join("; ")}`
+    });
+    return { mode: "applied", applied, flow };
   }
   /**
    * Compute a diff between the current flow and the proposed update body,
@@ -28364,7 +28825,7 @@ var FlowClient = class _FlowClient {
     const currentSnap = toSnapshot(current);
     const proposed = mergeProposal(currentSnap, body);
     const diff = diffFlow(currentSnap, proposed);
-    const proposalHash = hashProposal(proposed);
+    const proposalHash = hashUpdateBody(body);
     const { token, expiresAt } = issueToken({
       envId,
       flowId,
@@ -28382,9 +28843,7 @@ var FlowClient = class _FlowClient {
     };
   }
   async assertPreviewTokenMatches(envId, flowId, body, token) {
-    const current = await this.getFlow(envId, flowId);
-    const proposed = mergeProposal(toSnapshot(current), body);
-    const proposalHash = hashProposal(proposed);
+    const proposalHash = hashUpdateBody(body);
     const result = redeemToken(token, { envId, flowId, proposalHash });
     if (!result.ok) {
       if (result.code === "PreviewTokenMismatch") {
@@ -28398,6 +28857,42 @@ var FlowClient = class _FlowClient {
     await this.snapshotBeforeMutation(envId, flowId, "delete_flow", opts);
     const path5 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
     await this.ppapiRequestWithFallback(envId, path5, "DELETE");
+  }
+  /**
+   * Copy a flow: reads the source flow's definition + connection references,
+   * then creates a new flow with the same definition under a new name.
+   * Optionally copies to a different environment.
+   *
+   * Returns `sameEnv` (whether the copy stayed in the source environment) and
+   * `unresolvedConnectors` — connection references that won't carry over to the
+   * target environment (always empty for a same-env copy, since the existing
+   * connections keep working; non-empty for cross-env copies, which need the
+   * connections re-bound in the target env).
+   */
+  async copyFlow(envId, flowId, opts = {}) {
+    const source = await this.getFlow(envId, flowId);
+    const displayName = opts.name ?? `${source.properties.displayName} (Copy)`;
+    const targetEnv = opts.targetEnv ?? envId;
+    const sameEnv = targetEnv === envId;
+    const state = opts.state ?? "Stopped";
+    const sourceRefs = source.properties.connectionReferences ?? {};
+    const body = {
+      properties: {
+        displayName,
+        definition: source.properties.definition,
+        connectionReferences: sourceRefs,
+        state
+      }
+    };
+    const unresolvedConnectors = sameEnv ? [] : Object.keys(sourceRefs);
+    const created = await this.createFlow(targetEnv, body, { autoInjectParams: false });
+    return {
+      flowId: created.name ?? created.id,
+      displayName,
+      state,
+      sameEnv,
+      unresolvedConnectors
+    };
   }
   /**
    * Restore a flow from a previously captured backup. The current state of
@@ -28452,7 +28947,28 @@ var FlowClient = class _FlowClient {
   async publishFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "publish_flow", opts);
     const path5 = `/powerautomate/flows/${flowId}/start${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    try {
+      await this.ppapiRequestWithFallback(envId, path5, "POST");
+    } catch (err) {
+      if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
+        logger.info(`[publish-flow] PPAPI blocked with CannotStartUnpublishedSolutionFlow, attempting Dataverse activation`);
+        const ctx = await this.getFlowContext(envId, flowId);
+        if (!ctx.workflowId)
+          throw err;
+        try {
+          const instanceUrl = await this.getDataverseInstanceUrl(envId);
+          const dvToken = await this.auth.getAccessToken(instanceUrl);
+          const patchUrl = `${instanceUrl}/api/data/v9.2/workflows(${ctx.workflowId})`;
+          await this.dataversePatch(patchUrl, { statecode: 1, statuscode: 2 }, dvToken);
+          logger.info(`[publish-flow] Activated via Dataverse statecode=1, statuscode=2`);
+          return;
+        } catch (dvErr) {
+          logger.warn(`[publish-flow] Dataverse activation failed: ${dvErr instanceof Error ? dvErr.message : dvErr}`);
+          throw err;
+        }
+      }
+      throw err;
+    }
   }
   async disableFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "disable_flow", opts);
@@ -28584,6 +29100,108 @@ var FlowClient = class _FlowClient {
       }
       throw err;
     }
+  }
+  // --- Run Management (cancel, resubmit, diagnose) ---
+  async cancelRun(envId, flowId, runId) {
+    const path5 = `/powerautomate/flows/${flowId}/runs/${runId}/cancel${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    return { cancelled: true, runId };
+  }
+  async resubmitRun(envId, flowId, runId, opts) {
+    let triggerName = opts?.triggerName;
+    if (!triggerName) {
+      const run = await this.getRunDetails(envId, flowId, runId);
+      triggerName = run.properties?.trigger?.name;
+      if (!triggerName)
+        throw new Error("Could not detect trigger name from run. Provide it explicitly.");
+    }
+    const path5 = `/powerautomate/flows/${flowId}/triggers/${triggerName}/histories/${runId}/resubmit${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    return { resubmitted: true, triggerName };
+  }
+  async getRunActionRepetitions(envId, flowId, runId, actionName) {
+    const path5 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
+    return followPagination(async (nextUrl) => {
+      if (nextUrl)
+        return this.ppapiRequest("GET", nextUrl);
+      return this.ppapiRequestWithFallback(envId, path5, "GET");
+    });
+  }
+  /** Diagnose a failed run: classify each failed/timed-out action with an actionable remediation. */
+  async diagnoseRun(envId, flowId, runId) {
+    const run = await this.getRunDetails(envId, flowId, runId);
+    const actions = await this.getRunActionDetails(envId, flowId, runId);
+    const status = run.properties?.status ?? "Unknown";
+    const failed = (actions ?? []).filter((a) => a.properties?.status === "Failed" || a.properties?.status === "TimedOut");
+    const classified = failed.map((a) => {
+      const code = a.properties?.error?.code ?? a.properties?.code ?? "Unknown";
+      const message = a.properties?.error?.message ?? "";
+      return { name: a.name, code, message, remediation: this.classifyRemediation(code, message) };
+    });
+    const summary = classified.length === 0 ? `Run ${runId} status: ${status}. No failed actions found.` : `Run ${runId} status: ${status}. ${classified.length} failed action(s): ${classified.map((a) => a.name).join(", ")}`;
+    return { status, failedActions: classified, summary };
+  }
+  classifyRemediation(code, message) {
+    const codeLower = code.toLowerCase();
+    const msgLower = message.toLowerCase();
+    if (codeLower === "unauthorized" || codeLower === "authorizationfailed" || msgLower.includes("401"))
+      return "Connection expired or insufficient permissions. Re-authenticate the connection in the flow's connection references.";
+    if (codeLower === "forbidden" || msgLower.includes("403"))
+      return "The connected account lacks permissions for this resource. Verify role assignments.";
+    if (codeLower === "notfound" || codeLower === "resourcenotfound" || msgLower.includes("404"))
+      return "Target resource not found. Verify the item/list/folder still exists and the ID is correct.";
+    if (codeLower === "throttled" || codeLower === "ratelimitexceeded" || codeLower === "429" || msgLower.includes("throttl"))
+      return "API throttling. Add retry-after logic, reduce concurrency, or batch fewer items.";
+    if (codeLower === "timedout" || codeLower === "gatewayerror" || msgLower.includes("timed out"))
+      return "Action timed out. Increase the timeout in action settings or break into smaller operations.";
+    if (codeLower === "dependencyfailed" || codeLower === "actionconditionfailed")
+      return "Upstream dependency failed. Fix the earlier failing action first \u2014 this one was skipped.";
+    if (codeLower === "invalidtemplate" || msgLower.includes("expression"))
+      return "Expression or template error. Check the expression syntax in this action's inputs.";
+    return `Error code: ${code}. Review the error message and check the connector documentation.`;
+  }
+  async cancelAllRuns(envId, flowId, opts) {
+    try {
+      const ctx = await this.getFlowContext(envId, flowId);
+      if (ctx.warning !== "no-dataverse-instance" && ctx.workflowId) {
+        const instanceUrl = await this.getDataverseInstanceUrl(envId);
+        const url = `${instanceUrl}/api/data/v9.2/workflows(${ctx.workflowId})/Microsoft.Dynamics.CRM.CancelAllCloudFlowRuns`;
+        const token = await this.auth.getAccessToken(instanceUrl);
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!resp.ok && resp.status !== 204)
+          throw new Error(`CancelAllCloudFlowRuns failed: ${resp.status}`);
+        let turnedOff2 = false;
+        if (opts.turnOff) {
+          await this.disableFlow(envId, flowId, { forceManaged: opts.forceManaged });
+          turnedOff2 = true;
+        }
+        return { method: "dataverse-bulk", turnedOff: turnedOff2 };
+      }
+    } catch {
+    }
+    const runs = await this.getRunHistory(envId, flowId, { top: 100, filter: "status eq 'Running' or status eq 'Waiting'" });
+    const cancellable = runs.filter((r) => {
+      const st = r.properties?.status;
+      return st === "Running" || st === "Waiting";
+    });
+    let cancelled = 0;
+    for (const run of cancellable) {
+      try {
+        await this.cancelRun(envId, flowId, run.name);
+        cancelled++;
+      } catch {
+      }
+    }
+    let turnedOff = false;
+    if (opts.turnOff) {
+      await this.disableFlow(envId, flowId, { forceManaged: opts.forceManaged });
+      turnedOff = true;
+    }
+    return { method: "per-run", attempted: cancellable.length, cancelled, turnedOff };
   }
   /**
    * Fetch trigger inputs from a past run. This is the same primitive the PA
@@ -29215,6 +29833,11 @@ var FlowClient = class _FlowClient {
       } catch (err) {
         lastError = err;
         if (err instanceof FlowApiError) {
+          if (err.statusCode === 401 && attempt === 0) {
+            this.auth.invalidateAccessToken?.();
+            logger.debug("PPAPI 401 \u2014 invalidated token, retrying");
+            continue;
+          }
           if (err.statusCode !== 429 && err.statusCode < 500) {
             throw err;
           }
@@ -29826,6 +30449,7 @@ var FlowClient = class _FlowClient {
     } else {
       logger.info(`Connection '${connName}' created but not yet authenticated. Status: ${(authed.properties?.statuses ?? []).map((s) => s.status).join(", ") || "Unknown"}. Run: flowagent fix-connection --env=${envId} --connector=${connector} --connection=${connName}`);
     }
+    this.invalidateConnectionCache(envId, connector);
     return authed;
   }
   async testConnection(envId, connector, connName) {
@@ -29846,6 +30470,7 @@ var FlowClient = class _FlowClient {
   async deleteConnection(envId, connector, connName) {
     const url = ppapiConnectionUrl(envId, connector, connName);
     await this.connectivityRequest("DELETE", url);
+    this.invalidateConnectionCache(envId, connector);
   }
   async getConnectionPermissions(envId, connector, connName) {
     const url = ppapiConnectionPermissionsUrl(envId, connector, connName);
@@ -29965,10 +30590,19 @@ var FlowClient = class _FlowClient {
   }
   // --- Connections (via Dataverse) ---
   async listConnections(envId, opts) {
+    const connector = opts?.connectorFilter ?? opts?.connector;
+    if (opts?.useCache !== false) {
+      const cached3 = this.getCachedConnections(envId, connector);
+      if (cached3) {
+        logger.debug(`listConnections cache hit: ${envId}:${connector ?? "*"}`);
+        return cached3;
+      }
+    }
     const instanceUrl = await this.getDataverseInstanceUrl(envId);
     const dvToken = await this.auth.getAccessToken(instanceUrl);
-    const url = dataverseConnectionReferencesUrl(instanceUrl, opts);
+    const url = dataverseConnectionReferencesUrl(instanceUrl, { connectorFilter: connector });
     const data = await this.dataverseGet(url, dvToken);
+    this.setCachedConnections(envId, connector, data.value);
     return data.value;
   }
   // --- Solutions (Dataverse) ---
@@ -30280,6 +30914,25 @@ var FlowClient = class _FlowClient {
       return void 0;
     return JSON.parse(text);
   }
+  async dataversePatch(url, body, token) {
+    logger.debug(`PATCH ${url}`);
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json; charset=utf-8",
+        Accept: "application/json",
+        "OData-MaxVersion": "4.0",
+        "OData-Version": "4.0",
+        "If-Match": "*"
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new FlowApiError(response.status, response.statusText, text, url);
+    }
+  }
   // --- HTTP primitives ---
   async get(url) {
     return this.request("GET", url);
@@ -30297,7 +30950,7 @@ var FlowClient = class _FlowClient {
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "User-Agent": "power-automate-plugin/2.2.0",
+      "User-Agent": "power-automate-plugin/2.4.2",
       ...extraHeaders
     };
     if (body !== void 0) {
@@ -30505,7 +31158,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 var SCHEMA_VERSION = 1;
 function defaultCacheDir() {
   const envOverride = process.env.FLOWAGENT_TOKEN_CACHE_DIR;
@@ -30539,11 +31192,11 @@ function parseJwtClaims(token) {
 }
 function cacheKeyFile(cacheDir, resource, tenantId2, accountId) {
   const composite = `${resource}\0${tenantId2 ?? ""}\0${accountId ?? ""}`;
-  const hash = createHash("sha256").update(composite).digest("hex").slice(0, 32);
+  const hash = createHash2("sha256").update(composite).digest("hex").slice(0, 32);
   return path.join(cacheDir, `${hash}.json`);
 }
 function unkeyedFile(cacheDir, resource) {
-  const hash = createHash("sha256").update(resource).digest("hex").slice(0, 32);
+  const hash = createHash2("sha256").update(resource).digest("hex").slice(0, 32);
   return path.join(cacheDir, `_unknown-${hash}.json`);
 }
 var DiskTokenCache = class {
@@ -30755,6 +31408,11 @@ ${stdout}`.trim();
       }
     }
     return parsed.accessToken;
+  }
+  /** Invalidate cached token for a resource, forcing re-acquisition on next getAccessToken(). */
+  invalidateAccessToken(resource) {
+    const res = resource ?? this.defaultResource;
+    this.tokenCache.delete(res);
   }
 };
 var AzCliAuthError = class extends Error {
@@ -32434,6 +33092,153 @@ var TEMPLATES = {
         }
       }
     }
+  },
+  "email-to-teams": {
+    id: "email-to-teams",
+    name: "Email Arrives \u2192 Teams Notification",
+    description: "When a new email arrives in a folder, post a Teams message with the subject, sender, and preview. The most common 2-action flow pattern.",
+    connectors: ["shared_office365", "shared_teams"],
+    definition: {
+      $schema: SCHEMA,
+      contentVersion: "1.0.0.0",
+      parameters: BASE_PARAMS,
+      outputs: {},
+      triggers: {
+        When_a_new_email_arrives: {
+          type: "OpenApiConnection",
+          recurrence: { frequency: "Minute", interval: 15 },
+          splitOn: "@triggerOutputs()?['body/value']",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_office365",
+              operationId: "OnNewEmailV3",
+              connectionName: "shared_office365"
+            },
+            parameters: {
+              folderPath: "REPLACE_WITH_FOLDER_PATH",
+              importance: "Any",
+              fetchOnlyWithAttachment: false,
+              includeAttachments: false
+            }
+          }
+        }
+      },
+      actions: {
+        Post_Teams_Notification: {
+          type: "OpenApiConnection",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_teams",
+              operationId: "PostMessageToConversation",
+              connectionName: "shared_teams"
+            },
+            parameters: {
+              poster: "User",
+              location: "Channel",
+              "body/recipient": "REPLACE_WITH_TEAM_ID;REPLACE_WITH_CHANNEL_ID",
+              "body/messageBody": "<p><strong>New email from:</strong> @{triggerOutputs()?['body/from']}</p><p><strong>Subject:</strong> @{triggerOutputs()?['body/subject']}</p><p><strong>Preview:</strong> @{triggerOutputs()?['body/bodyPreview']}</p><p><strong>Received:</strong> @{triggerOutputs()?['body/receivedDateTime']}</p>"
+            }
+          },
+          runAfter: {}
+        }
+      }
+    }
+  },
+  "forms-to-email": {
+    id: "forms-to-email",
+    name: "Form Response \u2192 Email Notification",
+    description: "When a Microsoft Forms response is submitted, send an email with the response details.",
+    connectors: ["shared_microsoftforms", "shared_office365"],
+    definition: {
+      $schema: SCHEMA,
+      contentVersion: "1.0.0.0",
+      parameters: BASE_PARAMS,
+      outputs: {},
+      triggers: {
+        When_a_new_response_is_submitted: {
+          type: "OpenApiConnectionWebhook",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_microsoftforms",
+              operationId: "CreateFormWebhook",
+              connectionName: "shared_microsoftforms"
+            },
+            parameters: {
+              form_id: "REPLACE_WITH_FORM_ID"
+            }
+          }
+        }
+      },
+      actions: {
+        Get_response_details: {
+          type: "OpenApiConnection",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_microsoftforms",
+              operationId: "GetFormResponseById",
+              connectionName: "shared_microsoftforms"
+            },
+            parameters: {
+              form_id: "REPLACE_WITH_FORM_ID",
+              response_id: "@triggerOutputs()?['body/resourceData/responseId']"
+            }
+          },
+          runAfter: {}
+        },
+        Send_email_notification: {
+          type: "OpenApiConnection",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_office365",
+              operationId: "SendEmailV2",
+              connectionName: "shared_office365"
+            },
+            parameters: {
+              "emailMessage/To": "REPLACE_WITH_RECIPIENT_EMAIL",
+              "emailMessage/Subject": "New Form Response: @{outputs('Get_response_details')?['body/responder']}",
+              "emailMessage/Body": "<p><strong>New response submitted</strong></p><p>Responder: @{outputs('Get_response_details')?['body/responder']}</p><p>Submitted: @{outputs('Get_response_details')?['body/submitDate']}</p>"
+            }
+          },
+          runAfter: { Get_response_details: ["Succeeded"] }
+        }
+      }
+    }
+  },
+  "scheduled-email": {
+    id: "scheduled-email",
+    name: "Scheduled Email Report",
+    description: "Recurrence trigger \u2192 send a recurring email. Simple scheduled notification pattern.",
+    connectors: ["shared_office365"],
+    definition: {
+      $schema: SCHEMA,
+      contentVersion: "1.0.0.0",
+      parameters: BASE_PARAMS,
+      outputs: {},
+      triggers: {
+        Recurrence: {
+          type: "Recurrence",
+          recurrence: { frequency: "Day", interval: 1, schedule: { hours: ["9"], minutes: ["0"] } }
+        }
+      },
+      actions: {
+        Send_scheduled_email: {
+          type: "OpenApiConnection",
+          inputs: {
+            host: {
+              apiId: "/providers/Microsoft.PowerApps/apis/shared_office365",
+              operationId: "SendEmailV2",
+              connectionName: "shared_office365"
+            },
+            parameters: {
+              "emailMessage/To": "REPLACE_WITH_RECIPIENT_EMAIL",
+              "emailMessage/Subject": "Daily Report - @{utcNow('yyyy-MM-dd')}",
+              "emailMessage/Body": "<p>This is your daily automated report.</p><p>Generated at: @{utcNow()}</p>"
+            }
+          },
+          runAfter: {}
+        }
+      }
+    }
   }
 };
 
@@ -32553,42 +33358,6 @@ function createTelemetryObserver(opts = {}) {
   };
 }
 
-// packages/core/dist/connection-refs.js
-async function enrichRefsWithLogicalNames(client, envId, refs, log) {
-  const needsEnrichment = Object.values(refs).some((r) => !r.connectionReferenceLogicalName);
-  if (!needsEnrichment)
-    return refs;
-  let dvRefs;
-  try {
-    dvRefs = await client.listConnections(envId);
-  } catch {
-    log?.("Dataverse connection references unavailable; using direct connections");
-    return refs;
-  }
-  const connectorToLogical = {};
-  for (const dv of dvRefs) {
-    if (dv.connectorid && dv.connectionreferencelogicalname) {
-      connectorToLogical[dv.connectorid] = dv.connectionreferencelogicalname;
-    }
-  }
-  const enriched = { ...refs };
-  let count = 0;
-  for (const [key, ref] of Object.entries(enriched)) {
-    if (ref.connectionReferenceLogicalName)
-      continue;
-    const connectorId = ref.id ?? `/providers/Microsoft.PowerApps/apis/${key}`;
-    const logicalName = connectorToLogical[connectorId];
-    if (logicalName) {
-      enriched[key] = { ...ref, connectionReferenceLogicalName: logicalName };
-      count++;
-    }
-  }
-  if (count > 0) {
-    log?.(`Resolved ${count} connection reference logical name(s) from Dataverse`);
-  }
-  return enriched;
-}
-
 // packages/core/dist/current-env-store.js
 var CurrentEnvStore = class {
   state;
@@ -32651,6 +33420,11 @@ var CurrentFlowStore = class {
   clear() {
     this.state = { flowId: null, displayName: null, envId: null, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), source: "none" };
     return this.state;
+  }
+  /** Clear only if the pinned flow matches the given ID (e.g. after delete or confirmed 404). */
+  clearIf(flowId) {
+    if (this.state.flowId === flowId)
+      this.clear();
   }
 };
 var legacyCurrentFlowStore = new CurrentFlowStore();
@@ -39158,7 +39932,7 @@ var Protocol = class {
     };
   }
 };
-function isPlainObject2(value) {
+function isPlainObject3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function mergeCapabilities(base, additional) {
@@ -39169,7 +39943,7 @@ function mergeCapabilities(base, additional) {
     if (addValue === void 0)
       continue;
     const baseValue = result[k];
-    if (isPlainObject2(baseValue) && isPlainObject2(addValue)) {
+    if (isPlainObject3(baseValue) && isPlainObject3(addValue)) {
       result[k] = { ...baseValue, ...addValue };
     } else {
       result[k] = addValue;
@@ -41085,6 +41859,23 @@ function getNestedValue(obj, path5) {
   }
   return current;
 }
+function isNotFoundError(err) {
+  return err instanceof FlowApiError && err.statusCode === 404;
+}
+function isConflictError(err) {
+  return err instanceof FlowApiError && err.statusCode === 409;
+}
+function notFoundResult(resource, id, remediation) {
+  const payload = {
+    found: false,
+    code: "not_found",
+    resource,
+    id,
+    message: `${resource} not found (it may have been deleted or moved to another environment).`,
+    remediation: remediation ?? `Call list_flows to see current flows in this environment.`
+  };
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+}
 
 // packages/core/dist/mcp/progress.js
 function progress(extra) {
@@ -41120,6 +41911,310 @@ function progress(extra) {
 
 // packages/core/dist/mcp/server.js
 init_backups();
+
+// packages/core/dist/api/dynamic-resolvers.js
+init_logger();
+var MAX_CANDIDATES = 500;
+async function fetchAllPages(client, envId, connector, connectionName, operation, params, opts) {
+  const maxPages = opts?.maxPages ?? 3;
+  const result = await client.invokeOperation(envId, connector, connectionName, operation, params);
+  let items = result?.value ?? (Array.isArray(result) ? result : []);
+  let nextLink = result?.["@odata.nextLink"] ?? result?.nextLink;
+  let page = 1;
+  while (nextLink && page < maxPages && items.length < MAX_CANDIDATES) {
+    try {
+      page++;
+      break;
+    } catch {
+      break;
+    }
+  }
+  return items.slice(0, MAX_CANDIDATES);
+}
+function exactMatch(items, query) {
+  return items.find((i) => i.name.toLowerCase() === query.toLowerCase()) ?? null;
+}
+function fuzzyMatch(items, query) {
+  const q = query.toLowerCase();
+  return items.map((i) => {
+    const n = i.name.toLowerCase();
+    let score = 0;
+    if (n === q)
+      score = 100;
+    else if (n === q + "s" || q === n + "s")
+      score = 95;
+    else if (n.startsWith(q) && n.length <= q.length * 1.5)
+      score = 90;
+    else if (n.startsWith(q))
+      score = 80 - (n.length - q.length);
+    else if (n.includes(q))
+      score = 60 - (n.length - q.length);
+    else if (q.split(/\s+/).every((w) => n.includes(w)))
+      score = 50;
+    return { ...i, score };
+  }).filter((i) => i.score > 0).sort((a, b) => b.score - a.score);
+}
+function resolveFromList(items, query, paramName) {
+  const exact = exactMatch(items, query);
+  if (exact) {
+    return { name: paramName, value: exact.id, displayName: exact.name, confidence: "exact" };
+  }
+  const fuzzy = fuzzyMatch(items, query);
+  if (fuzzy.length === 1) {
+    return { name: paramName, value: fuzzy[0].id, displayName: fuzzy[0].name, confidence: "fuzzy" };
+  }
+  if (fuzzy.length > 1) {
+    return {
+      name: paramName,
+      value: fuzzy[0].id,
+      displayName: fuzzy[0].name,
+      confidence: "ambiguous",
+      alternatives: fuzzy.slice(0, 5).map((f) => ({ value: f.id, displayName: f.name }))
+    };
+  }
+  return {
+    name: paramName,
+    value: "",
+    displayName: "",
+    confidence: "not-found",
+    alternatives: items.slice(0, 10).map((i) => ({ value: i.id, displayName: i.name }))
+  };
+}
+async function resolveOutlookFolder(ctx, folderName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerOpen", { operation: "MailFolders" });
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.Id ?? f.id,
+      name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
+    }));
+    const topMatch = resolveFromList(items, folderName, "folderPath");
+    if (topMatch.confidence === "exact" || topMatch.confidence === "fuzzy") {
+      return topMatch;
+    }
+    for (const parent of items) {
+      try {
+        const children = await ctx.client.invokeOperation(ctx.envId, "shared_office365", ctx.connectionName, "OnFilePickerBrowse", { operation: "MailFolders", id: parent.id });
+        const childItems = (children?.value ?? []).map((f) => ({
+          id: f.Id ?? f.id,
+          name: f.DisplayName ?? f.displayName ?? f.Name ?? ""
+        }));
+        const childMatch = resolveFromList(childItems, folderName, "folderPath");
+        if (childMatch.confidence === "exact" || childMatch.confidence === "fuzzy") {
+          return childMatch;
+        }
+      } catch {
+      }
+    }
+    return topMatch;
+  } catch (err) {
+    logger.warn(`resolveOutlookFolder failed: ${err.message}`);
+    return { name: "folderPath", value: "Inbox", displayName: "Inbox (fallback)", confidence: "not-found" };
+  }
+}
+async function resolveTeam(ctx, teamName) {
+  try {
+    const rawItems = await fetchAllPages(ctx.client, ctx.envId, "shared_teams", ctx.connectionName, "GetAllTeams", {});
+    const items = rawItems.map((t) => ({
+      id: t.id,
+      name: t.displayName ?? t.name ?? ""
+    }));
+    return resolveFromList(items, teamName, "groupId");
+  } catch (err) {
+    logger.warn(`resolveTeam failed: ${err.message}`);
+    return { name: "groupId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveChannel(ctx, teamId, channelName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChannelsForGroup", { groupId: teamId });
+    const items = (result?.value ?? []).map((c) => ({
+      id: c.id,
+      name: c.displayName ?? c.name ?? ""
+    }));
+    return resolveFromList(items, channelName, "channelId");
+  } catch (err) {
+    logger.warn(`resolveChannel failed: ${err.message}`);
+    return { name: "channelId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveChat(ctx, chatQuery) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_teams", ctx.connectionName, "GetChats", {});
+    const items = (result?.value ?? []).map((c) => ({
+      id: c.id,
+      name: c.topic ?? c.chatType ?? c.id
+    }));
+    return resolveFromList(items, chatQuery, "chatId");
+  } catch (err) {
+    logger.warn(`resolveChat failed: ${err.message}`);
+    return { name: "chatId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolvePlan(ctx, teamId, planName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListGroupPlans", { groupId: teamId });
+    const items = (result?.value ?? []).map((p) => ({
+      id: p.id,
+      name: p.title ?? p.name ?? ""
+    }));
+    return resolveFromList(items, planName, "planId");
+  } catch (err) {
+    logger.warn(`resolvePlan failed: ${err.message}`);
+    return { name: "planId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveBucket(ctx, planId, bucketName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_planner", ctx.connectionName, "ListBuckets_V2", { id: planId });
+    const items = (result?.value ?? []).map((b) => ({
+      id: b.id,
+      name: b.name ?? ""
+    }));
+    return resolveFromList(items, bucketName, "bucketId");
+  } catch (err) {
+    logger.warn(`resolveBucket failed: ${err.message}`);
+    return { name: "bucketId", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveForm(ctx, formTitle) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_microsoftforms", ctx.connectionName, "GetForms", {});
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.id,
+      name: f.title ?? f.name ?? ""
+    }));
+    return resolveFromList(items, formTitle, "form_id");
+  } catch (err) {
+    logger.warn(`resolveForm failed: ${err.message}`);
+    return { name: "form_id", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveDataverseTable(ctx, tableName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_commondataserviceforapps", ctx.connectionName, "GetEntities", {});
+    const items = (result?.value ?? []).map((t) => ({
+      id: t.name ?? t.LogicalName,
+      name: t.displayName ?? t.DisplayCollectionName ?? t.name ?? ""
+    }));
+    return resolveFromList(items, tableName, "entityName");
+  } catch (err) {
+    logger.warn(`resolveDataverseTable failed: ${err.message}`);
+    return { name: "entityName", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveSharePointList(ctx, siteUrl, listName) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_sharepointonline", ctx.connectionName, "GetTables", { dataset: siteUrl });
+    const items = (result?.value ?? []).map((l) => ({
+      id: l.Name ?? l.name,
+      name: l.DisplayName ?? l.displayName ?? l.Name ?? ""
+    }));
+    return resolveFromList(items, listName, "table");
+  } catch (err) {
+    logger.warn(`resolveSharePointList failed: ${err.message}`);
+    return { name: "table", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+async function resolveOneDriveFolder(ctx, folderPath) {
+  try {
+    const result = await ctx.client.invokeOperation(ctx.envId, "shared_onedriveforbusiness", ctx.connectionName, "ListRootFolder", {});
+    const items = (result?.value ?? []).map((f) => ({
+      id: f.Id ?? f.id ?? f.Path,
+      name: f.DisplayName ?? f.Name ?? f.name ?? ""
+    }));
+    return resolveFromList(items, folderPath, "folderPath");
+  } catch (err) {
+    logger.warn(`resolveOneDriveFolder failed: ${err.message}`);
+    return { name: "folderPath", value: "", displayName: "", confidence: "not-found" };
+  }
+}
+var RESOLVER_REGISTRY = [
+  {
+    connector: "shared_office365",
+    paramName: "folderPath",
+    resolve: (ctx, q) => resolveOutlookFolder(ctx, q)
+  },
+  {
+    connector: "shared_teams",
+    paramName: "groupId",
+    resolve: (ctx, q) => resolveTeam(ctx, q)
+  },
+  {
+    connector: "shared_teams",
+    paramName: "channelId",
+    resolve: (ctx, q, parent) => resolveChannel(ctx, parent?.groupId ?? "", q),
+    dependsOn: ["groupId"]
+  },
+  {
+    connector: "shared_teams",
+    paramName: "chatId",
+    resolve: (ctx, q) => resolveChat(ctx, q)
+  },
+  {
+    connector: "shared_planner",
+    paramName: "planId",
+    resolve: (ctx, q, parent) => resolvePlan(ctx, parent?.groupId ?? "", q),
+    dependsOn: ["groupId"]
+  },
+  {
+    connector: "shared_planner",
+    paramName: "bucketId",
+    resolve: (ctx, q, parent) => resolveBucket(ctx, parent?.planId ?? "", q),
+    dependsOn: ["planId"]
+  },
+  {
+    connector: "shared_microsoftforms",
+    paramName: "form_id",
+    resolve: (ctx, q) => resolveForm(ctx, q)
+  },
+  {
+    connector: "shared_commondataserviceforapps",
+    paramName: "entityName",
+    resolve: (ctx, q) => resolveDataverseTable(ctx, q)
+  },
+  {
+    connector: "shared_sharepointonline",
+    paramName: "table",
+    resolve: (ctx, q, parent) => resolveSharePointList(ctx, parent?.dataset ?? "", q),
+    dependsOn: ["dataset"]
+  },
+  {
+    connector: "shared_onedriveforbusiness",
+    paramName: "folderPath",
+    resolve: (ctx, q) => resolveOneDriveFolder(ctx, q)
+  }
+];
+async function resolveParams(ctx, connector, queries, staticValues) {
+  const specs = RESOLVER_REGISTRY.filter((r) => r.connector === connector);
+  const resolved = { ...staticValues ?? {} };
+  const results = [];
+  for (const spec of specs) {
+    const query = queries[spec.paramName];
+    if (!query)
+      continue;
+    if (spec.dependsOn) {
+      const unmet = spec.dependsOn.filter((d) => !resolved[d]);
+      if (unmet.length > 0) {
+        results.push({
+          name: spec.paramName,
+          value: "",
+          displayName: "",
+          confidence: "not-found",
+          alternatives: [{ value: "", displayName: `Depends on: ${unmet.join(", ")}` }]
+        });
+        continue;
+      }
+    }
+    const result = await spec.resolve(ctx, query, resolved);
+    results.push(result);
+    if (result.confidence === "exact" || result.confidence === "fuzzy") {
+      resolved[spec.paramName] = result.value;
+    }
+  }
+  return results;
+}
+
+// packages/core/dist/mcp/server.js
 var jsonRecord = external_exports.preprocess((v) => {
   if (typeof v === "string") {
     try {
@@ -41375,7 +42470,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("list_flows", "List cloud flows. Supports name search.", { env: external_exports.string().optional().describe("Environment ID (session default if omitted)"), name: external_exports.string().optional().describe("Filter by display name"), top: external_exports.number().optional().describe("Max results (default 50)"), filter: external_exports.string().optional().describe("OData filter (advanced)") }, { readOnlyHint: true, title: "List Flows" }, async ({ env, name: name3, top, filter }) => {
+  server2.tool("list_flows", "List cloud flows. Supports name search.", { env: external_exports.string().optional().describe("Environment ID (session default if omitted)"), name: external_exports.string().optional().describe("Filter by display name"), top: external_exports.number().min(1).max(500).optional().describe("Max results (default 50)"), filter: external_exports.string().optional().describe("OData filter (advanced)") }, { readOnlyHint: true, title: "List Flows" }, async ({ env, name: name3, top, filter }) => {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
@@ -41427,6 +42522,12 @@ async function createMcpServer(authProvider, deps = {}) {
       }
       return safeResult(result, { singleItem: true });
     } catch (e) {
+      if (isNotFoundError(e)) {
+        const pinned = getActiveMcpContext().currentFlow.get();
+        if (pinned.flowId === flow)
+          getActiveMcpContext().currentFlow.clear();
+        return notFoundResult("Flow", flow);
+      }
       return safeError(e);
     }
   });
@@ -41553,6 +42654,8 @@ async function createMcpServer(authProvider, deps = {}) {
       await ctx.getClient().publishFlow(ctx.resolveEnv(env), flow, { forceManaged });
       return safeResult({ success: true });
     } catch (e) {
+      if (isConflictError(e))
+        return safeResult({ success: true, alreadyStarted: true, message: "Flow is already enabled." });
       return safeError(e);
     }
   });
@@ -41567,6 +42670,7 @@ async function createMcpServer(authProvider, deps = {}) {
   server2.tool("delete_flow", "Permanently delete a flow. **Refuses by default for managed-solution flows** (deletion is irreversible AND will be undone on next solution import). Pass forceManaged: true to override. **Use this when**: the flow is no longer needed AND you've confirmed no other flow / connection / app depends on it. **Do NOT use when**: you just want to stop the flow temporarily \u2014 use disable_flow (reversible). Auto-captures a backup snapshot before deletion, accessible via restore_backup for ~10 retentions.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false.") }, { destructiveHint: true, title: "Delete Flow" }, async ({ env, flow, forceManaged }) => {
     try {
       await ctx.getClient().deleteFlow(ctx.resolveEnv(env), flow, { forceManaged });
+      getActiveMcpContext().currentFlow.clearIf(flow);
       return safeResult({ success: true });
     } catch (e) {
       return safeError(e);
@@ -41650,6 +42754,8 @@ async function createMcpServer(authProvider, deps = {}) {
       const runs = await ctx.getClient().getRunHistory(ctx.resolveEnv(env), flow, top ? { top } : {});
       return safeResult(summarizeList(runs, ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.error.code", "properties.error.message"], { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" }));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Flow", flow, "The flow may have been deleted. Call list_flows to see current flows.");
       return safeError(e);
     }
   });
@@ -41657,6 +42763,8 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       return safeResult(await ctx.getClient().getRunDetails(ctx.resolveEnv(env), flow, run));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
       return safeError(e);
     }
   });
@@ -41665,6 +42773,8 @@ async function createMcpServer(authProvider, deps = {}) {
       const actions = await ctx.getClient().getRunActionDetails(ctx.resolveEnv(env), flow, run);
       return safeResult(summarizeList(actions, ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.code", "properties.error.code", "properties.error.message"], { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.code": "code", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" }));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
       return safeError(e);
     }
   });
@@ -41718,10 +42828,15 @@ async function createMcpServer(authProvider, deps = {}) {
   });
   server2.tool("set_current_flow", "Pin a flow as the session's current flow. Once pinned, run/debug tools (cancel_run, resubmit_run, cancel_all_runs, get_run_action_repetitions, diagnose_run) use it when `flow` is omitted \u2014 a guardrail so an autonomous agent acts on exactly one flow.", { env: external_exports.string().optional().describe("Environment ID (for display only)"), flow: external_exports.string().describe("Flow ID to pin") }, { readOnlyHint: false, title: "Set Current Flow" }, async ({ env, flow }) => {
     try {
+      const envId = ctx.resolveEnv(env);
       let displayName = null;
       try {
-        displayName = (await ctx.getClient().getFlow(ctx.resolveEnv(env), flow)).properties?.displayName ?? null;
-      } catch {
+        const f = await ctx.getClient().getFlow(envId, flow);
+        displayName = f?.properties?.displayName ?? null;
+      } catch (e) {
+        if (isNotFoundError(e)) {
+          return notFoundResult("Flow", flow, "Cannot pin a flow that does not exist. Call list_flows to find valid flow IDs.");
+        }
       }
       const next = getActiveMcpContext().currentFlow.set(flow, { displayName, envId: env ?? null, source: "set_tool" });
       return safeResult(next);
@@ -41849,6 +42964,47 @@ async function createMcpServer(authProvider, deps = {}) {
       const prog = progress(extra);
       const result = await c.resolveParams(envId, connector, operation, { connection, currentInputs }, prog.enabled ? prog : void 0);
       return safeResult(result);
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("resolve_entity", "Resolve display names to IDs for dynamic connector parameters (folders, teams, channels, lists, tables). Uses the connector's own picker APIs via API Hub \u2014 works where resolve_params fails (Outlook folders, Teams locations). Pass the connector, entity type, display name query, and optionally dependencies (e.g. team name for channel resolution). Returns: resolved ID + confidence (exact/fuzzy/ambiguous/not-found) + alternatives when ambiguous. **Fail-closed**: ambiguous results should be confirmed with the user before using in a flow definition.", {
+    env: external_exports.string().optional().describe("Environment ID"),
+    connector: external_exports.string().describe("Connector name (e.g. shared_office365, shared_teams)"),
+    entityType: external_exports.string().describe("Parameter/entity type to resolve (e.g. folderPath, groupId, channelId, entityName, table, form_id, planId, bucketId)"),
+    query: external_exports.string().describe("Display name to search for (e.g. 'Inbox', 'Power Automate', 'General')"),
+    connection: external_exports.string().optional().describe("Connection name; auto-discovered if omitted"),
+    dependencies: jsonRecord.optional().describe("Parent parameter values needed for cascading resolution (e.g. {groupId: '<teamId>'} for channel lookup)")
+  }, { readOnlyHint: true, title: "Resolve Entity" }, async ({ env, connector, entityType, query, connection, dependencies }) => {
+    try {
+      const envId = ctx.resolveEnv(env);
+      let connName = connection;
+      if (!connName) {
+        const conns = await ctx.getClient().listConnections(envId, { connector });
+        const active = conns.find((c) => c.statuses?.[0]?.status === "Connected" || c.status === "Connected");
+        const first = conns[0];
+        connName = active?.connectionName ?? active?.name ?? first?.connectionName ?? first?.name ?? first?.id;
+        if (!connName) {
+          return safeResult({ status: "connection_missing", connector, entityType, query, requiredAction: "create_connection" });
+        }
+      }
+      const resolverCtx = { client: ctx.getClient(), envId, connectionName: connName };
+      const queries = { [entityType]: query };
+      const staticValues = dependencies ? Object.fromEntries(Object.entries(dependencies).map(([k, v]) => [k, String(v)])) : void 0;
+      const results = await resolveParams(resolverCtx, connector, queries, staticValues);
+      if (results.length === 0) {
+        return safeResult({ status: "unsupported", connector, entityType, message: `No resolver registered for ${connector}/${entityType}. Supported: ${RESOLVER_REGISTRY.filter((r2) => r2.connector === connector).map((r2) => r2.paramName).join(", ") || "none"}` });
+      }
+      const r = results[0];
+      return safeResult({
+        status: r.confidence === "exact" || r.confidence === "fuzzy" ? "resolved" : r.confidence,
+        value: r.value,
+        displayName: r.displayName,
+        confidence: r.confidence,
+        ...r.alternatives ? { alternatives: r.alternatives } : {},
+        ...r.confidence === "ambiguous" ? { requiredAction: "choose_alternative" } : {},
+        ...r.confidence === "not-found" ? { requiredAction: "provide_more_specific_name" } : {}
+      });
     } catch (e) {
       return safeError(e);
     }
@@ -41991,6 +43147,39 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
+  server2.tool("list_datasets", "List available datasets for a tabular connector (SharePoint sites, SQL servers, Excel locations, etc.). Use before list_tables to discover what datasets/sites/servers are available. Calls the connector's GetDataSets operation via API Hub.", {
+    env: external_exports.string().optional().describe("Environment ID"),
+    connector: external_exports.string().describe("Connector name (e.g. shared_sharepointonline, shared_sql, shared_excelonlinebusiness)"),
+    connection: external_exports.string().describe("Connection ID")
+  }, { readOnlyHint: true, title: "List Datasets" }, async ({ env, connector, connection }) => {
+    try {
+      const result = await ctx.getClient().invokeOperation(ctx.resolveEnv(env), connector, connection, "GetDataSets", {});
+      const datasets = (result?.value ?? []).map((d) => ({
+        name: d.Name ?? d.name,
+        displayName: d.DisplayName ?? d.displayName ?? d.Name ?? d.name
+      }));
+      return safeResult({ connector, count: datasets.length, datasets });
+    } catch (e) {
+      return safeError(e);
+    }
+  });
+  server2.tool("list_tables", "List tables/lists in a dataset for a tabular connector (SharePoint lists, SQL tables, Excel tables, etc.). Requires a dataset name from list_datasets (e.g. a SharePoint site URL, a SQL server+db string). Calls the connector's GetTables operation via API Hub.", {
+    env: external_exports.string().optional().describe("Environment ID"),
+    connector: external_exports.string().describe("Connector name"),
+    connection: external_exports.string().describe("Connection ID"),
+    dataset: external_exports.string().describe("Dataset name from list_datasets (e.g. SharePoint site URL, SQL server string)")
+  }, { readOnlyHint: true, title: "List Tables" }, async ({ env, connector, connection, dataset }) => {
+    try {
+      const result = await ctx.getClient().invokeOperation(ctx.resolveEnv(env), connector, connection, "GetTables", { dataset });
+      const tables = (result?.value ?? []).map((t) => ({
+        name: t.Name ?? t.name,
+        displayName: t.DisplayName ?? t.displayName ?? t.Name ?? t.name
+      }));
+      return safeResult({ connector, dataset, count: tables.length, tables });
+    } catch (e) {
+      return safeError(e);
+    }
+  });
   server2.tool("list_templates", "List built-in flow templates", {}, { readOnlyHint: true, title: "List Templates" }, async () => {
     try {
       return safeResult(listTemplates());
@@ -41998,23 +43187,40 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("scaffold_flow", "Generate flow definition from template. Pass env to auto-resolve connections.", { template: external_exports.string().describe("Template ID"), env: external_exports.string().optional().describe("Environment ID for connection resolution") }, { readOnlyHint: true, title: "Scaffold Flow" }, async ({ template, env }) => {
+  server2.tool("scaffold_flow", "Generate flow definition from template. Pass env to auto-resolve connections. When env is provided, connection resolution is REQUIRED \u2014 returns an error with missing connectors if any can't be resolved. Without env, returns placeholder refs for offline use.", { template: external_exports.string().describe("Template ID"), env: external_exports.string().optional().describe("Environment ID for connection resolution") }, { readOnlyHint: true, title: "Scaffold Flow" }, async ({ template, env }) => {
     try {
       const tmpl = getTemplate(template);
       if (!tmpl)
         return safeError(new Error(`Template "${template}" not found. Use list_templates.`));
       const definition = injectTemplateMetadata(tmpl.definition);
       let refs;
+      let connectionStatus = "placeholder";
+      const unresolvedConnectors = [];
       if (env && tmpl.connectors.length > 0) {
         try {
           refs = await ctx.getClient().resolveConnectionRefs(ctx.resolveEnv(env), tmpl.connectors);
+          for (const connector of tmpl.connectors) {
+            const key = connector.replace("shared_", "shared_");
+            const ref = refs[key];
+            if (!ref?.connectionName || ref.connectionName.startsWith("REPLACE_WITH")) {
+              unresolvedConnectors.push(connector);
+            }
+          }
+          connectionStatus = unresolvedConnectors.length === 0 ? "resolved" : "partial";
         } catch {
           refs = generateConnectionRefs(tmpl.connectors);
+          unresolvedConnectors.push(...tmpl.connectors);
         }
       } else {
         refs = generateConnectionRefs(tmpl.connectors);
       }
-      return safeResult({ definition, connectionReferences: refs, template: { id: tmpl.id, name: tmpl.name, connectors: tmpl.connectors } });
+      return safeResult({
+        definition,
+        connectionReferences: refs,
+        template: { id: tmpl.id, name: tmpl.name, connectors: tmpl.connectors },
+        connectionStatus,
+        ...unresolvedConnectors.length > 0 ? { unresolvedConnectors, hint: `Missing connections for: ${unresolvedConnectors.join(", ")}. Create them with create-connection or pick_or_create_connection.` } : {}
+      });
     } catch (e) {
       return safeError(e);
     }

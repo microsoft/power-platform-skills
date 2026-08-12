@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -1212,7 +1212,13 @@ Arguments:
 
 Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
 
-If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9b. Do NOT skip Step 9b; Tamagui aliases and brand tokens are required for screen quality even when the app has no native capabilities.
+If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
+
+### Step 9a — Install approved pure-JavaScript dependencies
+
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+
+Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
 ### Step 9b — Apply design system
 
@@ -1708,21 +1714,6 @@ Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-a
 
 **Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
 
-**Fast-wave style deferral:** before spawning the first wave, create `<working_dir>/.tmp/defer-style-hooks` with a short note. The PostToolUse style hooks (`validate-screen-quality`, `validate-color-contrast`) skip blocking writes while this marker exists. This marker does **not** disable TypeScript, connector-first, protected-path, package, or write-safety validators. It only moves deterministic style debt out of the parallel builder hot path and into Step 11.4's batch report/fix sweep.
-
-```bash
-mkdir -p <working_dir>/.tmp
-printf 'Step 11 fast-wave mode: defer style hook blocking until Step 11.4 report sweep.\n' > <working_dir>/.tmp/defer-style-hooks
-```
-
-Delete the marker immediately after the last screen wave's final TypeScript gate passes and before Step 11.4 starts:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
-Never leave this marker in place for Step 11.4 or Step 12. Report mode ignores the marker and should always scan the generated screens.
-
 **Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
 > Wave 1/<W> starting: <comma-separated screen names in this wave>."
@@ -1803,12 +1794,6 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
-Before running any report, assert the Step 11 fast-wave marker is gone:
-
-```bash
-rm -f <working_dir>/.tmp/defer-style-hooks
-```
-
 **Print before starting:**
 > "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / token issues across all screens (~2-3 min)"
 
@@ -1833,7 +1818,7 @@ For each available stylistic validator:
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
 
-**Hook behavior during the sweep:** Do not disable hooks globally and do not recreate `<working_dir>/.tmp/defer-style-hooks`. If a normal PostToolUse hook blocks an intermediate edit, treat that as signal that the edit batch was incomplete: fold the hook's message into that file's next retry. Only use a temporary skip env var if the validator itself documents one and you immediately re-run `--report` before advancing.
+These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
 
 After all validators report no auto-fixable issues, run:
 

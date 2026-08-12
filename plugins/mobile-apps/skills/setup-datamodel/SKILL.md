@@ -168,7 +168,7 @@ Run the local, no-network delta check:
 node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`), and re-check to `in-sync`.
+Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue to Phase 7 silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`.
 
 ### Phase 7 — Summary
 

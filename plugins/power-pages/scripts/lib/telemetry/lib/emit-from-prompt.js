@@ -74,7 +74,13 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     provisioned =
       resolver && typeof resolver.isProvisioned === "function"
         ? resolver.isProvisioned(cfg)
-        : !!(cfg && cfg.instrumentationKey);
+        // Static-key fallback (no resolver): a real key must be present AND not be
+        // the shipped placeholder sentinel — otherwise a plugin that flipped
+        // `disabled:false` before replacing the key would be treated as provisioned
+        // and pay the pac/agent-info shellouts + dispatch (local-log write) even
+        // though the dispatcher can never POST a placeholder key. Matches the
+        // dispatcher's PLACEHOLDER_IKEY guard and the pretool hook's gate.
+        : !!(cfg && cfg.instrumentationKey && cfg.instrumentationKey !== "PLACEHOLDER_REPLACE_BEFORE_SHIPPING");
   } catch {
     // A plugin-provided resolver threw (or assumed cfg non-null) — treat as not
     // provisioned so a bad resolver can't break prompt handling (fail closed).

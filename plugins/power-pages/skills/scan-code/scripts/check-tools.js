@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 if (process.argv.includes('--help')) {
   process.stdout.write(`check-tools.js — Detects whether opengrep and trivy are installed.
@@ -23,19 +23,34 @@ Output (stdout, JSON):
   process.exit(0);
 }
 
-function probe(cmd, parseVersion) {
+function probe(runVersion, parseVersion) {
   try {
-    // 60s timeout — first invocation can be slow (cold start, antivirus scan, etc.)
-    const out = execSync(cmd, { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = runVersion();
     return { available: true, version: parseVersion(out), error: null };
   } catch (err) {
     return { available: false, version: null, error: (err.stderr || err.message || '').toString().trim() };
   }
 }
 
+// Keep executable names at the child_process call sites. Passing an executable
+// into probe() would make future CLI/env-derived values indistinguishable from
+// this fixed two-tool allowlist to the repository security validator.
+const runOpenGrepVersion = () => execFileSync('opengrep', ['--version'], {
+  encoding: 'utf8',
+  timeout: 60000,
+  stdio: ['ignore', 'pipe', 'pipe'],
+  shell: false,
+});
+const runTrivyVersion = () => execFileSync('trivy', ['--version'], {
+  encoding: 'utf8',
+  timeout: 60000,
+  stdio: ['ignore', 'pipe', 'pipe'],
+  shell: false,
+});
+
 const result = {
-  opengrep: probe('opengrep --version', (out) => (out.match(/[\d.]+/) || [null])[0]),
-  trivy: probe('trivy --version', (out) => {
+  opengrep: probe(runOpenGrepVersion, (out) => (out.match(/[\d.]+/) || [null])[0]),
+  trivy: probe(runTrivyVersion, (out) => {
     const m = out.match(/Version:\s*([\d.]+)/i) || out.match(/[\d.]+/);
     return m ? m[1] || m[0] : null;
   }),

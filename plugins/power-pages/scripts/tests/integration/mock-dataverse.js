@@ -15,6 +15,42 @@
 
 const http = require('http');
 
+function makeLocalRequest({
+  url,
+  method = 'GET',
+  headers = {},
+  body = null,
+  includeHeaders = false,
+  timeout = 15000,
+}) {
+  return new Promise((resolve) => {
+    const u = new URL(url);
+    const req = http.request({
+      method,
+      headers,
+      hostname: u.hostname,
+      port: u.port || undefined,
+      path: u.pathname + u.search,
+      timeout,
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        const result = { statusCode: res.statusCode, body: data };
+        if (includeHeaders) result.headers = res.headers;
+        resolve(result);
+      });
+    });
+    req.on('error', (error) => resolve({ error: error.message }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ error: 'Request timed out' });
+    });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 /**
  * Starts a localhost http server that responds to OData-like requests.
  *
@@ -82,4 +118,4 @@ function routeMatches(route, method, url) {
   return false;
 }
 
-module.exports = { startMock };
+module.exports = { makeLocalRequest, startMock };

@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"/>
 <title>Data Model Plan — __SITE_NAME__</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script nonce="__ATTR_CSP_NONCE__" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
 :root {
   --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --surface3:#edebe9;
@@ -209,7 +210,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
             <span class="status-tag status-modified">Modified</span>
             <span class="status-tag status-reused">Reused</span>
           </div>
-          <button id="expandAllBtn" onclick="toggleExpandAll()" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
+          <button id="expandAllBtn" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
         </div>
         <div id="tablesContainer"></div>
       </div>
@@ -224,14 +225,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
             <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(202,80,16,0.08);border-color:#ca5010;"></span> Modified</div>
             <div class="er-legend-item"><span class="er-legend-swatch" style="background:rgba(16,124,16,0.08);border-color:#107c10;"></span> Reused</div>
           </div>
-          <button id="erCompactBtn" class="er-toggle" onclick="toggleErCompact()">Compact View</button>
+          <button id="erCompactBtn" class="er-toggle">Compact View</button>
         </div>
         <div class="er-container" id="erDiagram">
           <div class="er-zoom-controls">
-            <button class="er-zoom-btn" onclick="erZoom(0.2)" title="Zoom in">+</button>
+            <button id="erZoomInBtn" class="er-zoom-btn" title="Zoom in">+</button>
             <div class="er-zoom-level" id="erZoomLevel">100%</div>
-            <button class="er-zoom-btn" onclick="erZoom(-0.2)" title="Zoom out">&minus;</button>
-            <button class="er-zoom-btn" onclick="erResetView()" title="Reset view" style="font-size:12px;">&#8634;</button>
+            <button id="erZoomOutBtn" class="er-zoom-btn" title="Zoom out">&minus;</button>
+            <button id="erResetBtn" class="er-zoom-btn" title="Reset view" style="font-size:12px;">&#8634;</button>
           </div>
         </div>
       </div>
@@ -240,19 +241,54 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   </div>
 </div>
 
-<script>
+<script nonce="__ATTR_CSP_NONCE__">
 // Data is populated by the data-model-architect agent
-const SITE_NAME = "__SITE_NAME__";
-const PREFIX = "__PREFIX__";
+const PREFIX = __JSON_PREFIX__;
 
-const TABLES = __TABLES_DATA__;
+const TABLES = __JSON_TABLES_DATA__;
 // Each table: { id, logicalName, displayName, status ("new"|"modified"|"reused"), rationale, columns: [{ logicalName, displayName, type, required, key ("PK"|"FK"|null), isNew }], relationships: [{ description, relatedTable, type, foreignKey }] }
 
-const RATIONALE = __RATIONALE_DATA__;
+const RATIONALE = __JSON_RATIONALE_DATA__;
 // Array of { icon, title, desc }
 
-const ER_DIAGRAM = `__ER_DIAGRAM__`;
+const ER_DIAGRAM = __JSON_ER_DIAGRAM__;
 // Mermaid erDiagram code as a string
+
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeIcon(value) {
+  const icon = String(value ?? '');
+  if (!/^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon)) return esc(icon);
+
+  let valid = true;
+  const decoded = icon.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, decimal) => {
+    const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      valid = false;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
+  });
+  return valid ? esc(decoded) : esc(icon);
+}
+
+function safeStatus(value) {
+  return ['new', 'modified', 'reused'].includes(value) ? value : 'reused';
+}
+
+function mermaidLabel(value) {
+  return String(value ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/"/g, "'")
+    .replace(/[<>]/g, '');
+}
 
 // Tab navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -268,15 +304,11 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 const statusColors = {
   new: 'var(--accent)', modified: 'var(--high)', reused: 'var(--pass)'
 };
-const statusBorderColors = {
-  new: 'var(--accent-border)', modified: 'var(--high-border)', reused: 'var(--pass-border)'
-};
-
 // Stats
 document.getElementById('prefixValue').textContent = PREFIX || '—';
-document.getElementById('statNew').textContent = TABLES.filter(t => t.status === 'new').length;
-document.getElementById('statModified').textContent = TABLES.filter(t => t.status === 'modified').length;
-document.getElementById('statReused').textContent = TABLES.filter(t => t.status === 'reused').length;
+document.getElementById('statNew').textContent = TABLES.filter(t => safeStatus(t.status) === 'new').length;
+document.getElementById('statModified').textContent = TABLES.filter(t => safeStatus(t.status) === 'modified').length;
+document.getElementById('statReused').textContent = TABLES.filter(t => safeStatus(t.status) === 'reused').length;
 
 const totalColumns = TABLES.reduce((sum, t) => sum + (t.columns ? t.columns.length : 0), 0);
 const totalRelationships = TABLES.reduce((sum, t) => sum + (t.relationships ? t.relationships.length : 0), 0);
@@ -291,10 +323,10 @@ function renderRationale() {
   let html = '';
   RATIONALE.forEach(r => {
     html += `<div class="principle">
-      <div class="principle-icon">${r.icon}</div>
+      <div class="principle-icon">${safeIcon(r.icon)}</div>
       <div>
-        <div class="principle-title">${r.title}</div>
-        <div class="principle-desc">${r.desc}</div>
+        <div class="principle-title">${esc(r.title)}</div>
+        <div class="principle-desc">${esc(r.desc)}</div>
       </div>
     </div>`;
   });
@@ -308,8 +340,9 @@ function renderTables() {
   const order = { new: 0, modified: 1, reused: 2 };
   const sorted = [...TABLES].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
   sorted.forEach(t => {
-    const statusClass = 'status-' + t.status;
-    const bgStyle = t.status === 'new' ? 'background:var(--accent-bg);border-color:var(--accent-border);' : t.status === 'modified' ? 'background:var(--high-bg);border-color:var(--high-border);' : '';
+    const status = safeStatus(t.status);
+    const statusClass = 'status-' + status;
+    const bgStyle = status === 'new' ? 'background:var(--accent-bg);border-color:var(--accent-border);' : status === 'modified' ? 'background:var(--high-bg);border-color:var(--high-border);' : '';
 
     // Columns table
     let colHtml = '';
@@ -317,13 +350,16 @@ function renderTables() {
       colHtml = `<div style="margin-top:12px;"><div class="field-label">Columns</div>
         <table class="col-table">
           <thead><tr><th></th><th>Logical Name</th><th>Display Name</th><th>Type</th><th>Required</th></tr></thead>
-          <tbody>${t.columns.map(col => `<tr class="${col.isNew ? 'col-new' : ''}">
-            <td>${col.key ? `<span class="key-badge key-${col.key}">${col.key}</span>` : ''}</td>
-            <td class="col-logical">${col.logicalName}</td>
-            <td class="col-display">${col.displayName}</td>
-            <td><span class="type-chip">${col.type}</span></td>
+          <tbody>${t.columns.map(col => {
+            const key = col.key === 'PK' || col.key === 'FK' ? col.key : '';
+            return `<tr class="${col.isNew ? 'col-new' : ''}">
+            <td>${key ? `<span class="key-badge key-${key}">${key}</span>` : ''}</td>
+            <td class="col-logical">${esc(col.logicalName)}</td>
+            <td class="col-display">${esc(col.displayName)}</td>
+            <td><span class="type-chip">${esc(col.type)}</span></td>
             <td>${col.required ? '<span class="req-dot"></span> Yes' : '<span style="color:var(--text-dim)">No</span>'}</td>
-          </tr>`).join('')}</tbody>
+          </tr>`;
+          }).join('')}</tbody>
         </table></div>`;
     }
 
@@ -332,7 +368,7 @@ function renderTables() {
     if (t.relationships && t.relationships.length > 0) {
       relHtml = `<div style="margin-top:12px;"><div class="field-label">Relationships</div>
         <div style="margin-top:4px;">${t.relationships.map(r =>
-          `<div class="rel-chip"><span class="rel-arrow">${r.type || '1:N'}</span> ${r.description}${r.foreignKey ? ` <code style="font-size:10px;color:var(--accent);background:var(--accent-bg);padding:0 4px;border-radius:2px;">${r.foreignKey}</code>` : ''}</div>`
+          `<div class="rel-chip"><span class="rel-arrow">${esc(r.type || '1:N')}</span> ${esc(r.description)}${r.foreignKey ? ` <code style="font-size:10px;color:var(--accent);background:var(--accent-bg);padding:0 4px;border-radius:2px;">${esc(r.foreignKey)}</code>` : ''}</div>`
         ).join('')}</div></div>`;
     }
 
@@ -340,14 +376,14 @@ function renderTables() {
     let ratHtml = '';
     if (t.rationale) {
       ratHtml = `<div style="margin-top:12px;"><div class="field-label">Rationale</div>
-        <div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid ${statusColors[t.status]};line-height:1.7;margin-top:4px;">${t.rationale}</div></div>`;
+        <div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid ${statusColors[status]};line-height:1.7;margin-top:4px;">${esc(t.rationale)}</div></div>`;
     }
 
-    html += `<div class="card" style="border-left:3px solid ${statusColors[t.status]};padding:0;${bgStyle}">
-      <div class="expandable-header" onclick="this.parentElement.classList.toggle('expanded')">
-        <span class="status-tag ${statusClass}">${t.status}</span>
-        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${t.displayName}</span>
-        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${t.logicalName}</code>
+    html += `<div class="card" style="border-left:3px solid ${statusColors[status]};padding:0;${bgStyle}">
+      <div class="expandable-header">
+        <span class="status-tag ${statusClass}">${esc(status)}</span>
+        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${esc(t.displayName)}</span>
+        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${esc(t.logicalName)}</code>
         <span style="font-size:11px;color:var(--text-dim);">${t.columns ? t.columns.length : 0} cols</span>
         <span class="expand-chevron">&#9654;</span>
       </div>
@@ -359,6 +395,9 @@ function renderTables() {
     </div>`;
   });
   c.innerHTML = html;
+  c.querySelectorAll('.expandable-header').forEach(header => {
+    header.addEventListener('click', () => header.parentElement.classList.toggle('expanded'));
+  });
 }
 
 // Expand All toggle
@@ -379,10 +418,11 @@ function buildErDiagram(compact) {
   const entityIds = {};
 
   TABLES.forEach(t => {
-    const eid = t.logicalName.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    const logicalName = String(t.logicalName ?? '');
+    const eid = logicalName.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
     entityIds[t.logicalName] = eid;
     entityIds[t.id] = eid;
-    lines.push('    ' + eid + '["' + t.logicalName + ' (' + t.displayName + ')"] {');
+    lines.push('    ' + eid + '["' + mermaidLabel(logicalName) + ' (' + mermaidLabel(t.displayName) + ')"] {');
 
     const cols = compact
       ? (t.columns || []).filter(c => c.key === 'PK')
@@ -391,9 +431,10 @@ function buildErDiagram(compact) {
     cols.forEach(col => {
       // Strip any char that isn't valid in a mermaid ATTRIBUTE_WORD — e.g. the
       // slash in Dataverse "Yes/No" breaks the erDiagram parser.
-      const type = col.type.replace(/[^A-Za-z0-9_]/g, '_');
-      const key = col.key || '';
-      lines.push('        ' + type + ' ' + col.logicalName + (key ? ' ' + key : ''));
+      const type = String(col.type ?? '').replace(/[^A-Za-z0-9_]/g, '_');
+      const logicalName = String(col.logicalName ?? '').replace(/[^A-Za-z0-9_]/g, '_');
+      const key = col.key === 'PK' || col.key === 'FK' ? col.key : '';
+      lines.push('        ' + type + ' ' + logicalName + (key ? ' ' + key : ''));
     });
     lines.push('    }');
   });
@@ -415,7 +456,7 @@ function buildErDiagram(compact) {
       if (r.type === '1:1' || r.type === '||--||') card = '||--||';
       else if (r.type === 'N:N' || r.type === '}o--o{') card = '}o--o{';
 
-      const label = (r.description || 'relates').substring(0, 40).replace(/"/g, "'");
+      const label = mermaidLabel(r.description || 'relates').substring(0, 40);
       lines.push('    ' + toId + ' ' + card + ' ' + fromId + ' : "' + label + '"');
     });
   });
@@ -437,8 +478,8 @@ function colorErDiagram(container) {
   // Build lookup: entity ID (uppercase) → status
   const entityStatusMap = {};
   TABLES.forEach(t => {
-    const eid = t.logicalName.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-    entityStatusMap[eid] = t.status;
+    const eid = String(t.logicalName ?? '').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    entityStatusMap[eid] = safeStatus(t.status);
   });
 
   // Find entity nodes — use suffix match since Mermaid v11 prepends the SVG ID to node IDs
@@ -560,8 +601,6 @@ document.addEventListener('mouseup', function() {
 
 function renderErDiagram() {
   const container = document.getElementById('erDiagram');
-  // Preserve zoom controls
-  const controls = container.querySelector('.er-zoom-controls');
   let code;
   try {
     code = buildErDiagram(erCompact);
@@ -574,9 +613,25 @@ function renderErDiagram() {
     // Remove existing SVG but keep controls
     const oldSvg = container.querySelector('svg');
     if (oldSvg) oldSvg.remove();
-    container.insertAdjacentHTML('beforeend', svgStr);
+    const parsed = new DOMParser().parseFromString(svgStr, 'image/svg+xml');
+    const svg = parsed.documentElement;
+    if (svg.nodeName.toLowerCase() !== 'svg' || parsed.querySelector('parsererror')) {
+      throw new Error('Mermaid returned invalid SVG');
+    }
+    container.appendChild(document.importNode(svg, true));
     colorErDiagram(container);
     erFitToView();
+  }
+
+  function showFallback() {
+    const oldSvg = container.querySelector('svg');
+    if (oldSvg) oldSvg.remove();
+    const oldPre = container.querySelector('pre');
+    if (oldPre) oldPre.remove();
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;';
+    pre.textContent = ER_DIAGRAM;
+    container.appendChild(pre);
   }
 
   mermaid.render(renderId, code).then(({ svg }) => {
@@ -586,15 +641,9 @@ function renderErDiagram() {
     if (code !== ER_DIAGRAM) {
       mermaid.render(renderId + 'fb', ER_DIAGRAM).then(({ svg }) => {
         injectSvg(svg);
-      }).catch(() => {
-        const oldSvg = container.querySelector('svg');
-        if (oldSvg) oldSvg.remove();
-        container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
-      });
+      }).catch(showFallback);
     } else {
-      const oldSvg = container.querySelector('svg');
-      if (oldSvg) oldSvg.remove();
-      container.insertAdjacentHTML('beforeend', '<pre style="color:var(--text-dim);font-family:var(--mono);font-size:12px;white-space:pre-wrap;">' + ER_DIAGRAM.replace(/</g, '&lt;') + '</pre>');
+      showFallback();
     }
   });
 }
@@ -608,7 +657,12 @@ function toggleErCompact() {
 }
 
 // Init
-mermaid.initialize({ startOnLoad: false, theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
+document.getElementById('expandAllBtn').addEventListener('click', toggleExpandAll);
+document.getElementById('erCompactBtn').addEventListener('click', toggleErCompact);
+document.getElementById('erZoomInBtn').addEventListener('click', () => erZoom(0.2));
+document.getElementById('erZoomOutBtn').addEventListener('click', () => erZoom(-0.2));
+document.getElementById('erResetBtn').addEventListener('click', erResetView);
+mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
 renderRationale();
 renderTables();
 renderErDiagram();

@@ -11,17 +11,6 @@
           }
         ]
       }
-    ],
-    "userPromptTransformed": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "dotnet run --file \"${PLUGIN_ROOT}/hooks/inject-sync-reminder.cs\"",
-            "timeout": 30
-          }
-        ]
-      }
     ]
   }
 }

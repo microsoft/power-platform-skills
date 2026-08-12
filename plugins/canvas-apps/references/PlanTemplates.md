@@ -1,11 +1,20 @@
-# Canvas App Plan — Document Templates
+# Canvas App Plan Templates
 
-These templates define the structure for `canvas-app-plan.md`, the single source of truth
-consumed by `canvas-screen-builder` agents. Use the mode-appropriate template below.
+The planner writes three artifact types:
 
----
+1. `[working directory]/canvas-app-plan.md` — compact orchestration index
+2. `[working directory]/canvas-app-shared.md` — cross-screen conventions
+3. `[working directory]/[target-base].screen-plan.md` — one implementation brief per screen
 
-## CREATE Mode Plan Structure
+## Contents
+
+- Plan Index — CREATE
+- Plan Index — EDIT
+- Shared Plan
+- Screen Brief — CREATE
+- Screen Brief — MODIFY
+
+## Plan Index — CREATE
 
 ```markdown
 # Canvas App Plan
@@ -13,88 +22,30 @@ consumed by `canvas-screen-builder` agents. Use the mode-appropriate template be
 ## Mode
 CREATE
 
-## App Requirements
-[The original user requirements passed to this agent]
+## Requirements
+[Original requirements]
+
+## Requirement Coverage
+| Requirement | Planned affordance | Fidelity |
+|-------------|--------------------|----------|
+| [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Working Directory
-[The absolute path where .pa.yaml files should be written]
+[absolute working directory]
 
 ## Discovery Summary
-- Controls available: [N] — notable: [list of most relevant]
-- Data sources: [names or "none connected"]
-- Connectors: [names or "none connected"]
+- Controls: [relevant controls]
+- Data sources: [used sources or none]
+- Connectors: [used connectors or none]
 
-## Data Source Schemas
-[For each data source used in the app, embed the FULL output of get_data_source_schema]
-[Screen builders will reference column names and Power Fx types from here]
-[Omit entirely if no data sources are used]
-
-### [DataSourceName]
-[Full get_data_source_schema output]
-
-## API Details
-[For each connector used in the app, embed the FULL output of describe_api]
-[Screen builders will reference operation names and parameters from here]
-[Omit entirely if no connectors are used]
-
-### [ApiName]
-[Full describe_api output]
-
-## Screens
-| Screen | File | Purpose | Key Controls |
-|--------|------|---------|--------------|
-| [Name] | [Name].pa.yaml | [description] | [controls] |
-
-## Aesthetic Direction
-- Palette: [description]
-- Primary background: RGBA([...])
-- Accent color: RGBA([...])
-- Text primary: RGBA([...])
-- Text secondary: RGBA([...])
-- Layout strategy: [AutoLayout (Vertical/Horizontal) / ManualLayout + rationale]
-- Typography scale: [header size/weight, body size/weight, caption size]
-
-## Named Variables and Shared State
-[App-level variables, named formulas, collection names — so each builder uses consistent names]
-[Example: selectedItem (Record), isLoading (Boolean), appTheme (Record with color fields)]
-
-## Control Definitions
-[For each control type used in the design, embed the FULL output of describe_control]
-[Builders will reference property names from here — do not summarize or abbreviate]
-
-### [ControlTypeName]
-[Full describe_control output]
-
-### [ControlTypeName]
-[Full describe_control output]
-
-## Per-Screen Specifications
-
-### [Screen Name]
-- **File:** [Name].pa.yaml
-- **Purpose:** [description]
-- **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
-- **Key Controls:** [list with purpose of each]
-- **Data Binding:** [variable names, data source references, collection names]
-- **Navigation:** [which screen(s) this navigates to, trigger conditions]
-- **State:** [any local variables set in OnVisible]
-
-### [Screen Name]
-[repeat for each screen]
-
-## TechnicalGuide Key Conventions
-[Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-builders must follow:
-- Formula prefix (= required)
-- Multi-line formula syntax (|- block scalar)
-- String quoting rules
-- Record literal syntax
-- Enum escaping patterns
-- Any patterns specific to this app's control choices]
+## Dispatch
+| Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
+|--------|--------|-------------|----------|-------------|--------------|
+| Create | [Landing] | [working directory]/Screen1.pa.yaml | Screen1 | [Prefix] | [working directory]/Screen1.screen-plan.md |
+| Create | [Additional] | [working directory]/[Name].pa.yaml | [Name] | [Prefix] | [working directory]/[Name].screen-plan.md |
 ```
 
----
-
-## EDIT Mode Plan Structure
+## Plan Index — EDIT
 
 ```markdown
 # Canvas App Plan
@@ -102,83 +53,165 @@ CREATE
 ## Mode
 EDIT
 
-## Edit Requirements
-[The original user edit requirements passed to this agent]
+## Requirements
+[Original edit requirements]
+
+## Requirement Coverage
+| Requirement | Planned affordance | Fidelity |
+|-------------|--------------------|----------|
+| [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Working Directory
-[The absolute path where .pa.yaml files are located]
+[absolute working directory]
 
-## Current App Summary
-- Screens: [list each screen with brief description]
-- Layout strategy: [ManualLayout / AutoLayout / mixed]
-- Current palette:
-  - Background: RGBA([...])
-  - Accent: RGBA([...])
-  - Text primary: RGBA([...])
-  - Text secondary: RGBA([...])
-- Variables in use: [list variable names and types]
-- Data sources: [names or "none connected"]
+## Discovery Summary
+- Existing screens: [names]
+- Layout: [ManualLayout / AutoLayout / mixed]
+- Data sources: [used sources or none]
 
-## Screens to Modify
-| Screen | File | Summary of Changes |
-|--------|------|--------------------|
-| [Name] | [Name].pa.yaml | [description] |
+## Dispatch
+| Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
+|--------|--------|-------------|----------|-------------|--------------|
+| Modify | [Existing] | [working directory]/[File].pa.yaml | [existing key] | [Prefix] | [working directory]/[File].screen-plan.md |
+| Create | [New] | [working directory]/[File].pa.yaml | [new key] | [Prefix] | [working directory]/[File].screen-plan.md |
 
-## Screens to Add
-| Screen | File | Purpose |
-|--------|------|---------|
-| [Name] | [Name].pa.yaml | [description] |
-(omit this section if no new screens)
+## App Changes
+### Before builders
+[Shared definitions screens bind to — collections, named formulas, app variables, OnStart
+seed data — or "None"]
+### After builders
+[Changes referencing screens that do not exist yet, such as StartScreen — or "None"]
+```
 
-## Data Source Schemas
-[For each data source involved in the edit, embed the FULL output of get_data_source_schema]
-[Editors will reference column names and Power Fx types from here]
-[Omit entirely if no data sources are involved]
+## Shared Plan
 
-### [DataSourceName]
-[Full get_data_source_schema output]
+```markdown
+# Canvas App Shared Plan
 
-## API Details
-[For each connector involved in the edit, embed the FULL output of describe_api]
-[Editors will reference operation names and parameters from here]
-[Omit entirely if no connectors are involved]
+## Aesthetic Direction
+- Palette: [description]
+- Primary background: RGBA([...])
+- Accent: RGBA([...])
+- Text primary: RGBA([...])
+- Text secondary: RGBA([...])
+- Typography: [scale and weights]
 
-### [ApiName]
-[Full describe_api output]
+## Layout Strategy
+[Shared layout rules and target-device rationale. Record the breakpoint formulas and the
+rule that responsive properties derive from current width rather than `OnVisible`
+variables.]
+
+## Named State
+[Variables, named formulas, collections, and ownership]
+
+## Control Naming
+[Standard control-type abbreviations followed by the per-screen namespace, such as
+`conDiscNavBar` and `btnDetailBack`, plus the rule that repeated UI blocks are
+instantiated under each screen's own namespace]
+
+## Cross-Screen Contracts
+[Navigation targets and shared state expectations. For repeated navigation blocks, list
+the exact items in order and prohibit extra screen-specific children. Use ModernButtons
+for cross-screen navigation; reserve ModernTabList for panels within one screen.]
+
+## YAML Conventions
+- Formula prefix
+- Multi-line formula syntax
+- String and record-literal quoting
+- Enum escaping
+- App-specific conventions
+```
+
+## Screen Brief — CREATE
+
+```markdown
+# Screen Plan: [Logical Screen]
+
+## Assignment
+- Action: Create
+- Target file: [working directory]/[File].pa.yaml
+- YAML key: [key]
+- Control name prefix: [Prefix]
+
+## Specification
+- Purpose: [description]
+- Layout: [root and child structure. For each fixed-height section and horizontal row
+  with four or more substantive children, include a desktop/narrow/phone budget with
+  child grouping, minimum widths/heights, gaps, padding and resulting section size.]
+- Grid contract: [for each GridLayout, exact columns, rows, column minimum, row minimum,
+  height and child-position formulas; omit when there is no GridLayout]
+- Controls: [prefixed control names and purpose]
+- Column headers: [for any grid or repeated row of inputs, the exact visible header
+  strings — "Mon", "Tue", … . A row of identical unlabelled inputs is unusable, and
+  `AccessibleLabel` is not a substitute for a visible header. Omit if the screen has no
+  repeated input row.]
+- Data binding: [sources, fields and variables; identify small screen-local read-only
+  tables that stay inline in `Items`, versus shared or mutable collections owned by App.
+  For entities with multiple date/status fields, define which field drives each visible
+  view and ensure displayed labels, seed data and filters use that same meaning.]
+- Navigation: [targets and triggers]
+- State: [OnVisible initialization]
+
+## Relevant Data Source Schemas
+[Only the fields this screen reads or writes; omit if none]
+
+## Relevant API Details
+[Only the operations and parameters this screen calls; omit if none]
+
+## Required Variants
+[Control type -> exact variant to use, for every control type whose definition includes a
+Variants section; omit if none]
 
 ## Control Definitions
-[For each NEW control type not already in the existing app, embed the FULL output of describe_control]
-[Editors will reference property names from here — do not summarize or abbreviate]
-[Omit entirely if no new control types are being added]
+[For each control type used on this screen: the complete list of valid input property
+names, plus the full enum name for each enum property this screen sets. Not the whole
+describe_control response.
 
-### [ControlTypeName]
-[Full describe_control output]
+Give each enum property the **compile-ready literal**, not a list of members. Write
+`Precision: =DecimalPrecision.'1'`, never `Enum name: DecimalPrecision; values: 0, 1, 2`.
+A member list is transcribed literally by the builder and a member starting with a digit
+then fails to compile.]
+```
 
-## Per-Screen Edit Specifications
+## Screen Brief — MODIFY
 
-### [Screen Name] (Existing)
-- **File:** [Name].pa.yaml
-- **Current State:** [brief summary of what the screen currently contains]
-- **Changes Required:** [specific numbered list of changes to apply]
-- **Controls to Add:** [control name, type, properties — or "none"]
-- **Controls to Remove:** [control name — or "none"]
-- **Properties to Update:** [control name → property name → new value]
+```markdown
+# Screen Plan: [Logical Screen]
 
-### [Screen Name] (New)
-- **File:** [Name].pa.yaml
-- **Purpose:** [description]
-- **Layout:** [VerticalAutoLayout / ManualLayout, root container details]
-- **Key Controls:** [list with purpose of each]
-- **Data Binding:** [variable names, data source references, collection names]
-- **Navigation:** [which screen(s) this navigates to, trigger conditions]
-- **State:** [any local variables set in OnVisible]
+## Assignment
+- Action: Modify
+- Target file: [working directory]/[File].pa.yaml
+- YAML key: [existing key]
+- Control name prefix: [Prefix]
 
-## TechnicalGuide Key Conventions
-[Embed the most critical YAML syntax rules from TechnicalGuide.md that screen-editors must follow:
-- Formula prefix (= required)
-- Multi-line formula syntax (|- block scalar)
-- String quoting rules
-- Record literal syntax
-- Enum escaping patterns
-- Any patterns specific to controls used in this edit]
+## Current State
+[Concise summary of relevant existing controls and layout]
+
+## Changes
+1. [Exact required change]
+
+## Controls to Add
+[Name, type, placement, properties; or "None"]
+
+## Controls to Remove
+[Names; or "None"]
+
+## Properties to Update
+[Control -> property -> exact value; or "None"]
+
+## Relevant Data Source Schemas
+[Only the fields this edit reads or writes; omit if none]
+
+## Relevant API Details
+[Only the operations this edit calls; omit if none]
+
+## Required Variants
+[Control type -> exact variant, for any control this edit adds whose definition includes a
+Variants section; omit if none]
+
+## Changed or Added Control Definitions
+[For each control type receiving a new property, enum, or variant — including types
+already present in the app: valid input property names, plus the full enum name and
+compile-ready literal for each enum property this edit sets. Write
+`Precision: =DecimalPrecision.'1'`, not a bare member list; omit if none]
 ```

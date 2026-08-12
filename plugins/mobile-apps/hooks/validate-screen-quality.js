@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook: enforce 5 screen-quality rules deterministically.
+ * Explicit validator: enforce screen-quality rules deterministically.
  *
  * Replaces these per-screen self-check rules from agents/screen-builder.md:
  *   - #20 Palette warmth (no raw grays in screens)
@@ -19,8 +19,8 @@
  *
  * Scope:
  *   - Watches: app/(any-path)/*.tsx, src/components/(any-path)/*.tsx
- *   - Skips:   brand/tokens.ts, tamagui.config.ts, tests, node_modules,
- *              src/generated (auto-generated), shared/samples (plugin source)
+ *   - Skips:   route layouts, brand/tokens.ts, tamagui.config.ts, tests,
+ *              node_modules, src/generated (auto-generated), shared/samples
  *
  * Exit codes:
  *   0 = pass (clean, not watched, or unparseable input)
@@ -36,19 +36,6 @@ function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
 }
 
-function hasDeferredStyleHooksMarker(filePath) {
-  if (typeof filePath !== 'string' || !filePath) return false;
-
-  let dir = path.dirname(path.resolve(filePath));
-  for (let depth = 0; depth < 12; depth += 1) {
-    if (fs.existsSync(path.join(dir, '.tmp', 'defer-style-hooks'))) return true;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return false;
-}
-
 function isWatchedFile(filePath) {
   if (typeof filePath !== 'string') return false;
   if (!/\.tsx$/i.test(filePath)) return false;
@@ -57,6 +44,7 @@ function isWatchedFile(filePath) {
 
   // Exclusions — these legitimately contain hex / inline shadows / etc.
   const exclude = [
+    /\/_layout\.tsx$/,
     /\/brand\//,
     /\/tamagui\.config\.ts/,
     /\/node_modules\//,
@@ -645,8 +633,6 @@ process.stdin.on('end', () => {
 
   const filePath = toolInput.file_path || toolInput.filePath;
   if (!isWatchedFile(filePath)) process.exit(0);
-
-  if (process.env.CODE_APPS_NATIVE_SKIP_SCREEN_QUALITY_HOOK === '1' || hasDeferredStyleHooksMarker(filePath)) process.exit(0);
 
   const content = extractContent(toolName, toolInput);
   if (!content) process.exit(0);

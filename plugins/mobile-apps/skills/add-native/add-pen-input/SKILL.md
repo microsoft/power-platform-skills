@@ -2,6 +2,7 @@
 name: add-pen-input
 description: Internal implementation skill invoked by /add-native for pen, signature, ink, drawing, and handwriting capture workflows using @microsoft/power-apps-native-pen-input.
 user-invocable: false
+disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---

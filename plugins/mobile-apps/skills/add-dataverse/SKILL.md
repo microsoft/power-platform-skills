@@ -329,7 +329,7 @@ For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → 
 
 **Solution targeting (HARD):** every Step 5 / 5b POST MUST pass `--solution <uniquename>` so Dataverse routes the new artifact into our solution rather than the unmanaged default. Read the solution name from `memory-bank.md` Power Platform context (captured in Step 3b). Without this flag, multi-project environments end up with cross-solution leakage and the foreign-collision class of bug returns. The script translates `--solution` to the `MSCRM.SolutionUniqueName` HTTP header.
 
-**Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. The hook `validate-write-safety.js` blocks writes outside the project directory. Create the folder if it doesn't exist: `mkdir -p <working_dir>/.tmp`.
+**Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. Keeping request bodies project-local prevents cross-project writes and makes cleanup deterministic. Create the folder if it doesn't exist: `mkdir -p <working_dir>/.tmp`.
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
@@ -796,8 +796,8 @@ Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKI
 | `status` | Action |
 |---|---|
 | `no-manifest` / `no-profile` / `in-sync` | Continue to Step 9 silently. For `no-profile` (no offline profile exists) do not nag — the app may not use offline. |
-| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update skills against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`, then run `/add-table-to-offline-profile` manually. |
-| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns to the offline profile, then invoke `/add-table-to-offline-profile` (for `missingTables[]`) and `/edit-offline-profile --table <t> --columns add:<newColumns>` (for `tablesWithNewColumns[]`). Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
+| `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update workflows against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`. |
+| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. For `missingTables[]`, read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md`; for `tablesWithNewColumns[]`, read and execute `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>`. Re-run the delta check; it should read `in-sync`. Follow the exact prompt + ordering in the reconciliation reference. |
 
 ### Step 9 — Summary
 

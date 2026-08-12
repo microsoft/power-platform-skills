@@ -15,8 +15,9 @@ D:\Projects\power-platform-skills\plugins\model-apps
 ## Environment
 
 - Active Profile: maker@contoso.onmicrosoft.com
-- Environment URL: https://contoso-dev.crm10.dynamics.com/
+- URL: https://contoso-dev.crm10.dynamics.com/
 - App: Operations Hub (aa112233-1122-1122-1122-aabbccdd1234)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -59,6 +60,14 @@ No entity creation required — all entities already exist.
 
 ### SharePoint Documents
 
+
+- **Purpose:** Lists documents from SharePoint team site via connector binding
+- **Entities:** (connector: new_uxtest_sharepoint)
+- **Needs caching:** true
+- **Key Features:** Document card list loaded from SharePoint connector with title search and fallback rows.
+- **Layout:** Responsive card list with metadata rows and no viewport-sized CSS.
+- **Data Binding:** queryConnectorTable("new_uxtest_sharepoint", dataset, tableGuid, { top: 50 }) on mount; use window in-flight de-dupe and cache.
+- **Interactions:** Search filters cached connector rows client-side; error state falls back to inline documents.
 - **File:** sharepoint-docs.tsx
 - **Connector:** new_uxtest_sharepoint (SharePoint Online)
 - **Dataset:** https://contoso.sharepoint.com/sites/team
