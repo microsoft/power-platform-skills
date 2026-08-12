@@ -24,11 +24,13 @@ const markerFiles = [];
 for (const file of files) {
   const base = path.basename(file);
   if (base.endsWith('.seed.json')) prototypeFiles.push(file);
-  if (file.includes(`${path.sep}schemas${path.sep}`) && base.endsWith('.Schema.ts')) prototypeFiles.push(file);
   if (/\.(ts|tsx|js|json)$/.test(base)) {
     const content = fs.readFileSync(file, 'utf8');
     if (/gen-mock-services\.js|PROTOTYPE MOCK SERVICE|PROTOTYPE CONNECTOR STUB|In-memory mock service|prototype mode/i.test(content)) {
       markerFiles.push(file);
+      if (file.includes(`${path.sep}schemas${path.sep}`) && base.endsWith('.Schema.ts')) {
+        prototypeFiles.push(file);
+      }
     }
   }
 }

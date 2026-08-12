@@ -24,10 +24,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - The plugin root
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
 - **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
+- **`prototype_mode` (optional)** — when `true`, plan local mock-backed entities without Power Platform environment or Dataverse discovery.
 
 ## Hard Rules
 
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
+- **Prototype mode is offline planning.** When `prototype_mode: true`, do not query Dataverse, run Power Apps CLI discovery, resolve a Power Platform environment, or require Azure authentication. Treat all proposed entities as prototype-only tables, use placeholder publisher prefix `cr` when needed, and mark reuse/extend decisions as deferred until `/prototype-to-real-app`.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first.** Always query existing tables and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a standard `contact` table fits.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.

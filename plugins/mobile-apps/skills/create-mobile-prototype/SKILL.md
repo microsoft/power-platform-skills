@@ -188,21 +188,28 @@ Run `/design-system` unless `--no-design` is explicitly set. Even with `--no-des
 
 For approved native capabilities, invoke `/add-native` or the dedicated native helper sequentially. Do not install native packages; only use modules already in the template.
 
-### Step 7 — Build Screens
+### Step 7 — Build Screens With Optional Progressive Preview
 
-Reuse the same create flow primitives where possible:
+Reuse the same create flow primitives in this order:
 
-- Generate navigation shell and typed skeletons from `native-app-plan.md`.
-- Spawn `mobile-app:screen-builder` per screen.
-- In DevPlayer mode, pass callback metadata in every screen-builder prompt and ask builders to emit `screen` events after their assigned file is written.
-- Run route, screen-quality, color-contrast, and TypeScript gates available in this plugin.
-- Invoke `/preview-screens` after validation.
+1. Generate the navigation shell and typed skeletons from `native-app-plan.md`.
+2. Run the scaffold TypeScript gate before starting Metro or spawning builders:
+
+  ```bash
+  npm --prefix "<PROJECT_DIR>" run type-check
+  ```
+
+3. In DevPlayer mode with `--progressive-preview`, start Metro now, before any `screen-builder` agent runs. Resolve a LAN-reachable URL, post the structured `preview` event, call `POST <callback-url>/preview` with that URL, and keep Metro running for the rest of the workflow.
+4. Spawn `mobile-app:screen-builder` per screen.
+5. In DevPlayer mode, pass callback metadata in every screen-builder prompt and ask builders to emit `screen` events after their assigned file is written.
+6. Run route, screen-quality, color-contrast, and TypeScript gates available in this plugin.
+7. Invoke `/preview-screens` after validation.
 
 If a route/layout/screen-contract validator mentioned by older prototype docs is not present in this plugin, use available checks (`scripts/check-routes.js`, `hooks/validate-screen-quality.js`, `hooks/validate-color-contrast.js`, `npm run type-check`) and record the missing validator as `DONE_WITH_CONCERNS`, not as a silent pass.
 
-### Step 8 — Start Dev Server / Progressive Preview
+### Step 8 — Finalize Dev Server / Preview
 
-In DevPlayer mode with `--progressive-preview`, start Metro as soon as the template, placeholder config, navigation shell, and scaffold TypeScript gate are valid. Post:
+If DevPlayer progressive preview started Metro in Step 7, reuse that process and URL. Do not start a second Metro process. When starting the preview in Step 7, post:
 
 ```json
 {"kind":"preview","level":"success","state":"running","itemId":"metro","title":"Live preview started","message":"Metro preview is available"}
@@ -210,14 +217,14 @@ In DevPlayer mode with `--progressive-preview`, start Metro as soon as the templ
 
 Then call `POST /preview` with `{ "metroUrl": "http://<desktop-lan-ip>:<metro-port>" }`. Use a LAN-reachable URL for physical Android/iOS devices; do not send `localhost` unless DevPlayer is running on the same device.
 
-After validation:
+In normal mode, start Metro after validation:
 
 ```bash
 cd "<PROJECT_DIR>"
 npm run dev
 ```
 
-Normal mode may start Metro only at the end. DevPlayer mode should keep Metro running while screen files are generated so Expo Fast Refresh can reveal screens progressively.
+DevPlayer mode keeps Metro running while screen files are generated so Expo Fast Refresh reveals screens progressively.
 
 When all gates pass in DevPlayer mode, call `POST /ready` with the final Metro URL.
 
