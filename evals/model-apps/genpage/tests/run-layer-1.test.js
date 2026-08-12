@@ -34,7 +34,7 @@ function mockEval2Artifacts() {
 - working directory created
 ## Phase 1
 - node --version
-- pac help → PAC CLI Version 2.7.3 (>= 2.7.0 verified)
+- pac help → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 - pac auth list — active profile, environment https://x.crm.dynamics.com
 - AskUserQuestion: new or edit → create new
 - Solution selection question SKIPPED (code-only flow)
