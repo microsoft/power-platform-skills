@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 32 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, localization, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -378,6 +378,22 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 ### Polish
 
+#### `/add-localization`
+
+> "Add French and German to my site"
+
+Adds or extends multilingual localization for React, Vue, Angular, and Astro
+Power Pages code-site SPAs.
+
+- Detects and preserves existing localization configuration and translations
+- Validates canonical BCP-47 language tags against the bundled IANA registry
+- Recommends runtime localization for React/Vue, official static localization
+  for Angular, and built-in static locale routes for Astro
+- Generates translations with the agent or creates blank values for manual
+  completion
+- Adds an accessible language selector with fallback and RTL handling
+- Localizes only the SPA UI; it does not enable Dataverse environment languages
+
 #### `/add-seo`
 
 > "Add SEO to my site"
@@ -451,17 +467,18 @@ A common end-to-end workflow looks like this:
 8.  /create-webroles        →  Define access roles
 9.  /setup-auth             →  Add login/logout + role-based UI
 10. /audit-permissions      →  Verify table permissions are safe
-11. /add-seo                →  Search engine optimization
-12. /deploy-site            →  Push final changes live
-13. /test-site              →  Runtime smoke test on the live URL
-14. /security-review        →  Full security review (headers, firewall, scan, permissions)
-15. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
-16. /setup-solution         →  Package the site into a Dataverse solution
-17. /setup-pipeline         →  Set up the Power Platform pipeline
-18. /deploy-pipeline        →  Promote through staging → production (run per stage)
+11. /add-localization       →  Add SPA languages and a language selector
+12. /add-seo                →  Search engine optimization
+13. /deploy-site            →  Push final changes live
+14. /test-site              →  Runtime smoke test on the live URL
+15. /security-review        →  Full security review (headers, firewall, scan, permissions)
+16. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
+17. /setup-solution         →  Package the site into a Dataverse solution
+18. /setup-pipeline         →  Set up the Power Platform pipeline
+19. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
 
-> Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
+> Steps 17–19 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 

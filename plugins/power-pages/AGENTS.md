@@ -38,12 +38,15 @@ agents/
   ai-webapi-settings-architect.md ← Agent: proposes Summarization/* site settings (read-only)
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
+  validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
   encode-solution-file.js      ← Base64-encodes a solution zip for OData request bodies (used by import-solution)
   parse-deployment-errors.js   ← Parses PAC CLI stderr + OData errors into structured findings (used by diagnose-deployment)
 references/                    ← Shared reference docs used by multiple skills
   odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
+  bcp47-subtags.json           ← Bundled IANA Language Subtag Registry snapshot
+  i18n-frameworks.md           ← Framework localization modes, packages, resources, selector behavior, and manifest schema
   dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
   framework-conventions.md     ← Framework detection, paths, route discovery
   datamodel-manifest-schema.md ← .datamodel-manifest.json format spec
@@ -68,6 +71,9 @@ skills/
   add-seo/
     SKILL.md                   ← SEO essentials skill definition (robots.txt, sitemap.xml, meta tags)
     scripts/validate-seo.js    ← Node script validating SEO assets (robots.txt, sitemap.xml, meta tags)
+  add-localization/
+    SKILL.md                   ← SPA localization workflow for React, Vue, Angular, and Astro
+    scripts/validate-localization.js ← Validates manifest, locales, resources, tokens, selector, lang, and dir
   activate-site/
     SKILL.md                   ← Site activation/provisioning skill definition
     scripts/activate-site.js   ← Activates a site via PP API + polls status
@@ -149,6 +155,7 @@ User-invocable via `/power-pages:<skill-name>`:
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.
 - `activate-site`: 5-step workflow — verify prerequisites (PAC CLI auth + Azure CLI token + cloud-aware API URL resolution + activation status check via shared script), gather parameters (site name, subdomain, website record ID), confirm with user, activate & poll via `skills/activate-site/scripts/activate-site.js`, present summary with site URL.
 - `add-seo`: 7-step workflow — verify site exists, gather SEO config (production URL, exclusions, meta description), plan & approve, create robots.txt, generate sitemap.xml from discovered routes, add meta tags (title, description, viewport, Open Graph, Twitter Card, favicon) to index.html, verify via Playwright & commit.
+- `add-localization`: 8-phase workflow — detect framework/existing i18n, validate BCP-47 locales and package choices, approve exact file delta, configure framework localization, extract/generate translations, add runtime selector or static locale navigation, validate/build/browser-test, review, and conditionally deploy. React/Vue use runtime localization; Angular recommends official `@angular/localize` static builds with Transloco available for runtime; Astro uses built-in static locale routes.
 - `create-webroles`: 6-step workflow — verify `.powerpages-site/web-roles/` exists (redirect to deploy-site if missing), discover existing roles, determine new roles needed, create web role YAML files with UUIDs from shared `scripts/generate-uuid.js`, verify web roles (validate files, UUIDs, uniqueness constraints), review & prompt deployment via deploy-site skill.
 - `integrate-webapi`: 7-step workflow — verify site exists, use Explore agent to analyze code and identify tables needing Web API integration, review plan with user, invoke `webapi-integration` agent per table to create API client/types/services/hooks, verify integrations (validate all files exist, project builds), invoke `table-permissions-architect` and `webapi-settings-architect` agents (in parallel) to configure table permissions and site settings, review & deploy via `deploy-site` skill. Supports an `[AI-READ-ONLY]` sentinel that hardens the flow to read-only when invoked by `/add-ai-webapi`.
 - `add-ai-webapi`: 8-phase workflow — verify site/deployment, Explore-agent scan for search/data summarization candidates, review plan with user, **delegate Layer 1/2** (Web API site settings + table permissions) to `/integrate-webapi` in AI-only read mode and to `/create-webroles`, invoke `ai-webapi-integration` agent **sequentially per target** to create the summarization service + framework wrapper + UI wiring, invoke `ai-webapi-settings-architect` for Layer 3 (`Summarization/*` settings), verify (header-contract grep, `$select` grep, build, validator), review & deploy. This skill owns **Layer 3 only** and delegates everything else. Validator: `skills/add-ai-webapi/scripts/validate-ai-webapi.js`. AI summarization APIs are a **preview** feature gated by a three-level admin hierarchy.
@@ -192,8 +199,11 @@ Shared utility scripts live at `scripts/` and are referenced by multiple skills 
 - `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--token` (optional, refreshed via Azure CLI if omitted), `--intervalMs` (default 5000), `--maxAttempts` (default 60). Outputs JSON status. Used by `export-solution` and `import-solution`.
 - `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution`.
 - `parse-deployment-errors.js`: Parses PAC CLI stderr output or OData error JSON into structured findings array. Each finding has `{ patternId, type, severity, message, rawMatch, autoFixAvailable, suggestedFix }`. Reads from `--input`, `--file`, or stdin. Used by `diagnose-deployment`.
+- `validate-i18n-package.js`: Validates an npm localization package/version against the detected framework, selected runtime/static mode, peer range, stable-release requirement, 24-month maintenance window, approved permissive licenses, and documentation metadata. Used by `add-localization`.
 
 Shared lib modules live at `scripts/lib/` and are imported by other scripts via `require('./validation-helpers')` or sibling requires. Never inline their logic in skill scripts — always require from `scripts/lib/`.
+
+- `scripts/lib/localization-config.js`: Detects supported frameworks and existing localization, validates/canonicalizes BCP-47 tags against `references/bcp47-subtags.json`, visibly deduplicates locales, and extracts protected translation tokens. Used by `add-localization` and its validator.
 
 #### ALM Prerequisites & Context
 
@@ -261,6 +271,7 @@ Shared reference documents live at `references/` and are referenced by multiple 
 - `odata-common.md`: Auth headers, PowerShell token helper, token refresh cadence, HTTP status codes, Dataverse error codes, retry pattern. Used by `setup-datamodel` and `add-sample-data`.
 - `dataverse-prerequisites.md`: PAC CLI auth check (`pac env who`), Azure CLI token acquisition, API access verification (`WhoAmI`). Used by `setup-datamodel`, `add-sample-data`, `setup-solution`, `export-solution`, and `import-solution`.
 - `framework-conventions.md`: Supported frameworks, framework → build tool / router / build output / public dir / index HTML mapping, framework detection via `package.json`, route discovery patterns. Used by `create-site` and `add-seo`.
+- `i18n-frameworks.md`: Framework-specific localization modes, packages, resource paths, selector behavior, translation safeguards, manifest schema, and repair scenarios. Used by `add-localization`.
 - `datamodel-manifest-schema.md`: Schema spec for `.datamodel-manifest.json` (fields, types, usage). Written by `setup-datamodel`, read by `add-sample-data`, validated by `validate-datamodel.js`.
 - `skill-tracking-reference.md`: Skill usage tracking instructions — script invocation syntax, skill name mapping table, and YAML format. Referenced by all skills to record usage via `update-skill-tracking.js`.
 - `solution-api-patterns.md`: OData body templates for publisher POST, solution POST, `AddSolutionComponent`, `ExportSolutionAsync`, `DownloadSolutionExportData`, `ImportSolutionAsync`, `StageSolution`. Also documents `.solution-manifest.json` format. Used by `setup-solution`, `export-solution`, and `import-solution`.
@@ -291,6 +302,14 @@ Checks created Dataverse data models by reading `.datamodel-manifest.json` (writ
 ### `add-seo/scripts/validate-seo.js`
 
 Checks SEO assets added to Power Pages sites: verifies `robots.txt` exists in `public/` with proper `User-agent` and `Sitemap` directives, `sitemap.xml` exists with `<urlset>` and `<loc>` entries (no unreplaced placeholders), and `index.html` has `meta description` and `viewport` tags. Only runs validation when at least one SEO file (robots.txt or sitemap.xml) is detected — gracefully exits 0 otherwise to avoid blocking non-SEO sessions.
+
+### `add-localization/scripts/validate-localization.js`
+
+Checks `.powerpages-localization.json`, framework/package/mode consistency,
+canonical unique locales, default locale, resource files, key parity,
+protected interpolation/markup tokens, managed files, language selector or
+locale navigation, and document `lang`/`dir` handling. Gracefully exits 0 when
+no localization manifest exists.
 
 ### `create-webroles/scripts/validate-webroles.js`
 
