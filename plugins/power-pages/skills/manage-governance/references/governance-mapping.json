@@ -1,0 +1,586 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "governance-mapping.json",
+  "version": "6.0.0",
+  "policyModes": {
+    "uniformGovernance": [
+      {
+        "policyValue": "All",
+        "userIntent": "Enable the Governance Setting on every site in the environment.",
+        "apiBehavior": {
+          "applyTo": "All",
+          "enabled": true,
+          "inclusionList": [],
+          "exclusionList": []
+        }
+      },
+      {
+        "policyValue": "Include",
+        "userIntent": "Enable the Governance Setting only on the listed sites.",
+        "apiBehavior": {
+          "applyTo": "Include",
+          "enabled": true,
+          "siteList": ["site1", "site2"]
+        }
+      },
+      {
+        "policyValue": "None",
+        "userIntent": "Disable the Governance Setting on every site in the environment.",
+        "apiBehavior": {
+          "applyTo": "None",
+          "enabled": false,
+          "inclusionList": [],
+          "exclusionList": []
+        }
+      },
+      {
+        "policyValue": "Exclude",
+        "userIntent": "Disable the Governance Setting only on the listed sites.",
+        "apiBehavior": {
+          "applyTo": "Exclude",
+          "enabled": true,
+          "siteList": ["site1", "site2"]
+        }
+      }
+    ]
+  },
+
+  "policies": [
+    {
+      "policyName": "EnableMakerCopilotForExistingSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Maker Copilot for existing sites",
+      "subject": "Maker Copilot",
+      "summaryLabel": "Maker Copilot rule",
+      "userShorthands": ["maker copilot", "copilot", "maker copilot for existing sites", "existing sites copilot", "MakerCopilot", "EnableMakerCopilotForExistingSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot Enabled",
+        "Disabled": "Maker Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "EnableProtocolOpenIdConnect",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the OpenID Connect protocol",
+      "subject": "OpenID Connect sign-in",
+      "summaryLabel": "OpenID Connect protocol",
+      "statusColumnLabel": "OpenID Connect",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
+      "userShorthands": ["openid connect protocol", "oidc protocol", "enable openid connect", "enable oidc", "openid connect sign-in", "EnableProtocolOpenIdConnect", "openid connect", "oidc", "openidconnect", "openid"],
+      "stateParaphrase": {
+        "Enabled": "OpenID Connect sign-in Enabled",
+        "Disabled": "OpenID Connect sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via OpenID Connect on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolSAML20",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the SAML 2.0 protocol",
+      "subject": "SAML 2.0 sign-in",
+      "summaryLabel": "SAML 2.0 protocol",
+      "statusColumnLabel": "SAML 2.0",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
+      "userShorthands": ["saml 2.0 protocol", "saml protocol", "saml20 protocol", "enable saml", "enable saml 2.0", "EnableProtocolSAML20", "saml", "saml 2.0", "saml20", "saml2", "saml2.0"],
+      "stateParaphrase": {
+        "Enabled": "SAML 2.0 sign-in Enabled",
+        "Disabled": "SAML 2.0 sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via SAML 2.0 on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolWsFederation",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the WS-Federation protocol",
+      "subject": "WS-Federation sign-in",
+      "summaryLabel": "WS-Federation protocol",
+      "statusColumnLabel": "WS-Federation",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
+      "userShorthands": ["ws-federation", "wsfederation", "ws federation", "wsfed", "enable ws-federation", "ws-fed", "EnableProtocolWsFederation"],
+      "stateParaphrase": {
+        "Enabled": "WS-Federation protocol sign-in Enabled",
+        "Disabled": "WS-Federation protocol sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated via WS-Federation on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableProtocolOpenAuth",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable the OAuth 2.0 protocol",
+      "subject": "OAuth 2.0 sign-in",
+      "summaryLabel": "OAuth 2.0 protocol",
+      "statusColumnLabel": "OpenAuth Protocol",
+      "effectiveStatusLabel": "Effective OpenAuth State",
+      "availabilityDependsOn": ["EnableExternalAuthProviders"],
+      "userShorthands": ["openauth", "open auth", "oauth 2.0 protocol", "oauth protocol", "openauth protocol", "enable openauth", "oauth2", "oauth 2.0", "EnableProtocolOpenAuth"],
+      "stateParaphrase": {
+        "Enabled": "OAuth 2.0 sign-in Enabled",
+        "Disabled": "OAuth 2.0 sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this setting signs out all users currently authenticated with OAuth 2.0 on the affected sites and prevents OAuth 2.0 sign-in until it is re-enabled."
+      },
+      "cascadeOnDisable": {
+        "heading": "Disabling OAuth 2.0 protocol will disable the following identity providers:",
+        "items": ["Facebook", "Google", "Microsoft"]
+      },
+      "cascadeOnEnable": {
+          "heading": "Enabling OAuth 2.0 protocol allows Social-based sign-in. Each identity provider must also be enabled individually through its corresponding governance setting:",        "items": [
+          { "label": "Facebook", "note": "Controlled by the Facebook governance setting." },
+          { "label": "Google", "note": "Controlled by the Google governance setting." },
+          { "label": "Microsoft", "note": "Controlled by the Microsoft governance setting." }
+        ]
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthFacebook",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Facebook sign-in",
+      "subject": "Facebook sign-in",
+      "summaryLabel": "Facebook sign-in provider",
+      "statusColumnLabel": "Facebook",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "userShorthands": ["facebook", "facebook login", "facebook sign-in", "facebook oauth", "facebook idp", "enable facebook", "fb", "EnableIdpOAuthFacebook"],
+      "stateParaphrase": {
+        "Enabled": "Facebook sign-in Enabled",
+        "Disabled": "Facebook sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with Facebook on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthGoogle",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Google sign-in",
+      "subject": "Google sign-in",
+      "summaryLabel": "Google sign-in provider",
+      "statusColumnLabel": "Google",
+      "effectiveStatusLabel": "Effective Google idp State",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "userShorthands": ["google", "google login", "google sign-in", "google oauth", "google idp", "enable google", "gmail", "EnableIdpOAuthGoogle"],
+      "stateParaphrase": {
+        "Enabled": "Google sign-in Enabled",
+        "Disabled": "Google sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with Google on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableIdpOAuthMicrosoft",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable Microsoft sign-in",
+      "subject": "Microsoft sign-in",
+      "summaryLabel": "Microsoft sign-in provider",
+      "statusColumnLabel": "Microsoft",
+      "availabilityDependsOn": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "userShorthands": ["microsoft", "microsoft account", "microsoft login", "microsoft sign-in", "microsoft oauth", "microsoft idp", "enable microsoft", "msa", "EnableIdpOAuthMicrosoft"],
+      "stateParaphrase": {
+        "Enabled": "Microsoft sign-in Enabled",
+        "Disabled": "Microsoft sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this signs out any users currently authenticated with a Microsoft account on the affected sites and blocks that sign-in method until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableAuthenticationLocalLogin",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable local login",
+      "subject": "Local (username & password) sign-in",
+      "summaryLabel": "Local login setting",
+      "userShorthands": ["local login", "local authentication", "local sign-in", "username and password", "username/password login", "enable local login", "password login", "EnableAuthenticationLocalLogin"],
+      "stateParaphrase": {
+        "Enabled": "Local sign-in Enabled",
+        "Disabled": "Local sign-in Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this blocks username & password sign-in on the affected sites; users who rely on local accounts won't be able to sign in until it's re-enabled."
+      }
+    },
+    {
+      "policyName": "EnableExternalAuthProviders",
+      "policyMode": "uniformGovernance",
+      "displayName": "Enable external authentication providers",
+      "subject": "External authentication providers",
+      "summaryLabel": "External auth providers setting",
+      "statusColumnLabel": "External Auth",
+      "userShorthands": ["external auth providers", "external authentication providers", "external identity providers", "external providers", "enable external providers", "external idps", "external idp", "third-party identity providers", "third-party providers", "EnableExternalAuthProviders"],
+      "stateParaphrase": {
+        "Enabled": "External providers Enabled",
+        "Disabled": "External providers Blocked"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": ["None", "Exclude"],
+        "message": "Disabling this turns off all external (social / federated) identity providers on the affected sites; users who sign in through them will be signed out until it's re-enabled."
+      },
+      "cascadeOnDisable": {
+        "heading": "Below Setting will get Disable",
+        "items": [
+          "Authentication Using OpenID Connect (OIDC) Protocol",
+          "Authentication Using SAML 2.0 Protocol",
+          {
+            "Authentication Using OAuth 2.0 Protocol": [
+              "Facebook Authentication",
+              "Google Authentication",
+              "Microsoft Authentication"
+            ]
+          },
+          "Authentication Using WS-Federation Protocol"
+        ]
+      },
+      "cascadeOnEnable": {
+        "heading": "Below authentication Protocol/IDPs become available:",
+        "items": [
+          "Authentication Using OpenID Connect (OIDC) Protocol",
+          "Authentication Using SAML 2.0 Protocol",
+          {
+            "Authentication Using OAuth 2.0 Protocol": [
+              "Facebook Authentication",
+              "Google Authentication",
+              "Microsoft Authentication"
+            ]
+          },
+          "Authentication Using WS-Federation Protocol"
+        ],
+        "footer": "Enabling the External Authentication policy restores support for these authentication methods. Each authentication provider must also be enabled and configured."
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowMakerCopilotsForNewSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow Maker Copilots for new sites",
+      "subject": "Maker Copilot for new sites",
+      "summaryLabel": "Maker Copilot (new sites) setting",
+      "userShorthands": ["maker copilots for new sites", "maker copilot for new sites", "new sites copilot", "maker copilot new sites", "new site copilot", "PowerPages_AllowMakerCopilotsForNewSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot for new sites Enabled",
+        "Disabled": "Maker Copilot for new sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowMakerCopilotsForExistingSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow Maker Copilots for existing sites",
+      "subject": "Maker Copilot for existing sites",
+      "summaryLabel": "Maker Copilot (existing sites) setting",
+      "userShorthands": ["maker copilots for existing sites", "allow maker copilots for existing sites", "existing sites maker copilot", "maker copilot existing sites allow", "PowerPages_AllowMakerCopilotsForExistingSites"],
+      "stateParaphrase": {
+        "Enabled": "Maker Copilot for existing sites Enabled",
+        "Disabled": "Maker Copilot for existing sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowProDevCopilotsForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow pro-dev Copilots for sites",
+      "subject": "Pro-dev Copilot for sites",
+      "summaryLabel": "Pro-dev Copilot (sites) setting",
+      "userShorthands": ["pro dev copilot for sites", "pro-dev copilot for sites", "prodev copilot for sites", "prodev copilot sites", "professional developer copilot for sites", "pro dev copilot sites", "PowerPages_AllowProDevCopilotsForSites"],
+      "stateParaphrase": {
+        "Enabled": "Pro-dev Copilot for sites Enabled",
+        "Disabled": "Pro-dev Copilot for sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSiteCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow site Copilot for sites",
+      "subject": "Site Copilot",
+      "summaryLabel": "Site Copilot setting",
+      "userShorthands": ["site copilot", "site copilot for sites", "sites copilot", "portal copilot", "PowerPages_AllowSiteCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Site Copilot Enabled",
+        "Disabled": "Site Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSearchSummaryCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow search summary Copilot for sites",
+      "subject": "Search summary Copilot",
+      "summaryLabel": "Search summary Copilot setting",
+      "userShorthands": ["search summary copilot", "search summary", "search summarization copilot", "search summary copilot for sites", "PowerPages_AllowSearchSummaryCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Search summary Copilot Enabled",
+        "Disabled": "Search summary Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowListSummaryCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow list summary Copilot for sites",
+      "subject": "List summary Copilot",
+      "summaryLabel": "List summary Copilot setting",
+      "userShorthands": ["list summary copilot", "list summary", "list summarization copilot", "list summary copilot for sites", "PowerPages_AllowListSummaryCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "List summary Copilot Enabled",
+        "Disabled": "List summary Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowIntelligentFormsCopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow intelligent forms Copilot for sites",
+      "subject": "Intelligent forms Copilot",
+      "summaryLabel": "Intelligent forms Copilot setting",
+      "userShorthands": ["intelligent forms copilot", "intelligent forms", "forms copilot", "intelligent forms copilot for sites", "smart forms copilot", "PowerPages_AllowIntelligentFormsCopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Intelligent forms Copilot Enabled",
+        "Disabled": "Intelligent forms Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowSummarizationAPICopilotForSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow summarization API Copilot for sites",
+      "subject": "Summarization API Copilot",
+      "summaryLabel": "Summarization API Copilot setting",
+      "userShorthands": ["summarization api copilot", "summarization api", "summarization copilot", "summarisation api copilot", "summarization api copilot for sites", "PowerPages_AllowSummarizationAPICopilotForSites"],
+      "stateParaphrase": {
+        "Enabled": "Summarization API Copilot Enabled",
+        "Disabled": "Summarization API Copilot Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowProDevCopilotsForEnvironment",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow pro-dev Copilots for the environment",
+      "subject": "Pro-dev Copilot for the environment",
+      "summaryLabel": "Pro-dev Copilot (environment) setting",
+      "userShorthands": ["pro dev copilot for environment", "pro-dev copilot for environment", "prodev copilot for environment", "prodev copilot environment", "pro dev copilot environment", "professional developer copilot for environment", "PowerPages_AllowProDevCopilotsForEnvironment"],
+      "stateParaphrase": {
+        "Enabled": "Pro-dev Copilot for the environment Enabled",
+        "Disabled": "Pro-dev Copilot for the environment Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_AllowNonProdPublicSites",
+      "policyMode": "uniformGovernance",
+      "displayName": "Allow non-production public sites",
+      "subject": "Non-production public sites",
+      "summaryLabel": "Non-production public sites setting",
+      "userShorthands": ["non-prod public sites", "non prod public sites", "nonprod public sites", "non production public sites", "public non-prod sites", "allow non-prod public sites", "PowerPages_AllowNonProdPublicSites"],
+      "stateParaphrase": {
+        "Enabled": "Non-production public sites Enabled",
+        "Disabled": "Non-production public sites Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    },
+    {
+      "policyName": "PowerPages_DisableExtSvcCallsFromServerLogic",
+      "policyMode": "uniformGovernance",
+      "displayName": "Disable external service calls from server-side logic",
+      "subject": "External service calls from server-side logic",
+      "summaryLabel": "External service calls from server logic setting",
+      "userShorthands": ["external service calls from server logic", "disable external service calls", "ext svc calls from server logic", "external service calls server logic", "server logic external calls", "disable ext svc calls from server logic", "PowerPages_DisableExtSvcCallsFromServerLogic"],
+      "stateParaphrase": {
+        "Enabled": "External service calls from server-side logic Enabled",
+        "Disabled": "External service calls from server-side logic Disabled"
+      },
+      "sideEffectCallout": {
+        "policyValueTriggers": [],
+        "message": ""
+      }
+    }
+  ],
+
+  "policyAvailabilityDependencies": {
+    "description": "Parent/child availability model for Power Pages authentication governance. A portal (or the whole environment) is only ELIGIBLE ('available') for a CHILD policy's governance setting when EVERY parent listed in that child's `availabilityDependsOn` is Enabled for that portal/env. When a gating parent is Disabled for a portal/env, the portal is UNAVAILABLE for the child policy: it cannot be enabled or disabled there and must be shown in the picker BELOW the available portals with the blocking parent named. This mirrors the product rule that a specific sign-in method can only be governed on a portal where its umbrella provider is turned on. `EnableExternalAuthProviders` is the root parent (the Main Flag) of the four sign-in protocols; `EnableProtocolOpenAuth` (OAuth 2.0) is in turn the parent of the three OAuth-based social identity providers. Each dependent policy carries the same list in its own `availabilityDependsOn` field — the per-policy field is what the resolver reads; this block is the readable overview / single source of truth for the tree shape.",
+    "parents": {
+      "EnableExternalAuthProviders": [
+        "EnableProtocolOpenIdConnect",
+        "EnableProtocolSAML20",
+        "EnableProtocolWsFederation",
+        "EnableProtocolOpenAuth"
+      ],
+      "EnableProtocolOpenAuth": [
+        "EnableIdpOAuthFacebook",
+        "EnableIdpOAuthGoogle",
+        "EnableIdpOAuthMicrosoft"
+      ]
+    },
+    "unknownParentPosture": "fail-open",
+    "unknownParentPostureNote": "When a parent's live state cannot be read (network/parse failure), the portal is treated as AVAILABLE (fail-open) so a transient read error never hides portals from the admin. The resolver annotates such portals so the orchestrator can note the unread parent rather than silently blocking."
+  },
+
+  "effectiveStatusRules": {
+    "description": "How the EFFECTIVE (real, end-user-observable) status of a child sign-in method is computed for the status-display paths (Fetch Env portal table, Fetch Site, and the post-Set verify table). A child method's own governance setting being Enabled is necessary but NOT sufficient: the method only actually works on a portal when EVERY gating parent (the transitive `availabilityDependsOn` chain) is also Enabled on that portal. This mirrors the product runtime — e.g. Google sign-in is dark on a portal where OAuth 2.0 or External Auth is off even if the Google setting itself is Enabled, because the umbrella provider gates it. The status tables therefore show the child's own state PLUS a column for each parent, and an Effective column = own AND all parents. The parent columns to display are exactly the child's `availabilityDependsOn` list, in order (External Auth first, then OAuth 2.0 for social IdPs).",
+    "effectiveRule": "effective = Enabled iff (ownState == Enabled) AND every parent in availabilityDependsOn is Enabled for that portal; Disabled iff no state is Unknown and at least one of {own, ...parents} is Disabled; otherwise Unknown (a parent or own state could not be read).",
+    "parentColumnsByPolicy": {
+      "EnableProtocolOpenIdConnect": ["EnableExternalAuthProviders"],
+      "EnableProtocolSAML20": ["EnableExternalAuthProviders"],
+      "EnableProtocolWsFederation": ["EnableExternalAuthProviders"],
+      "EnableProtocolOpenAuth": ["EnableExternalAuthProviders"],
+      "EnableIdpOAuthFacebook": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "EnableIdpOAuthGoogle": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"],
+      "EnableIdpOAuthMicrosoft": ["EnableExternalAuthProviders", "EnableProtocolOpenAuth"]
+    },
+    "note": "`parentColumnsByPolicy` is the readable overview; the renderer reads each child's own `availabilityDependsOn` field (authoritative). Policies absent here (Maker Copilot, local login, and External Auth itself as a root) have no parents — their effective status equals their own state and no parent columns render."
+  },
+
+  "readValueAliases": {
+    "AllSites": "All",
+    "IncludeSites": "Include",
+    "ExcludeSites": "Exclude",
+    "IncludedSites": "Include",
+    "AllSitesExceptExcluded": "Exclude",
+    "ExcludedSites": "Exclude",
+    "None": "None"
+  },
+
+  "stateColors": {
+    "description": "Color convention for rendering Governance Setting state in summary/verification/state tables. The Status column is wrapped in ANSI SGR codes so it renders green/red in an ANSI-capable terminal; the emoji marker is kept as a fallback indicator for surfaces that strip ANSI (e.g. some chat renderers). Wrap the whole Status cell as `<ansi><emoji> <label> (<paraphrase>)<reset>`.",
+    "ansi": { "green": "\u001b[32m", "red": "\u001b[31m", "reset": "\u001b[0m" },
+    "Enabled": { "color": "green", "emoji": "🟢", "ansi": "\u001b[32m" },
+    "Disabled": { "color": "red", "emoji": "🔴", "ansi": "\u001b[31m" },
+    "Unavailable": { "color": "gray", "emoji": "⚪", "ansi": "\u001b[90m" }
+  },
+
+  "intentToPolicyValue": [
+    {
+      "intentDirection": "enable",
+      "scope": "all",
+      "policyValue": "All",
+      "toBeAdded": "empty",
+      "scopeQualifiers": ["for all portals", "everywhere", "across the env", "for live portals", "for running portals"]
+    },
+    {
+      "intentDirection": "enable",
+      "scope": "specific",
+      "policyValue": "Include",
+      "toBeAdded": "pickedIds",
+      "scopeQualifiers": ["only X", "for X and Y", "specific sites", "just X", "for X"]
+    },
+    {
+      "intentDirection": "disable",
+      "scope": "all",
+      "policyValue": "None",
+      "toBeAdded": "empty",
+      "scopeQualifiers": ["for all portals", "everywhere", "across the env", "for no portals", "clear the policy"]
+    },
+    {
+      "intentDirection": "disable",
+      "scope": "specific",
+      "policyValue": "Exclude",
+      "toBeAdded": "pickedIds",
+      "scopeQualifiers": ["only X", "for X and Y", "specific sites"]
+    }
+  ],
+
+  "siteStateRules": [
+    { "envBody": "All",     "inInclusionList": null,  "inExclusionList": null,  "siteState": "Enabled" },
+    { "envBody": "None",    "inInclusionList": null,  "inExclusionList": null,  "siteState": "Disabled" },
+    { "envBody": "Include", "inInclusionList": true,  "inExclusionList": null,  "siteState": "Enabled" },
+    { "envBody": "Include", "inInclusionList": false, "inExclusionList": null,  "siteState": "Disabled" },
+    { "envBody": "Exclude", "inInclusionList": null,  "inExclusionList": true,  "siteState": "Disabled" },
+    { "envBody": "Exclude", "inInclusionList": null,  "inExclusionList": false, "siteState": "Enabled" }
+  ],
+
+  "ambiguousPhrasings": [
+    {
+      "phrase": "everywhere except X",
+      "rephrasePrompt": "Please re-phrase as either 'Enable for X' or 'Disable for X' so the uniform mapping applies cleanly."
+    },
+    {
+      "phrase": "all except X",
+      "rephrasePrompt": "Please re-phrase as either 'Enable for X' or 'Disable for X'."
+    }
+  ],
+
+  "effectLineTemplates": [
+    { "intentDirection": "enable",  "scope": "all",      "template": "{Subject} will be enabled on all portals in {EnvDisplay}." },
+    { "intentDirection": "enable",  "scope": "specific", "template": "{Subject} will be enabled on the listed portals in {EnvDisplay}: {SiteNameList}." },
+    { "intentDirection": "disable", "scope": "all",      "template": "{Subject} will be disabled on all portals in {EnvDisplay}." },
+    { "intentDirection": "disable", "scope": "specific", "template": "{Subject} will be disabled on the listed portals in {EnvDisplay}: {SiteNameList}." }
+  ],
+
+  "scopePicker": [
+    {
+      "label": "All portals in environment",
+      "description": "Apply the chosen Enable/Disable action to every site in the env. Clears any inclusion / exclusion list.",
+      "policyValueForEnable": "All",
+      "policyValueForDisable": "None",
+      "toBeAdded": "empty"
+    },
+    {
+      "label": "Specific portals",
+      "description": "I'll list the sites; you reply with the names or IDs (comma-separated).",
+      "policyValueForEnable": "Include",
+      "policyValueForDisable": "Exclude",
+      "toBeAdded": "pickedIds"
+    }
+  ],
+
+  "consentGate": {
+    "requiredRows": ["Action", "Environment", "Scope", "After-state site table", "API mapping", "Effect"],
+    "neverShowToUser": ["policyValue", "InclusionList", "ExclusionList", "Include", "Exclude"],
+    "rules": [
+      "Rows where the per-site state changes MUST be marked '<- CHANGED'.",
+      "When the env state transition would flip sites that aren't the user's target, surface a 'Side effect:' line with the count and the affected sites."
+    ]
+  },
+
+  "uiConstants": {
+    "envList":  { "columns": ["#", "Environment Name", "Environment ID"], "excludedFields": ["envUrl", "type", "region", "domain"] },
+    "siteList": { "columns": ["#", "Name", "URL", "Portal ID"] }
+  }
+}
