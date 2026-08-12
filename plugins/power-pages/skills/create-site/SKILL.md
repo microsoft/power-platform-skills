@@ -8,7 +8,7 @@ description: >-
   template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 ---
 
@@ -106,12 +106,29 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    Do **not** ask for framework or project location in Phase 1. Each creation path asks for its location after Phase 1.5 selects that path.
 
+6. Ask whether localization should be included:
+
+   > **Add localization support to this site?**
+   > This localizes only the SPA user interface; it does not add languages to your Dataverse environment.
+
+   <!-- not-a-gate: creation-scope preference is recorded before path selection or scaffolding and does not write anything by itself -->
+
+   Use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Add localization support to this site?<br><br>This localizes only the SPA user interface; it does not add languages to your Dataverse environment. | Localization | Yes — configure languages after the pages are built, No — keep this site single-language |
+
+   Record the answer as `LOCALIZATION_REQUESTED=true|false`. Ask this even when
+   `$ARGUMENTS` supplied enough details to skip the Phase 1 multi-question
+   discovery prompt.
+
 **Audience influences site generation:**
 
 - **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
 - **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
 
-**Output**: Clear statement of site purpose, audience, and derived naming values.
+**Output**: Clear statement of site purpose, audience, localization scope, and derived naming values.
 
 ---
 
@@ -915,6 +932,12 @@ Assemble a single JSON object with the following keys. The plan template rejects
 
 **Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
 
+When `LOCALIZATION_REQUESTED=true`, mention localization in `SUMMARY` and add
+review items covering the language selector, locale fallback, translated
+content, and document language/direction. The standalone add-localization
+workflow will collect the actual locales, package/mode, and translation method
+after real page content exists.
+
 ### 4.3 Render the HTML Plan
 
 Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
@@ -1092,9 +1115,27 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
+### 5.7 Add Localization When Requested
+
+When `LOCALIZATION_REQUESTED=true`, invoke:
+
+```text
+/power-pages:add-localization <PROJECT_ROOT> [FROM_CREATE_SITE]
+```
+
+Wait for the skill to complete before accessibility verification. The child
+skill owns locale/package questions, translation generation, selector wiring,
+its implementation review, build, and localization checks. The
+`[FROM_CREATE_SITE]` context prevents a duplicate deployment prompt; control
+returns here so create-site can run accessibility verification, final review,
+and its existing deployment prompt.
+
+When `LOCALIZATION_REQUESTED=false`, skip this step without suggesting the
+skill again during the same create-site run.
+
 > **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
 
-**Output**: All pages, components, and design elements implemented and verified
+**Output**: All pages, components, design elements, and requested localization implemented and verified
 
 ---
 
@@ -1242,6 +1283,8 @@ Present a summary table to the user:
    - Total file count and git commit count
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
+   - `/add-localization` — Add or extend SPA languages (suggest only when
+     `LOCALIZATION_REQUESTED=false`)
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
@@ -1293,7 +1336,7 @@ After Phase 1.5 selects the from-scratch path, append the existing from-scratch 
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
-| Implement pages and components | Building site | Apply chosen design tokens, create all pages, components, routing, navigation |
+| Implement pages and components | Building site | Apply design tokens, create pages/components/routing/navigation, then invoke localization when requested |
 | Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
