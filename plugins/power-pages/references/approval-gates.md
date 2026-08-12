@@ -2,7 +2,7 @@
 
 > **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 24 user-invocable skills (12 ALM + 12 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
+> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the catalogued user-invocable skills. `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
@@ -176,6 +176,7 @@ Required, normalized vocabulary:
 | Value | Meaning |
 |---|---|
 | `nothing` | Clean exit. No Dataverse write, no filesystem write, no state change anywhere. |
+| `localized-site-files` | Localization changes remain in the site files but are not deployed. |
 | `validated-stage-run` | A `deploymentstageruns` row remains on the host in validated-but-not-deployed state. |
 | `partial-manifest` | `.solution-manifest.json` written but not all components added to Dataverse. |
 | `partial-solution` | Some components added to Dataverse via `AddSolutionComponent` before Cancel. |
@@ -468,11 +469,12 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (21 calls: 15 gates + 6 not-a-gates)
+### 6.13 `create-site` (22 calls: 15 gates + 7 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
+| `create-site:1.localization` | not-a-gate | — | 1 | *"Add localization support?"* — records creation scope before path selection or scaffolding; explains SPA-only scope and does not write by itself | — |
 | `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
@@ -742,6 +744,28 @@ Read-only design review of an existing site from a URL or a project folder. It r
 | Step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL / Review the code only"*. Asks where the site runs (the deployed site, or a dev server the user starts); the skill starts nothing. Data-gathering. | nothing |
 
 ---
+
+### 6.34 `add-localization` (11 calls)
+
+Adds or extends localization for React, Vue, Angular, and Astro code-site SPAs.
+Most prompts gather validated configuration before the Phase 3 plan gate.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-localization:1.framework` | not-a-gate | — | 1 | Conflicting framework evidence — choose an evidence-backed candidate or stop for manual framework-configuration repair | — |
+| `add-localization:1.existing-action` | not-a-gate | — | 1 | Existing setup — add languages, repair/reconfigure, or stop | — |
+| `add-localization:2.languages` | not-a-gate | — | 2.1 | Enter locales; invalid tags are rejected and canonicalization/duplicates are shown | — |
+| `add-localization:2.default` | not-a-gate | — | 2.2 | Select exactly one validated default locale when required | — |
+| `add-localization:2.mode` | not-a-gate | — | 2.3 | Angular only — official static localization or runtime Transloco | — |
+| `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
+| `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
+| `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
+| `add-localization:3.plan-approval` | gate | plan | 3 | Approve exact package/mode/locale/file delta before installation or edits | nothing |
+| `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |
+| `add-localization:8.deploy` | gate | plan | 8 | Direct invocation only — deploy now or skip; create-site child invocation suppresses this prompt | localized-site-files |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.
