@@ -8,7 +8,8 @@
 // Unlike connectors (whose metadata lives outside Dataverse and needs pac verbs), Custom API metadata
 // IS in ordinary Dataverse tables, so discovery is a plain Web API query — no new pac verb needed.
 //   customapi                  — the API definitions (uniquename, isfunction, bindingtype, bound entity)
-//   customapirequestparameter  — each API's request parameters and their declared `type`
+//   customapirequestparameter  — each API's request parameters and their declared `type` (pulled inline
+//                                via $expand so discovery stays a single request — see main())
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/custom-api
 //
 // Usage:
@@ -89,18 +90,19 @@ function buildCustomApiFilter(entities) {
   return `bindingtype eq 0 or (${bound})`;
 }
 
-// Groups customapirequestparameter rows by their parent API id into { [customapiid]: { name: kind } },
-// dropping parameters whose declared type is unknown (see mapParameterKind).
-function groupParameterKinds(rows) {
-  const byApi = {};
+// Maps one API's request-parameter rows (returned inline via $expand of CustomAPIRequestParameters)
+// into { [paramName]: DataverseParameterKind }, dropping any whose declared type is unknown (see
+// mapParameterKind). Because the rows arrive nested under their parent API there is no parent id to
+// group on — unlike the flat cross-API query this replaced.
+function parameterKindsFromRows(rows) {
+  const kinds = {};
   for (const row of rows || []) {
-    const apiId = row._customapiid_value;
     const name = row.uniquename;
     const kind = mapParameterKind(row.type);
-    if (!apiId || !name || !kind) continue;
-    (byApi[apiId] = byApi[apiId] || {})[name] = kind;
+    if (!name || !kind) continue;
+    kinds[name] = kind;
   }
-  return byApi;
+  return kinds;
 }
 
 // Projects one customapi row (+ its parameter kinds) into the discovery shape the builder writes to
@@ -138,11 +140,18 @@ async function main() {
 
   try {
     const filter = encodeURIComponent(buildCustomApiFilter(entities));
+    // Pull each API's request parameters INLINE via $expand rather than issuing a second query that ORs
+    // every matched API id into one $filter. A real environment has hundreds of Global Custom APIs
+    // (system + custom — 800+ is normal), and an OR-of-ids filter over that many rows overruns the
+    // server's URL-length limit (HTTP 414). $expand keeps discovery to a single request whose URL
+    // length is independent of how many APIs match; request parameters per API are few, so the nested
+    // collection is never truncated.
+    const expand = encodeURIComponent('CustomAPIRequestParameters($select=uniquename,type,isoptional)');
     const apisRes = await dataverseRequest(
       envUrl,
       'GET',
       'customapis?$select=customapiid,uniquename,name,displayname,isfunction,bindingtype,boundentitylogicalname' +
-        `&$filter=${filter}`
+        `&$filter=${filter}&$expand=${expand}`
     );
     ensureOk(apisRes, 'List custom APIs');
     const apis = (apisRes.data?.value || [])
@@ -152,25 +161,8 @@ async function main() {
       // one would only let the builder emit a binding that fails. See genpage-customapi-builder.md.
       .filter((a) => Number(a.bindingtype) !== 2);
 
-    // Fetch request parameters for exactly the matched APIs in one call (an OR of id equalities),
-    // then group by API. Skip entirely when nothing matched so we don't issue an empty `in ()` filter.
-    let parameterKindsByApi = {};
-    if (apis.length > 0) {
-      const idFilter = apis
-        .map((a) => `_customapiid_value eq ${a.customapiid}`)
-        .join(' or ');
-      const paramsRes = await dataverseRequest(
-        envUrl,
-        'GET',
-        'customapirequestparameters?$select=uniquename,type,isoptional,_customapiid_value' +
-          `&$filter=${encodeURIComponent(idFilter)}`
-      );
-      ensureOk(paramsRes, 'List custom API request parameters');
-      parameterKindsByApi = groupParameterKinds(paramsRes.data?.value);
-    }
-
     const customApis = apis
-      .map((api) => toCustomApiEntry(api, parameterKindsByApi[api.customapiid]))
+      .map((api) => toCustomApiEntry(api, parameterKindsFromRows(api.CustomAPIRequestParameters)))
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     emitResult(true, { ok: true, customApis });
@@ -191,7 +183,7 @@ module.exports = {
   bindingTypeLabel,
   mapParameterKind,
   buildCustomApiFilter,
-  groupParameterKinds,
+  parameterKindsFromRows,
   toCustomApiEntry,
   escapeODataString,
 };

@@ -10,9 +10,13 @@ const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
 
 // --- Source-shape guards (cheap contract checks) ---------------------------
 
-test('queries the customapi + customapirequestparameter Dataverse tables', () => {
+test('queries customapi with request parameters expanded inline (no OR-of-ids param query)', () => {
   assert.match(scriptSrc, /customapis\?\$select=customapiid,uniquename,name,displayname,isfunction,bindingtype,boundentitylogicalname/);
-  assert.match(scriptSrc, /customapirequestparameters\?\$select=uniquename,type,isoptional,_customapiid_value/);
+  // Parameters are pulled inline via $expand of the CustomAPIRequestParameters navigation property...
+  assert.match(scriptSrc, /CustomAPIRequestParameters\(\$select=uniquename,type,isoptional\)/);
+  // ...NOT via a second query that ORs every matched API id into one $filter. That pattern overran the
+  // server's URL-length limit (HTTP 414) in real environments with hundreds of Global Custom APIs.
+  assert.doesNotMatch(scriptSrc, /_customapiid_value eq/);
 });
 
 test('gates fail-closed via exitIfCustomApiDisabled before any query', () => {
@@ -46,7 +50,7 @@ const {
   bindingTypeLabel,
   mapParameterKind,
   buildCustomApiFilter,
-  groupParameterKinds,
+  parameterKindsFromRows,
   toCustomApiEntry,
 } = require(scriptPath);
 
@@ -86,16 +90,20 @@ test('buildCustomApiFilter includes Global plus the page tables, escaping quotes
   assert.match(escaped, /boundentitylogicalname eq 'o''brien'/);
 });
 
-test('groupParameterKinds groups by parent API and drops unknown types', () => {
-  const grouped = groupParameterKinds([
-    { _customapiid_value: 'A', uniquename: 'Comment', type: 10 },
-    { _customapiid_value: 'A', uniquename: 'Amount', type: 2 },
-    { _customapiid_value: 'A', uniquename: 'Mystery', type: 999 }, // unknown → dropped
-    { _customapiid_value: 'B', uniquename: 'OrderId', type: 12 },
-    { _customapiid_value: null, uniquename: 'Orphan', type: 10 }, // no parent → dropped
+test('parameterKindsFromRows maps one API\'s expanded params and drops unknown types', () => {
+  // Rows arrive inline via $expand — each element has uniquename + type, but no parent id.
+  const kinds = parameterKindsFromRows([
+    { uniquename: 'Comment', type: 10 },
+    { uniquename: 'Amount', type: 2 },
+    { uniquename: 'Mystery', type: 999 }, // unknown → dropped
+    { uniquename: null, type: 10 },       // no name → dropped
   ]);
-  assert.deepEqual(grouped.A, { Comment: 'String', Amount: 'Decimal' });
-  assert.deepEqual(grouped.B, { OrderId: 'Guid' });
+  assert.deepEqual(kinds, { Comment: 'String', Amount: 'Decimal' });
+});
+
+test('parameterKindsFromRows tolerates missing/empty input', () => {
+  assert.deepEqual(parameterKindsFromRows(undefined), {});
+  assert.deepEqual(parameterKindsFromRows([]), {});
 });
 
 test('toCustomApiEntry omits boundEntityLogicalName for a Global API', () => {
