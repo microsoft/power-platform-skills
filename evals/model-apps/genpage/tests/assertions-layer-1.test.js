@@ -117,6 +117,18 @@ test('node --version and pac help: fail when the recorded version is <= 2.10.0',
   assert.match(result.reason, /2\.10\.0/);
 });
 
+test('node --version and pac help: fail when only the node version is present (must not be mistaken for pac)', () => {
+  // The node line records v20.x; without a "PAC CLI Version" line there is no valid pac version, so
+  // the assertion must NOT pass by grabbing 20.x from `node --version`.
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
+  const log = `## Phase 1
+- node --version → v20.11.0
+- pac help → (ran, but version not captured)
+`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 test('node --version and pac help: fail when chained with &&', () => {
   const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `node --version && pac help → 2.7.3`;
