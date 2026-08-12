@@ -122,6 +122,33 @@
         "Deployment is offered with 'Deploy now (Recommended)' and 'Skip for now' options",
         "Skill usage is recorded via skill tracking reference before deployment prompt"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a React Power Pages company portal called Global Contoso and add localization for it.",
+      "expected_output": "The create-site workflow explains SPA-only localization scope, records the opt-in, includes localization in the plan, builds real pages first, invokes add-localization with FROM_CREATE_SITE, then continues accessibility/review and asks only one deployment question.",
+      "files": [],
+      "expectations": [
+        "Shows the localization opt-in question with the SPA-only and Dataverse-language subtext",
+        "Records LOCALIZATION_REQUESTED=true",
+        "Mentions localization in the rendered implementation plan",
+        "Invokes add-localization after real pages are built and before accessibility verification",
+        "Passes the FROM_CREATE_SITE context",
+        "Does not duplicate the deployment prompt"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Create an Astro Power Pages site called Local Bakery. Keep it English-only.",
+      "expected_output": "The workflow records localization opt-out, builds the site without invoking add-localization, and may suggest the skill later as an optional enhancement.",
+      "files": [],
+      "expectations": [
+        "Shows the localization scope subtext",
+        "Records LOCALIZATION_REQUESTED=false",
+        "Does not invoke add-localization during implementation",
+        "Continues normal accessibility, review, and deployment phases",
+        "May list add-localization as an optional next step"
+      ]
     }
   ]
 }

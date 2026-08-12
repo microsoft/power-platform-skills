@@ -1,0 +1,414 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const { createTempProject, writeProjectFile } = require('./test-utils');
+
+const VALIDATOR_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'skills',
+  'add-localization',
+  'scripts',
+  'validate-localization.js'
+);
+const { compareXlfResources, extractXlfMessages } = require(VALIDATOR_PATH);
+
+function runValidator(projectRoot) {
+  return spawnSync(process.execPath, [VALIDATOR_PATH], {
+    input: JSON.stringify({ cwd: projectRoot }),
+    encoding: 'utf8',
+  });
+}
+
+function createLocalizedReactProject(t, overrides = {}) {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      i18next: '^25.0.0',
+      'react-i18next': '^16.0.0',
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', JSON.stringify({
+    greeting: 'Hello {{name}}',
+    navigation: { home: 'Home' },
+  }));
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', JSON.stringify({
+    greeting: 'Bonjour {{name}}',
+    navigation: { home: 'Accueil' },
+  }));
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ document.documentElement.lang='en-US'; document.documentElement.dir='ltr'; return null; }"
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/i18n/index.ts',
+    "import i18next from 'i18next'; i18next.init({ fallbackLng: 'en-US' });"
+  );
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'react-i18next',
+    packageVersion: '^16.0.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/i18n/locales/en-US.json',
+      'fr-FR': 'src/i18n/locales/fr-FR.json',
+    },
+    generatedFiles: ['src/components/LanguageSelector.tsx'],
+    managedFiles: ['src/i18n/index.ts'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+    ...overrides,
+  }));
+  return projectRoot;
+}
+
+test('approves when no localization manifest exists', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('blocks a partial manifestless localization setup', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'react-i18next': '^16.0.0',
+      i18next: '^25.0.0',
+    },
+  }));
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /localization\.json.*missing.*setup.*incomplete/i);
+  assert.match(result.stderr, /no locale resources/);
+});
+
+test('approves a complete manifestless localization setup for safe adoption', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'react-i18next': '^16.0.0',
+      i18next: '^25.0.0',
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', "i18next.init({ fallbackLng: 'en-US' });");
+  writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{"home":"Home"}');
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', '{"home":"Accueil"}');
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ changeLanguage('fr-FR'); document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr'; }"
+  );
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('blocks manifestless adoption when resource keys or protected tokens differ', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'react-i18next': '^16.0.0',
+      i18next: '^25.0.0',
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', "i18next.init({ fallbackLng: 'en-US' });");
+  writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{"home":"Hello {name}","about":"About"}');
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', '{"home":"Bonjour"}');
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ changeLanguage('fr-FR'); document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr'; }"
+  );
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /resources are not safe to adopt/);
+  assert.match(result.stderr, /missing translation keys: about/);
+  assert.match(result.stderr, /protected interpolation\/markup tokens/);
+});
+
+test('reports malformed manifest field types instead of throwing', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    locales: { default: 'en-US' },
+    resourcePaths: [],
+    generatedFiles: 'src/components/LanguageSelector.tsx',
+  });
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /locales must be an array/);
+  assert.match(result.stderr, /resourcePaths must be an object/);
+  assert.match(result.stderr, /generatedFiles must be an array/);
+  assert.doesNotMatch(result.stderr, /TypeError/);
+});
+
+test('approves a complete runtime localization setup', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('approves an explicitly unverified custom package with initialization evidence', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    packageName: 'custom-react-i18n',
+    packageVersion: '^2.0.0',
+    packageVerification: {
+      status: 'unverified',
+      source: 'user-approved',
+      evidenceUrl: 'https://custom.example.test/runtime',
+    },
+    initializationEvidence: {
+      file: 'src/i18n/custom-provider.ts',
+      marker: 'customI18n.initialize(',
+    },
+    managedFiles: ['src/i18n/custom-provider.ts'],
+  });
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'custom-react-i18n': '^2.0.0',
+    },
+  }));
+  writeProjectFile(
+    projectRoot,
+    'src/i18n/custom-provider.ts',
+    "import customI18n from 'custom-react-i18n'; customI18n.initialize({ locale: 'en-US' });"
+  );
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', 'export {};');
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('blocks custom initialization evidence when its marker is absent', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    packageName: 'custom-react-i18n',
+    packageVersion: '^2.0.0',
+    packageVerification: {
+      status: 'unverified',
+      source: 'user-approved',
+    },
+    initializationEvidence: {
+      file: 'src/i18n/custom-provider.ts',
+      marker: 'customI18n.initialize(',
+    },
+    managedFiles: ['src/i18n/custom-provider.ts'],
+  });
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      'custom-react-i18n': '^2.0.0',
+    },
+  }));
+  writeProjectFile(
+    projectRoot,
+    'src/i18n/custom-provider.ts',
+    "import customI18n from 'custom-react-i18n'; export default customI18n;"
+  );
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', 'export {};');
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /initialization marker was not found/);
+});
+
+test('requires package verification metadata for schema version 1', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    packageVerification: undefined,
+  });
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /packageVerification must be an object/);
+});
+
+test('accepts an evidence-backed manifest framework when project evidence is ambiguous', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  writeProjectFile(projectRoot, 'package.json', JSON.stringify({
+    dependencies: {
+      react: '^19.0.0',
+      'react-dom': '^19.0.0',
+      vue: '^3.5.0',
+      'react-i18next': '^16.0.0',
+      i18next: '^25.0.0',
+    },
+  }));
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('blocks missing locale keys and protected-token mismatches', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', JSON.stringify({
+    greeting: 'Bonjour',
+  }));
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /missing translation keys: navigation.home/);
+  assert.match(result.stderr, /protected interpolation\/markup tokens/);
+});
+
+test('blocks a default locale that is not configured', (t) => {
+  const projectRoot = createLocalizedReactProject(t, { defaultLocale: 'de-DE' });
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /defaultLocale must be one of the configured locales/);
+});
+
+test('blocks when the configured package is absent', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    packageName: 'missing-i18n-package',
+    packageVerification: {
+      status: 'unverified',
+      source: 'user-approved',
+    },
+  });
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /is not installed/);
+});
+
+test('blocks a framework-package-mode mismatch', (t) => {
+  const projectRoot = createLocalizedReactProject(t, { mode: 'static' });
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /react does not support "static"/);
+  assert.match(result.stderr, /react-i18next.*runtime localization/);
+});
+
+test('blocks noncanonical manifest locale values', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    locales: ['en-us', 'fr-FR'],
+    defaultLocale: 'en-us',
+    resourcePaths: {
+      'en-us': 'src/i18n/locales/en-US.json',
+      'fr-FR': 'src/i18n/locales/fr-FR.json',
+    },
+  });
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /valid, canonical, and unique/);
+});
+
+test('allows intentional blank target values in blank translation mode', (t) => {
+  const projectRoot = createLocalizedReactProject(t, { translationMethod: 'blank' });
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', JSON.stringify({
+    greeting: '',
+    navigation: { home: '' },
+  }));
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('allows preserved stale translations in manifest-backed synchronization', (t) => {
+  const projectRoot = createLocalizedReactProject(t);
+  writeProjectFile(projectRoot, 'src/i18n/locales/fr-FR.json', JSON.stringify({
+    greeting: 'Bonjour {{name}}',
+    navigation: { home: 'Accueil' },
+    legacy: 'Texte conservé',
+  }));
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('extracts XLIFF 1.2 and XLIFF 2 messages', () => {
+  assert.deepEqual(
+    extractXlfMessages(
+      '<trans-unit id="greeting"><source xml:lang="en">Hello</source><target>Bonjour</target></trans-unit>'
+    ),
+    { greeting: { source: 'Hello', target: 'Bonjour' } }
+  );
+  assert.deepEqual(
+    extractXlfMessages('<unit id="greeting"><segment><source>Hello</source><target>Bonjour</target></segment></unit>'),
+    { greeting: { source: 'Hello', target: 'Bonjour' } }
+  );
+  assert.deepEqual(
+    extractXlfMessages(
+      '<unit id="account">' +
+      '<segment id="title"><source>Account</source><target>Compte</target></segment>' +
+      '<segment id="count"><source>{count} items</source><target>{count} éléments</target></segment>' +
+      '</unit>'
+    ),
+    {
+      'account#title': { source: 'Account', target: 'Compte' },
+      'account#count': { source: '{count} items', target: '{count} éléments' },
+    }
+  );
+});
+
+test('blocks stale target-only XLIFF messages', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/locale/messages.xlf',
+    '<trans-unit id="home"><source>Home</source><target>Home</target></trans-unit>'
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/locale/messages.fr.xlf',
+    '<trans-unit id="home"><source>Home</source><target>Accueil</target></trans-unit>' +
+    '<trans-unit id="stale"><source>Old</source><target>Ancien</target></trans-unit>'
+  );
+  const errors = [];
+
+  compareXlfResources(projectRoot, {
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/locale/messages.xlf',
+      'fr-FR': 'src/locale/messages.fr.xlf',
+    },
+  }, errors);
+
+  assert.deepEqual(errors, ['fr-FR: stale XLF messages: stale']);
+});
+
+test('blocks missing language selector and lang/dir behavior', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    generatedFiles: ['src/i18n/index.ts'],
+  });
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', 'export const locale = "en-US";');
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /language selector/);
+  assert.match(result.stderr, /document direction/);
+  assert.match(result.stderr, /document language/);
+});
