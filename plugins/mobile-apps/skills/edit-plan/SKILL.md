@@ -1,6 +1,6 @@
 ---
 name: edit-plan
-description: Use when the user wants to change one part of an existing mobile native-app-plan.md without immediately mutating app code: data model, native capabilities, connectors, screens/navigation, or design direction. Safe plan-only workflow; follow with /sync-from-plan or the relevant specialist skill.
+description: "Use when the user wants to change one part of an existing mobile native-app-plan.md without immediately mutating app code: data model, native capabilities, connectors, screens/navigation, or design direction. Safe plan-only workflow; follow with /sync-from-plan or the relevant specialist skill."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task
 model: opus
