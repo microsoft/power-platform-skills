@@ -129,6 +129,30 @@ What happens:
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
+### Prototype first, Dataverse later
+
+Use `/create-mobile-prototype` when you want a fast UX prototype without provisioning a Power Platform environment. It uses the same Expo mobile template and planning/screen-builder flow, but generates local in-memory mock services under `src/generated/` instead of creating Dataverse tables or connector data sources. The generated imports match the real services, so screens can later be rebound with `/prototype-to-real-app`.
+
+```text
+> /create-mobile-prototype "Build a scan-first inventory prototype for dealer equipment check-in and label printing"
+```
+
+When the prototype is approved, run:
+
+```text
+> /prototype-to-real-app --working-dir <prototype-folder> --environment <environment-id-or-url>
+```
+
+That flow binds the existing project to a real environment, runs `/add-dataverse`, adds real connectors/flows, runs `npm run generate-schemas`, removes mock seed/stub artifacts, and finishes with `/sync-from-plan` so the screens keep their UX while data becomes real.
+
+For plan-only changes, use `/edit-plan`; for app changes, use `/edit-app`. `/edit-app` reads lifecycle state, keeps prototype edits mock-backed, and routes “make this prototype real” to `/prototype-to-real-app`.
+
+DevPlayer builder integrations should invoke `/create-mobile-prototype`, not `/create-mobile-app`, for hackathon-style progressive previews:
+
+```text
+/create-mobile-prototype --working-dir "<generated-workspace>" --devplayer-mode --callback-url "http://127.0.0.1:5177/jobs/<jobId>" --callback-token "<token>" --progressive-preview --no-plan-mode
+```
+
 ### 2. Add Dataverse tables to an existing app
 
 ```text
@@ -206,6 +230,10 @@ Example edit flows:
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — creates or uses a fresh template, skips Dataverse/env provisioning, writes local mock generated services and connector throw-stubs, builds screens, previews, and starts Metro for UX iteration. |
+| `/prototype-to-real-app` | ✅ v0 | Graduation path — converts a mock-data prototype into a Dataverse-backed app by binding an environment, running `/add-dataverse`, adding real connectors/flows, running `npm run generate-schemas`, cleaning prototype artifacts, and invoking `/sync-from-plan`. |
+| `/sync-from-plan` | ✅ v0 | Existing-project reconciliation — rebuilds changed/missing screens from `native-app-plan.md` after prototype creation, prototype-to-real conversion, data/schema, connector, native, or design changes. |
+| `/edit-plan` | ✅ v0 | Plan-only editor — safely updates one section of `native-app-plan.md` and suggests the next lifecycle-aware follow-up without mutating app code. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |

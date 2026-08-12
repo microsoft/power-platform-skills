@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app or mock prototype: update the plan, data model, native capabilities, connectors, design, screens, generated app code, and preview without restarting the full project flow. Routes prototype graduation to /prototype-to-real-app."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
@@ -10,7 +10,7 @@ model: opus
 
 # Edit App (`/edit-app`)
 
-Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
+Post-generation editor for an existing mobile app or mock prototype. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into prototype/Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
 
@@ -30,6 +30,7 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
 - "Reorder screens — move profile out of tabs, into a modal from the home header"
+- "Make this prototype real" → route to `/prototype-to-real-app`
 
 ## When NOT to use
 
@@ -86,6 +87,7 @@ If `native-app-plan.md` is missing → STOP. Tell the user this skill edits an e
 Read if present:
 
 - `memory-bank.md` — project facts, target environment, visual companion flag, prior blocks
+- `.code-apps-native/state.json` — lifecycle mode (`prototype` or `dataverse`) when present
 - `.datamodel-manifest.json` — existing Dataverse tables/columns
 - `brand/design-system.md` and `brand/tokens.ts` — design constraints and token availability
 - `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
@@ -104,6 +106,10 @@ Run these existing-app health checks before any mutation:
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
 If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+
+**Prototype lifecycle router:** if `$ARGUMENTS` says `make real`, `graduate`, `convert prototype`, `bind to Dataverse`, or similar, invoke `/prototype-to-real-app --working-dir <working_dir>` and stop. Do not duplicate conversion logic inside `/edit-app`.
+
+When `.code-apps-native/state.json` has `dataMode: "prototype"`, data-model and connector edits stay mock-backed: update `native-app-plan.md`, regenerate mock services with `skills/create-mobile-prototype/scripts/gen-mock-services.js`, then run `/sync-from-plan`. Do not call `/add-dataverse`, `/add-connector`, or `npm run generate-schemas` until the user explicitly graduates with `/prototype-to-real-app`.
 
 ### Step 1 — Discover intent + inspect existing app
 
@@ -381,9 +387,9 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
-1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
+1. **Data Model** — branch on lifecycle mode. In `prototype` mode, regenerate mock services with `node <plugin-root>/skills/create-mobile-prototype/scripts/gen-mock-services.js <working_dir>` and run `npx tsc --noEmit`; do not create Dataverse tables. In `dataverse` mode, read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
-3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
+3. **Connector/Data Source** — branch on lifecycle mode. In `prototype` mode, update `## Connectors`, regenerate connector throw-stubs with `gen-mock-services.js`, and continue to `/sync-from-plan`; do not provision real connections. In `dataverse` mode, read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.

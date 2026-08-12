@@ -24,10 +24,12 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - `route` — the Expo Router route path (e.g., `/(app)/inspections`)
 - `target_file` — the absolute path of the file to write (e.g., `<working_dir>/app/(app)/inspections.tsx`)
 - `plan_path` — absolute path to `<working_dir>/native-app-plan.md`
+- Optional DevPlayer callback metadata (`devplayer_mode`, `callback_url`, `callback_token`, `job_id`) when invoked by `/create-mobile-prototype --devplayer-mode`.
 
 ## Hard Rules
 
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the orchestrator before doing the step's work, prefixed with `[<screen_name>]` so parallel builds can be told apart. Do not skip, do not paraphrase. Without these prints, the user sees nothing for 30–60 seconds while N screens build in parallel.
+- **DevPlayer screen events.** If the prompt includes DevPlayer callback metadata, emit a structured `screen` event after writing the screen file. On success, POST `<callback_url>/events` with `kind: "screen"`, `level: "success"`, `state: "completed"`, `itemId: "screen-<screen_name>"`, and a short title/message. On a blocking screen failure, POST the same endpoint with `level: "error"`, `state: "failed"`. Send `callback_token` only as `x-builder-token`; never print it or include it in event JSON. Do not include source code, raw errors, full paths, secrets, or record payloads in messages.
 - **Write exactly one screen file.** No new hooks, no new services beyond your assigned screen file. **`src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` are guaranteed to exist** — the orchestrator creates them at Step 7 before any builder runs. NEVER create or modify these shared files from a builder. If `src/components/index.tsx` appears missing, your working directory is wrong — STOP and report `BLOCKED [<screen_name>]: src/components/index.tsx is missing — orchestrator should have created it at Step 7`.
 - **Use shared code via path aliases — NEVER re-define inline.** The project has `@/components`, `@/hooks`, `@/utils`, `@/tokens` configured in tsconfig. Import from them:
   - **Components:** `import { LoadingState, ErrorState, EmptyState, ScreenHeader, ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick, StatusPill, AvatarInitials, InfoRow, ActionRow, SectionHeader } from '@/components'`
