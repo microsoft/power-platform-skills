@@ -1,0 +1,29 @@
+{
+  "name": "solution-wrapped connection-reference rewrite",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "connection-reference-rewrite"
+    ]
+  },
+  "requested": {
+    "state": "Stopped",
+    "connectionReferences": {
+      "shared_commondataserviceforapps": "shared_commondataserviceforapps"
+    },
+    "definition": {
+      "triggers": {},
+      "actions": {}
+    }
+  },
+  "live": {
+    "state": "Stopped",
+    "connectionReferences": {
+      "shared_commondataserviceforapps": "new_solution_dataverse_reference"
+    },
+    "definition": {
+      "triggers": {},
+      "actions": {}
+    }
+  }
+}

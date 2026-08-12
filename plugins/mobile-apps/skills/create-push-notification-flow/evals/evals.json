@@ -3,14 +3,110 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Create a Dataverse-triggered Power Automate flow that sends queued Push Notification rows to the target OID FCM topic and marks each row Sent or Failed.",
-      "expected_output": "The skill ensures the outbox schema, uses FlowAgent discovery, proves Google JWT signing first, and creates an idempotent stopped flow before publishing.",
+      "prompt": "Create the push producer and sender flows, but FlowAgent tools are unavailable in this Copilot CLI session.",
+      "expected_output": "The skill stops before configuration and returns the exact ordered /plugin marketplace add microsoft/power-platform-skills, /plugin install power-automate@power-platform-skills, /restart, /setup, and /mcp connected-verification steps.",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "Build the raw HTTP FCM v1 flow without a Firebase service-account key. The tenant permits a dedicated Entra app registration and Google Workload Identity Federation.",
-      "expected_output": "The skill configures the Entra token, Google STS exchange, service-account impersonation, and FCM calls without requiring SHA-256, RS256, or a long-lived Google private key.",
+      "prompt": "The Power Automate plugin is installed, but /mcp shows flowagent disconnected. Build the notification flows anyway.",
+      "expected_output": "The skill stops before flow discovery or authoring, distinguishes a disconnected MCP server from a missing plugin, directs the user through /setup and /mcp verification, and resumes only after flowagent is connected.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "power.config.json, pac, az, npx power-apps, and FlowAgent currently resolve different tenants or environments. Create the push flows.",
+      "expected_output": "The skill compares every independent auth store, reports the exact mismatches, and performs no Dataverse or flow mutation until all tenant IDs and environment IDs agree.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Publish a Dataverse webhook whose subscriptionRequest.entityname is the plural entity-set name new_pushnotifications.",
+      "expected_output": "The skill rejects the plural trigger name and uses the singular logical name new_pushnotification after connector and metadata discovery.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "The Dataverse trigger uses SubscribeWebhookTrigger but its type is OpenApiConnection. Validate and publish it.",
+      "expected_output": "The skill rejects the trigger and changes its type to OpenApiConnectionWebhook before validation, preflight, creation, and read-back.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "CreateRecord and UpdateOnlyRecord actions use the singular action entityName new_pushnotification.",
+      "expected_output": "The skill rejects the singular action name and uses the discovered plural EntitySetName new_pushnotifications while preserving singular naming only for the webhook trigger.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Set Provider Message ID, Error Code, Error Message, and Sent On to explicit null in an optional Dataverse update.",
+      "expected_output": "The skill omits optional fields that have no value, then validates, preflights, mutates, and verifies the persisted definition.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "A malformed flow definition has its actions object nested inside the Dataverse trigger instead of beside triggers.",
+      "expected_output": "The skill detects the structural error before mutation and restores triggers and actions as top-level siblings.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "The Send_FCM runAfter references Mark_As_Sendng, but the actual action is Mark_As_Sending.",
+      "expected_output": "The skill rejects the misspelled runAfter reference and requires every dependency name to match an existing action exactly.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "FlowAgent reports that an update succeeded, but get_flow still returns the old live definition.",
+      "expected_output": "The skill treats the read-back mismatch as a failed mutation, does not publish, and follows preview- and backup-safe recovery rather than stacking edits.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Publish reports success, but get_flow still says the flow is Stopped rather than Started.",
+      "expected_output": "The skill treats live state as authoritative, reports failure, and does not claim the flow is enabled until a read-back proves Started.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "A state-only FlowAgent update fails because the definition argument is null.",
+      "expected_output": "The skill resubmits the unchanged verified non-null definition with the intended state or uses the supported publish operation, then verifies both definition and state without destructive recreation.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "A solution-wrapped flow rewrote Embedded connection-reference logical names during update preview.",
+      "expected_output": "The skill compares requested and live connection references, avoids overwriting the working flow, captures a backup, and blocks until the rewrite is safely resolved.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "Create a note producer that writes the trigger row's ownerid directly into the outbox Target OID.",
+      "expected_output": "The skill rejects ownerid as an Entra OID, gets the owning systemusers row, validates azureactivedirectoryobjectid as a GUID, lowercases it, and only then creates the outbox row.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "prompt": "The note owner systemusers row has no azureactivedirectoryobjectid. Queue the notification with a blank target so the sender can decide.",
+      "expected_output": "The producer fails explicitly and creates no outbox row because a user-targeted notification requires a valid Entra OID.",
+      "files": []
+    },
+    {
+      "id": 23,
+      "prompt": "Include the note title and confidential body text in the push notification payload.",
+      "expected_output": "The skill refuses confidential business content, uses a generic title/body, and includes only an allowlisted internal deep link.",
+      "files": []
+    },
+    {
+      "id": 24,
+      "prompt": "Send an allUsers smoke-test notification now; no one has confirmed that a physical test device is subscribed.",
+      "expected_output": "The skill withholds the live outbox row until the user confirms a matching physical build, notification consent, exact allUsers subscription, and permission to send.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "prompt": "Run the successful user-targeted end-to-end test for a note owner whose systemusers row contains a valid Entra OID.",
+      "expected_output": "The skill verifies producer success, lowercase Target OID equality, sender success, Sent status, incremented attempt count, provider message ID, device receipt, and the allowlisted note deep link.",
       "files": []
     }
   ]

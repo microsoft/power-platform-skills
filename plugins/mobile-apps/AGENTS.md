@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 29 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 30 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -97,6 +97,8 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Push notification architecture: `expo-notifications` for consent/presentation/responses, React Native Firebase Messaging for Android+iOS FCM topics, lowercase-canonical Entra OID while signed in, exact `allUsers` while signed out, Expo Router for validated deep links. Client-managed OID topics are explicitly not an authorization boundary.
 - ✅ Push sender authentication is keyless: Power Automate exchanges a dedicated Entra app token through Google Workload Identity Federation, impersonates a least-privilege Firebase sender service account, and calls FCM HTTP v1. Do not use Firebase Admin private-key JSON or attempt RS256 in flow expressions.
 - ✅ The template postinstall compatibility check GUID-validates the native auth account's decoded `claims.oid` and exposes typed `useAuth().user.oid` only when the installed host does not already provide that contract. It never substitutes the MSAL home-account identifier and fails closed on unknown package shapes.
+- ✅ `/setup-push-wif` owns Google Cloud provisioning and verification. It decodes only non-secret claims from a real Entra app-only token, configures the provider from the observed `iss` plus `appid`/`azp` shape, and proves STS + service-account impersonation before flow creation.
+- ✅ `/create-push-notification-flow` uses FlowAgent for connector discovery and every flow mutation. It creates a queued-outbox sender plus a Dataverse row-created producer by default, resolves `ownerid` through `systemusers.azureactivedirectoryobjectid`, and verifies each mutation by reading the live definition back.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
 - ✅ Offline profile creation is **author-only in v0.1** — `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` to the project, but do NOT scaffold offline runtime code (SQLite store, sync engine, write queue) into the generated app. Runtime support is gated on upstream `@microsoft/power-apps-native-host` confirmation.
 - ✅ Custom filter mode (`recorddistributioncriteria=3`, `profileitemrule` → `savedquery`) is **deferred to v0.5**. v0.1 supports Related-rows-only / All-records / Organization-rows radio options only.

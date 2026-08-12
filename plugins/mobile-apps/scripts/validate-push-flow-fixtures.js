@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert');
+
+const DEFAULT_FIXTURE_DIR = path.resolve(
+  __dirname,
+  '..',
+  'skills',
+  'create-push-notification-flow',
+  'evals',
+  'fixtures',
+);
+
+function stableJson(value) {
+  if (Array.isArray(value)) return value.map(stableJson);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stableJson(value[key])]),
+    );
+  }
+  return value;
+}
+
+function equalJson(left, right) {
+  return JSON.stringify(stableJson(left)) === JSON.stringify(stableJson(right));
+}
+
+function validateFixture(fixture) {
+  const reasons = new Set();
+  const requested = fixture.requested || {};
+  const definition = requested.definition || {};
+  const triggers = definition.triggers || {};
+  const actions = definition.actions || {};
+  const contract = fixture.contract || {};
+
+  const nestedActions = Object.values(triggers).some(
+    (trigger) => trigger && typeof trigger === 'object' && trigger.actions,
+  );
+  if (nestedActions) reasons.add('actions-must-be-top-level');
+
+  for (const trigger of Object.values(triggers)) {
+    if (trigger.type !== 'OpenApiConnectionWebhook') {
+      reasons.add('trigger-must-use-open-api-connection-webhook');
+    }
+    const entityName = trigger.inputs
+      && trigger.inputs.parameters
+      && trigger.inputs.parameters['subscriptionRequest/entityname'];
+    if (contract.triggerEntityName && entityName !== contract.triggerEntityName) {
+      reasons.add('trigger-entity-name-must-be-singular');
+    }
+  }
+
+  for (const [actionName, action] of Object.entries(actions)) {
+    const parameters = (action.inputs && action.inputs.parameters) || {};
+    const expectedEntityName = contract.actionEntityNames
+      && contract.actionEntityNames[actionName];
+    if (expectedEntityName && parameters.entityName !== expectedEntityName) {
+      reasons.add('action-entity-name-must-be-plural');
+    }
+    if (Object.values(parameters).some((value) => value === null)) {
+      reasons.add('optional-update-fields-must-be-omitted');
+    }
+    for (const dependency of Object.keys(action.runAfter || {})) {
+      if (!Object.hasOwn(actions, dependency)) {
+        reasons.add('run-after-target-not-found');
+      }
+    }
+  }
+
+  if (fixture.live) {
+    if (requested.state !== fixture.live.state) {
+      reasons.add('live-state-mismatch');
+    }
+    if (!equalJson(requested.definition, fixture.live.definition)) {
+      reasons.add('live-definition-mismatch');
+    }
+    if (!equalJson(requested.connectionReferences, fixture.live.connectionReferences)) {
+      reasons.add('connection-reference-rewrite');
+    }
+  }
+
+  return [...reasons].sort();
+}
+
+function loadFixtures(fixtureDir = DEFAULT_FIXTURE_DIR) {
+  return fs.readdirSync(fixtureDir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => {
+      const fixturePath = path.join(fixtureDir, name);
+      return {
+        fixturePath,
+        fixture: JSON.parse(fs.readFileSync(fixturePath, 'utf8')),
+      };
+    });
+}
+
+function main(argv = process.argv.slice(2)) {
+  const fixtureDir = argv[0] ? path.resolve(argv[0]) : DEFAULT_FIXTURE_DIR;
+  let failures = 0;
+
+  for (const { fixturePath, fixture } of loadFixtures(fixtureDir)) {
+    const actual = validateFixture(fixture);
+    const expected = [...fixture.expected.reasons].sort();
+    try {
+      assert.deepStrictEqual(actual, expected);
+      assert.strictEqual(fixture.expected.valid, actual.length === 0);
+      process.stdout.write(`PASS ${path.basename(fixturePath)}\n`);
+    } catch (error) {
+      failures += 1;
+      process.stderr.write(
+        `FAIL ${path.basename(fixturePath)}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}\n`,
+      );
+    }
+  }
+
+  return failures === 0 ? 0 : 1;
+}
+
+if (require.main === module) {
+  process.exitCode = main();
+}
+
+module.exports = {
+  DEFAULT_FIXTURE_DIR,
+  loadFixtures,
+  main,
+  validateFixture,
+};

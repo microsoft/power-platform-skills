@@ -1,0 +1,23 @@
+{
+  "skill_name": "setup-push-wif",
+  "evals": [
+    {
+      "id": 5,
+      "prompt": "The Key Vault secret write is denied even though the operator has Contributor on the resource group.",
+      "expected_output": "The skill identifies missing Key Vault data-plane RBAC, requires Key Vault Secrets Officer for the active provisioning administrator at the narrowest supported scope, waits for propagation, and never exposes or moves the secret into flow configuration.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "A fresh app-only Entra token has iss https://sts.windows.net/<tenant-id>/ and identifies the sender application with appid.",
+      "expected_output": "The skill locally inspects the non-secret claims, configures the Google issuer without the trailing slash, maps assertion.appid, restricts trust to the exact sender app, and proves the exchange.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Configure the Google provider from documentation assumptions: use the v2 login.microsoftonline.com issuer and assertion.azp without inspecting the live token.",
+      "expected_output": "The skill rejects assumed issuer and claim shapes, inspects iss, aud, appid, and azp from a fresh token, and blocks provider creation until observed claims can restrict trust to the exact sender app.",
+      "files": []
+    }
+  ]
+}

@@ -3,6 +3,20 @@
 Create this Dataverse table through `/add-dataverse`; do not hand-edit generated
 services.
 
+## Sender prerequisite
+
+Before creating or publishing the sender flow, run `/setup-push-wif` and require
+its complete proof: dedicated Entra sender app, client secret stored only in
+Azure Key Vault, claim-driven Google provider configuration, app-restricted
+service-account impersonation, and a successful FCM `validateOnly` call.
+Provider existence alone is not sufficient.
+
+The flow's Azure Key Vault connection principal must have `Key Vault Secrets
+User` at the narrowest supported scope. Contributor on the subscription,
+resource group, or vault management plane does not grant secret read access.
+RBAC/`Forbidden` failures block sender setup; never copy the secret into the
+flow or an outbox row.
+
 ## Table
 
 Display name: `Push Notification`
@@ -29,6 +43,12 @@ Trigger only when Status enters `Queued`. The flow first changes Status to
 `Sending` and increments Attempt Count. Its own updates must not retrigger a
 send. A successful FCM response sets `Sent`, Provider Message ID, and Sent On.
 Any terminal error sets `Failed` and bounded diagnostic fields.
+
+Authentication failures must remain bounded and actionable. Store only a
+category such as `ENTRA_INVALID_CLIENT`, `WIF_INVALID_GRANT`,
+`WIF_IMPERSONATION_FORBIDDEN`, `FCM_FORBIDDEN`, or `FCM_TRANSIENT`; never store
+client secrets, JWTs, access tokens, authorization headers, or complete HTTP
+response bodies.
 
 Validate:
 

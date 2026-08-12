@@ -1,0 +1,11 @@
+{
+  "skill_name": "set-app-registration-native",
+  "evals": [
+    {
+      "id": 4,
+      "prompt": "I pasted a valid client ID, but native login now fails with AADSTS650057 Invalid resource.",
+      "expected_output": "The skill identifies a Wrap registration configuration mismatch, sends the user to the exact environment's Wrap page to repair or recreate it, never guesses API permissions, updates a replacement client ID if needed, and requires a fresh successful login.",
+      "files": []
+    }
+  ]
+}

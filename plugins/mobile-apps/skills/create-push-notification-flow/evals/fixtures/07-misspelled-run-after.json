@@ -1,0 +1,31 @@
+{
+  "name": "misspelled runAfter",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "run-after-target-not-found"
+    ]
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Mark_As_Sending": {
+          "type": "Compose",
+          "inputs": "sending",
+          "runAfter": {}
+        },
+        "Send_FCM": {
+          "type": "Compose",
+          "inputs": "send",
+          "runAfter": {
+            "Mark_As_Sendng": [
+              "Succeeded"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -32,6 +32,30 @@
 { "type": "Request", "kind": "Http", "inputs": { "schema": { "type": "object", "properties": { ... } } } }
 ```
 
+**Dataverse webhook**
+```json
+{
+  "type": "OpenApiConnectionWebhook",
+  "inputs": {
+    "parameters": {
+      "subscriptionRequest/message": 1,
+      "subscriptionRequest/entityname": "new_note"
+    },
+    "host": {
+      "apiId": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+      "operationId": "SubscribeWebhookTrigger",
+      "connectionName": "shared_commondataserviceforapps"
+    }
+  }
+}
+```
+
+Dataverse webhook triggers use the **singular logical table name** for
+`subscriptionRequest/entityname`. Dataverse actions such as Get item, Add a new
+row, and Update a row use the **plural entity-set name** in `entityName`.
+Discover both values from live connector/Dataverse metadata; do not derive one
+by pluralizing the other.
+
 ## Action Template (OpenApiConnection)
 
 ```json
@@ -166,6 +190,28 @@ Alternative pattern where the prompt text is defined inline in the flow (not sav
 4. `host.connectionName` must match a key in connection references
 5. `runAfter` must reference existing action names
 6. No `@odata.bind` parameter suffixes
+7. `triggers` and `actions` are top-level siblings; a misplaced brace must not
+   nest the action tree under a trigger
+8. Omit optional Dataverse update parameters with no value instead of sending
+   explicit `null`, unless the connector operation explicitly supports clearing
+   that field
+
+## Mutation Verification
+
+Validation and a successful mutation response are not proof that the live flow
+changed. For every create/update/edit/publish/disable operation:
+
+1. Run `validate_flow`.
+2. Run `preflight_flow`.
+3. For updates, use `preview_update`.
+4. Perform one mutation.
+5. Read the live definition with `get_flow` and verify state, trigger/action
+   contracts, `runAfter`, and connection references.
+
+If read-back differs, allow one propagation re-read and then treat the mutation
+as failed. Do not stack edits on an unverified definition. Before changing an
+existing flow, inspect solution context and preserve a usable backup/recovery
+copy.
 
 ## Dynamic Parameters
 

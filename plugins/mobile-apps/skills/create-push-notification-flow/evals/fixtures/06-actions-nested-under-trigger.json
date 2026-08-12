@@ -1,0 +1,35 @@
+{
+  "name": "actions accidentally nested under trigger",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "actions-must-be-top-level"
+    ]
+  },
+  "contract": {
+    "triggerEntityName": "new_pushnotification"
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {
+        "When_a_row_is_added": {
+          "type": "OpenApiConnectionWebhook",
+          "inputs": {
+            "host": {
+              "operationId": "SubscribeWebhookTrigger"
+            },
+            "parameters": {
+              "subscriptionRequest/entityname": "new_pushnotification"
+            }
+          },
+          "actions": {
+            "Mark_As_Sending": {
+              "type": "OpenApiConnection"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -194,7 +194,15 @@ For other capabilities (only those actually shipped by the template):
 
 Native modules are allowlist-bound by the current template `package.json`. Push notifications use the dedicated `/add-push-notifications` workflow because they require `expo-notifications`, React Native Firebase Messaging, permission UX, auth/topic lifecycle, and Expo Router deep links.
 
-Notification delivery must be tested on matching wrapped physical-device builds. The sender flow uses Dataverse, premium HTTP actions, Google Workload Identity Federation, and optionally Azure Key Vault/secret environment variables; tenant licensing and administrator permissions for those services are required.
+Notification delivery must be tested on matching wrapped physical-device builds. The sender flow uses Dataverse, premium HTTP actions, Google Workload Identity Federation, and Azure Key Vault for the Entra sender credential; tenant licensing and administrator permissions for those services are required.
+
+Run `/setup-push-wif` before flow authoring when the Google trust is not already
+verified. It inspects a real Entra app-only token, configures the provider from
+the observed issuer and application claim, and proves the Google STS and
+service-account impersonation exchange without storing a Google private key.
+`/create-push-notification-flow` then uses FlowAgent to create the outbox sender
+and a producer flow. The producer defaults to a Dataverse row-created trigger
+and resolves the row owner to a lowercase Entra OID topic.
 
 ### 4. Add a connector
 
@@ -256,7 +264,8 @@ Example edit flows:
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
 | `/setup-fcm` | 🟡 preview | Configure Firebase Android/iOS client files and validate React Native Firebase Messaging setup without storing Admin credentials. |
 | `/setup-apns` | 🟡 preview | Configure the APNs-to-FCM bridge for iOS and validate entitlements/client identity; APNs `.p8` material is never copied into the app. |
-| `/create-push-notification-flow` | 🟡 preview | Create the Dataverse outbox-triggered FCM HTTP v1 sender through FlowAgent, using keyless Entra-to-Google Workload Identity Federation and short-lived service-account impersonation tokens. |
+| `/setup-push-wif` | 🟡 preview | Provision and verify keyless Entra-to-Google Workload Identity Federation with `gcloud`, using claims observed from a real app-only token rather than assuming an issuer or claim shape. |
+| `/create-push-notification-flow` | 🟡 preview | Create the Dataverse outbox sender and a Dataverse row-created producer through FlowAgent. User notifications resolve the record owner to a lowercase Entra OID topic; broadcasts use exact `allUsers`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |

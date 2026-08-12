@@ -651,7 +651,43 @@ First attempt auto-Extend: compare the plan against that table's attribute snaps
 
 If the retry also returns a collision signature, continue probing the remaining candidates, then the numeric tail, then the run-token form described above.
 
-**On successful POST**, immediately re-GET to capture the server-assigned `MetadataId` and write it to memory-bank (Step 6d updates `.datamodel-manifest.json`; you also append to `memory-bank.md` under "Created tables" with the GUID and solution name). This lets future `/add-dataverse` runs distinguish "we own this" from "name collision."
+#### Authoritative post-create reconciliation — required before success
+
+Run this reconciliation after **every** table-create attempt, including:
+
+- a clean 2xx response;
+- `429` throttling or metadata-lock responses;
+- client/network timeout, connection reset, or missing/unparseable response;
+- any duplicate-name response (especially one after an ambiguous attempt); and
+- a retry that reports the entity already exists.
+
+GET the table by its intended logical name, including the metadata fields needed to prove identity:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
+  "EntityDefinitions(LogicalName='<table>')?\$select=MetadataId,LogicalName,OwnershipType,PrimaryNameAttribute,IsAvailableOffline,ChangeTrackingEnabled&\$expand=Attributes(\$select=LogicalName,AttributeType,RequiredLevel)"
+```
+
+If an ambiguous attempt returns 404, retry this GET with bounded backoff (2s, 5s, 10s). Do not re-POST or rename while commit visibility is uncertain. After the final 404, retry the original POST once; reconcile again before taking any collision action.
+
+Compare the response with the resolved plan:
+
+| Check | Required action |
+|---|---|
+| `OwnershipType` | Must equal the planned ownership (`UserOwned` / `OrganizationOwned`). A mismatch is an incompatible table: stop or follow the confirmed foreign-collision flow; never claim success. |
+| `PrimaryNameAttribute` | Must equal the planned primary-name logical name. A mismatch is an incompatible table; do not rename merely because the create response was duplicate after ambiguity. |
+| Planned columns | Every planned non-lookup column must exist with the planned `AttributeType`; required columns must also have the planned `RequiredLevel.Value`. |
+| Offline-capable mode | `IsAvailableOffline` and `ChangeTrackingEnabled` must both be `true`. |
+| Explicit online-only mode | `IsAvailableOffline` must remain `false`; `ChangeTrackingEnabled` must match the explicit plan (default `false`). Never enable either solely as recovery. |
+
+For a table whose ownership and primary-name checks match:
+
+1. Treat same-type existing columns as committed and leave them untouched.
+2. POST **only missing columns**, sequentially, using the per-column pre-flight and `--solution`.
+3. If any existing column has the wrong type or required level, stop and report schema drift; never delete, rename, or overwrite it.
+4. Re-run the authoritative GET after adding missing columns. Do not print `✓ <table>`, write the manifest, or continue to service generation until every check passes.
+
+After reconciliation succeeds, capture the server-assigned `MetadataId` and write it to memory-bank (Step 6d updates `.datamodel-manifest.json`; also append under "Created tables" with the GUID and solution name). This lets future `/add-dataverse` runs distinguish "we own this" from "name collision."
 
 #### Step 5b — Create / extend
 
@@ -713,7 +749,7 @@ Microsoft documents both halves of this contract: [ordinary columns may be inclu
 
 Body skeleton — **all planned columns inline in `Attributes: [...]`** (this example shows primary + 3 additional; expand the array to fit every column from the plan):
 
-> **⚠️ `IsAvailableOffline` + `ChangeTrackingEnabled` MUST be set to `true` at create time** for any table the app intends to make available offline. Without these two flags the table cannot be added to a `mobileofflineprofile`, and `/setup-offline-profile` will have to fix them via a separate metadata PUT (the `/enable-tables-offline` skill handles that, but it doubles the metadata-lock-serialized round trips). Empirically verified 2026-05-18 in the chanel-rm demo: 7 custom tables created without these flags caused 7 prereq-revert drift entries; fixed by post-hoc enablement. Default these to `true` for all UserOwned tables created by `/add-dataverse` unless the user has explicitly opted out of offline support. The flags are no-ops at runtime for apps that don't use offline profiles.
+> **⚠️ Resolve offline intent before creating anything.** For the default offline-capable mode, `IsAvailableOffline` + `ChangeTrackingEnabled` MUST be `true` at create time. Without these flags the table cannot be added to a `mobileofflineprofile`, and `/setup-offline-profile` must repair it via separate metadata PUTs. If the user or approved plan explicitly says **online-only** (including `--online-only`), set `IsAvailableOffline: false`, leave `ChangeTrackingEnabled` at its explicit planned value (default `false`), record the mode for post-create verification, and skip Step 8.5 entirely. Never silently convert an explicit online-only table to offline-capable.
 
 ```json
 {
@@ -769,6 +805,15 @@ Body skeleton — **all planned columns inline in `Attributes: [...]`** (this ex
   ]
 }
 ```
+
+For explicit online-only mode, the same body uses:
+
+```json
+"IsAvailableOffline": false,
+"ChangeTrackingEnabled": false
+```
+
+If the approved plan independently requires change tracking while remaining online-only, honor that explicit value, but `IsAvailableOffline` remains `false`.
 
 For each `Extend` decision, POST a new column to the existing table.
 
@@ -1185,6 +1230,8 @@ Fix any errors. Common: missing peer dependencies — `npx expo install <package
 A schema change here (new table or new column) can leave an existing Mobile Offline Profile behind — new tables never sync to devices and new columns come down blank. Reconcile the profile with what you just created.
 
 **Skip this step entirely when `$ARGUMENTS` contains `--skip-planning`** (the orchestrator-invoked path). `/create-mobile-app`, `/setup-datamodel`, and `/edit-app` own offline reconciliation in their own flow, so running it here too would double-prompt.
+
+**Also skip this step entirely for explicit online-only mode** (`--online-only` or an approved plan explicitly marking these changes online-only). Online-only tables must keep `IsAvailableOffline: false`; prompting to add them to an offline profile would contradict the user's choice.
 
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 

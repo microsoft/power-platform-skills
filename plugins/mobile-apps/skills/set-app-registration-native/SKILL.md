@@ -21,7 +21,7 @@ This skill is manual by design:
 
 ## Workflow
 
-1. Verify app root -> 2. Resolve environment + tenant -> 3. Open Wrap registration URL -> 4. Capture client ID -> 5. Write `auth.config.json` -> 6. Validate JSON -> 7. Summary
+1. Verify app root -> 2. Resolve environment + tenant -> 3. Open Wrap registration URL -> 4. Capture client ID -> 5. Write `auth.config.json` -> 6. Validate JSON -> 7. Revalidate login / repair invalid resource -> 8. Summary
 
 ---
 
@@ -140,7 +140,33 @@ npx tsc --noEmit
 
 Do not run npm install or native builds from this skill.
 
-## Step 7 — Summary
+## Step 7 — Revalidate login and diagnose invalid resource
+
+After writing the client ID, have the user restart/reload the app and attempt a fresh sign-in. Do not treat valid JSON or a GUID-shaped client ID as proof that the registration is correctly configured.
+
+If login succeeds, continue to Step 8.
+
+If login fails with `AADSTS650057: Invalid resource` (or text saying the client requested access to a resource that is not listed in the app registration's required resource access), diagnose it as a **Wrap registration configuration mismatch**, not a tenant-ID formatting problem and not a reason to guess API permissions.
+
+Repair flow:
+
+1. Confirm the app is using the environment ID and tenant resolved in Step 2.
+2. Re-open the exact environment's Wrap page:
+
+   ```text
+   https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
+   ```
+
+3. Ask the user to repair/reconfigure the registration there. If the Wrap page cannot repair the existing registration, create a replacement registration through that page and paste the new Application (client) ID.
+4. Do **not** add guessed Dynamics CRM, Dataverse, Power Apps, Microsoft Graph, or custom API permissions in Entra. Do not invent resource/application IDs, redirect URIs, scopes, or admin-consent steps. The Wrap page is the authority for this registration shape.
+5. If a replacement client ID is supplied, repeat GUID validation and Step 5's structured JSON update.
+6. Restart/reload the app and perform a fresh login again. Do not report the registration as wired until login succeeds.
+
+If the repaired/recreated Wrap registration still returns `AADSTS650057`, stop with the environment ID, tenant ID, client ID, and exact error text (no tokens) so the user can escalate. Do not continue cycling through guessed permissions.
+
+If the user stops before a successful login, report `DONE_WITH_CONCERNS` and state that the config was updated but authentication remains unverified; do not use the success summary below.
+
+## Step 8 — Summary
 
 If a client ID was written:
 
@@ -149,6 +175,7 @@ App registration wired.
 Client ID : <client-id>
 Tenant    : <tenant-guid>
 Config    : auth.config.json
+Login     : revalidated
 ```
 
 If skipped:

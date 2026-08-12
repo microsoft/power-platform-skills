@@ -1,0 +1,36 @@
+{
+  "name": "explicit-null optional updates",
+  "expected": {
+    "valid": false,
+    "reasons": [
+      "optional-update-fields-must-be-omitted"
+    ]
+  },
+  "contract": {
+    "actionEntityNames": {
+      "Mark_As_Sent": "new_pushnotifications"
+    }
+  },
+  "requested": {
+    "state": "Stopped",
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Mark_As_Sent": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "UpdateOnlyRecord"
+            },
+            "parameters": {
+              "entityName": "new_pushnotifications",
+              "recordId": "@variables('rowId')",
+              "item/new_providermessageid": null
+            }
+          },
+          "runAfter": {}
+        }
+      }
+    }
+  }
+}
