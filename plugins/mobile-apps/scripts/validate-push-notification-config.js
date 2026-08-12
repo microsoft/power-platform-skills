@@ -73,9 +73,14 @@ function main(argv) {
 
   const config = fs.readFileSync(configPath, 'utf8');
   const requiredConfig = [
+    "require('node:fs')",
+    "require('node:path')",
     "'expo-notifications'",
     "'@react-native-firebase/app'",
     "'@react-native-firebase/messaging'",
+    "'./firebase/google-services.json'",
+    "'./firebase/GoogleService-Info.plist'",
+    'path.resolve(__dirname, configuredPath)',
     'HAS_FIREBASE_CLIENT_CONFIG',
     'googleServicesFile',
     "'aps-environment'",

@@ -1,0 +1,17 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "appId": "1:123456789:android:a1b2c3",
+      "displayName": "Field Operations Android",
+      "platform": "ANDROID",
+      "packageName": "com.contoso.fieldops"
+    },
+    {
+      "appId": "1:123456789:ios:d4e5f6",
+      "displayName": "Field Operations iOS",
+      "platform": "IOS",
+      "bundleId": "com.contoso.fieldops"
+    }
+  ]
+}

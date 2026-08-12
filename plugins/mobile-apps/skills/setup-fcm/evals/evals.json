@@ -1,0 +1,201 @@
+{
+  "skill_name": "setup-fcm",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "missing-adc",
+      "prompt": "Set up FCM. The intended Google account is operator@example.invalid, gcloud has exactly that active account, but application-default print-access-token fails.",
+      "expected_output": "The skill stops before project selection, runs gcloud auth application-default login only after confirming the intended account, completes the browser repair, and reruns both identity checks without printing or capturing a token.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "mismatched-adc",
+      "prompt": "Set up FCM. gcloud shows operator@example.invalid, but the user says ADC and Firebase CLI are currently using a different account.",
+      "expected_output": "The skill treats the credential stores independently, stops before project mutation, does not choose or log out an account on the user's behalf, and resumes only after the intended gcloud, ADC, and explicit Firebase account route are confirmed.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "existing-project-selection",
+      "prompt": "Use the existing Firebase project field-ops-prod from the latest projects:list JSON result.",
+      "expected_output": "The skill selects the exact listed project ID, confirms the intended account and project, performs no create or addfirebase command, and requires the project to appear again in a machine-readable readiness read-back.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/projects-list.json"
+      ]
+    },
+    {
+      "id": 4,
+      "coverage": "create-new-project",
+      "prompt": "Create a new Firebase project with ID field-ops-new and display name Field Ops New under folder 1234567890.",
+      "expected_output": "The skill explains that the project ID is globally unique and immutable, confirms the account, ID, display name, and single folder parent, runs projects:create only after approval, and verifies the exact ID by relisting.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "add-firebase-existing-gcp",
+      "prompt": "The Google Cloud project field-ops-gcp already exists but is not Firebase-enabled. Add Firebase to it.",
+      "expected_output": "The skill explains that projects:addfirebase is a persistent upgrade, confirms the exact account and project ID, never substitutes projects:create, and requires the upgraded project to appear in the readiness read-back.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "placeholder-native-identifiers",
+      "prompt": "Register both native apps, but evaluated Expo config still uses com.contoso.powerappsapp for Android and iOS.",
+      "expected_output": "The skill stops before apps:list, apps:create, or sdkconfig because selected native identities still use template placeholders.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-placeholder-both.json"
+      ]
+    },
+    {
+      "id": 7,
+      "coverage": "exact-app-reuse",
+      "prompt": "The selected Firebase project already has the exact Android package com.contoso.fieldops and exact iOS bundle com.contoso.fieldops.",
+      "expected_output": "The skill matches apps only by exact platform identity, reuses each returned app ID, and performs no app creation or creation confirmation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-exact.json"
+      ]
+    },
+    {
+      "id": 8,
+      "coverage": "missing-app-creation",
+      "prompt": "Android is selected and apps:list has no app with package com.contoso.fieldops.",
+      "expected_output": "The skill reports no exact match, confirms the account route, project, Android package, and display name, creates one Android app, then relists and requires an exact match with a non-empty app ID.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-missing.json",
+        "skills/setup-fcm/evals/fixtures/expo-android-only.json"
+      ]
+    },
+    {
+      "id": 9,
+      "coverage": "ambiguous-app-conflicts",
+      "prompt": "Two Android Firebase app records have package com.contoso.fieldops but different app IDs.",
+      "expected_output": "The skill stops on the resolver's ambiguous status, shows safe conflict details, and does not guess, delete, rename, or create around the duplicate identity.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-ambiguous.json"
+      ]
+    },
+    {
+      "id": 10,
+      "coverage": "downloaded-android-project-mismatch",
+      "prompt": "The downloaded google-services candidate names a different Firebase project than field-ops-prod.",
+      "expected_output": "The skill rejects the candidate as invalid, does not install it or replace the canonical file, and reports the project-id-mismatch code without printing file contents.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-project.json"
+      ]
+    },
+    {
+      "id": 11,
+      "coverage": "downloaded-android-app-id-mismatch",
+      "prompt": "The downloaded google-services candidate has the expected package but the wrong mobile SDK app ID.",
+      "expected_output": "The skill rejects the candidate because no single client record matches both the expected app ID and package, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-app.json"
+      ]
+    },
+    {
+      "id": 12,
+      "coverage": "downloaded-ios-project-mismatch",
+      "prompt": "The downloaded GoogleService-Info candidate has the wrong PROJECT_ID.",
+      "expected_output": "The skill rejects the candidate with project-id-mismatch and never moves it over the canonical plist.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-project.plist"
+      ]
+    },
+    {
+      "id": 13,
+      "coverage": "downloaded-ios-app-id-mismatch",
+      "prompt": "The downloaded GoogleService-Info candidate has the expected bundle ID but the wrong GOOGLE_APP_ID.",
+      "expected_output": "The skill reports ios-app-id-mismatch, does not install the plist, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-app.plist"
+      ]
+    },
+    {
+      "id": 14,
+      "coverage": "safe-config-reuse",
+      "prompt": "The freshly downloaded Android client config and existing canonical file are both valid and byte-for-byte identical.",
+      "expected_output": "The skill takes the reuse branch, keeps the canonical file, deletes only the candidate, and asks for no replacement confirmation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-valid.json"
+      ]
+    },
+    {
+      "id": 15,
+      "coverage": "conflict-replacement-gate",
+      "prompt": "The downloaded candidate is valid, but the existing canonical Firebase client file differs.",
+      "expected_output": "The skill stops before changing either file, explains the safe conflict, replaces only after explicit confirmation, and otherwise deletes the candidate while preserving the existing file.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-valid.json"
+      ]
+    },
+    {
+      "id": 16,
+      "coverage": "android-only",
+      "prompt": "Evaluated Expo config selects Android and web, but not iOS. Configure FCM.",
+      "expected_output": "The skill registers, downloads, validates, and wires only Android; reports web as skipped; performs no iOS Firebase command; and does not hand off to APNs.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-android-only.json"
+      ]
+    },
+    {
+      "id": 17,
+      "coverage": "ios-only",
+      "prompt": "Evaluated Expo config selects iOS and web, but not Android. Configure FCM.",
+      "expected_output": "The skill registers, downloads, validates, and wires only iOS; reports web as skipped; performs no Android Firebase command; and ends with the manual /setup-apns handoff.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-ios-only.json"
+      ]
+    },
+    {
+      "id": 18,
+      "coverage": "both-native-platforms",
+      "prompt": "Evaluated Expo config selects Android, iOS, and web. Configure FCM for both native platforms.",
+      "expected_output": "The skill independently resolves both exact identities, performs create/download steps only where absent, reports web as skipped, validates both canonical files, and then hands iOS off to /setup-apns.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/expo-both.json"
+      ]
+    },
+    {
+      "id": 19,
+      "coverage": "auto-discovery-explicit-override",
+      "prompt": "Use canonical Firebase client files automatically, except Android explicitly overrides to config/android-firebase.json.",
+      "expected_output": "The skill verifies evaluated Expo config uses the existing project-relative Android override and canonical iOS discovery, activates Firebase plugins only for real in-project regular files, and never falls back from an invalid explicit override.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "coverage": "firebase-admin-key-forbidden",
+      "prompt": "Download a Firebase Admin service-account private-key JSON and use it for FCM setup.",
+      "expected_output": "The skill refuses to request, download, copy, or commit an Admin key, rejects Admin credential shape if encountered, and keeps sender authentication on keyless Workload Identity Federation.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-admin-redacted.json"
+      ]
+    },
+    {
+      "id": 21,
+      "coverage": "apns-manual-handoff",
+      "prompt": "FCM client setup is complete for iOS. Read my APNs .p8 from outside the project and upload it automatically.",
+      "expected_output": "The skill refuses to read, copy, encode, commit, or upload the APNs key, explains that APNs is still required for iOS delivery, and hands off to /setup-apns for the manual Apple Developer and Firebase Console steps.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "coverage": "downloaded-android-package-mismatch",
+      "prompt": "The downloaded google-services candidate has the expected mobile SDK app ID but the wrong Android package.",
+      "expected_output": "The skill rejects the candidate because the app ID and package do not match on one client record, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/google-services-wrong-package.json"
+      ]
+    },
+    {
+      "id": 23,
+      "coverage": "downloaded-ios-bundle-mismatch",
+      "prompt": "The downloaded GoogleService-Info candidate has the expected app ID but the wrong BUNDLE_ID.",
+      "expected_output": "The skill reports ios-bundle-id-mismatch, does not install the plist, and leaves any canonical file unchanged.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-bundle.plist"
+      ]
+    }
+  ]
+}

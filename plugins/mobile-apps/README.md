@@ -196,6 +196,23 @@ Native modules are allowlist-bound by the current template `package.json`. Push 
 
 Notification delivery must be tested on matching wrapped physical-device builds. The sender flow uses Dataverse, premium HTTP actions, Google Workload Identity Federation, and Azure Key Vault for the Entra sender credential; tenant licensing and administrator permissions for those services are required.
 
+Run `/setup-fcm` to list accessible Firebase projects, select one, create a new
+project, or add Firebase to an existing Google Cloud project. The workflow keeps
+Google credentials separated: `gcloud` verifies the active account and
+Application Default Credentials (ADC), while `npx firebase-tools` performs
+Firebase project and app operations without a global install. Android package
+names and iOS bundle identifiers are resolved from Expo config, so matching
+Firebase apps are reused and only missing registrations are created.
+
+Validated client files are stored as
+`firebase/google-services.json` and
+`firebase/GoogleService-Info.plist`. These client configurations are intended
+to be committed, and the template discovers them automatically; project-relative
+environment overrides remain available when needed. For iOS, `/setup-apns`
+guides the user through manually uploading the Apple APNs `.p8` key in Firebase
+Console. The key stays outside the project and is never read or uploaded by the
+agent.
+
 Run `/setup-push-wif` before flow authoring when the Google trust is not already
 verified. It inspects a real Entra app-only token, configures the provider from
 the observed issuer and application claim, and proves the Google STS and
@@ -262,8 +279,8 @@ Example edit flows:
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
-| `/setup-fcm` | 🟡 preview | Configure Firebase Android/iOS client files and validate React Native Firebase Messaging setup without storing Admin credentials. |
-| `/setup-apns` | 🟡 preview | Configure the APNs-to-FCM bridge for iOS and validate entitlements/client identity; APNs `.p8` material is never copied into the app. |
+| `/setup-fcm` | 🟡 preview | List/select/create Firebase projects with `npx firebase-tools` after `gcloud` ADC identity checks; idempotently reuse or register Android/iOS apps, then validate committed `firebase/` client configs that Expo auto-discovers. |
+| `/setup-apns` | 🟡 preview | Validate the existing Firebase iOS identity and guide manual APNs `.p8` upload in Firebase Console; the key is never read, copied, or uploaded by the agent. |
 | `/setup-push-wif` | 🟡 preview | Provision and verify keyless Entra-to-Google Workload Identity Federation with `gcloud`, using claims observed from a real app-only token rather than assuming an issuer or claim shape. |
 | `/create-push-notification-flow` | 🟡 preview | Create the Dataverse outbox sender and a Dataverse row-created producer through FlowAgent. User notifications resolve the record owner to a lowercase Entra OID topic; broadcasts use exact `allUsers`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |

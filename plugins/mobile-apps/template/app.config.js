@@ -1,4 +1,6 @@
 const { createPowerAppsExpoConfig } = require('@microsoft/power-apps-native-host/config/expoConfig');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // CUSTOMER APP SETTINGS START - DO NOT REMOVE OR RENAME THE COMMENT
 // App identity, package names, icon, and version defaults are customer-owned.
@@ -7,8 +9,45 @@ const APP_SLUG = process.env.APP_SLUG || 'powerapps-standalone-app';
 const APP_SCHEME = process.env.APP_SCHEME || APP_SLUG;
 const ANDROID_PACKAGE = process.env.ANDROID_PACKAGE || 'com.contoso.powerappsapp';
 const IOS_BUNDLE_IDENTIFIER = process.env.IOS_BUNDLE_IDENTIFIER || 'com.contoso.powerappsapp';
-const GOOGLE_SERVICES_JSON = process.env.GOOGLE_SERVICES_JSON || null;
-const GOOGLE_SERVICE_INFO_PLIST = process.env.GOOGLE_SERVICE_INFO_PLIST || null;
+
+function existingProjectFile(envName, defaultPath) {
+  const configuredPath = process.env[envName] || defaultPath;
+  if (path.isAbsolute(configuredPath)) return null;
+
+  const projectRoot = fs.realpathSync(__dirname);
+  const absolutePath = path.resolve(__dirname, configuredPath);
+  if (!fs.existsSync(absolutePath)) return null;
+
+  const file = fs.lstatSync(absolutePath);
+  if (!file.isFile() || file.isSymbolicLink()) return null;
+
+  // A lexical project-relative path can still escape through a symlinked parent
+  // directory. Compare real paths so only files physically inside the app root
+  // can activate native config plugins.
+  const realFilePath = fs.realpathSync(absolutePath);
+  const relativePath = path.relative(projectRoot, realFilePath);
+  const isInsideProject =
+    relativePath !== '' &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath);
+  if (!isInsideProject) return null;
+
+  const expoPath = path.relative(projectRoot, realFilePath).split(path.sep).join('/');
+  return expoPath.startsWith('.') ? expoPath : `./${expoPath}`;
+}
+
+// Canonical committed Firebase client files work without per-machine environment
+// configuration. Environment variables remain explicit project-relative overrides;
+// an invalid or missing override never silently activates the canonical fallback.
+const GOOGLE_SERVICES_JSON = existingProjectFile(
+  'GOOGLE_SERVICES_JSON',
+  './firebase/google-services.json',
+);
+const GOOGLE_SERVICE_INFO_PLIST = existingProjectFile(
+  'GOOGLE_SERVICE_INFO_PLIST',
+  './firebase/GoogleService-Info.plist',
+);
 const HAS_FIREBASE_CLIENT_CONFIG = GOOGLE_SERVICES_JSON || GOOGLE_SERVICE_INFO_PLIST;
 
 // App icon — set APP_ICON_PATH to a 1024×1024 PNG before running expo prebuild.

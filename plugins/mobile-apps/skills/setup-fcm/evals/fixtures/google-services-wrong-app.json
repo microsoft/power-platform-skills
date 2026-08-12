@@ -1,0 +1,15 @@
+{
+  "project_info": {
+    "project_id": "field-ops-prod"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:123456789:android:wrong",
+        "android_client_info": {
+          "package_name": "com.contoso.fieldops"
+        }
+      }
+    }
+  ]
+}

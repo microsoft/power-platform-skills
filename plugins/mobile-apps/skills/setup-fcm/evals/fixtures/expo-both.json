@@ -1,0 +1,10 @@
+{
+  "name": "Field Operations",
+  "platforms": ["ios", "android", "web"],
+  "android": {
+    "package": "com.contoso.fieldops"
+  },
+  "ios": {
+    "bundleIdentifier": "com.contoso.fieldops"
+  }
+}

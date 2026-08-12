@@ -1,0 +1,7 @@
+{
+  "type": "service_account",
+  "project_id": "field-ops-prod",
+  "private_key_id": "REDACTED_TEST_ONLY",
+  "private_key": "REDACTED_TEST_ONLY",
+  "client_email": "firebase-adminsdk@example.invalid"
+}
