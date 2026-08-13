@@ -231,7 +231,8 @@ const KIND_HANDLERS = {
     },
     // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
     // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
-    // Delete=Cascade, so the platform removes them for us.
+    // Delete=Cascade, verified end to end — one DELETE of a real pac-created page removed the
+    // project and all four of its file rows, none orphaned.
     //
     // Deleting the files ourselves first would be actively DESTRUCTIVE. Dataverse tracks a
     // dependency on the PROJECT row (component type 10372) but NOT on its files (10373):
