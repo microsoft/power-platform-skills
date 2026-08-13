@@ -50340,24 +50340,34 @@ var FlowClient = class _FlowClient {
             return c.statuses?.[0]?.status === "Connected";
           if (c.status !== void 0)
             return c.status === "Connected";
-          return true;
+          if (c.statecode !== void 0)
+            return c.statecode === 0;
+          return c.connectionid !== void 0;
         });
         if (connected.length === 1) {
           const conn = connected[0];
-          resolved[connectorKey] = {
-            connectionName: conn.connectionName ?? conn.name,
+          const connectionName = conn.connectionid ?? conn.connectionName ?? conn.name;
+          if (!connectionName) {
+            throw new Error(`Found a connection for ${connectorKey} but could not read its id. Pass explicit connectionRefs for this connector.`);
+          }
+          const ref = {
+            connectionName,
             source: "Embedded",
             id: `/providers/Microsoft.PowerApps/apis/${connectorName}`,
             tier: "NotSpecified"
           };
-          logger.info(`[auto-merge] Resolved ${connectorKey} \u2192 ${conn.connectionName ?? conn.name}`);
+          const logicalName = conn.connectionreferencelogicalname ?? conn.connectionReferenceLogicalName;
+          if (logicalName)
+            ref.connectionReferenceLogicalName = logicalName;
+          resolved[connectorKey] = ref;
+          logger.info(`[auto-merge] Resolved ${connectorKey} \u2192 ${connectionName}`);
         } else if (connected.length > 1) {
           throw new Error(`Multiple connections available for ${connectorKey} (${connected.length} candidates). Pass explicit connectionRefs or use connectionSelection to disambiguate.`);
         } else {
           throw new Error(`No connected connection found for ${connectorKey}. Create one with: create-connection --env=${envId} --connector=${connectorName}`);
         }
       } catch (err) {
-        if (err.message?.includes("Multiple connections") || err.message?.includes("No connected connection")) {
+        if (err.message?.includes("Multiple connections") || err.message?.includes("No connected connection") || err.message?.includes("could not read its id")) {
           throw err;
         }
         logger.debug(`[auto-merge] Could not resolve ${connectorKey}: ${err.message}`);
@@ -50388,7 +50398,8 @@ var FlowClient = class _FlowClient {
     const wf = await this.dataverseGet(url2, dvToken);
     const clientdata = JSON.parse(wf.clientdata);
     if (body.properties?.definition) {
-      clientdata.properties.definition = this.rewriteDefinitionForDataverse(body.properties.definition);
+      const storedKey = this.detectHostConnectionKey(clientdata?.properties?.definition);
+      clientdata.properties.definition = storedKey ? this.normalizeHostConnectionKey(body.properties.definition, storedKey) : body.properties.definition;
     }
     if (body.properties?.displayName) {
       clientdata.properties.displayName = body.properties.displayName;
@@ -50452,9 +50463,9 @@ var FlowClient = class _FlowClient {
    * are performed — without it PPAPI cannot resolve the logical name and returns
    * WorkflowRunActionInputsInvalidProperty (#392).
    *
-   * NOT called for the Dataverse write path — use rewriteDefinitionForDataverse()
-   * instead, which renames connectionName → connectionReferenceName without
-   * mapping through logical names (Dataverse stores the ref key, not the logical name).
+   * NOT called for the Dataverse write path — that path uses
+   * detectHostConnectionKey() + normalizeHostConnectionKey() to match whichever
+   * convention the flow's stored clientdata already uses.
    */
   rewriteConnectionNamesForPpapi(body, connectionReferences) {
     const def = body.properties?.definition;
@@ -50517,32 +50528,66 @@ var FlowClient = class _FlowClient {
     }
   }
   /**
-   * Translate PPAPI-format `host.connectionName` to Dataverse-format
-   * `host.connectionReferenceName` in a deep-cloned definition copy.
+   * Walk a flow definition and report which key its OpenApiConnection hosts use
+   * to name their connection: `connectionName` or `connectionReferenceName`.
+   * Returns null when the definition has no connector hosts (nothing to match).
    *
-   * PPAPI returns `host.connectionName = "<refKey>"` on read. Dataverse clientdata
-   * stores `host.connectionReferenceName = "<refKey>"`. The value is the same ref
-   * key (e.g. "shared_approvals") — only the field name differs. (#418, #415)
-   *
-   * Called exclusively from updateFlowViaDataverse before writing clientdata.
+   * Used to make the Dataverse clientdata write match the convention the stored
+   * definition already uses, instead of assuming one. (#418, #415)
    */
-  rewriteDefinitionForDataverse(definition) {
-    const def = JSON.parse(JSON.stringify(definition));
-    const fixHost = (inputs) => {
+  detectHostConnectionKey(definition) {
+    if (!definition || typeof definition !== "object")
+      return null;
+    let found = null;
+    const check2 = (inputs) => {
+      if (found)
+        return;
       if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
         return;
-      const inp = inputs;
-      const host = inp.host;
-      if (host && host.connectionName && !host.connectionReferenceName) {
-        host.connectionReferenceName = host.connectionName;
-        delete host.connectionName;
-      }
+      const host = inputs.host;
+      if (!host)
+        return;
+      if (typeof host.connectionReferenceName === "string")
+        found = "connectionReferenceName";
+      else if (typeof host.connectionName === "string")
+        found = "connectionName";
     };
+    this.walkDefinitionInputs(definition, check2);
+    return found;
+  }
+  /**
+   * Return a deep clone of `definition` with every OpenApiConnection host's
+   * connection key renamed to `targetKey`. The value is carried across unchanged
+   * — only the field name differs between the two conventions. No-op for hosts
+   * that already use `targetKey`.
+   */
+  normalizeHostConnectionKey(definition, targetKey) {
+    const otherKey = targetKey === "connectionName" ? "connectionReferenceName" : "connectionName";
+    const def = JSON.parse(JSON.stringify(definition));
+    this.walkDefinitionInputs(def, (inputs) => {
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
+        return;
+      const host = inputs.host;
+      if (!host)
+        return;
+      if (host[targetKey] === void 0 && typeof host[otherKey] === "string") {
+        host[targetKey] = host[otherKey];
+        delete host[otherKey];
+      }
+    });
+    return def;
+  }
+  /**
+   * Visit the `inputs` of every trigger and action in a definition, recursing
+   * into the nesting containers Logic Apps supports (If/else, Switch cases and
+   * default, Scope, Foreach, Until).
+   */
+  walkDefinitionInputs(definition, visit) {
     const walkActions = (actions) => {
       if (!actions || typeof actions !== "object" || Array.isArray(actions))
         return;
       for (const action of Object.values(actions)) {
-        fixHost(action?.inputs);
+        visit(action?.inputs);
         if (action?.actions)
           walkActions(action.actions);
         if (action?.else?.actions)
@@ -50557,14 +50602,13 @@ var FlowClient = class _FlowClient {
         }
       }
     };
-    walkActions(def.actions);
-    const triggers = def.triggers;
+    walkActions(definition.actions);
+    const triggers = definition.triggers;
     if (triggers) {
       for (const trigger of Object.values(triggers)) {
-        fixHost(trigger?.inputs);
+        visit(trigger?.inputs);
       }
     }
-    return def;
   }
   /**
    * Apply targeted edits to an existing flow's definition. Gets the current
