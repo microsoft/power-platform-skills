@@ -8,6 +8,13 @@
 //
 // Order (each the mirror of the build's create order — dependents before their dependencies):
 //   1. app          — the app module (references the sitemap + dashboard/form/view/chart components)
+//   1a. pages        — generative pages (uxagentproject + files) this build AUTHORED, per the page
+//                      manifest. The SDK's deleteAppCascade no longer removes them: a
+//                      page is REFERENCED by an app, not owned by one — another app's sitemap, or a
+//                      form's UxAgentControl `RefId` in formxml, can point at the same row — so the
+//                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
+//                      sitemap reference is gone and the cross-app scan only sees genuine other
+//                      consumers; a page any other app still references is SKIPPED, not deleted.
 //   1b. roles        — persona security roles. Deleted right after the app (BEFORE the data model): a
 //                      role holding a soon-to-be-deleted table's privileges could otherwise block that
 //                      table's delete. SEC-1: only roles the SDK itself authored (marked on the role
@@ -39,7 +46,7 @@
 
 const { topoOrderEntities } = require('./_graph.js');
 const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
-const { manifestResourceName } = require('./page-manifest.js');
+const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
@@ -74,6 +81,17 @@ function isNotFound(err) {
 // teardown skips it instead of failing — the same best-effort spirit as isNotFound. Deliberately
 // NARROW: it must NOT match a dependency block ("...cannot be deleted because it is referenced by
 // N other components"), which is a genuine leftover the teardown must surface, not swallow.
+// Dataverse refused a delete because another component still references the record:
+// "The <entity>(<id>) component cannot be deleted because it is referenced by N other components."
+// For MOST kinds that is a genuine leftover the teardown must surface. For a generative page it is
+// the correct, expected answer — the page belongs to whoever still points at it — so only handlers
+// that opt in via `tolerateDependencyBlock` treat it as a skip.
+function isDependencyBlocked(err) {
+  if (!err) return false;
+  const msg = String((err && err.message) || '').toLowerCase();
+  return /cannot be deleted because it is referenced by/.test(msg) || /referenced by \d+ other component/.test(msg);
+}
+
 function isUndeletable(err) {
   if (!err) return false;
   const msg = String((err && err.message) || '').toLowerCase();
@@ -120,15 +138,18 @@ const KIND_HANDLERS = {
       const items = await sdk.resolveArtifact('app', { uniqueName: target.uniqueName });
       return (items || []).map((x) => ({ id: x.id, name: x.name, appModuleIdUnique: x.appModuleIdUnique }));
     },
-    // deleteAppCascade fail-fast-deletes the app module, then best-effort cleans up the
-    // orphaned sitemap + generative-page rows (uxagentproject[file]). It returns a structured
-    // { success, deleted, failures } result (older vendored bundles returned void). The app
-    // record itself is gone once this resolves, but an individual child-cleanup step can still
-    // fail — which the old void contract swallowed, silently leaving orphaned rows while the
-    // teardown reported a clean delete. Surface any GENUINE child failure so the run reports
-    // ok=false with the exact leftovers. A not-found child failure means the row already
-    // cascaded away (not a leftover), so it is tolerated — the same best-effort spirit as the
-    // step-level isNotFound handling in deleteStep.
+    // deleteAppCascade fail-fast-deletes the app module together with its sitemap (atomically), and
+    // returns a structured { success, deleted, failures, retained } result (older vendored bundles
+    // returned void). It deliberately does NOT delete the app's generative pages — a `uxagentproject`
+    // is referenced by an app, not owned by one, so it reports them in `retained` and the owner
+    // decides. The `genpage` step that follows is that decision: it deletes the pages
+    // THIS build authored, per the page manifest, skipping any another app still references.
+    //
+    // The app record itself is gone once this resolves, but a cleanup step can still fail — which the
+    // old void contract swallowed, silently leaving orphaned rows while teardown reported a clean
+    // delete. Surface any GENUINE failure so the run reports ok=false with the exact leftovers. A
+    // not-found failure means the row already cascaded away (not a leftover), so it is tolerated —
+    // the same best-effort spirit as the step-level isNotFound handling in deleteStep.
     async del(sdk, item) {
       const result = await sdk.deleteAppCascade(item.id, item.appModuleIdUnique);
       const failures = (result && Array.isArray(result.failures) ? result.failures : []).filter(
@@ -142,6 +163,79 @@ const KIND_HANDLERS = {
           `app "${item.name}" deleted, but ${failures.length} cascade cleanup step(s) failed (orphaned rows remain): ${detail}`
         );
       }
+    },
+  },
+  // Generative pages the build authored. The SDK's `deleteAppCascade` deliberately does NOT delete
+  // these: a `uxagentproject` is REFERENCED by an app, not owned by one, so the SDK
+  // reports them in `retained` and leaves the decision to the caller. WE are the caller that CREATED
+  // them, and the page manifest is the durable record of exactly which pages this build authored —
+  // so teardown deletes those, and only those.
+  //
+  // Safety is delegated to DATAVERSE, not inferred from a scan. Verified against a live environment:
+  // saving an app that surfaces a page creates a real solution dependency, and DELETE on that page
+  // returns 400 "component cannot be deleted because it is referenced by N other components" —
+  // whether or not the app is published. The dependency clears only when the referencing sitemap is
+  // removed AND published, or when the app+sitemap are deleted outright (which is what the step
+  // before this one just did).
+  //
+  // So the delete IS the check. Attempting it and reading the platform's answer is strictly better
+  // than a pre-flight scan: it is authoritative (the platform's own dependency graph, not our model
+  // of it), it covers every surface the platform tracks rather than just sitemap XML, and it has no
+  // TOCTOU window — a pre-check can go stale between the check and the delete, this cannot.
+  genpage: {
+    // A page another app still references is a SKIP, not a failure — see isDependencyBlocked.
+    tolerateDependencyBlock: true,
+    async resolve(sdk, target) {
+      if (typeof sdk.queryRecords !== 'function') return [];
+      // The manifest lives in a web resource this same teardown deletes later (web-resources phase),
+      // so it is still readable here.
+      let manifest = null;
+      try {
+        const rows = await sdk.queryRecords('webresource', {
+          select: ['content'],
+          filter: `name eq '${odataStr(target.manifestName)}'`,
+          top: 1,
+        });
+        if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
+      } catch {
+        // No manifest readable → nothing provably ours → delete nothing. Leaving a row behind is
+        // recoverable; deleting a page we cannot prove we authored is not.
+        return [];
+      }
+      const authored = [];
+      for (const p of (manifest && manifest.pages) || []) {
+        if (p && typeof p.pageId === 'string' && FORM_GUID_RE.test(p.pageId)) {
+          authored.push({ id: p.pageId, name: p.name || p.key || p.pageId });
+        }
+      }
+      if (!authored.length) return [];
+
+      // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
+      try {
+        const filter = authored.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
+        const rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid'], filter });
+        const live = new Set((rows || []).map((r) => String(r.uxagentprojectid).toLowerCase()));
+        return authored.filter((a) => live.has(String(a.id).toLowerCase()));
+      } catch {
+        return [];
+      }
+    },
+    // Files first, then the project — the parent cannot be removed while children reference it.
+    // A page still in use fails here with a dependency error, which `deleteStep` records as a SKIP
+    // (see isUndeletable) rather than a teardown failure: another app legitimately owning the page
+    // is an expected outcome, not a broken teardown.
+    async del(sdk, item) {
+      const files = await sdk.queryRecords('uxagentprojectfile', {
+        select: ['uxagentprojectfileid'],
+        filter: `_uxagentprojectid_value eq ${item.id}`,
+        paginate: true,
+      });
+      for (const f of files || []) {
+        if (f && f.uxagentprojectfileid) {
+          await sdk.deleteRecord('uxagentprojectfile', f.uxagentprojectfileid);
+        }
+      }
+      await sdk.deleteRecord('uxagentproject', item.id);
     },
   },
   dashboard: {
@@ -358,6 +452,19 @@ function planTeardown(spec) {
   const steps = [];
   if (spec.app && spec.solution) {
     steps.push({ kind: 'app', phase: 'app', label: `app module "${spec.app.name}"`, target: { uniqueName: appUniqueName(spec) } });
+    // Generative pages, AFTER the app. The SDK no longer deletes them — a page is
+    // referenced by an app, not owned by one, so the SDK reports them and the owner decides. We are
+    // the owner: the page manifest records exactly which pages this build authored. Ordered after the
+    // app so the app's own sitemap reference is already gone and the cross-app scan only ever sees a
+    // GENUINE other consumer. Emitted for every app-bearing spec (not gated on spec.pages) so a spec
+    // that dropped its pages still cleans up what it previously created; resolve is a no-op when the
+    // manifest is absent or lists nothing.
+    steps.push({
+      kind: 'genpage',
+      phase: 'pages',
+      label: 'generative pages authored by this app',
+      target: { manifestName: manifestResourceName(appUniqueName(spec)) },
+    });
   }
   // Persona security roles — deleted right after the app, before the data model (a role holding a
   // table's privileges could block that table's delete). The role handler is SEC-1 safe (marker-gated)
@@ -509,6 +616,15 @@ async function deleteStep(sdk, handler, items) {
       if (isNotFound(err)) {
         // Already gone (e.g. cascade) — tolerate
         deletedIds.push(item.id);
+        continue;
+      }
+      if (handler.tolerateDependencyBlock && isDependencyBlocked(err)) {
+        // The platform refused because something else still references this record. For a
+        // generative page that is the CORRECT outcome, not a leftover: the page belongs to whoever
+        // still points at it, and Dataverse is the authority on that (live-measured — saving an app
+        // that surfaces a page creates the dependency, published or not). Record it as skipped so
+        // the run stays auditable without reporting a false failure.
+        skippedIds.push(item.id);
         continue;
       }
       if (isUndeletable(err)) {

@@ -225,7 +225,7 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   const kinds = steps.map((s) => s.kind);
   // Gap 6: resetDefaultViews steps (drop parent lookups from un-deletable default views) precede the
   // relationships. fullSpec's ticket + comment are 1:N children, so both get a reset step.
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
+  assert.deepStrictEqual(kinds, ['app', 'genpage', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
@@ -587,10 +587,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 22); // +1 generated app-icon WR, +1 page-manifest WR, +2 resetDefaultViews (ticket, comment)
+  assert.strictEqual(r.plan.length, 23); // +1 genpage step, +1 generated app-icon WR, +1 page-manifest WR, +2 resetDefaultViews (ticket, comment)
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 22);
+  assert.strictEqual(terminal.length, 23);
 });
 
 test('apply without an sdk throws', async () => {
@@ -660,7 +660,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
   // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
   // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 15); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
+  assert.strictEqual(r.skipped.length, 16); // app, genpage, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
@@ -896,8 +896,10 @@ test('planTeardown inserts persona role steps right after the app, before the da
   ] });
   const kinds = planTeardown(spec).map((s) => s.kind);
   assert.strictEqual(kinds[0], 'app');
-  assert.strictEqual(kinds[1], 'role');
+  // Generative pages are torn down immediately after the app (the SDK no longer cascades them).
+  assert.strictEqual(kinds[1], 'genpage');
   assert.strictEqual(kinds[2], 'role');
+  assert.strictEqual(kinds[3], 'role');
   // Roles are torn down before any relationship/table delete (a role holding a table's privileges
   // could otherwise block that table's delete).
   assert.ok(kinds.lastIndexOf('role') < kinds.indexOf('relationship'), 'roles before relationships/tables');
@@ -984,3 +986,140 @@ test('planTeardown trims the persona name in the role step (matches the SDK-crea
   assert.strictEqual(roleStep.target.name, 'Agent');
 });
 
+
+// ---------------------------------------------------------------------------------------------
+// Generative pages: the SDK's deleteAppCascade no longer removes them, so teardown
+// owns that decision for the pages IT authored. These pin who deletes what, and when it backs off.
+// ---------------------------------------------------------------------------------------------
+
+// A minimal SDK stand-in for the genpage handler: a page manifest in a web resource, the live
+// uxagentproject/file rows, and the appmodule sitemaps the cross-app scan reads.
+// A minimal SDK stand-in for the genpage handler: a page manifest in a web resource, the live
+// uxagentproject/file rows, and the OTHER apps + sitemaps the cross-app scan walks.
+// `otherApps` is [{ unique, xml }] — the scan enumerates appmodules, then reads each one's sitemap
+// via appmodulecomponent (componenttype 62) -> sitemap row. A real env ALWAYS has system apps, and
+// fetchAppsForPages fail-closes on an empty enumeration, so every case supplies at least one.
+function genpageSdk({ manifestPages = [], livePages = [], files = {}, otherApps = [{ unique: 'system_app', xml: '<SiteMap />' }], sitemapThrows = false } = {}) {
+  const deleted = [];
+  const manifestJson = JSON.stringify({ schemaVersion: 1, pages: manifestPages });
+  const byUnique = new Map(otherApps.map((a, i) => [a.unique, { i, xml: a.xml }]));
+  const sdk = {
+    async queryRecords(entity, opts = {}) {
+      const filter = String(opts.filter || '');
+      if (entity === 'webresource') {
+        return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
+      }
+      if (entity === 'uxagentproject') {
+        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id }));
+      }
+      if (entity === 'uxagentprojectfile') {
+        const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
+        return (files[owner.toLowerCase()] || []).map((id) => ({ uxagentprojectfileid: id }));
+      }
+      if (entity === 'appmodule') {
+        const m = /uniquename eq '([^']+)'/.exec(filter);
+        if (m) {
+          const hit = byUnique.get(m[1]);
+          return hit ? [{ appmoduleid: `app-${hit.i}`, appmoduleidunique: `uniq-${hit.i}` }] : [];
+        }
+        // The env-wide enumeration.
+        return otherApps.map((a, i) => ({ appmoduleid: `app-${i}`, appmoduleidunique: `uniq-${i}`, uniquename: a.unique }));
+      }
+      if (entity === 'appmodulecomponent') {
+        const m = /_appmoduleidunique_value eq (\S+)/.exec(filter);
+        return m ? [{ objectid: `sm-${m[1]}`, componenttype: 62 }] : [];
+      }
+      if (entity === 'sitemap') {
+        if (sitemapThrows) throw new Error('sitemap unreadable');
+        const m = /sitemapid eq ([\w-]+)/.exec(filter) || /sm-uniq-(\d+)/.exec(filter);
+        const idx = m ? Number(String(m[1]).replace(/\D/g, '')) : 0;
+        const app = otherApps[idx];
+        return app ? [{ sitemapxml: app.xml }] : [];
+      }
+      return [];
+    },
+    async deleteRecord(entity, id) {
+      deleted.push(`${entity}:${id}`);
+    },
+  };
+  return { sdk, deleted };
+}
+const PAGE_1 = '11111111-1111-4111-8111-111111111111';
+const PAGE_2 = '22222222-2222-4222-8222-222222222222';
+
+test('genpage resolve returns only pages the manifest says WE authored', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
+    livePages: [PAGE_1, PAGE_2], // PAGE_2 exists but is not ours
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+});
+
+test('genpage del removes the file rows before the project', async () => {
+  const { sdk, deleted } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
+  await KIND_HANDLERS.genpage.del(sdk, { id: PAGE_1, name: 'Overview' });
+  assert.deepStrictEqual(deleted, [
+    'uxagentprojectfile:f1',
+    'uxagentprojectfile:f2',
+    `uxagentproject:${PAGE_1}`,
+  ]);
+});
+
+// Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
+// creates a real dependency, and the DELETE then fails with "cannot be deleted because it is
+// referenced by N other components" (live-measured, published or not). The delete IS the check —
+// there is no pre-flight scan to go stale.
+test('genpage records a still-referenced page as SKIPPED, not a failure', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const sdk = {
+    async queryRecords() { return []; },
+    async deleteRecord() { throw err; },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.deletedIds, []);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1]);
+});
+
+test('a dependency block is still a FAILURE for kinds that did not opt in', async () => {
+  const err = new Error('The savedquery(x) component cannot be deleted because it is referenced by 1 other components.');
+  const handler = { del: async () => { throw err; } };
+  await assert.rejects(() => deleteStep({}, handler, [{ id: 'v1' }]), /referenced by/);
+});
+
+test('genpage deletes a page no other app references', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
+    livePages: [PAGE_1],
+    otherApps: [{ unique: 'other_app', xml: `<SiteMap><Area><Group><SubArea GenPageId="${PAGE_2}" /></Group></Area></SiteMap>` }],
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+});
+
+test('genpage deletes nothing when the live-existence query fails (cannot prove what is ours)', async () => {
+  const sdk = {
+    async queryRecords(entity) {
+      if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
+      throw new Error('uxagentproject query failed');
+    },
+    async deleteRecord() {},
+  };
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});
+
+test('genpage skips a page the manifest claims but that no longer exists', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'gone', name: 'Gone', pageId: PAGE_1 }],
+    livePages: [], // already deleted by hand
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});
+
+test('genpage deletes nothing when the manifest is absent or unreadable', async () => {
+  const sdk = { async queryRecords() { throw new Error('no manifest'); }, async deleteRecord() {} };
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});
