@@ -41,7 +41,7 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 | Delete `power.config.json` | `npx power-apps init` regenerates for the user's environment |
 | Reset `src/generated/` + `src/hooks/` | Remove any example stubs — `npx power-apps add-data-source` repopulates |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` props | Screens render under brand tokens, not upstream defaults |
-| `telemetry.config.json` + `customerTelemetry` prop | Optional direct Application Insights telemetry is explicit opt-in and targets one C1-owned resource |
+| `app.json`: `expo.extra.appInsightsConfig` | Optional direct Application Insights telemetry is explicit opt-in and targets one C1-owned resource |
 | `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
@@ -74,7 +74,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-13. **Customer telemetry is Application Insights-specific and opt-in** — Each generated app targets one C1-owned, workspace-based Application Insights resource. `telemetry.config.json` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
+13. **Customer telemetry is Application Insights-specific and opt-in** — Each generated app targets one C1-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
 
 ## Decisions made
 

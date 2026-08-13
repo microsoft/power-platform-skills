@@ -1,7 +1,0 @@
-{
-  "enabled": false,
-  "connectionString": "",
-  "appId": "powerapps-standalone-app",
-  "environment": "development",
-  "includeUserId": false
-}

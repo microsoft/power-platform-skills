@@ -634,11 +634,11 @@ Then apply these **safe idempotent** prep steps:
 
 1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
 2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
-3. Ensure `telemetry.config.json` exists with customer telemetry disabled and the generated app slug as `appId`.
+3. Ensure `app.json` contains `expo.extra.appInsightsConfig` with customer telemetry disabled. Step 6.8 writes the generated app slug as `appId`.
 4. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
 5. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
 6. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
-7. Verify `app/_layout.tsx` imports `PowerAppsProvider`, `tamaguiConfig`, and `telemetryConfig`, and passes `customerTelemetry={telemetryConfig}`. Patch conservatively; do not rewrite custom navigation or unrelated provider code.
+7. Verify `app/_layout.tsx` imports `PowerAppsProvider` and `tamaguiConfig`. `PowerAppsProvider` reads `expo.extra.appInsightsConfig` automatically; do not add telemetry prop wiring.
 8. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
 
 Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
@@ -654,7 +654,6 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 | `const APP_NAME = process.env.APP_DISPLAY_NAME || 'Power Apps Standalone App';` | `const APP_NAME = process.env.APP_DISPLAY_NAME || '<displayName>';` |
 | `const APP_SLUG = process.env.APP_SLUG || 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG || '<slug>';` |
 | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
-| `"appId": "powerapps-standalone-app"` in `telemetry.config.json` | `"appId": "<slug>"` |
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
@@ -762,7 +761,6 @@ import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
 import authConfig from '../auth.config.json';
-import telemetryConfig from '../telemetry.config.json';
 // @ts-ignore - power.config.json is auto-generated at build time
 import powerConfig from '../power.config.json';
 // @ts-ignore - connectorSchemas is auto-generated at build time
@@ -785,7 +783,6 @@ export default function RootLayout() {
         defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
         theme={lightTheme}
         darkTheme={darkTheme}
-        customerTelemetry={telemetryConfig}
       >
         <StatusBar style="auto" />
         <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
@@ -802,7 +799,7 @@ Key points:
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
-- `telemetryConfig` is imported from `'../telemetry.config.json'`. It contains the selected Application Insights connection string. Never print that value, copy it to `memory-bank.md`, or include it in a summary.
+- `PowerAppsProvider` reads `expo.extra.appInsightsConfig` from `app.json` automatically. Never print its connection string, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
 Write the file directly when applying this fix.
@@ -1054,17 +1051,25 @@ Branch on the result:
 
 When accepting a pasted connection string, use `AskUserQuestion` freeform and never repeat the answer in chat or command output. Validate only that it contains `InstrumentationKey=` and either an `IngestionEndpoint=` or the standard public-cloud default can be used. Do not store the connection string in `memory-bank.md`.
 
-Write `<working_dir>/telemetry.config.json`:
+Update `<working_dir>/app.json` so `expo.extra.appInsightsConfig` contains:
 
 ```json
 {
-  "enabled": true,
-  "connectionString": "<selected-or-pasted-connection-string>",
-  "appId": "<slug>",
-  "environment": "development",
-  "includeUserId": false
+  "expo": {
+    "extra": {
+      "appInsightsConfig": {
+        "enabled": true,
+        "connectionString": "<selected-or-pasted-connection-string>",
+        "appId": "<slug>",
+        "environment": "development",
+        "includeUserId": false
+      }
+    }
+  }
 }
 ```
+
+Preserve all other existing `app.json` fields. `PowerAppsProvider` reads this configuration automatically; do not import it into `app/_layout.tsx` or pass a telemetry prop.
 
 The app uses `@microsoft/applicationinsights-web` with the React Native manual-device plugin. The first runtime event is `PowerAppsNative.ApplicationStarted`, which gives the creator a deterministic ingestion check after loading the app in Dev Player.
 
@@ -1095,15 +1100,21 @@ Never write the connection string itself to `memory-bank.md`.
 
 #### Disabled branch
 
-Ensure `<working_dir>/telemetry.config.json` contains:
+Ensure `<working_dir>/app.json` preserves its existing fields and contains:
 
 ```json
 {
-  "enabled": false,
-  "connectionString": "",
-  "appId": "<slug>",
-  "environment": "development",
-  "includeUserId": false
+  "expo": {
+    "extra": {
+      "appInsightsConfig": {
+        "enabled": false,
+        "connectionString": "",
+        "appId": "<slug>",
+        "environment": "development",
+        "includeUserId": false
+      }
+    }
+  }
 }
 ```
 
