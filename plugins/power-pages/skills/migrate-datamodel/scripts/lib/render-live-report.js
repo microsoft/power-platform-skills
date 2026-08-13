@@ -369,12 +369,57 @@ function renderOverviewSection(state, snapshots) {
   <p class="section-desc">SDM → EDM migration for <code>${escapeHtml(state.site.name || state.site.webSiteId)}</code>. Open this report alongside the skill to track progress as each sub-step completes.</p>
 
   <div class="summary-box">
-    <p>The <strong>Enhanced Data Model (EDM)</strong> is the next-generation storage model for Power Pages sites. Instead of spreading site configuration across many bespoke <code>adx_*</code> Dataverse tables (the legacy <strong>Standard Data Model</strong>, or <strong>SDM</strong>), EDM consolidates site metadata into a small set of unified tables — most notably <code>powerpagecomponent</code> — where component-specific properties are stored as JSON in a <code>content</code> column. The result is a simpler, future-proof schema, cleaner ALM with fewer tables to package, faster runtime resolution because the platform no longer joins across many <code>adx_*</code> tables, and a consistent surface for new Power Pages features that are being built EDM-first.</p>
-    <p>It's important to note that <strong>not all <code>adx_*</code> tables move into <code>powerpagecomponent</code></strong>. Only the <strong>metadata</strong> <code>adx_*</code> tables — the ones that describe the structure and authoring surface of the site, such as <code>adx_webpage</code>, <code>adx_webtemplate</code>, <code>adx_contentsnippet</code>, <code>adx_sitesetting</code>, <code>adx_pagetemplate</code>, <code>adx_weblink</code>, <code>adx_entityform</code>, and <code>adx_entitylist</code> — are consolidated into <code>powerpagecomponent</code> (with their per-row properties moved into the <code>content</code> JSON column). The <strong>transactional / runtime</strong> <code>adx_*</code> tables — the ones that capture end-user activity at runtime, such as <code>adx_invitation</code>, <code>adx_inviteredemption</code>, <code>adx_portalcomment</code>, <code>adx_externalidentity</code>, and the entity-form / advanced-form submission and log tables — are <strong>not</strong> migrated into <code>powerpagecomponent</code>; they remain on their existing schemas and keep storing runtime data as before. What changes for those transactional tables is that their lookups to metadata records get rewired during the references migration so they point at the new <code>powerpagecomponent</code> rows instead of the legacy metadata <code>adx_*</code> rows.</p>
-    <p>Existing sites were authored on SDM and continue to run on <code>adx_*</code> tables, so each site must be <strong>migrated</strong> to benefit from EDM. Migration moves the site's configuration metadata into the EDM <code>powerpagecomponent</code> shape, rewires transactional references onto those new metadata records, and flips the site record to serve from EDM. It is also where <strong>customizations</strong> — custom <code>adx_*</code> columns, Liquid that reads <code>adx_*</code> attributes, FetchXML over <code>adx_*</code> tables, plugins, and workflows — are surfaced and remediated, because those customizations don't carry over automatically and must be rewritten or restructured to work against EDM.</p>
-    <p>This skill runs in <strong>four high-level phases</strong>. Phase 1 (Site Discovery &amp; Pre-checks) and Phase 4 (Post-Migration Validation) run the same way for every site, while Phase 2 and Phase 3 are <strong>track-branched</strong> — their shape depends on the migration mode chosen in step 1.7, which derives the track from the environment type. The <strong>Authoring Track</strong> (mode <code>configurationData</code> or <code>all</code>) is used for Dev and Single-environment setups: the metadata itself is migrated locally and customizations are scanned and fixed against SDM source before transactional references move. The <strong>Downstream Track</strong> (mode <code>configurationDataReferences</code>) is used for Test, UAT, and Production environments where configuration metadata is assumed to have arrived via ALM solution import from Dev; only transactional references migrate here, and any customization findings indicate an upstream ALM gap rather than work the user should do locally.</p>
-    <p>On the <strong>Authoring Track</strong> (17 sub-steps total), Phase 2 captures an SDM baseline snapshot, migrates metadata with <code>pac pages migrate-datamodel</code>, locates the auto-emitted customization report, and remediates customizations by staging FetchXML and Liquid auto-rewrites alongside augmented prompts for plugins and Data Model Extensions, then applying the staged diff and uploading back with <code>pac pages upload --modelVersion 1</code>. Phase 3 then runs four sub-steps: an SDM↔EDM data diff validation as a pre-refs safety gate, the transactional references migration (auto-skipped when mode was <code>all</code>), EDM activation via <code>--updateDataModelVersion --portalId</code>, and the user-confirmed site restart.</p>
-    <p>On the <strong>Downstream Track</strong> (18 sub-steps total), Phase 2 is shorter — verify that metadata is present in the target environment, capture snapshots, and confirm readiness via a user-facing gate before Phase 3 starts moving transactional data. Phase 3 is longer here because customizations are scanned and remediated after the refs migration emits its own customization report: data diff validation, migrate refs with <code>--mode configurationDataReferences</code>, locate the customization report, remediate customizations with the same staged-rewrite and augmented-prompt flow (with a stronger warning since Prod/Test/UAT findings typically signal an ALM gap upstream), activate EDM, and confirm the site restart. Phase 4 then runs a runtime smoke-test recommendation and a final status summary for both tracks.</p>
+    <p>The <strong>Enhanced Data Model (EDM)</strong> is the next-generation storage model for Power Pages sites. Instead of spreading site configuration across many bespoke <code>adx_*</code> Dataverse tables (the legacy <strong>Standard Data Model</strong>, or <strong>SDM</strong>), EDM consolidates site metadata into a small set of unified tables — most notably <code>powerpagecomponent</code> — where component-specific properties are stored as JSON in a <code>content</code> column.</p>
+
+    <h4>Why EDM</h4>
+    <ul>
+      <li>Simpler, future-proof schema with fewer tables to reason about.</li>
+      <li>Cleaner ALM — fewer tables to package into solutions.</li>
+      <li>Faster runtime resolution — no joins across many <code>adx_*</code> tables.</li>
+      <li>A consistent surface for new Power Pages features that are built EDM-first.</li>
+    </ul>
+
+    <h4>What migrates into <code>powerpagecomponent</code></h4>
+    <ul>
+      <li>Only the <strong>metadata</strong> <code>adx_*</code> tables — the ones describing the site's structure and authoring surface.</li>
+      <li>Examples: <code>adx_webpage</code>, <code>adx_webtemplate</code>, <code>adx_contentsnippet</code>, <code>adx_sitesetting</code>, <code>adx_pagetemplate</code>, <code>adx_weblink</code>, <code>adx_entityform</code>, <code>adx_entitylist</code>.</li>
+      <li>Their per-row properties move into the <code>content</code> JSON column of <code>powerpagecomponent</code>.</li>
+    </ul>
+
+    <h4>What stays put</h4>
+    <ul>
+      <li>The <strong>transactional / runtime</strong> <code>adx_*</code> tables that capture end-user activity — e.g. <code>adx_invitation</code>, <code>adx_inviteredemption</code>, <code>adx_portalcomment</code>, <code>adx_externalidentity</code>, and the entity-form / advanced-form submission and log tables.</li>
+      <li>These keep their existing schemas and keep storing runtime data as before.</li>
+      <li>Only their lookups get <strong>rewired</strong> during the references migration to point at the new <code>powerpagecomponent</code> rows instead of the legacy metadata <code>adx_*</code> rows.</li>
+    </ul>
+
+    <h4>What migration does</h4>
+    <ul>
+      <li>Existing sites were authored on SDM and still run on <code>adx_*</code>, so each site must be migrated to benefit from EDM.</li>
+      <li>Moves configuration metadata into the EDM <code>powerpagecomponent</code> shape, rewires transactional references onto the new records, and flips the site to serve from EDM.</li>
+      <li>Surfaces and remediates <strong>customizations</strong> — custom <code>adx_*</code> columns, Liquid reading <code>adx_*</code> attributes, FetchXML over <code>adx_*</code> tables, plugins, and workflows — since these don't carry over automatically and must be rewritten to work against EDM.</li>
+    </ul>
+
+    <h4>How this skill runs</h4>
+    <ul>
+      <li><strong>Four high-level phases.</strong> Phase 1 (Site Discovery &amp; Pre-checks) and Phase 4 (Post-Migration Validation) run the same for every site.</li>
+      <li>Phase 2 and Phase 3 are <strong>track-branched</strong> — their shape depends on the migration mode chosen in step 1.7, which derives the track from the environment type.</li>
+      <li><strong>Authoring Track</strong> (mode <code>configurationData</code> or <code>all</code>) — for Dev / Single-environment setups: metadata is migrated locally and customizations are fixed against SDM source before transactional references move.</li>
+      <li><strong>Downstream Track</strong> (mode <code>configurationDataReferences</code>) — for Test / UAT / Production, where metadata is assumed to have arrived via ALM solution import from Dev: only transactional references migrate, and any customization findings signal an upstream ALM gap rather than local work.</li>
+    </ul>
+
+    <h4>Authoring Track — phase detail</h4>
+    <ul>
+      <li><strong>Phase 2:</strong> capture an SDM baseline snapshot → migrate metadata with <code>pac pages migrate-datamodel</code> → locate the auto-emitted customization report → remediate by staging FetchXML/Liquid auto-rewrites plus augmented prompts for plugins &amp; Data Model Extensions → apply the staged diff and upload back with <code>pac pages upload --modelVersion 1</code>.</li>
+      <li><strong>Phase 3:</strong> SDM↔EDM data-diff validation (pre-refs safety gate) → transactional references migration (auto-skipped when mode was <code>all</code>) → EDM activation via <code>--updateDataModelVersion --portalId</code> → user-confirmed site restart.</li>
+    </ul>
+
+    <h4>Downstream Track — phase detail</h4>
+    <ul>
+      <li><strong>Phase 2 (shorter):</strong> verify metadata is present in the target environment → capture snapshots → confirm readiness via a user-facing gate before Phase 3 moves transactional data.</li>
+      <li><strong>Phase 3 (longer):</strong> data-diff validation → migrate refs with <code>--mode configurationDataReferences</code> → locate the customization report → remediate with the same staged-rewrite / augmented-prompt flow (stronger warning, since Prod/Test/UAT findings usually signal an upstream ALM gap) → activate EDM → confirm site restart.</li>
+      <li><strong>Phase 4</strong> (both tracks): a runtime smoke-test recommendation and a final status summary.</li>
+    </ul>
   </div>
 
   <div class="stats-grid">
@@ -844,22 +889,21 @@ function renderRemediationFileRow(entry, idx) {
   const summary = (entry.changeSummary && entry.changeSummary.length > 0)
     ? `<ul class="rem-summary">${entry.changeSummary.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`
     : '';
-  const stagedHref = entry.stagedPath
-    ? `vscode://file/${escapeHtml(entry.stagedPath.replace(/\\/g, '/'))}`
-    : null;
+  // Single-quoted absolute paths so the command pastes cleanly into either
+  // PowerShell or bash from any working directory (both treat single quotes as
+  // literal, and livePath/stagedPath are absolute in the manifest).
   const diffCmd = entry.livePath && entry.stagedPath
-    ? `code --diff "${entry.livePath}" "${entry.stagedPath}"`
+    ? `code --diff '${entry.livePath}' '${entry.stagedPath}'`
     : null;
-  const vscodeLink = stagedHref
-    ? `<a class="rem-vscode-link" href="${stagedHref}" title="Open staged file in your local VSCode desktop app">Open staged file in VSCode</a>`
+  // Per-file Copy button in the always-visible summary row so the user can see
+  // exactly which file each command targets without expanding the row.
+  const copyBtn = diffCmd
+    ? `<button type="button" class="rem-copy-btn" data-label="Copy diff command" data-copy="${escapeHtml(diffCmd)}">Copy diff command</button>`
     : '';
-  // The diff command goes inside the expanded details body (a small copy-able snippet
-  // for users who want the actual side-by-side editor — vscode://file/<path> only
-  // opens the file by itself, not a diff view).
   const diffCmdBlock = diffCmd
-    ? `<div class="rem-cli">
-      <div class="rem-cli-label">For a side-by-side diff editor, run from a terminal:</div>
-      <code class="rem-cli-cmd">${escapeHtml(diffCmd)}</code>
+    ? `<div class="rem-open">
+      <div class="rem-open-label">Open this file's side-by-side diff in VS Code — paste into a terminal:</div>
+      <code class="rem-open-cmd">${escapeHtml(diffCmd)}</code>
     </div>`
     : '';
   return `<details class="rem-file" id="${id}">
@@ -867,7 +911,7 @@ function renderRemediationFileRow(entry, idx) {
     <span class="rem-file-path">${escapeHtml(entry.relativePath)}</span>
     ${kindBadge(entry.kind)}
     <span class="rem-stats"><span class="rem-added">+${entry.linesAdded || 0}</span> <span class="rem-removed">−${entry.linesRemoved || 0}</span></span>
-    ${vscodeLink}
+    ${copyBtn}
   </summary>
   ${summary}
   ${diffCmdBlock}
@@ -887,42 +931,17 @@ function renderRemediationDiffCard(diff) {
 
   const generatedAt = diff.generatedAt ? formatTimestamp(diff.generatedAt) : '';
 
-  // PP-VSCode import deep-link. Requires the extension's URI handler to support
-  // the /metadataDiffImport route (added in PP-VSCode in 2026; for older builds
-  // the link silently no-ops and the user falls back to the per-file snippets).
-  const ppvLink = diff.manifestPath
-    ? `vscode://microsoft-IsvExpTools.powerplatform-vscode/metadataDiffImport?filePath=${encodeURIComponent(diff.manifestPath)}`
-    : null;
-  const ppvButton = ppvLink
-    ? `<a class="rem-import-btn" href="${escapeHtml(ppvLink)}">
-      <span class="rem-import-icon">▣</span>
-      <span class="rem-import-text">
-        <span class="rem-import-title">Import in Power Pages Actions</span>
-        <span class="rem-import-sub">Opens this diff in the Power Pages VSCode extension</span>
-      </span>
-    </a>`
-    : '';
-  const ppvGuide = ppvLink
-    ? `<div class="rem-guide">
-      <div class="rem-guide-title">What happens when you click "Import in Power Pages Actions":</div>
-      <ol class="rem-guide-steps">
-        <li>VSCode pulls focus (if installed and the Power Platform extension is enabled).</li>
-        <li>The diff is imported into the <strong>Site Comparison</strong> section of the Power Pages Actions sidebar — look for an entry named after this site.</li>
-        <li><strong>Click each file in the imported tree</strong> to open VSCode's side-by-side diff editor. Imported diffs don't auto-open the editor; you have to expand the tree and click each row.</li>
-      </ol>
-      <div class="rem-guide-fallback">If the Power Platform extension isn't installed, or you'd rather skip the tree view, use the per-file links and <code>code --diff</code> commands inside each row below — they open the same VSCode diff editor directly.</div>
-    </div>`
-    : '';
-
   return `<div class="card remediation-card">
   <div class="card-title">Remediation Diff <span class="rem-card-subtitle">— review before approving upload</span></div>
   <p class="rem-blurb">Auto-rewriters proposed changes to <strong>${files.length} file${files.length === 1 ? '' : 's'}</strong> (${fxCount} FetchXML${lqCount ? ` · ${lqCount} Liquid` : ''}, <span class="rem-added">+${totalAdded}</span> <span class="rem-removed">−${totalRemoved}</span> lines). Files are written to <code>remediation-staged/</code> — your live site source is untouched until you approve.</p>
   <div class="rem-meta">Staged at ${escapeHtml(generatedAt)}</div>
 
-  ${ppvButton}
-  ${ppvGuide}
+  <div class="rem-howto">
+    <div class="rem-howto-title">Review each change in VS Code's built-in diff editor</div>
+    <p>Each file below has a <strong>Copy diff command</strong> button. Paste the copied command into any terminal to open that file's side-by-side diff (current vs proposed) in VS Code — no extension required. Requires the <code>code</code> command on PATH (in VS Code: Command Palette → <em>Shell Command: Install 'code' command in PATH</em>). The commands use absolute paths, so they work from any working directory.</p>
+  </div>
 
-  <h4 class="rem-files-heading">Per-file inline preview</h4>
+  <h4 class="rem-files-heading">Per-file diffs &amp; inline preview</h4>
   <div class="rem-file-list">
 ${fileRows}
   </div>
@@ -1383,6 +1402,12 @@ h3 { font-size:15px; font-weight:700; color:var(--text-bright); margin-top:24px;
 .summary-box p:last-child { margin-bottom:0; }
 .summary-box code { color:var(--accent); background:var(--accent-bg); padding:1px 6px; border-radius:3px; font-family:var(--mono); font-size:12.5px; }
 .summary-box strong { color:var(--text-bright); }
+.summary-box h4 { margin:18px 0 8px; font-size:12px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--accent); }
+.summary-box h4:first-child { margin-top:0; }
+.summary-box h4 code { text-transform:none; letter-spacing:normal; }
+.summary-box ul { margin:0 0 4px; padding-left:20px; }
+.summary-box li { margin:0 0 7px; line-height:1.6; }
+.summary-box li:last-child { margin-bottom:0; }
 
 /* Track explainer card (Overview) */
 .track-explainer-card { }
@@ -1605,27 +1630,19 @@ details[open] > summary { margin-bottom:6px; }
 .kind-badge.fetchxml { color:var(--info); background:var(--info-bg); border:1px solid var(--info-border); }
 .kind-badge.liquid { color:var(--purple); background:var(--purple-bg); border:1px solid var(--purple-border); }
 .rem-stats { font-family:var(--mono); font-size:12px; padding:0 4px; }
-.rem-vscode-link { color:var(--accent); font-size:12px; text-decoration:underline; }
-.rem-vscode-link:hover { color:var(--text-bright); }
+.rem-copy-btn { margin-left:auto; font-family:inherit; font-size:11px; font-weight:600; color:var(--accent); background:var(--accent-bg); border:1px solid var(--accent); padding:3px 10px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+.rem-copy-btn:hover { background:var(--accent); color:#ffffff; }
+.rem-copy-btn.copied { color:#ffffff; background:#107c10; border-color:#107c10; }
 .rem-summary { margin:8px 14px; padding-left:18px; font-size:12px; color:var(--text-dim); line-height:1.6; }
 .rem-summary li { margin-bottom:2px; }
-.rem-import-btn { display:inline-flex; align-items:center; gap:12px; padding:12px 18px; margin-top:6px; background:var(--accent); color:#ffffff; text-decoration:none; border-radius:var(--radius-sm); box-shadow:var(--shadow-4); transition:background 0.15s; }
-.rem-import-btn:hover { background:#106ebe; box-shadow:var(--shadow-8); }
-.rem-import-icon { font-size:22px; line-height:1; opacity:0.95; }
-.rem-import-text { display:flex; flex-direction:column; }
-.rem-import-title { font-size:13.5px; font-weight:700; }
-.rem-import-sub { font-size:11px; opacity:0.85; margin-top:2px; }
-.rem-guide { margin-top:12px; padding:14px 16px; background:var(--info-bg); border:1px solid var(--info-border); border-radius:var(--radius-sm); font-size:12.5px; line-height:1.65; }
-.rem-guide-title { font-weight:700; color:var(--text-bright); margin-bottom:6px; font-size:12px; }
-.rem-guide-steps { margin:6px 0 8px 22px; padding:0; color:var(--text); }
-.rem-guide-steps li { margin-bottom:4px; }
-.rem-guide-steps strong { color:var(--text-bright); }
-.rem-guide-fallback { color:var(--text-dim); padding-top:8px; border-top:1px solid var(--info-border); margin-top:6px; }
-.rem-guide-fallback code { font-family:var(--mono); background:var(--surface); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
+.rem-howto { margin:10px 0 14px; padding:12px 16px; background:var(--info-bg); border:1px solid var(--info-border); border-radius:var(--radius-sm); font-size:12.5px; line-height:1.6; }
+.rem-howto-title { font-weight:700; color:var(--text-bright); margin-bottom:4px; font-size:12px; }
+.rem-howto p { margin:0; }
+.rem-howto code { font-family:var(--mono); background:var(--surface); padding:1px 5px; border-radius:3px; color:var(--text-bright); }
 .rem-files-heading { font-size:12px; font-weight:700; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin:18px 0 8px; }
-.rem-cli { margin:8px 14px 4px; padding:8px 12px; background:var(--surface); border:1px dashed var(--border); border-radius:var(--radius-sm); }
-.rem-cli-label { font-size:11px; color:var(--text-dim); margin-bottom:4px; }
-.rem-cli-cmd { display:block; font-family:var(--mono); font-size:11.5px; color:var(--text-bright); background:var(--surface3); padding:6px 10px; border-radius:3px; user-select:all; cursor:text; word-break:break-all; }
+.rem-open { margin:8px 14px 4px; padding:8px 12px; background:var(--surface); border:1px dashed var(--border); border-radius:var(--radius-sm); }
+.rem-open-label { font-size:11px; color:var(--text-dim); margin-bottom:4px; }
+.rem-open-cmd { display:block; font-family:var(--mono); font-size:11.5px; color:var(--text-bright); background:var(--surface3); padding:6px 10px; border-radius:3px; user-select:all; cursor:text; word-break:break-all; }
 .diff-body { background:var(--surface); padding:10px 0; max-height:420px; overflow-y:auto; border-top:1px solid var(--border); font-family:var(--mono); font-size:11.5px; }
 .diff-hunk { margin-bottom:8px; }
 .diff-hunk-header { color:var(--text-dim); background:var(--surface2); padding:3px 14px; font-size:11px; }
@@ -1885,14 +1902,59 @@ ${renderMigrationReviewSection(state, snapshots)}
 </div>
 
 <div class="footer">
-  Generated by <strong>migrate-sdm-to-edm</strong> skill · Last updated <span data-live-updated-at>${escapeHtml(formatTimestamp(state.lastUpdatedAt))}</span> · <span id="live-refresh-status">Auto-refreshing every 3s</span>
+  Generated by <strong>migrate-datamodel</strong> skill · Last updated <span data-live-updated-at>${escapeHtml(formatTimestamp(state.lastUpdatedAt))}</span> · <span id="live-refresh-status">Auto-refreshing every 3s</span> · AI-generated content may be incorrect
 </div>
 
 <script>
 ${TAB_JS}
 </script>
 <script>
-// ── Live auto-refresh ───────────────────────────────────────────────────────
+// ── Copy-to-clipboard for per-file "code --diff" buttons ─────────────────────
+// Works even when the report is opened as a local file:// URL — tries the async
+// Clipboard API first, then falls back to a hidden-textarea execCommand('copy').
+(function () {
+  function fallbackCopy(text) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'absolute';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (_) { return false; }
+  }
+  function flash(btn) {
+    var label = btn.getAttribute('data-label') || 'Copy';
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function () {
+      btn.textContent = label;
+      btn.classList.remove('copied');
+    }, 1500);
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('.rem-copy-btn') : null;
+    if (!btn) return;
+    // Prevent the surrounding <summary> from toggling the <details> open/closed.
+    e.preventDefault();
+    e.stopPropagation();
+    var text = btn.getAttribute('data-copy') || '';
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { flash(btn); }, function () {
+        if (fallbackCopy(text)) flash(btn);
+      });
+    } else if (fallbackCopy(text)) {
+      flash(btn);
+    }
+  });
+})();
+</script>
+<script>
+// ── Live auto-refresh ────────────────────────────────────────────────────────
 // Polls this same HTML file, compares the embedded lastUpdatedAt token, and
 // reloads the page only when the agent has written new state. Preserves the
 // scroll position and the active tab across reloads so the user doesn't lose

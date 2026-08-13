@@ -165,8 +165,7 @@ function loadRemediationDiffIfExists(outputDir) {
   if (!fs.existsSync(p)) return null;
   try {
     const data = JSON.parse(fs.readFileSync(p, 'utf-8'));
-    // Inject the manifest's own absolute path so the renderer can build the
-    // PP-VSCode import URL (vscode://...metadataDiffImport?filePath=<this>).
+    // Inject the manifest's own absolute path for reference by the renderer.
     data.manifestPath = path.resolve(p);
     return data;
   } catch (e) {

@@ -1,5 +1,5 @@
 ---
-name: migrate-sdm-to-edm
+name: migrate-datamodel
 description: >-
   This skill should be used when the user asks to "migrate to enhanced data model",
   "migrate from standard to enhanced", "switch to EDM", "migrate SDM to EDM",
@@ -47,7 +47,7 @@ Throughout this skill, progress is mirrored to two files inside `<OUTPUT_DIR>`:
 **Init point.** As soon as `<OUTPUT_DIR>` is resolved (end of step 1.2) AND WebSiteId is known (from `$ARGUMENTS=GUID`, `website.yml`, or step 1.3 site discovery), run once:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/update-state.js" --init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/update-state.js" --init --output-dir "<OUTPUT_DIR>" --website-id "<WEBSITE_ID>"
 ```
 
 After init, each sub-step below ends with a **→ Update report** callout. Execute each as a `node update-state.js --output-dir "<OUTPUT_DIR>" <args>` call. The CLI accepts:
@@ -291,7 +291,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    |----------|--------|---------|
    | Which D365 portal? | D365 Portal | Community, Customer Self-Service, Employee Self-Service, Partner |
 
-   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check entirely. The foundation packages (CDSBasePortal, PowerPagesCore) were already validated in step 1.5.
+   **Q2d — if "Other or Unknown":** no follow-up. Treat as Other/Unknown — step 1.6 skips the template-specific V2 package check entirely. The foundation packages (CDSBasePortal, PowerPages_Core) were already validated in step 1.5.
 
    Store the final chosen template — it drives the V2 package check in step 1.6.
 
@@ -427,17 +427,17 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
    pac solution list --includeSystemSolutions
    ```
 
-   > **Important:** The `--includeSystemSolutions` flag is required. Without it, `pac solution list` returns only user/managed-by-customer solutions and omits the first-party packages we need to verify (`CDSBasePortal`, `PowerPagesCore`, and the V2 template solutions checked in step 1.6).
+   > **Important:** The `--includeSystemSolutions` flag is required. Without it, `pac solution list` returns only user/managed-by-customer solutions and omits the first-party packages we need to verify (`CDSBasePortal`, `PowerPages_Core`, and the V2 template solutions checked in step 1.6).
 
    Search the output for:
    - `CDSBasePortal` — Dataverse base portal package (required: **9.3.2307.x+**)
-   - `PowerPagesCore` — Power Pages Core package (required: **1.0.2309.63+**)
+   - `PowerPages_Core` — Power Pages Core package (required: **1.0.2309.63+**)
 
    Capture both the **installed version** (or `not found`) and present them to the user.
 
 2. **Evaluate and Install/Upgrade as Needed**
 
-   For **each** of `CDSBasePortal` and `PowerPagesCore`, evaluate independently:
+   For **each** of `CDSBasePortal` and `PowerPages_Core`, evaluate independently:
 
    - **Found and version meets minimum**: log "OK · v<X>" and move on to the next package.
    - **Not found OR installed version is below the minimum**: surface the gap and ask the user before running any install:
@@ -480,7 +480,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
 **Output**: Both required first-party packages verified at or above the minimum version, installed/upgraded via `pac application install`, or explicitly acknowledged as skipped by the user.
 
-> **→ Update report:** `--set-step 1.5 --status completed --output "CDSBasePortal <state> · PowerPagesCore <state>"` where `<state>` is one of `v<X> OK`, `installed via pac application install (v<X> → v<Y>)`, `upgraded via pac application install (v<X> → v<Y>)`, or `user skipped — proceeding at user's risk`. Capturing the install method explicitly so the user can audit afterwards.
+> **→ Update report:** `--set-step 1.5 --status completed --output "CDSBasePortal <state> · PowerPages_Core <state>"` where `<state>` is one of `v<X> OK`, `installed via pac application install (v<X> → v<Y>)`, `upgraded via pac application install (v<X> → v<Y>)`, or `user skipped — proceeding at user's risk`. Capturing the install method explicitly so the user can audit afterwards.
 
 ---
 
@@ -564,7 +564,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 
    > **Note:** if `pac application list` itself errors out (older PAC builds, missing role), fall back to offering the dummy-site method directly without the catalog check.
 
-**Output**: V2 template package verified/installed (or explicitly skipped). `PowerPagesCore` was already verified and installed/upgraded as needed in step 1.5.
+**Output**: V2 template package verified/installed (or explicitly skipped). `PowerPages_Core` was already verified and installed/upgraded as needed in step 1.5.
 
 > **→ Update report:** `--set-step 1.6 --status completed --output "<V2_UNIQUE_NAME> <state>"`. If the V2 package was installed during this step, mention the method explicitly so the user can audit — e.g., `"installed via pac application install"` or `"installed via dummy EDM site"`.
 
@@ -686,7 +686,7 @@ This phase has **two completely different shapes** depending on the migration tr
 2. **Snapshot the downloaded source**
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/snapshot-site.js" `
      --site-root "<SITE_ROOT>" `
      --output-dir "<OUTPUT_DIR>" `
      --label sdm
@@ -852,18 +852,14 @@ This phase has **two completely different shapes** depending on the migration tr
 ### 3. Stage automated FetchXML rewrites
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
   --customization-report "<OUTPUT_DIR>/SiteCustomization.csv" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --site-path "<SITE_ROOT>" `
-  --environment-name "<ENV_NAME>" `
-  --environment-id "<ENV_ID>" `
   --automate-fetchxml `
   --output-dir "<OUTPUT_DIR>"
 ```
-
-> `--environment-name` and `--environment-id` are optional but recommended — they get written into `remediation-diff.json` so the file is valid for the PP-VSCode extension's "Import Metadata Diff" command. Source from step 1.1 (`pac auth list` / `pac org list`). If omitted, both default to `"unknown"`.
 
 Script behavior:
 
@@ -875,13 +871,11 @@ Script behavior:
 ### 4. Stage semi-automated Liquid `entities['adx_*']` rewrites
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
   --customization-report "<OUTPUT_DIR>/SiteCustomization.csv" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --site-path "<SITE_ROOT>" `
-  --environment-name "<ENV_NAME>" `
-  --environment-id "<ENV_ID>" `
   --automate-liquid `
   --output-dir "<OUTPUT_DIR>"
 ```
@@ -893,11 +887,7 @@ Script behavior:
 - **Inserts a suggested rewrite as a Liquid comment next to the original** — does NOT overwrite the original line. User decides what to keep.
 - **Writes the annotated file to `<OUTPUT_DIR>/remediation-staged/<relative path>`** (merging on top of the FetchXML pass if the same file was touched there).
 
-After both rewriters run, the script emits **`<OUTPUT_DIR>/remediation-diff.json`** — a **dual-format manifest** that serves two consumers:
-
-1. **The live execution report's Remediation Diff card** reads our structured fields (`files[].relativePath`, `kind: "fetchxml" | "liquid" | "fetchxml+liquid"`, `status: "modified"`, `linesAdded`, `linesRemoved`, `hunks[]`, `changeSummary[]`, `livePath`, `stagedPath`) to render one expandable row per touched file with inline hunks plus an "Open staged file" link.
-
-2. **The Power Pages VSCode extension's "Import Metadata Diff"** command reads PP-VSCode's required schema (`version: "1.0"`, `extensionVersion`, `exportedAt`, `environmentId`, `environmentName`, `localWebsiteId`/`Name`, `remoteWebsiteId`/`Name`, and `files[].localContent` / `.remoteContent` as base64). The PP-VSCode mapping: `localContent` = your live `<SITE_ROOT>` file (untouched), `remoteContent` = the staged proposed file — so PP-VSCode's "local vs remote" diff editor reads as "current vs proposed".
+After both rewriters run, the script emits **`<OUTPUT_DIR>/remediation-diff.json`** — a lean, skill-owned manifest consumed by the live execution report's Remediation Diff card. It carries `generatedAt`, `siteRoot`, `stagedDir`, and `files[]` (each with `relativePath`, `kind: "fetchxml" | "liquid" | "fetchxml+liquid"`, `status: "modified"`, `linesAdded`, `linesRemoved`, `hunks[]`, `changeSummary[]`, and **absolute** `livePath` / `stagedPath`). The report renders one expandable row per touched file with inline hunks plus a **Copy diff command** button that copies `code --diff '<live>' '<staged>'` — paste it into any terminal to open VS Code's built-in side-by-side diff editor (current vs proposed). No VS Code extension is required.
 
 ### 5. Generate augmented prompts for manual categories
 
@@ -949,7 +939,7 @@ Branch on the user's answer:
 **Yes — apply and upload:** copy staged files over the live source, then upload.
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.js" `
   --output-dir "<OUTPUT_DIR>" `
   --site-root "<SITE_ROOT>"
 
@@ -961,7 +951,7 @@ pac pages upload --path "<SITE_ROOT>" --modelVersion 1
 **No — discard staged changes:** delete the staged tree and the diff manifest; live source remains untouched.
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.js" `
   --output-dir "<OUTPUT_DIR>" --discard
 ```
 
@@ -1185,7 +1175,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 2. **Snapshot the EDM site**
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/snapshot-site.js" `
      --site-root "<SITE_ROOT_EDM>" `
      --output-dir "<OUTPUT_DIR>" `
      --label edm
@@ -1196,7 +1186,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 3. **Diff SDM vs EDM**
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/diff-snapshots.js" `
      --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
      --edm "<OUTPUT_DIR>/edm-snapshot.json" `
      --output-dir "<OUTPUT_DIR>"
@@ -1321,6 +1311,8 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
    - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch. The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user (retry / reset / exit). The card shows the failed status and chunk-level error details from the last poll.
+
+   > **Chunk-level generic SQL errors — auto-retry before escalating.** When individual chunks fail with a **Generic SQL error** (e.g., `1205` deadlock victim, `3732` type still referenced), these come from the **Dataverse SQL backend, not PAC/client-side**. Under chunked migration most are transient — `1205` is always a deadlock retry, and `3732` ("type still referenced") is frequently a concurrency side-effect from parallel chunk processing that clears on a fresh pass. **The refs migration is resumable**: re-running `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences` re-processes only the still-unmigrated chunks, so a retry is cheap and non-destructive. **Automatically retry the command up to 3 times** (30–60s backoff between attempts, re-entering the poll loop each time) whenever the only failures are chunk-level generic SQL errors — **do this even when the tracker labels a chunk `Non Retriable`**, because that label reflects PAC's in-run retry classification, not whether a fresh command invocation can succeed. Only escalate if the **same** chunks still fail with the **same** generic SQL error after the retries: capture the failing chunk IDs, error numbers, `pac --version`, WebSiteId, and environment URL for a Microsoft support ticket. Do **not** proceed to step 3.3 (Activate EDM) until refs migration reports `Completed`.
 
    > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
@@ -1479,7 +1471,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    Then snapshot:
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/snapshot-site.js" `
      --site-root "<SITE_ROOT>" `
      --output-dir "<OUTPUT_DIR>" `
      --label sdm
@@ -1496,7 +1488,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 3. **Snapshot the EDM site**
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/snapshot-site.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/snapshot-site.js" `
      --site-root "<SITE_ROOT_EDM>" `
      --output-dir "<OUTPUT_DIR>" `
      --label edm
@@ -1507,7 +1499,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 4. **Diff SDM vs EDM**
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/diff-snapshots.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/diff-snapshots.js" `
      --sdm "<OUTPUT_DIR>/sdm-snapshot.json" `
      --edm "<OUTPUT_DIR>/edm-snapshot.json" `
      --output-dir "<OUTPUT_DIR>"
@@ -1581,6 +1573,8 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    - **In Progress (30-min timeout)**: surface timeout, ask user (retry / reset / exit). The card shows the last captured running state.
    - **Failed / Reverted**: surface error, ask user; card shows the failed status and chunk-level errors from the last poll.
 
+   > **Chunk-level generic SQL errors — auto-retry before escalating.** Same handling as Authoring Track 3.2: chunk-level **Generic SQL error** failures (e.g., `1205` deadlock victim, `3732` type still referenced) are **Dataverse SQL-backend errors, not PAC/client-side**, and are usually transient under chunked migration. Because the refs migration is resumable (re-running re-processes only the still-unmigrated chunks), **automatically retry the command up to 3 times** (30–60s backoff, re-entering the poll loop) whenever the only failures are chunk-level generic SQL errors — **even when a chunk is labeled `Non Retriable`**, since that label is PAC's in-run classification, not a verdict on a fresh invocation. Only escalate to a Microsoft support ticket (chunk IDs, error numbers, `pac --version`, WebSiteId, env URL) if the **same** chunks fail with the **same** error after the retries. Do **not** proceed until refs migration reports `Completed`.
+
    > **PAC build compatibility:** `-s -v` works on most current builds. If your PAC errors with `An unknown argument --verbose was passed`, fall back to plain `--checkMigrationStatus` in the loop and emit a smaller `--set-refs-migration` payload (`status` + `currentStep` only) once per iteration.
 
 **Output**: Transactional references migrated, customization CSV auto-emitted. Live report's Transactional References Migration card reflected real-time progress during polling.
@@ -1649,7 +1643,7 @@ Same logic as Authoring Track Phase 2.3 — glob `SiteCustomization*.csv` in `<O
 7. **Apply staged changes and upload** — same as Authoring Track Phase 2.4 step 7 (`apply-remediation.js` copies staged → live, then `pac pages upload`). On "No — discard staged changes", run `apply-remediation.js --discard` and skip upload.
 
    ```powershell
-   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/apply-remediation.js" `
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/apply-remediation.js" `
      --output-dir "<OUTPUT_DIR>" `
      --site-root "<SITE_ROOT>"
 
@@ -1825,6 +1819,21 @@ Identical to the Authoring Track's step 3.4 — print restart instructions, wait
 4. **Record Skill Usage**
 
    Follow instructions in `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`.
+
+5. **Emit Completion Telemetry**
+
+   Fire the anonymous `skill_completed` 1DS event with a per-phase rollup built
+   from `migration-state.json`. This is best-effort and fails closed — never
+   block or surface errors from it:
+
+   ```powershell
+   node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/emit-telemetry.js" --output-dir "<OUTPUT_DIR>"
+   ```
+
+   `<OUTPUT_DIR>` is the per-migration subfolder holding `migration-state.json`.
+   The script honors the plugin telemetry kill switch / opt-out and sends only
+   non-PII product signals (track, migration mode, template, per-phase status +
+   duration). No site names, URLs, environment names, or paths are sent.
 
 **Output**: Migration complete (or rolled back), final summary printed, skill usage recorded.
 

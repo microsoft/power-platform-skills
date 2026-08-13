@@ -1757,30 +1757,17 @@ function executeLiquidRewrites(sitePath, outputDir) {
 }
 
 /**
- * Read a file as base64. Returns null if the file is missing.
- */
-function readBase64IfExists(filePath) {
-  if (!fs.existsSync(filePath)) return null;
-  return fs.readFileSync(filePath).toString('base64');
-}
-
-/**
  * Merge per-rewriter diff entries by relativePath and emit `remediation-diff.json`.
  *
- * The emitted JSON is **dual-format**: it carries our own structured fields
- * (`kind`, `hunks`, `changeSummary`, `livePath`, `stagedPath`) used by the live
- * report's Remediation Diff card, AND the fields required by the PP-VSCode
- * extension's "Import Metadata Diff" command (`version`, `extensionVersion`,
- * `exportedAt`, `environmentId/Name`, `localWebsiteId/Name`, `remoteWebsiteId/Name`,
- * and `files[].localContent`/`.remoteContent` as base64).
- *
- * Semantic mapping for the PP-VSCode side. PP-VSCode renders the diff editor as
- *   vscode.diff(remoteUri, localUri) — remote on LEFT, local on RIGHT — so:
- *   - `remoteContent` = live `<SITE_ROOT>` file (untouched) → LEFT pane (current state)
- *   - `localContent`  = staged proposed file (what rewriter wants to apply) → RIGHT pane (proposed)
- * Order matches git diff convention: read left-to-right as "current → proposed".
+ * The emitted JSON is a lean, skill-owned manifest consumed only by the live
+ * report's Remediation Diff card: `generatedAt`, `siteRoot`, `stagedDir`, and
+ * `files[]` (each with `relativePath`, `kind`, `status`, `linesAdded`,
+ * `linesRemoved`, `hunks[]`, `changeSummary[]`, and ABSOLUTE `livePath` /
+ * `stagedPath`). The report turns each file into a `code --diff "<live>"
+ * "<staged>"` command the user runs in any terminal — VS Code's built-in diff
+ * editor, no extension required.
  */
-function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResults, meta) {
+function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResults) {
   const fxEntries = (fetchXmlResults && fetchXmlResults.diffEntries) || [];
   const lqEntries = (liquidResults && liquidResults.diffEntries) || [];
 
@@ -1802,48 +1789,20 @@ function writeRemediationDiff(sitePath, outputDir, fetchXmlResults, liquidResult
   const files = [...byPath.values()].sort((a, b) => a.relativePath.localeCompare(b.relativePath));
   if (files.length === 0) return null;
 
-  // Attach base64 file contents for PP-VSCode import compatibility.
-  // PP-VSCode renders remoteContent on the LEFT, localContent on the RIGHT, so:
-  //   left  = remoteContent = live file (current state, untouched on disk)
-  //   right = localContent  = staged file (proposed change from the rewriter)
-  // This matches git diff convention (before → after, left → right).
+  // Normalize livePath/stagedPath to ABSOLUTE so the report's per-file
+  // `code --diff "<live>" "<staged>"` commands work when pasted into a fresh
+  // terminal whose working directory is unrelated to the site root or output
+  // dir. Resolved here — the same process/cwd that just wrote the staged files —
+  // so any relative inputs resolve correctly.
   for (const entry of files) {
-    entry.remoteContent = readBase64IfExists(entry.livePath);
-    entry.localContent = readBase64IfExists(entry.stagedPath);
+    if (entry.livePath) entry.livePath = path.resolve(entry.livePath);
+    if (entry.stagedPath) entry.stagedPath = path.resolve(entry.stagedPath);
   }
 
-  const websiteId = (meta && meta.websiteId) || 'unknown';
-  const websiteName = (meta && meta.websiteName) || 'unknown';
-  const environmentId = (meta && meta.environmentId) || 'unknown';
-  const environmentName = (meta && meta.environmentName) || 'unknown';
-
   const payload = {
-    // PP-VSCode importer required fields (current schema)
-    version: '1.0',
-    extensionVersion: 'migrate-sdm-to-edm-skill/1.0',
-    exportedAt: new Date().toISOString(),
-    environmentId,
-    environmentName,
-    localWebsiteId: websiteId,
-    localWebsiteName: websiteName,
-    remoteWebsiteId: websiteId,
-    remoteWebsiteName: websiteName,
-    dataModelVersion: 1,
-
-    // Deprecated aliases — emit them too so older PP-VSCode builds (and any code
-    // path in the mapper that still reads these names) find a non-empty value.
-    // Without these, RemoveSiteHandler can hit "Cannot read properties of
-    // undefined (reading 'siteName')" when its mapper degrades to empty string.
-    websiteId,
-    websiteName: websiteName,
-    localSiteName: websiteName,
-
-    // Skill-specific context (ignored by PP-VSCode, used by our renderer)
     generatedAt: new Date().toISOString(),
     siteRoot: path.resolve(sitePath),
     stagedDir: path.resolve(path.join(outputDir, 'remediation-staged')),
-    note: 'PP-VSCode renders diffs as vscode.diff(remoteUri, localUri) — remote on LEFT, local on RIGHT. So: remoteContent = live <SITE_ROOT> file (untouched, LEFT pane = current state); localContent = staged proposed file from the auto-rewriters (RIGHT pane = proposed change). Importing this into PP-VSCode\'s "Import Metadata Diff" command surfaces a "current → proposed" diff editor reading left-to-right.',
-
     files,
   };
 
@@ -2074,13 +2033,7 @@ async function main() {
 
     // Emit remediation-diff.json combining FetchXML + Liquid passes.
     if (sitePathUsed && (fetchXmlRewriteResults || liquidRewriteResults)) {
-      const diffMeta = {
-        websiteId: args['website-id'],
-        websiteName: args['site-name'],
-        environmentId: args['environment-id'] || args['environmentId'] || null,
-        environmentName: args['environment-name'] || args['environmentName'] || null,
-      };
-      const diffOutcome = writeRemediationDiff(sitePathUsed, args['output-dir'], fetchXmlRewriteResults, liquidRewriteResults, diffMeta);
+      const diffOutcome = writeRemediationDiff(sitePathUsed, args['output-dir'], fetchXmlRewriteResults, liquidRewriteResults);
       if (diffOutcome) {
         console.log(`✓ Remediation diff: ${diffOutcome.outPath} (${diffOutcome.fileCount} file${diffOutcome.fileCount === 1 ? '' : 's'})`);
       } else {

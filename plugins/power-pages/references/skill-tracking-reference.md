@@ -42,7 +42,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | add-cloud-flow | AddCloudFlow | Site/AI/Skills/AddCloudFlow |
 | add-ai-webapi | AddAiWebapi | Site/AI/Skills/AddAiWebapi |
 | integrate-backend | IntegrateBackend | Site/AI/Skills/IntegrateBackend |
-| migrate-sdm-to-edm | MigrateSdmToEdm | Site/AI/Skills/MigrateSdmToEdm |
+| migrate-datamodel | MigrateDatamodel | Site/AI/Skills/MigrateDatamodel |
 | scan-site | ScanSite | Site/AI/Skills/ScanSite |
 | manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
 | manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |

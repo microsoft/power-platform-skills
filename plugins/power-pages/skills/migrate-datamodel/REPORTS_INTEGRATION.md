@@ -1,11 +1,11 @@
 # HTML Reports Integration Guide
 
-This document explains how to integrate the HTML report templates and generation scripts into the `migrate-sdm-to-edm` skill workflow.
+This document explains how to integrate the HTML report templates and generation scripts into the `migrate-datamodel` skill workflow.
 
 ## Folder Structure
 
 ```
-plugins/power-pages/skills/migrate-sdm-to-edm/
+plugins/power-pages/skills/migrate-datamodel/
 ├── assets/
 │   ├── customization-report.html      # Template for customization report
 │   ├── sdm-to-edm-migration-report.html    # Template for execution report
@@ -37,7 +37,7 @@ pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --siteCustomizationReport
 # ... parsing logic ...
 
 # Phase 8 step 3: Generate HTML report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
   --customization-report "./migration-report/SiteCustomization.csv" \
   --site-name "<SITE_NAME>" \
   --website-id "<WEBSITE_ID>" \
@@ -53,7 +53,7 @@ echo "Customization report: file://$(pwd)/migration-reports/customization-report
 For automatable fixes (Data Model Extensions only), the same script is invoked with `--automate` and `--env-url`:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
   --site-name "<SITE_NAME>" \
   --website-id "<WEBSITE_ID>" \
   --siteCustomizationReportPath "./migration-report/SiteCustomization.csv" \
@@ -81,7 +81,7 @@ The script creates missing string attributes via Dataverse Web API and logs resu
 # Track all commands, results, and timing
 
 # At end of Phase 12: generate execution report
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" \
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" \
   --site-name "<SITE_NAME>" \
   --website-id "<WEBSITE_ID>" \
   --portal-id "<PORTAL_ID>" \
@@ -183,7 +183,7 @@ During skill execution, collect:
 The skill calls the script after parsing the CSV from PAC CLI:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
   --customization-report "<REPORT_PATH>" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
@@ -198,7 +198,7 @@ Open the generated HTML report in your browser: `file://<OUTPUT_DIR>/customizati
 The same script runs with `--automate` to apply safe fixes via Dataverse API (Data Model Extensions only):
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --siteCustomizationReportPath "<REPORT_PATH>" `
@@ -213,7 +213,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration
 At the end of post-migration validation:
 
 ```powershell
-node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-sdm-to-edm/scripts/generate-migration-reports.js" `
+node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-reports.js" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
   --portal-id "<PORTAL_ID>" `
