@@ -50335,7 +50335,13 @@ var FlowClient = class _FlowClient {
       const connectorName = connectorKey.startsWith("shared_") ? connectorKey : `shared_${connectorKey}`;
       try {
         const conns = await this.listConnections(envId, { connector: connectorName });
-        const connected = conns.filter((c) => c.statuses?.[0]?.status === "Connected" || c.status === "Connected");
+        const connected = conns.filter((c) => {
+          if (c.statuses !== void 0)
+            return c.statuses?.[0]?.status === "Connected";
+          if (c.status !== void 0)
+            return c.status === "Connected";
+          return true;
+        });
         if (connected.length === 1) {
           const conn = connected[0];
           resolved[connectorKey] = {
@@ -50382,13 +50388,10 @@ var FlowClient = class _FlowClient {
     const wf = await this.dataverseGet(url2, dvToken);
     const clientdata = JSON.parse(wf.clientdata);
     if (body.properties?.definition) {
-      clientdata.properties.definition = body.properties.definition;
+      clientdata.properties.definition = this.rewriteDefinitionForDataverse(body.properties.definition);
     }
     if (body.properties?.displayName) {
       clientdata.properties.displayName = body.properties.displayName;
-    }
-    if (body.properties?.connectionReferences) {
-      clientdata.properties.connectionReferences = body.properties.connectionReferences;
     }
     const patchUrl = `${instanceUrl}/api/data/v9.2/workflows(${workflowId})`;
     await this.dataversePatch(patchUrl, { clientdata: JSON.stringify(clientdata) }, dvToken);
@@ -50449,8 +50452,9 @@ var FlowClient = class _FlowClient {
    * are performed — without it PPAPI cannot resolve the logical name and returns
    * WorkflowRunActionInputsInvalidProperty (#392).
    *
-   * NOT called for the Dataverse write path — Dataverse clientdata stores the
-   * native format (connectionName) and the rewrite would corrupt it.
+   * NOT called for the Dataverse write path — use rewriteDefinitionForDataverse()
+   * instead, which renames connectionName → connectionReferenceName without
+   * mapping through logical names (Dataverse stores the ref key, not the logical name).
    */
   rewriteConnectionNamesForPpapi(body, connectionReferences) {
     const def = body.properties?.definition;
@@ -50513,6 +50517,56 @@ var FlowClient = class _FlowClient {
     }
   }
   /**
+   * Translate PPAPI-format `host.connectionName` to Dataverse-format
+   * `host.connectionReferenceName` in a deep-cloned definition copy.
+   *
+   * PPAPI returns `host.connectionName = "<refKey>"` on read. Dataverse clientdata
+   * stores `host.connectionReferenceName = "<refKey>"`. The value is the same ref
+   * key (e.g. "shared_approvals") — only the field name differs. (#418, #415)
+   *
+   * Called exclusively from updateFlowViaDataverse before writing clientdata.
+   */
+  rewriteDefinitionForDataverse(definition) {
+    const def = JSON.parse(JSON.stringify(definition));
+    const fixHost = (inputs) => {
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
+        return;
+      const inp = inputs;
+      const host = inp.host;
+      if (host && host.connectionName && !host.connectionReferenceName) {
+        host.connectionReferenceName = host.connectionName;
+        delete host.connectionName;
+      }
+    };
+    const walkActions = (actions) => {
+      if (!actions || typeof actions !== "object" || Array.isArray(actions))
+        return;
+      for (const action of Object.values(actions)) {
+        fixHost(action?.inputs);
+        if (action?.actions)
+          walkActions(action.actions);
+        if (action?.else?.actions)
+          walkActions(action.else.actions);
+        if (action?.default?.actions)
+          walkActions(action.default.actions);
+        if (action?.cases) {
+          for (const c of Object.values(action.cases)) {
+            if (c?.actions)
+              walkActions(c.actions);
+          }
+        }
+      }
+    };
+    walkActions(def.actions);
+    const triggers = def.triggers;
+    if (triggers) {
+      for (const trigger of Object.values(triggers)) {
+        fixHost(trigger?.inputs);
+      }
+    }
+    return def;
+  }
+  /**
    * Apply targeted edits to an existing flow's definition. Gets the current
    * flow, applies operations via `applyFlowEdits`, then either previews
    * (dry run) or commits via `updateFlow`.
@@ -50524,8 +50578,12 @@ var FlowClient = class _FlowClient {
       throw new Error("Flow has no definition to edit");
     }
     const { definition: newDef, applied } = applyFlowEdits(currentDef, operations);
+    const currentRefs = current.properties?.connectionReferences;
     const body = {
-      properties: { definition: newDef }
+      properties: {
+        definition: newDef,
+        ...currentRefs ? { connectionReferences: currentRefs } : {}
+      }
     };
     if (opts.dryRun) {
       const preview = await this.previewUpdate(envId, flowId, body);
@@ -50541,6 +50599,7 @@ var FlowClient = class _FlowClient {
     const flow = await this.updateFlow(envId, flowId, body, {
       forceManaged: opts.forceManaged,
       previewToken: opts.previewToken,
+      autoResolveConnectionRefs: opts.autoResolveConnectionRefs,
       backupNote: `edit_flow: ${applied.map((a) => `${a.op} ${a.path}`).join("; ")}`
     });
     return { mode: "applied", applied, flow };
@@ -52396,12 +52455,14 @@ var FlowClient = class _FlowClient {
     const dvToken = await this.auth.getAccessToken(instanceUrl);
     let workflow = null;
     try {
-      const url2 = dataverseWorkflowUrl(instanceUrl, flowId);
+      const dvId = ppapiFlow?.properties?.workflowEntityId ?? flowId;
+      const url2 = dataverseWorkflowUrl(instanceUrl, dvId);
       workflow = await this.dataverseGet(url2, dvToken);
     } catch (err) {
       if (err?.statusCode === 404) {
         try {
-          const fbUrl = dataverseWorkflowByUniqueUrl(instanceUrl, flowId);
+          const dvUniqueId = ppapiFlow?.properties?.workflowUniqueId ?? flowId;
+          const fbUrl = dataverseWorkflowByUniqueUrl(instanceUrl, dvUniqueId);
           const list = await this.dataverseGet(fbUrl, dvToken);
           if (list.value && list.value.length > 0) {
             workflow = list.value[0];
@@ -65724,12 +65785,13 @@ async function createMcpServer(authProvider, deps = {}) {
     })).describe("Ordered list of edit operations"),
     dryRun: external_exports.boolean().optional().describe("If true, return a diff + previewToken without writing."),
     previewToken: external_exports.string().optional().describe("Token from a prior dryRun for these exact operations; applies only if the flow still matches."),
-    forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false.")
-  }, { readOnlyHint: false, title: "Edit Flow (surgical)" }, async ({ env, flow, operations, dryRun, previewToken, forceManaged }) => {
+    forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."),
+    autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true.")
+  }, { readOnlyHint: false, title: "Edit Flow (surgical)" }, async ({ env, flow, operations, dryRun, previewToken, forceManaged, autoResolveConnectionRefs }) => {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
-      const result = await ctx.getClient().editFlow(envId, flow, operations, { dryRun, previewToken, forceManaged });
+      const result = await ctx.getClient().editFlow(envId, flow, operations, { dryRun, previewToken, forceManaged, autoResolveConnectionRefs });
       if (result.mode === "preview") {
         return safeResult({ mode: "preview", applied: result.applied, diff: result.diff, previewToken: result.token, expiresAt: result.expiresAt, note: result.note });
       }
