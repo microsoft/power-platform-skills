@@ -593,13 +593,21 @@ function planTeardown(spec) {
 }
 
 // Delete the resolved artifacts for one plan step via SDK methods. Returns `{ deletedIds,
-// skippedIds }` — `skippedIds` are artifacts that exist but cannot be removed (system/managed),
-// surfaced so a destructive run is auditable rather than silently reporting "(0 deleted)". A
-// not-found error counts as already-gone. Throws only on a genuine failure (non-not-found,
-// non-undeletable).
+// skippedIds, skipped }` — artifacts that exist but were not removed, surfaced so a destructive run
+// is auditable rather than silently reporting "(0 deleted)". `skipped` carries a REASON per id
+// because the two cases mean opposite things to an operator:
+//
+//   - `undeletable`  — a system/managed artifact that can never be removed. Nothing to act on.
+//   - `referenced`   — the platform refused because something else still points at it. The record
+//                      is perfectly deletable once that consumer releases it; for a generative page
+//                      this is the CORRECT, expected outcome, not a defect.
+//
+// Reporting both as "undeletable" would send an operator hunting a platform problem that isn't
+// there. `skippedIds` is retained as the union of both for callers that only need the count.
+// A not-found error counts as already-gone. Throws only on a genuine failure.
 async function deleteStep(sdk, handler, items) {
   const deletedIds = [];
-  const skippedIds = [];
+  const skipped = [];
   for (const item of items) {
     try {
       await handler.del(sdk, item);
@@ -619,21 +627,22 @@ async function deleteStep(sdk, handler, items) {
         // The platform refused because something else still references this record. For a
         // generative page that is the CORRECT outcome, not a leftover: the page belongs to whoever
         // still points at it, and Dataverse is the authority on that (live-measured — saving an app
-        // that surfaces a page creates the dependency, published or not). Record it as skipped so
-        // the run stays auditable without reporting a false failure.
-        skippedIds.push(item.id);
+        // that surfaces a page creates the dependency, published or not). Recorded as `referenced`
+        // rather than `undeletable` so the run stays auditable AND the operator is told the truth:
+        // nothing is broken, someone else is still using it.
+        skipped.push({ id: item.id, reason: 'referenced' });
         continue;
       }
       if (isUndeletable(err)) {
         // A system/managed artifact (e.g. an auto-generated "Active <Entity>" view that shares
         // the spec view's name) — not ours to remove. Record it as skipped without failing.
-        skippedIds.push(item.id);
+        skipped.push({ id: item.id, reason: 'undeletable' });
         continue;
       }
       throw err;
     }
   }
-  return { deletedIds, skippedIds };
+  return { deletedIds, skippedIds: skipped.map((s) => s.id), skipped };
 }
 
 // Execute a teardown. Dry-run (default) emits the plan (no I/O) and returns { ok, dryRun, plan }.
@@ -681,14 +690,20 @@ async function runTeardown(spec, opts = {}, deps = {}) {
         emit({ phase: step.phase, status: 'skip', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
-      const { deletedIds, skippedIds } = await deleteStep(sdk, handler, items);
+      const { deletedIds, skipped } = await deleteStep(sdk, handler, items);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
-      if (skippedIds.length) {
-        result.skipped.push(`${step.label} (${skippedIds.length} undeletable — skipped)`);
+      // Report each skip reason in its own words. "undeletable" tells an operator there is nothing
+      // to do; "still referenced" tells them another consumer holds it — a different situation with
+      // a different (possibly no) follow-up.
+      const referenced = skipped.filter((s) => s.reason === 'referenced').length;
+      const undeletable = skipped.filter((s) => s.reason === 'undeletable').length;
+      const parts = [];
+      if (undeletable) parts.push(`${undeletable} undeletable`);
+      if (referenced) parts.push(`${referenced} still referenced`);
+      if (parts.length) {
+        result.skipped.push(`${step.label} (${parts.join(', ')} — skipped)`);
       }
-      const summary = skippedIds.length
-        ? `${deletedIds.length} deleted, ${skippedIds.length} undeletable`
-        : `${deletedIds.length} deleted`;
+      const summary = [`${deletedIds.length} deleted`, ...parts].join(', ');
       emit({ phase: step.phase, status: 'ok', label: `${step.label} (${summary})`, n: myN, total });
     } catch (err) {
       result.ok = false;

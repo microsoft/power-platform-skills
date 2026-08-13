@@ -1048,7 +1048,8 @@ test('genpage del deletes ONLY the project row and never touches its files', asy
 // Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
 // creates a real dependency, and the DELETE then fails with "cannot be deleted because it is
 // referenced by N other components" (live-measured, published or not). The delete IS the check —
-// there is no pre-flight scan to go stale.
+// there is no pre-flight scan to go stale. (The stronger form of this — asserting the files survive
+// — is below; this one pins the deleted/skipped bookkeeping.)
 test('genpage records a still-referenced page as SKIPPED, not a failure', async () => {
   const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
   const sdk = {
@@ -1058,6 +1059,26 @@ test('genpage records a still-referenced page as SKIPPED, not a failure', async 
   const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
   assert.deepStrictEqual(r.deletedIds, []);
   assert.deepStrictEqual(r.skippedIds, [PAGE_1]);
+});
+
+// A referenced page is a normal outcome, so the run must say so in the operator's words. Reporting
+// it as "undeletable" — the wording reserved for system/managed artifacts — would send someone
+// hunting a platform problem that does not exist.
+test('a dependency block reports as "still referenced", never "undeletable"', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const sdk = {
+    async queryRecords() { return []; },
+    async deleteRecord() { throw err; },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.skipped, [{ id: PAGE_1, reason: 'referenced' }]);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1], 'union list still populated for count-only callers');
+});
+
+test('a system/managed artifact still reports as "undeletable", not "referenced"', async () => {
+  const sdk = { deleteRemoteArtifact: async () => { const e = new Error('System-defined views cannot be deleted. SavedQuery Active X cannot be deleted.'); e.statusCode = 400; throw e; } };
+  const r = await deleteStep(sdk, KIND_HANDLERS.view, [{ id: 'v1', name: 'Active X' }]);
+  assert.deepStrictEqual(r.skipped, [{ id: 'v1', reason: 'undeletable' }]);
 });
 
 test('a dependency block is still a FAILURE for kinds that did not opt in', async () => {
