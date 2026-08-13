@@ -125,18 +125,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 1. Mark **Select template or choose from-scratch** as `in_progress`.
 
-<!-- not-a-gate: route preference before any catalog fetch, project directory creation, Dataverse write, or durable skill state -->
-
-2. Ask the user whether they want to browse templates or start from scratch before doing any template lookup:
-
-   | Question | Header | Options |
-   |----------|--------|---------|
-   | Would you like to browse available templates first, or create this site from scratch? | Creation Path | Browse templates (Recommended), Create from scratch |
-
-   - **Browse templates**: continue to the catalog fetch below.
-   - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions. Do not fetch the template catalog.
-
-3. Fetch the template catalog:
+2. Fetch the template catalog:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/fetch-template-catalog.js"
@@ -148,13 +137,26 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    - **If `ok: true` but `catalog.templates` is empty or malformed**: tell the user no templates are currently available and continue with the from-scratch path.
    - **If templates are available**: proceed to semantic matching.
 
-4. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
+3. Semantically match the template families against the Phase 1 context (`$ARGUMENTS`, site name, purpose, audience, and any framework mentioned by the user):
    - Use each family template's `displayName`, `description`, `keywords`, `audience`, available variant frameworks, and any variant-specific previews.
    - Do **not** compute a numeric score or invent a ranking script. Keywords guide agent judgement; they are not counted.
    - Treat a template family as the user-facing template and a framework variant as the installable package. A family can have multiple variants (`react`, `vue`, `angular`, `astro`).
-   - **If no template family is a clear semantic match**: tell the user no matching templates are available for their requested site, set `CREATION_PATH = "from-scratch"`, and continue to the from-scratch questions below. Do **not** render or offer the full catalog in this no-match branch; showing unrelated templates is worse than a clean from-scratch fallback.
 
-5. If one or more template families match, render the relevant templates for browser preview:
+<!-- not-a-gate: read-only route selection after semantic matching; no project directory, Dataverse write, or durable skill state exists yet -->
+
+4. Ask the user how to proceed after semantic matching:
+
+   | Match situation | Question | Header | Options |
+   |-----------------|----------|--------|---------|
+   | One or more clear matches | I found matching template(s) for your site. What would you like to do? | Creation Path | Show matching templates (Recommended), Browse all templates, Create from scratch |
+   | No clear match | I couldn't find a matching template for your site. What would you like to do? | Creation Path | Browse all templates, Create from scratch (Recommended) |
+
+   Branch on the answer:
+   - **Show matching templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the matched family or families and continue to browser preview.
+   - **Browse all templates**: set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog and continue to browser preview.
+   - **Create from scratch**: set `CREATION_PATH = "from-scratch"` and continue to the deferred framework/location questions.
+
+5. Render `TEMPLATE_PREVIEW_FAMILIES` for browser preview:
 
    - Download each `previewImages` artifact into the SHA-keyed cache before rendering:
      ```bash
@@ -181,8 +183,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | One strong family + framework match | Use `<displayName>` - `<framework>` (Recommended), Choose another framework, See all templates, Start from scratch |
    | One strong family but no framework match | One option per available framework, See all templates, Start from scratch |
    | Several plausible family matches | One option per shortlisted family, See all templates, Start from scratch |
+   | Full catalog browse | One option per family, Start from scratch |
 
-   When the user chooses **See all templates** from a matching-template branch, render the full family-first catalog gallery and ask again with one option per family plus **Start from scratch**. If the selected family has multiple variants, ask a second terminal question for the framework.
+   When the user chooses **See all templates** from a matching-template branch, set `TEMPLATE_PREVIEW_FAMILIES` to the full catalog, render the full family-first catalog gallery, and ask again with the **Full catalog browse** options. If the selected family has multiple variants, ask a second terminal question for the framework.
 
 7. Branch on the user's selection:
    - **Template family and framework variant selected**:
