@@ -447,7 +447,7 @@ test('app teardown resolves via resolveArtifact and delegates the full cascade t
   await h.del(sdk, items[0]);
   assert.strictEqual(cascadeCalls.length, 1, 'deleteAppCascade called once');
   assert.strictEqual(cascadeCalls[0].appModuleId, 'app-1', 'app module id passed');
-  assert.strictEqual(cascadeCalls[0].appModuleIdUnique, 'u-1', 'unique id passed (deleteAppCascade handles sitemap + genpage internally)');
+  assert.strictEqual(cascadeCalls[0].appModuleIdUnique, 'u-1', 'unique id passed (deleteAppCascade removes the sitemap; generative pages are a separate step)');
 });
 
 test('app teardown skips when app not found (resolve returns [])', async () => {
@@ -992,19 +992,18 @@ test('planTeardown trims the persona name in the role step (matches the SDK-crea
 // owns that decision for the pages IT authored. These pin who deletes what, and when it backs off.
 // ---------------------------------------------------------------------------------------------
 
-// A minimal SDK stand-in for the genpage handler: a page manifest in a web resource, the live
-// uxagentproject/file rows, and the appmodule sitemaps the cross-app scan reads.
-// A minimal SDK stand-in for the genpage handler: a page manifest in a web resource, the live
-// uxagentproject/file rows, and the OTHER apps + sitemaps the cross-app scan walks.
-// `otherApps` is [{ unique, xml }] — the scan enumerates appmodules, then reads each one's sitemap
-// via appmodulecomponent (componenttype 62) -> sitemap row. A real env ALWAYS has system apps, and
-// fetchAppsForPages fail-closes on an empty enumeration, so every case supplies at least one.
-function genpageSdk({ manifestPages = [], livePages = [], files = {}, otherApps = [{ unique: 'system_app', xml: '<SiteMap />' }], sitemapThrows = false } = {}) {
+// A minimal SDK stand-in for the genpage handler: the page manifest (in a web resource) that says
+// which pages this build authored, and the live `uxagentproject` rows used to skip ones already
+// gone. The `uxagentprojectfile` branch exists ONLY so tests can prove the handler never touches
+// it — deleting the project cascades to its files, and deleting them ourselves would gut a page
+// the platform is about to refuse to delete.
+function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
   const deleted = [];
+  const queried = [];
   const manifestJson = JSON.stringify({ schemaVersion: 1, pages: manifestPages });
-  const byUnique = new Map(otherApps.map((a, i) => [a.unique, { i, xml: a.xml }]));
   const sdk = {
     async queryRecords(entity, opts = {}) {
+      queried.push(entity);
       const filter = String(opts.filter || '');
       if (entity === 'webresource') {
         return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
@@ -1016,33 +1015,13 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {}, otherApps 
         const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
         return (files[owner.toLowerCase()] || []).map((id) => ({ uxagentprojectfileid: id }));
       }
-      if (entity === 'appmodule') {
-        const m = /uniquename eq '([^']+)'/.exec(filter);
-        if (m) {
-          const hit = byUnique.get(m[1]);
-          return hit ? [{ appmoduleid: `app-${hit.i}`, appmoduleidunique: `uniq-${hit.i}` }] : [];
-        }
-        // The env-wide enumeration.
-        return otherApps.map((a, i) => ({ appmoduleid: `app-${i}`, appmoduleidunique: `uniq-${i}`, uniquename: a.unique }));
-      }
-      if (entity === 'appmodulecomponent') {
-        const m = /_appmoduleidunique_value eq (\S+)/.exec(filter);
-        return m ? [{ objectid: `sm-${m[1]}`, componenttype: 62 }] : [];
-      }
-      if (entity === 'sitemap') {
-        if (sitemapThrows) throw new Error('sitemap unreadable');
-        const m = /sitemapid eq ([\w-]+)/.exec(filter) || /sm-uniq-(\d+)/.exec(filter);
-        const idx = m ? Number(String(m[1]).replace(/\D/g, '')) : 0;
-        const app = otherApps[idx];
-        return app ? [{ sitemapxml: app.xml }] : [];
-      }
       return [];
     },
     async deleteRecord(entity, id) {
       deleted.push(`${entity}:${id}`);
     },
   };
-  return { sdk, deleted };
+  return { sdk, deleted, queried };
 }
 const PAGE_1 = '11111111-1111-4111-8111-111111111111';
 const PAGE_2 = '22222222-2222-4222-8222-222222222222';
@@ -1056,14 +1035,14 @@ test('genpage resolve returns only pages the manifest says WE authored', async (
   assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
 });
 
-test('genpage del removes the file rows before the project', async () => {
-  const { sdk, deleted } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
+// Deleting the project cascades to its files (the uxagentproject -> uxagentprojectfile
+// relationship is CascadeConfiguration Delete=Cascade), so ONE delete is both necessary and
+// sufficient. Deleting files ourselves first would be destructive — see the skip test below.
+test('genpage del deletes ONLY the project row and never touches its files', async () => {
+  const { sdk, deleted, queried } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
   await KIND_HANDLERS.genpage.del(sdk, { id: PAGE_1, name: 'Overview' });
-  assert.deepStrictEqual(deleted, [
-    'uxagentprojectfile:f1',
-    'uxagentprojectfile:f2',
-    `uxagentproject:${PAGE_1}`,
-  ]);
+  assert.deepStrictEqual(deleted, [`uxagentproject:${PAGE_1}`]);
+  assert.ok(!queried.includes('uxagentprojectfile'), 'must not enumerate the page files');
 });
 
 // Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
@@ -1087,11 +1066,41 @@ test('a dependency block is still a FAILURE for kinds that did not opt in', asyn
   await assert.rejects(() => deleteStep({}, handler, [{ id: 'v1' }]), /referenced by/);
 });
 
-test('genpage deletes a page no other app references', async () => {
+// THE regression this ordering exists for. Dataverse tracks a dependency on the page ROW
+// (component type 10372) but NOT on its files (10373): measured on pages an app sitemap
+// references, the project reports 1 dependent and its DELETE is refused, while every one of its
+// files reports ZERO dependents and would delete cleanly. So if the handler deleted files first,
+// a skipped page would be left as an empty shell for the app that still references it.
+test('a still-referenced page is SKIPPED with its files left completely intact', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const deleted = [];
+  const sdk = {
+    // The page HAS files — a handler that enumerated and deleted them first would destroy the
+    // content of a page the platform then refuses to delete.
+    async queryRecords(entity) {
+      return entity === 'uxagentprojectfile'
+        ? [{ uxagentprojectfileid: 'f1' }, { uxagentprojectfileid: 'f2' }]
+        : [];
+    },
+    async deleteRecord(entity, id) {
+      deleted.push(`${entity}:${id}`);
+      if (entity === 'uxagentproject') throw err;
+    },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1]);
+  assert.deepStrictEqual(r.deletedIds, []);
+  assert.deepStrictEqual(
+    deleted,
+    [`uxagentproject:${PAGE_1}`],
+    'the page delete must be the ONLY write attempted — its files must survive the skip'
+  );
+});
+
+test('genpage resolve ignores live pages the manifest does not claim', async () => {
   const { sdk } = genpageSdk({
     manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
-    livePages: [PAGE_1],
-    otherApps: [{ unique: 'other_app', xml: `<SiteMap><Area><Group><SubArea GenPageId="${PAGE_2}" /></Group></Area></SiteMap>` }],
+    livePages: [PAGE_1, PAGE_2],
   });
   const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
   assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);

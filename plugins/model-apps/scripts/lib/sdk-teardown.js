@@ -13,8 +13,8 @@
 //                      page is REFERENCED by an app, not owned by one — another app's sitemap, or a
 //                      form's UxAgentControl `RefId` in formxml, can point at the same row — so the
 //                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
-//                      sitemap reference is gone and the cross-app scan only sees genuine other
-//                      consumers; a page any other app still references is SKIPPED, not deleted.
+//                      sitemap reference is already gone and the only dependency the platform can
+//                      still report is a GENUINE other consumer; such a page is SKIPPED, not deleted.
 //   1b. roles        — persona security roles. Deleted right after the app (BEFORE the data model): a
 //                      role holding a soon-to-be-deleted table's privileges could otherwise block that
 //                      table's delete. SEC-1: only roles the SDK itself authored (marked on the role
@@ -220,21 +220,18 @@ const KIND_HANDLERS = {
         return [];
       }
     },
-    // Files first, then the project — the parent cannot be removed while children reference it.
-    // A page still in use fails here with a dependency error, which `deleteStep` records as a SKIP
-    // (see isUndeletable) rather than a teardown failure: another app legitimately owning the page
-    // is an expected outcome, not a broken teardown.
+    // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
+    // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
+    // Delete=Cascade, so the platform removes them for us.
+    //
+    // Deleting the files ourselves first would be actively DESTRUCTIVE. Dataverse tracks a
+    // dependency on the PROJECT row (component type 10372) but NOT on its files (10373):
+    // measured on pages that an app sitemap references, the project reports 1 dependent and its
+    // DELETE is refused, while every one of its files reports ZERO dependents and would delete
+    // cleanly. So a files-first order would strip the content out of a page the platform is about
+    // to refuse to delete, leaving the app that still references it pointing at an empty shell —
+    // exactly the data loss this step exists to avoid. One delete, and the platform decides.
     async del(sdk, item) {
-      const files = await sdk.queryRecords('uxagentprojectfile', {
-        select: ['uxagentprojectfileid'],
-        filter: `_uxagentprojectid_value eq ${item.id}`,
-        paginate: true,
-      });
-      for (const f of files || []) {
-        if (f && f.uxagentprojectfileid) {
-          await sdk.deleteRecord('uxagentprojectfile', f.uxagentprojectfileid);
-        }
-      }
       await sdk.deleteRecord('uxagentproject', item.id);
     },
   },
@@ -455,10 +452,10 @@ function planTeardown(spec) {
     // Generative pages, AFTER the app. The SDK no longer deletes them — a page is
     // referenced by an app, not owned by one, so the SDK reports them and the owner decides. We are
     // the owner: the page manifest records exactly which pages this build authored. Ordered after the
-    // app so the app's own sitemap reference is already gone and the cross-app scan only ever sees a
-    // GENUINE other consumer. Emitted for every app-bearing spec (not gated on spec.pages) so a spec
-    // that dropped its pages still cleans up what it previously created; resolve is a no-op when the
-    // manifest is absent or lists nothing.
+    // app so the app's own sitemap reference is already gone and any dependency the platform still
+    // reports belongs to a GENUINE other consumer. Emitted for every app-bearing spec (not gated on
+    // spec.pages) so a spec that dropped its pages still cleans up what it previously created;
+    // resolve is a no-op when the manifest is absent or lists nothing.
     steps.push({
       kind: 'genpage',
       phase: 'pages',
