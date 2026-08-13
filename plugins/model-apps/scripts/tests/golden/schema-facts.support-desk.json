@@ -1,0 +1,167 @@
+{
+  "globalChoices": [],
+  "tables": [
+    {
+      "logicalName": "new_comment",
+      "displayName": "Comment",
+      "hasNotes": false,
+      "quickCreate": false,
+      "primary": {
+        "logicalName": "new_name",
+        "displayName": "Comment",
+        "autoNumber": false
+      },
+      "columns": [
+        {
+          "logicalName": "new_author",
+          "type": "Text",
+          "required": false
+        },
+        {
+          "logicalName": "new_body",
+          "type": "Memo",
+          "required": false
+        },
+        {
+          "logicalName": "new_postedon",
+          "type": "DateTime",
+          "required": false
+        }
+      ],
+      "statusReasons": [],
+      "alternateKeys": []
+    },
+    {
+      "logicalName": "new_customer",
+      "displayName": "Customer",
+      "hasNotes": false,
+      "quickCreate": false,
+      "primary": {
+        "logicalName": "new_name",
+        "displayName": "Customer Name",
+        "autoNumber": false
+      },
+      "columns": [
+        {
+          "logicalName": "new_accountmanager",
+          "type": "Text",
+          "required": false
+        },
+        {
+          "logicalName": "new_segment",
+          "type": "Choice",
+          "required": false,
+          "choices": [
+            {
+              "value": 100000000,
+              "label": "Enterprise"
+            },
+            {
+              "value": 100000001,
+              "label": "Mid-Market"
+            },
+            {
+              "value": 100000002,
+              "label": "Small Business"
+            }
+          ]
+        }
+      ],
+      "statusReasons": [],
+      "alternateKeys": []
+    },
+    {
+      "logicalName": "new_ticket",
+      "displayName": "Ticket",
+      "hasNotes": false,
+      "quickCreate": false,
+      "primary": {
+        "logicalName": "new_name",
+        "displayName": "Title",
+        "autoNumber": false
+      },
+      "columns": [
+        {
+          "logicalName": "new_description",
+          "type": "Memo",
+          "required": false
+        },
+        {
+          "logicalName": "new_duedate",
+          "type": "DateTime",
+          "required": false
+        },
+        {
+          "logicalName": "new_priority",
+          "type": "Choice",
+          "required": false,
+          "choices": [
+            {
+              "value": 100000000,
+              "label": "Low"
+            },
+            {
+              "value": 100000001,
+              "label": "Medium"
+            },
+            {
+              "value": 100000002,
+              "label": "High"
+            },
+            {
+              "value": 100000003,
+              "label": "Critical"
+            }
+          ]
+        },
+        {
+          "logicalName": "new_status",
+          "type": "Choice",
+          "required": false,
+          "choices": [
+            {
+              "value": 100000000,
+              "label": "New"
+            },
+            {
+              "value": 100000001,
+              "label": "In Progress"
+            },
+            {
+              "value": 100000002,
+              "label": "Resolved"
+            },
+            {
+              "value": 100000003,
+              "label": "Closed"
+            }
+          ]
+        }
+      ],
+      "statusReasons": [],
+      "alternateKeys": []
+    }
+  ],
+  "relationships": [
+    {
+      "kind": "1:n",
+      "schemaName": "new_customer_new_ticket",
+      "referenced": "new_customer",
+      "referencing": "new_ticket",
+      "lookup": {
+        "logicalName": "new_customerid",
+        "displayName": "Customer"
+      }
+    },
+    {
+      "kind": "1:n",
+      "schemaName": "new_ticket_new_comment",
+      "referenced": "new_ticket",
+      "referencing": "new_comment",
+      "lookup": {
+        "logicalName": "new_ticketid",
+        "displayName": "Ticket"
+      }
+    }
+  ]
+}

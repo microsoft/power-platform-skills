@@ -178,7 +178,7 @@ async function provisionCustomHost(opts = {}) {
   const sleep = sleepImpl || defaultSleep;
   const now = nowImpl || (() => Date.now());
 
-  const cleanBase = bapBase.replace(/\/+$/, '');
+  const cleanBase = helpers.validateBapUrl(bapBase, { allowPath: false }).replace(/\/+$/, '');
   const cid = correlationId || crypto.randomUUID();
   const startedAt = now();
 
@@ -237,7 +237,14 @@ async function provisionCustomHost(opts = {}) {
   // is sparse.
   let resolvedSku = envBody?.properties?.environmentSku || environmentSku;
   let provisioningState = extractProvisioningState(envBody) || 'Creating';
-  const locationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const rawLocationHeader = postRes.headers?.location || postRes.headers?.Location || null;
+  const locationHeader = rawLocationHeader
+    ? helpers.validateBapPollingUrl(
+      rawLocationHeader,
+      postUrl,
+      'BAP env-create Location header',
+    )
+    : null;
   let retryAfterSec = readRetryAfterSec(postRes.headers) || DEFAULT_RETRY_AFTER_SEC;
 
   // Already done synchronously

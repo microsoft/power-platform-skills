@@ -30,7 +30,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 
 - The user's requirements (`$ARGUMENTS`)
 - The working directory (absolute path where artifacts should be written)
-- The plugin root directory (`${CLAUDE_PLUGIN_ROOT}`)
+- The plugin root directory (`${PLUGIN_ROOT}`)
 
 ---
 
@@ -49,7 +49,7 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
 - The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
+  for `> 2.10.0`-shaped text — `PAC CLI Version 2.10.x` is the canonical
   form).
 
 Decisions and outcomes can be summarized at the end of the section, but they
@@ -70,9 +70,10 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
-user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(required for `pac model create` support and the genpage `upload` connector/Custom API
+flags). If the version is older, instruct the user to update:
+`dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
 Do NOT proceed until prerequisites are met.
@@ -197,7 +198,89 @@ If any entities need creating, note that entity creation requires:
 - A target solution (the planner asks you to pick one in the next step)
 
 Detection uses `pac model list-tables` natively; creation runs through the
-plugin's own Web API scripts under `${CLAUDE_PLUGIN_ROOT}/scripts/`.
+plugin's own Web API scripts under `${PLUGIN_ROOT}/scripts/`.
+
+### Connector Detection (handled by the orchestrator, not by you)
+
+If the request implies a non-Dataverse source (SharePoint, Teams, weather,
+Office 365, SQL via connector, or a custom REST connector), **do not dispatch any
+agent and do not run the feature-gate probe or any connector discovery inline.**
+You have no `Task` tool, and `genpage-connector-builder` asks the user questions —
+it cannot run headless inside a sub-agent. It is dispatched by the top-level
+`/genpage` orchestrator.
+
+Discovery is **mutating** (it can create a connection reference), and it is *you*
+who resolves create-vs-edit and the target environment — so discovery always runs
+AFTER you, never before. Your first invocation therefore always carries the
+sentinel `No connector bindings.`.
+
+Two cases:
+
+1. **The orchestrator already forwarded connector results** — you are being
+   re-invoked after discovery, so your prompt carries a `## Connector Bindings`
+   block (or the sentinel `No connector bindings.`) and/or a `connectors.json`
+   path. Consume it as-is: copy the block verbatim into the plan's
+   `## Connector Bindings` section. Never re-derive or edit it.
+2. **A connector need is present or surfaces during clarification** — do NOT
+   attempt discovery. Stop and return
+
+   ```json
+   { "action": "connector_discovery_required", "intent": "<the source(s) implied>",
+     "resolvedAction": "create" | "edit", "envUrl": "<the environment you resolved>" }
+   ```
+
+   `resolvedAction` and `envUrl` are **required**: the orchestrator dispatches the
+   builder against exactly those, and a connection reference created in the wrong
+   environment or the wrong mode cannot be undone. Return this only after your
+   auth/environment steps have run, so both values are real.
+
+`genpage-connector-builder` remains the single owner of the connectors feature gate,
+connection / connection-ref discovery, connection-reference creation, and the binding
+contract. When no connectors are involved, write the exact sentinel
+`No connector bindings.` into the plan.
+
+When the orchestrator forwards results it provides:
+
+- `connector-bindings.md` — the exact body for the plan's `## Connector Bindings`
+section (either `No connector bindings.` or the binding table).
+- `connectors.json` — the bare-array binding file for deployment.
+
+Read `connector-bindings.md` and splice its contents verbatim into the
+`## Connector Bindings` section of `genpage-plan.md`.
+
+If the request implies **only** Dataverse and/or mock data (no connector source),
+write `## Connector Bindings` as exactly `No connector bindings.`.
+
+### Custom API Detection (delegated to genpage-customapi-builder)
+
+If the request implies **server-side Dataverse logic** — approving/escalating a record,
+running a calculation or validation, or any operation that maps to a Dataverse **Custom API**
+(Action or Function) rather than a plain row read/write — delegate ALL Custom API work to the
+`genpage-customapi-builder` agent via the `Task` tool. Do **not** run the feature-gate probe
+or any Custom API discovery inline — that agent is the single owner of the `custom-api`
+feature gate, Custom API discovery, and the binding contract.
+
+Invoke `genpage-customapi-builder` with a prompt containing:
+
+- **Mode:** `create`
+- **Working directory**, **Plugin root** (`${PLUGIN_ROOT}`), **Environment URL**
+- **Page tables:** the table logical name(s) the page is bound to (from `## Existing
+  Entities` / `pageInput`), or "none"
+- **Intent:** the server-side operation(s) the request implies (e.g. "approve the order",
+  "escalate the case", "compute an order summary")
+
+It writes two files into the working directory:
+
+- `custom-api-bindings.md` — the exact body for the plan's `## Custom API Bindings` section
+  (either `No custom API bindings.` or the binding table).
+- `actions.json` — the bare-array binding file for deployment (`--actions`).
+
+Read `custom-api-bindings.md` and splice its contents verbatim into the
+`## Custom API Bindings` section of `genpage-plan.md`.
+
+If the request implies **no** server-side Custom API operation (plain Dataverse CRUD and/or
+mock data only), skip the agent entirely and write `## Custom API Bindings` as exactly
+`No custom API bindings.`.
 
 ### App Detection
 
@@ -241,7 +324,7 @@ Query the env for non-managed solutions (excluding the always-present "Default" 
 "Active"):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "solutions?\$select=uniquename,friendlyname&\$expand=publisherid(\$select=customizationprefix)&\$filter=ismanaged eq false and uniquename ne 'Default' and uniquename ne 'Active' and isvisible eq true&\$top=10"
 ```
 
@@ -289,9 +372,9 @@ in the plan's `## Environment`. Specifics:
 - **Existing solution** → use it directly; capture its prefix from the Step 2 query.
 - **Create new under publisher `<prefix>`** → resolve publisher uniquename, then create:
   ```bash
-  PUB=$(node "${CLAUDE_PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
+  PUB=$(node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
     "publishers?\$select=uniquename&\$filter=customizationprefix eq '<prefix>'&\$top=1")
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/create-solution.js" "$ENV_URL" \
+  node "${PLUGIN_ROOT}/scripts/provision-solution.js" "$ENV_URL" \
     "<UniqueName>" "<Friendly Name>" --publisher "<publisherUniqueName>"
   ```
   Omit `--publisher` to use the env's Default Publisher (prefix `new`).
@@ -326,6 +409,8 @@ Enter plan mode (`EnterPlanMode`) and present:
 - Entities needed: [list]
 - Entities that exist: [list]
 - Entities to create: [list — with columns, types, relationships, choices]
+- Connector bindings: [ready-to-bind connectionreference logical names, or "none"]
+- Custom API bindings: [bound Custom API names (Action/Function), or "none"]
 - Sample data: will ask after entity creation
 
 ### App
@@ -357,7 +442,7 @@ of truth** for all downstream agents. It must be fully self-contained.
 downstream agents parse by name. See:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/references/plan-schema.md
+${PLUGIN_ROOT}/references/plan-schema.md
 ```
 
 Read that file before writing the plan. Every required section must be present with
@@ -385,13 +470,16 @@ prefix you embed in a column name is a silent footgun.
 `crb2b_playerresult.crb2b_playername`), but write only suffixes in the document.
 
 For the `## Per-Page Specifications` section, set the **`Needs caching:`** field
-(exact key, with space) per page: `true` for list pages, detail pages, or any
-page where the user is likely to navigate away and return; `false` for forms,
-single-visit dashboards, or mock-data pages. The page-builder reads this field
-to decide whether to load `references/data-caching.md`.
+(exact key, with space) per page: `true` for any page that **fetches data on
+mount** through a real host read — Dataverse `dataApi` calls OR connector calls
+such as `queryConnectorTable` / `executeConnectorOperation`. Lists, details, and
+single-visit overviews/dashboards all need the in-flight de-dupe that survives
+the host double-mount. Set `false` only for pages that render inline mock arrays
+and forms with no initial fetch. The page-builder reads this field to decide
+whether to load `references/data-caching.md`.
 
 For the `## Relevant Samples` section: pick the most structurally relevant sample
-from `${CLAUDE_PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
+from `${PLUGIN_ROOT}/samples/` (e.g., 7-responsive-cards.tsx for card
 layouts, 2-wizard-multi-step.tsx for wizards, 12-dialog-form-overlay.tsx for any
 page with a modal/dialog — create/edit forms, confirm-delete, detail-in-a-dialog).
 Do NOT list reference docs as samples — only files under `samples/`.

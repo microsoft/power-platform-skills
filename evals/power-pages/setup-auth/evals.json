@@ -541,7 +541,7 @@
       "expectations": [
         "Detects the site as a React framework project",
         "Asks the optional features question in Phase 2.1 and the user selects Terms and Conditions",
-        "Runs `node \"${CLAUDE_PLUGIN_ROOT}/scripts/check-solution-installed.js\" --solutionName \"msdynce_PortalPrivacyExtensions\"` BEFORE asking the GDPR prerequisite question",
+        "Runs `node \"${PLUGIN_ROOT}/scripts/check-solution-installed.js\" --solutionName \"msdynce_PortalPrivacyExtensions\"` BEFORE asking the GDPR prerequisite question",
         "Parses the script's stdout JSON result and branches based on the `installed` boolean",
         "When the script returns installed: true, skips the manual prerequisite confirmation entirely and tells the user the solution is detected (including the version from the JSON) before proceeding to collect Terms content",
         "When the script returns installed: false, tells the user clearly that Terms and Conditions will NOT be enforced by the server until msdynce_PortalPrivacyExtensions is installed (Authentication/Registration/TermsAgreementEnabled is silently ignored without it), then asks via AskUserQuestion whether to continue scaffolding anyway or skip Terms entirely (two options, not three)",

@@ -46,8 +46,11 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
-    /plugin install code-apps@power-platform-skills
+    /plugin install mcp-apps@power-platform-skills
+    /plugin install code-apps-preview@power-platform-skills
+    /plugin install mobile-app@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
+    /plugin install power-automate@power-platform-skills
     ```
 
 ## Available Plugins
@@ -60,9 +63,19 @@ Create and deploy Power Pages sites using modern development approaches.
 
 ### [Model Apps](plugins/model-apps/README.md) (`plugins/model-apps`)
 
-Build and deploy Power Apps generative pages for model-driven apps.
+Build model-driven Power Apps end to end, and the generative pages that go in them.
 
-**Stack**: React + TypeScript + Fluent, deployed via PAC CLI
+**Skills**: `/app-builder` (**Preview**) builds and edits a whole app — tables, relationships, forms,
+views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
+generative pages for an app that already exists. Use either independently — neither requires the other
+
+**Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
+
+### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
+
+Generate interactive MCP App widgets for MCP tools.
+
+**Stack**: HTML widgets using the MCP Apps protocol
 
 ### [Code Apps](plugins/code-apps/AGENTS.md) (`plugins/code-apps`)
 
@@ -70,11 +83,23 @@ Build and deploy Power Apps code apps connected to Power Platform via connectors
 
 **Stack**: React + Vite + TypeScript, deployed via PAC CLI
 
+### [Mobile Apps](plugins/mobile-apps/README.md) (`plugins/mobile-apps`)
+
+Build and deploy Power Apps code apps for mobile with native device capabilities.
+
+**Stack**: Expo + React Native + TypeScript, deployed via Power Apps Wrap
+
 ### [Canvas Apps](plugins/canvas-apps/AGENTS.md) (`plugins/canvas-apps`)
 
 Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 
 **Stack**: PA YAML (`.pa.yaml`) authored via `CanvasAuthoringMcpServer`, requires .NET 10 SDK
+
+### [Power Automate](plugins/power-automate/README.md) (`plugins/power-automate`)
+
+Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server.
+
+**Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
 
 ## Local Development
 
@@ -86,8 +111,11 @@ To develop and test plugins locally, follow these steps:
     ```bash
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-pages
     claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
     ```
 
 ## Running Without Interruption
@@ -155,38 +183,65 @@ See the [Copilot CLI docs](https://docs.github.com/en/copilot/how-tos/use-copilo
 
 ```text
 power-platform-skills/
-├── .claude-plugin/
-│   └── marketplace.json      # Marketplace manifest (lists all plugins)
+├── marketplace.json          # Open Plugins marketplace manifest (lists all plugins)
+├── .claude-plugin/           # Legacy marketplace shim for existing subscriptions
+│   └── marketplace.json
 ├── .claude/
 │   └── settings.json         # Auto-allowed tools (pac, node, dotnet, etc.)
 ├── plugins/
 │   ├── power-pages/          # Power Pages plugin
-│   │   ├── .claude-plugin/
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── .claude-plugin/   # Legacy manifest mirror
 │   │   │   └── plugin.json
 │   │   ├── commands/
 │   │   ├── shared/
 │   │   └── skills/
 │   ├── model-apps/           # Model Apps plugin
-│   |   ├── .claude-plugin/
+│   |   ├── .plugin/
 │   │   └── plugin.json
 │   |   ├── commands/
 │   |   ├── skills/
 │   |   ├── shared/           # Shared references + samples
 │   |   └── github/           # GitHub Copilot instructions
+│   ├── mcp-apps/             # MCP Apps widget generator plugin
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── references/
+│   │   ├── samples/
+│   │   └── skills/
 │   ├── code-apps/            # Code Apps plugin
-│   │   ├── .claude-plugin/
+│   │   ├── .plugin/
 │   │   │   └── plugin.json
 │   │   ├── agents/
 │   │   ├── skills/
 │   │   └── shared/           # Shared instructions + references
+│   ├── mobile-apps/          # Mobile Apps plugin
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── .claude-plugin/   # Legacy manifest mirror
+│   │   │   └── plugin.json
+│   │   ├── agents/
+│   │   ├── skills/
+│   │   ├── shared/           # Shared instructions + references
+│   │   └── template/         # Bundled Expo app template
 │   └── canvas-apps/          # Canvas Apps plugin
-│       ├── .claude-plugin/
+│       ├── .plugin/
 │       │   └── plugin.json
 │       ├── references/       # Technical + design guides
 │       └── skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md
 ```
+
+The `.claude-plugin` files are compatibility mirrors for users who subscribed
+before the Open Plugins migration. The root legacy marketplace mirrors
+`marketplace.json`, and per-plugin legacy manifests mirror `.plugin/plugin.json`.
+The shared marketplace keeps marketplace-level `owner` and `metadata`, while each
+plugin entry is intentionally just `name` plus repository-root-relative `source`.
+Plugin descriptions, versions, licenses, and keywords are controlled from each
+plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
+duplicating display/update metadata.
 
 ## Documentation
 
@@ -214,4 +269,6 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals. Telemetry is default-on; users opt out per-plugin via the `/<plugin>:telemetry off` command (e.g. `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. See `shared/telemetry/README.md` for what is sent.
+Power Pages and Model Apps ship 1DS telemetry code, but their committed configurations have different states. Power Pages telemetry is enabled and default-on; its usage events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Model Apps ships hard-disabled (`disabled: true`), so it currently transmits no events and writes no local telemetry mirror. If Model Apps is enabled later, its events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
+
+For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See `shared/telemetry/README.md` for the full field list, kill-switch semantics, and local-mirror behavior.

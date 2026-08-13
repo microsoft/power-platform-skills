@@ -11,7 +11,7 @@ Tracking only runs when `.powerpages-site/site-settings/` exists (site has been 
 Run the shared tracking script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
+node "${PLUGIN_ROOT}/scripts/update-skill-tracking.js" --projectRoot "<PROJECT_ROOT>" --skillName "<PascalCaseName>" --authoringTool "<YourAgentName>"
 ```
 
 - `--projectRoot`: The project root directory (containing `powerpages.config.json`)
@@ -47,6 +47,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | manage-headers | ManageHeaders | Site/AI/Skills/ManageHeaders |
 | manage-firewall | ManageFirewall | Site/AI/Skills/ManageFirewall |
 | security-review | SecurityReview | Site/AI/Skills/SecurityReview |
+| scan-code | ScanCode | Site/AI/Skills/ScanCode |
 | setup-solution | SetupSolution | Site/AI/Skills/SetupSolution |
 | export-solution | ExportSolution | Site/AI/Skills/ExportSolution |
 | import-solution | ImportSolution | Site/AI/Skills/ImportSolution |

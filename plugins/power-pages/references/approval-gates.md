@@ -256,12 +256,16 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 
 ---
 
-### 6.1 `plan-alm` (19 calls; orchestrator)
+### 6.1 `plan-alm` (17 calls; planner)
+
+> `plan-alm` is a **planner** — it produces an approved/draft HTML plan and never executes. The execution gates that used to live in Phases 5–8 (deploy-failure, post-deploy activation, manual export/import checkpoint) now belong to the individual ALM skills the user runs afterward; they are catalogued under those skills' sections, not here.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `plan-alm:1.deferral` | gate | progress | 1 | `.alm-deferred` marker present — *"Continue with deferral / remove and proceed / cancel"* | `deferral-marker` |
+| `plan-alm:1.approve-draft` | gate | plan | 1 (0b) | Existing **Draft** plan found — *"Approve this draft now (no re-plan) / re-plan from scratch / cancel"*. Approve writes status via `set-plan-status.js` and exits | nothing |
 | `plan-alm:1.completeness` | gate | progress | 1 | Completeness check found gaps — *"Sync first / plan with gaps / cancel"* | nothing |
+| `plan-alm:1.env-match` | gate | progress | 1 (6b) | `pac env who` env ≠ project's (recorded-URL mismatch or `websiteRecordId` not found in connected env) — *"Switch PAC env & re-run / continue against connected env (degraded) / cancel"*. Only fires on a detected mismatch | nothing |
 | `plan-alm:2.q1-existing` | gate | plan | 2 (Q1) | `SOLUTION_DONE=true` — *"Use existing solution **{name}**?"* | nothing |
 | `plan-alm:2.q1-fresh` | gate | plan | 2 (Q1) | `SOLUTION_DONE=false` — *"Include solution setup in plan?"* | nothing |
 | `plan-alm:2.q1b-split` | gate | plan | 2 (Q1b) | `RECOMMEND_SPLIT=true` — *"Follow recommended {strategy} split?"* | nothing |
@@ -273,12 +277,8 @@ Each section lists every `AskUserQuestion` in that skill. Catalog rows are marke
 | `plan-alm:2.q3-manual` | gate | plan | 2 (Q3 Manual) | *"How many target envs?"* | nothing |
 | `plan-alm:2.q4-manual-target` | gate | plan | 2 (Q4 Manual per stage) | *"URL for target env {N}?"* | nothing |
 | `plan-alm:2.q5-manual-type` | gate | plan | 2 (Q5 Manual) | *"Export managed or unmanaged?"* | nothing |
-| `plan-alm:2.q6-manual-checkpoint` | gate | plan | 2 (Q6 Manual) | *"Pause between export and import?"* | nothing |
-| `plan-alm:4.approve` | gate | plan | 4 | *"Approve and execute / save for later / change something"* | nothing |
-| `plan-alm:4.approver-fallback` | not-a-gate | — | 4 | Free-text "approver name" — pure data-gathering | — |
-| `plan-alm:7.manual-checkpoint` | gate | progress | 7 (Manual path) | `MANUAL_CHECKPOINT=true` — *"Export done; proceed to import?"* | partial-manifest |
-| `plan-alm:7.deploy-failure` | gate | plan | 7 (Step A.1) | deploy-pipeline halted before completing — *"Retry / Skip stage / Exit"*. Fires per failed stage. | nothing |
-| `plan-alm:7.activate-step-b` | gate | plan | 7 (Step B) | Post-deploy activation prompt per stage — *"Activate now / skip"* | nothing |
+| `plan-alm:4.approve` | gate | plan | 4 | *"Save approved / Save draft / Change something"* — saves the plan; never executes | nothing |
+| `plan-alm:4.approver` | not-a-gate | — | 4 | Approver-name capture (option 1 only) — always-on interactive prompt with git/OS-name prefill; data-gathering for the audit trail | — |
 
 ---
 
@@ -526,13 +526,16 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.17 `setup-auth` (5 calls)
+### 6.17 `setup-auth` (8 calls)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `setup-auth:1.3.deploy-first` | gate | plan | 1.3 | `.powerpages-site` missing — *"Deploy now (Required) / Later"* | nothing |
 | `setup-auth:1.4.create-webroles` | gate | plan | 1.4 | No web roles found — *"Create web roles first (Recommended) / Skip"* | nothing |
 | `setup-auth:2.1.requirements` | gate | plan | 2.1 | *"Which auth features? Login+Logout+RBAC / Login+Logout only / RBAC only"* — covers the follow-up "which roles get access" sub-prompt in the same step | nothing |
+| `setup-auth:2.1.2.setup-choice` | not-a-gate | — | 2.1.2 | Guided vs "configure it for me" selection — sub-prompt; the load-bearing consent is the `2.1.2.provision-idp` gate | — |
+| `setup-auth:2.1.2.provision-idp` | gate | consent | 2.1.2 | *"Go ahead and configure the {provider} app registration in your {provider} now? Yes / No"* — the configure-it-for-you path only (offered when the provider supports it): creates/configures a real app registration in the user's Okta/Auth0/Entra External ID (or other OIDC) tenant via the provider's CLI/API. Guided setup doesn't reach this gate. | nothing |
+| `setup-auth:2.1.2.open-registration` | not-a-gate | — | 2.1.2 | Open vs Controlled registration — records `OpenRegistrationEnabled`; the load-bearing sign-off is the `2.2.plan-approval` gate | — |
 | `setup-auth:2.2.plan-approval` | gate | plan | 2.2 | *"Approve and proceed / I'd like to make changes"* | nothing |
 | `setup-auth:8.4.deploy` | gate | plan | 8.4 | *"Deploy now (Recommended) / Later"* — auth doesn't work until deployed | nothing |
 
@@ -652,7 +655,7 @@ The `### Option rules` sections in `manage-firewall` and `scan-site` retain `<!-
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Access & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
+| `security-review:2.1.goal` | gate | plan | 2.1 | *"What to review? Code & config / Release readiness / Deployed site"* — branches into 3 different sub-skill sets. | nothing |
 | `security-review:5.3.next-action` | gate | plan | 5.3 | Post-report prompt — *"Walk me through the fixes / Re-run the review / Done for now"*. Drives whether remediation skills get invoked next. | nothing |
 
 ---
@@ -670,9 +673,21 @@ New skill introduced by PR #144. Orchestrates AI summarization API integration a
 
 ---
 
+### 6.30 `scan-code` (3 gate IDs)
+
+New skill (Power Pages source & dependency security scan). Runs local static analysis and dependency/secret/license scanning, then surfaces findings. All gates are `plan` — every prompt configures a read-only scan, so cancelling never leaves behind state to undo.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `scan-code:1.agent-review-fallback` | gate | plan | 1.2 | Offer the high-token agent-driven review when a scanning tool is missing. Fires only on a missing tool, interactive mode only. | nothing |
+| `scan-code:2.scope-choice` | gate | plan | 2 (`### Scope selection`, Q1) | *"What to check? Everything / Code only / Packages only"* — selects which scanners run. Skipped in review mode and when the initial request already names the scope. | nothing |
+| `scan-code:2.depth-choice` | gate | plan | 2 (`### Scope selection`, Q2) | *"How thorough? Advanced / Basic"* — sets the code-scan depth. Asked only when code checking is included; skipped in review mode. | nothing |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
-`report-issue` — The power-pages SKILL.md wrapper at `plugins/power-pages/skills/report-issue/SKILL.md` is a thin re-export that contains no prompts. The actual workflow with `AskUserQuestion` calls lives in `shared/skills/report-issue/report-issue-workflow.md`, which is consumed by every plugin (not just power-pages). The shared workflow lies outside the per-plugin lint scope (`plugins/power-pages/skills/`), so its prompts are not catalogued here. If the shared workflow is ever ported into per-plugin SKILL.md files, add a `report-issue:*` section to this catalog.
+`report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.
 
 ---
 
@@ -712,10 +727,11 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 - §6.13–§6.24 added — full catalog rows for `create-site`, `deploy-site`, `add-server-logic`, `add-cloud-flow`, `setup-auth`, `integrate-webapi`, `setup-datamodel`, `add-sample-data`, `add-seo`, `create-webroles`, `audit-permissions`, `integrate-backend` (45 gates + 9 not-a-gates).
 - §6.24a–§6.28 added — security skills introduced by PR #151 (`manage-firewall`, `manage-headers`, `scan-site`, `security-review`). The new skills use a runtime-loop prompt pattern; §6.24a documents the marker convention for that pattern. 3 gates + 2 not-a-gates.
+- §6.30 added — `scan-code` (Power Pages source & dependency security scan). 3 `plan` gates (`scan-code:1.agent-review-fallback`, `scan-code:2.scope-choice`, `scan-code:2.depth-choice`); no not-a-gates.
 - Markers added to all non-ALM SKILL.md files (HTML comment + 🚦 block per gate; `not-a-gate` comment per data-gathering prompt or meta-mention).
 - `scripts/lint-skills-alm.js` warn-only branch removed — all skills now hard-fail.
 - `AGENTS.md` Key Patterns updated — Approval Gate convention applies plugin-wide; new skills must extend §6 in the same PR they introduce a prompt.
-- `report-issue` excluded from the catalog (cross-plugin shared workflow lives outside the per-plugin lint scope). **Cross-plugin TODO:** the `AskUserQuestion` calls in `shared/skills/report-issue/report-issue-workflow.md` are not caught by any per-plugin lint today. A future cross-plugin sweep should either (a) define a `shared:*` namespace in the catalog and add markers in the shared workflow, or (b) duplicate the workflow into each plugin so the per-plugin lint covers it.
+- `report-issue` excluded from the catalog because its `AskUserQuestion` calls come from a cross-plugin shared workflow. **Cross-plugin TODO:** those shared prompts are not caught by any per-plugin lint today. A future cross-plugin sweep should define a `shared:*` namespace in the catalog or explicitly opt each plugin copy into per-plugin lint coverage.
 - v3 lint changes: removed warn-only branch; tightened `m <= promptLine` to strict `m <`; relaxed `CATALOG_GATE_ID_PATTERN` to case-insensitive on the skill-name segment; added two new rules — `CATALOG-row-must-have-marker` (reverse check — catalog rows of `kind: gate` must have a matching SKILL.md marker; prevents the orphan-row class of bug v3 closed by hand) and `GATE-prose-block-required` (every marker must be followed within 10 lines by a 🚦 sentinel; minimum-viable check against prose-block deletion). Field rename: `Blast radius if skipped:` → `Why we ask:` across all ~60 prose blocks plus §4.1 template.
 
 ---
@@ -724,7 +740,7 @@ These need explicit confirmation from the reviewer before SKILL.md edits land. R
 
 These are honest unresolved questions — not necessary to answer before v2 lands, but flagged for future tightening:
 
-- **Does `intent` need a sub-category for plan-alm itself?** plan-alm is the orchestrator; it doesn't have a Phase 0 ALM-plan gate (because it *is* the plan). The closest analogue is `plan-alm:1.deferral` (handle `.alm-deferred` marker) and `plan-alm:1.completeness` (completeness check). Both are tagged `progress` in §6.1 — defensible but worth a second look.
+- **Does `intent` need a sub-category for plan-alm itself?** plan-alm is the front-door planner; it doesn't have a Phase 0 ALM-plan gate (because it *is* the plan). The closest analogue is `plan-alm:1.deferral` (handle `.alm-deferred` marker) and `plan-alm:1.completeness` (completeness check). Both are tagged `progress` in §6.1 — defensible but worth a second look.
 - **Should `pause` gates be allowed to auto-resume?** Currently the lint rule would flag any tooling that auto-responds. But if PP Pipelines exposes a polling endpoint that detects approval state, a deterministic auto-resume becomes possible. Worth a future rule extension.
 - **Telemetry on gate cancellation.** A gate that's cancelled 80% of the time is asking the wrong question. Out of scope for v2; worth instrumenting once §5 lint lands.
 - **Multi-prompt gates.** Some entries in §6 cover multiple `AskUserQuestion` calls under one marker (e.g., `setup-solution:5.5*` is one logical gate but renders three multiSelect prompts). The lint rule says one marker can cover multiple calls if the catalog row documents it. Worth a more precise rule once we see drift.

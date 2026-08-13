@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -200,6 +200,7 @@ Adds login/logout functionality and role-based authorization to your site.
 - Login/logout UI component
 - Role-based UI patterns (show/hide elements by role)
 - Framework-specific implementation (hooks, composables, services)
+- **IDP app-registration setup for OIDC providers** (Okta, Auth0, Microsoft Entra External ID, and other OpenID Connect) — reads the provider's own documentation first, then **guides the user through the provider's console** or, **when the provider supports it, configures the app for the user**; either way it wires the client ID, authority, and claims mapping (registration + login) into Power Pages using the platform-default no-secret `code id_token` flow
 
 #### `/audit-permissions`
 
@@ -220,6 +221,16 @@ Runs a security scan on a deployed Power Pages site, fetches the latest scan rep
 - Scans the live site's public surface for vulnerabilities
 - Fetches and explains the latest scan report
 - Surfaces issues grouped by severity
+
+#### `/scan-code`
+
+> "Check my source code and dependencies for security issues"
+
+Scans a Power Pages site project's source files and dependencies for security problems — static analysis of the code plus dependency, secret, and license scanning — then surfaces findings in plain language.
+
+- Runs static analysis (opengrep) and dependency/secret/license scanning (trivy)
+- Groups findings by category — code patterns, vulnerable packages, secrets, licenses
+- Offers an agent-driven review fallback when the scanning tools are not installed
 
 #### `/manage-firewall`
 
@@ -245,9 +256,9 @@ Inspects and configures the security headers a Power Pages site sends to browser
 
 > "Do a full security review before we ship"
 
-Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering the live site, browser headers, firewall, authentication, and role-based permissions.
+Runs a guided, end-to-end security review of a Power Pages site and consolidates every finding into one HTML report covering source code and dependencies, the live site, browser headers, firewall, authentication, and role-based permissions.
 
-- Orchestrates `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
+- Orchestrates `/scan-code`, `/scan-site`, `/manage-headers`, `/manage-firewall`, `/audit-permissions`, and auth checks
 - Consolidates findings into a single HTML report
 - Suitable for release-readiness or live-site monitoring
 
@@ -257,15 +268,15 @@ Runs a guided, end-to-end security review of a Power Pages site and consolidates
 
 > "Plan how to promote this site to staging and production"
 
-Orchestrator skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, generates a visual HTML plan, and after your approval executes the plan by calling the right ALM skills in sequence.
+Planner skill that creates an ALM (Application Lifecycle Management) plan for deploying a Power Pages site across environments. Gathers your promotion strategy, target environments, and approval requirements, then generates a visual HTML plan for your review and approval. **It does not deploy anything itself** — after you approve the plan, you run the individual ALM skills, which detect the plan and execute the right step in order.
 
 - Detects project state (config, manifests, current environment)
 - Branched flow for Power Platform Pipelines or manual export/import
-- Generates `docs/alm-plan.html` for review and approval
-- Dispatches to `setup-solution`, `setup-pipeline`, `export-solution`, `deploy-pipeline`, or `import-solution`
+- Generates `docs/alm-plan.html` for review and approval (the recommended execution sequence is the plan of record)
+- Recommends the skill sequence to run next — `setup-solution`, `setup-pipeline`/`export-solution`, `deploy-pipeline`/`import-solution` — each of which detects this plan, proceeds, and keeps it updated as it runs
 
 > [!TIP]
-> `/plan-alm` is the front door for any ALM intent. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
+> `/plan-alm` is the front door for any ALM intent — run it first to produce the plan. It plans only; you then run the execution skills it recommends. Use it instead of jumping straight to individual ALM skills when you want to deploy to staging, ship to production, or set up CI/CD.
 
 #### `/setup-solution`
 
@@ -393,12 +404,13 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 
 > "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
 
-Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+Enables, disables, or checks the status of usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
 
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
+- Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
 
@@ -424,6 +436,8 @@ The plugin ships with two MCP servers configured in `.mcp.json` — they start a
 | **playwright** | Headless browser automation for live previews and runtime tests |
 | **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs |
 
+The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAUDE_PLUGIN_ROOT` (Claude Code). The Playwright bootstrap resolves its launcher only from that declared plugin root and never from the workspace working directory.
+
 ## Typical Workflow
 
 A common end-to-end workflow looks like this:
@@ -443,39 +457,30 @@ A common end-to-end workflow looks like this:
 12. /deploy-site            →  Push final changes live
 13. /test-site              →  Runtime smoke test on the live URL
 14. /security-review        →  Full security review (headers, firewall, scan, permissions)
-15. /plan-alm               →  Plan multi-environment promotion
-16. /deploy-pipeline        →  Promote through staging → production
+15. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
+16. /setup-solution         →  Package the site into a Dataverse solution
+17. /setup-pipeline         →  Set up the Power Platform pipeline
+18. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
+
+> Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
-## Running Without Interruption
+## Runtime approvals
 
-The plugin invokes multiple tools during a session. To reduce approval prompts:
+Keep your AI host's runtime approval prompts enabled while using this plugin.
+Plugin scripts run on your workstation with the filesystem access and cloud sign-in state available to your user account.
+A script that invokes `pac` or `az` may therefore act on Power Platform environments, Dataverse data, and Azure tenants that you can access.
 
-**Option 1 — Permission mode (recommended)**
+Before approving a command, check the executable, script path, arguments, and target environment.
+Pay particular attention to commands that read or change project files, environment configuration, tenant resources, or business data.
+Do not grant blanket approval to command families such as `node`, `npm`, `git`, `pac`, or `az`.
 
-```jsonc
-// .claude/settings.json
-{
-  "defaultMode": "acceptEdits",
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(git *)",
-      "Bash(pac *)",
-      "Bash(az *)",
-      "Bash(node *)"
-    ]
-  }
-}
-```
-
-**Option 2 — Auto-accept all**
-
-```bash
-claude --dangerously-skip-permissions
-```
+If your host supports command-specific allow rules, use them only for an exact plugin script path that you have inspected and expect to run.
+Keep approval prompts for commands whose arguments or environment variables select a project, environment, tenant, or data source.
+Permission features and rule syntax vary by host and version, so follow the documentation for your host.
+Suppressing an approval prompt does not sandbox a script, restrict the programs it can start, or guarantee that the command is safe.
 
 ## ALM prompts you may see
 
@@ -508,10 +513,10 @@ This Dataverse relationship check is intended for local validation only and shou
 
 ## Telemetry & privacy
 
-This plugin sends **anonymous** usage telemetry by default to help Microsoft
-improve it. **No personal data is ever collected** — only things like skill name,
-plugin version, OS, and Node version. It never includes file paths, prompts, tool
-inputs, site names, URLs, credentials, usernames, or hostnames.
+This plugin sends usage telemetry by default to help Microsoft improve it.
+Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
+When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**
 
@@ -521,11 +526,26 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 /power-pages:telemetry on       # resume sending telemetry
 ```
 
-When **off**, nothing leaves your machine. A local diagnostic copy of each event
-is still written to `~/.power-platform-skills/events.jsonl` so you can see exactly
-what would have been sent; delete it anytime. The setting is stored at
-`~/.power-platform-skills/config.json` (`{ "telemetry": { "power-pages": "off" } }`),
-so CI/headless environments can opt out by writing that file directly.
+When **off**, nothing leaves your machine. A local diagnostic copy containing the
+same event fields, including available organization, tenant, and Entra object IDs,
+is still written under
+`~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
+so you can see exactly what would have been sent; delete it anytime. Run
+`/power-pages:telemetry status` to see the logs directory and the most recent
+session file. The setting is stored at `~/.power-platform-skills/config.json`
+(`{ "telemetry": { "power-pages": "off" } }`).
+
+For automation / CI, set the per-plugin opt-out environment variable instead of
+editing that file:
+
+```bash
+POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1   # stop sending telemetry
+```
+
+Set it to `1` or `true` (dotnet `*_TELEMETRY_OPTOUT` convention). This opt-out has
+the **highest precedence** — it overrides a saved `/power-pages:telemetry` choice
+and even `/power-pages:telemetry on`. Like `off` from the command, it suppresses
+transmission only — the local per-session `events.jsonl` mirror is still written.
 
 ## License
 

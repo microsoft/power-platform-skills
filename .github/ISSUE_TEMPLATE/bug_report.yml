@@ -10,7 +10,10 @@ body:
       options:
         - canvas-apps
         - code-apps
+        - mcp-apps
+        - mobile-app
         - model-apps
+        - power-automate
         - power-pages
     validations:
       required: true

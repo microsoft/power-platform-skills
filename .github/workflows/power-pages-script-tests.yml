@@ -16,6 +16,14 @@ jobs:
     test-power-pages-scripts:
         name: test-power-pages-scripts (${{ matrix.os }})
         runs-on: ${{ matrix.os }}
+        # Defense-in-depth: opt this CI job out of telemetry transmission so even
+        # a test that forgets to isolate emission (no FAKE_HTTPS probe / temp
+        # ikey) can never POST to the production collector. Honored end-to-end
+        # because emit-spawn forwards this var to the detached dispatcher. The two
+        # positive-emission tests clear it in their own spawn env so they still
+        # exercise the real emit path.
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:

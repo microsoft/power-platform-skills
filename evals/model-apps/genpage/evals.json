@@ -4,7 +4,7 @@
   "common_workflow_assertions": [
     "A workflow-log.md file is saved to the working directory documenting all phases attempted",
     "Phase 0: A working directory is created with a kebab-case name derived from the user's description",
-    "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified",
+    "Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified",
     "Phase 1 (Planner): pac auth list is run and the active environment is identified and reported to the user",
     "Phase 1 (Planner): Question 1 (new or edit) is asked via AskUserQuestion",
     "Phase 1 (Planner): genpage-plan.md ALWAYS contains 'Solution:' and 'Publisher Prefix:' lines in ## Environment; default fallback is 'Solution: Default' + 'Publisher Prefix: new' for code-only flows",
@@ -12,7 +12,7 @@
     "Phase 1 (Planner): When the solution question runs, the planner queries /solutions via dataverse-request.js and presents options (existing custom solutions, 'Create new genpage-<app> solution', 'Use Default Solution')",
     "Phase 1 (Planner): The plan is presented via EnterPlanMode and user approval is requested",
     "Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md",
-    "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts",
+    "Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts",
     "Phase 6 / 6.5 / 7.5 / Edit Phase 6 (--prompt scoping): The FIRST pac model genpage upload for each new page passes --prompt with the FULL page description (from plan's ## User Requirements). EVERY SUBSEQUENT upload of an existing page (--page-id, no --add-to-sitemap) passes --prompt scoped to ONLY the delta of changes in that upload — never the full original description",
     "Prefix discipline — plan format: Every name in `## Entity Creation Required` (table headings, column Suffix values, choice column suffixes, relationship Lookup Suffix values) is a bare suffix matching `^[a-z][a-z0-9]+$`. No value contains an underscore or a prefix. The prefix lives only in `## Environment` → `Publisher Prefix:`.",
     "Prefix discipline — resolved names: For every operation in `entity-creation-log.md`, the Resolved Full Name starts with the `Publisher Prefix:` value from the plan's `## Environment` followed by `_` and the bare suffix from the plan (e.g., Publisher Prefix `crb2b` + suffix `playername` → `crb2b_playername`).",
@@ -59,7 +59,7 @@
         "Phase 2: Entity-builder is SKIPPED (no entities to create)",
         "Phase 4: pac model genpage generate-types --data-sources 'account' --output-file <working-dir>/RuntimeTypes.ts is run",
         "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
-        "Phase 5b: Orchestrator reads ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
         "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
         "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
         "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
@@ -209,12 +209,12 @@
         "Phase 1 (Planner): Because entities will be created, the planner asks the solution selection question via AskUserQuestion and records the choice in ## Environment as 'Solution: <uniqueName>' and 'Publisher Prefix: <prefix>'",
         "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
         "Phase 2b (Entity Builder): Reads Solution + Publisher Prefix from the plan's ## Environment",
-        "Phase 2b (Entity Builder): cr_jobrequisition (independent) is created via scripts/create-table.js BEFORE cr_candidate (has lookup)",
-        "Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — 'Default' is a valid value, never omitted)",
-        "Phase 2b (Entity Builder): Propagation delay (4s) is observed after table creation before adding columns",
-        "Phase 2b (Entity Builder): Lookup is created via scripts/create-relationship.js 1n (POST /RelationshipDefinitions); 8s delay before using @odata.bind navigation properties",
+        "Phase 2b (Entity Builder): cr_jobrequisition (independent) is provisioned before cr_candidate (has lookup) to satisfy dependency ordering",
+        "Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — 'Default' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration",
+        "Phase 2b (Entity Builder): provision-entities.js handles entity creation and column definitions atomically with internal propagation management",
+        "Phase 2b (Entity Builder): Lookup relationship (cr_candidate → cr_jobrequisition) is provisioned via input JSON; provision-entities.js handles propagation internally",
         "Phase 2b (Entity Builder): User is asked about sample data via AskUserQuestion",
-        "Phase 2b (Entity Builder): Sample inserts use scripts/create-record.js; arrays of records go through OData $batch automatically",
+        "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js input JSON; parent references use $parent/match convention for dependency resolution",
         "Phase 2b (Entity Builder): Actual logical names are reported back (may be normalized by Dataverse); a transaction log at <working-dir>/entity-creation-log.md captures each successful operation",
         "Phase 4: pac model genpage generate-types is run with the created entity names",
         "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
@@ -261,11 +261,10 @@
         "Phase 1 (Planner): Plan includes a lookup relationship (cr_milestone → cr_project)",
         "Phase 1 (Planner): Solution selection question is asked because new entities will be created",
         "Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder",
-        "Phase 2b (Entity Builder): cr_project (independent) is created via scripts/create-table.js first; cr_milestone (dependent) is created second; 1:N lookup via scripts/create-relationship.js 1n",
+        "Phase 2b (Entity Builder): cr_project and cr_milestone entities are provisioned with lookup relationship (cr_milestone → cr_project) via provision-entities.js; dependency ordering is handled automatically",
         "Phase 2b (Entity Builder): Sample data is created because the user explicitly requested it in the prompt",
-        "Phase 2b (Entity Builder): Sample inserts go through scripts/create-record.js; arrays trigger OData $batch (one round-trip per 100 records)",
-        "Phase 2b (Entity Builder): Sample records are realistic (not lorem ipsum or empty values)",
-        "Phase 2b (Entity Builder): Sample records respect relationships (milestones reference valid project IDs via @odata.bind)",
+        "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js; realistic values (not lorem ipsum)",
+        "Phase 2b (Entity Builder): Sample records respect relationships (milestones reference projects via $parent/match convention)",
         "Phase 6: Deployment includes --data-sources with both entity names"
       ]
     },
@@ -407,11 +406,10 @@
         "Phase 1 (Planner): Plan includes a datetime column for due date",
         "Phase 1 (Planner): Solution selection question is asked (because new entity will be created) and recorded in ## Environment",
         "Phase 2a: scripts/check-auth.js returns ok:true before entity-builder is invoked",
-        "Phase 2b (Entity Builder): cr_ticket is created via scripts/create-table.js (POST /EntityDefinitions)",
-        "Phase 2b (Entity Builder): Choice columns are added using scripts/add-column.js with type 'picklist' and --options JSON listing {value,label} pairs",
+        "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs",
         "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)",
         "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000",
-        "Phase 2b (Entity Builder): Every script invocation includes --solution <Solution> (always — 'Default' is a valid value, never omitted)",
+        "Phase 2b (Entity Builder): Solution is specified via provision-entities.js input JSON; verified through ## Environment → Solution: declaration",
         "Phase 2b (Entity Builder): Transaction log (entity-creation-log.md) records each create with its returned metadataId",
         "Phase 4: pac model genpage generate-types picks up the enum registrations",
         "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
@@ -438,6 +436,54 @@
         "Phase 1 (Planner): File names in ## Pages are unique",
         "Phase 1 (Planner): Because the account entity exists, ## Entity Creation Required contains the literal string 'No entity creation required — all entities already exist.'",
         "Phase 1 (Planner): ## Existing Entities contains the entity logical name used for RuntimeTypes generation (account)"
+      ]
+    },
+    {
+      "id": 17,
+      "tier": "smoke",
+      "prompt": "Build a dashboard showing the current weather for Seattle with temperature, conditions, and humidity.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "Mock data",
+          "specific_requirements": "current weather panel"
+        },
+        "app_selection": "user selects an existing app from pac model list"
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag OFF, the feature gate (scripts/lib/feature-flags.js) is checked, connector discovery (list-connections.js) is NOT run, and the plan's ## Connector Bindings is exactly 'No connector bindings.'",
+        "Phase 2: Entity-builder is SKIPPED (mock data)",
+        "Phase 4: RuntimeTypes generation is SKIPPED (mock data)",
+        "Phase 5 (Page Builder): genpage-page-builder is invoked with Data mode: mock",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing",
+        "Phase 6: Deployment omits --data-sources flag (mock data page)"
+      ]
+    },
+    {
+      "id": 18,
+      "tier": "full",
+      "prompt": "Build a page listing documents from our SharePoint team site.",
+      "data": {
+        "question_answers": {
+          "new_or_edit": "Create new page(s)",
+          "data_source": "SharePoint (connector)",
+          "specific_requirements": "list documents"
+        },
+        "feature_flags": {
+          "connectors": "ON (GENPAGE_ENABLE_CONNECTORS=1)"
+        }
+      },
+      "expectations": [
+        "Phase 1 (Planner): With the connectors feature flag ON, the feature gate passes (enabled) and list-connections.js is run for connector discovery, and the plan's ## Connector Bindings records at least one binding (not 'No connector bindings.')",
+        "Phase 4.5 / Phase 6 (connectors ON): connectors.json is written as a bare array (not the config.json object wrapper) and the upload includes --connectors",
+        "Phase 2: Entity-builder is SKIPPED (no entities to create)",
+        "Phase 5b (single-page fast path): Plan has 1 page so orchestrator inlines the build — NO Task subagent dispatched for the page-builder",
+        "Phase 5b: Orchestrator reads ${PLUGIN_ROOT}/references/verified-icons.txt before writing the .tsx",
+        "Phase 5b: A relevant sample file is read (e.g., 7-responsive-cards.tsx for card layout)",
+        "Phase 5b: After writing, orchestrator greps the .tsx for `from \"@fluentui/react-icons\"` imports and verifies each named import against verified-icons.txt — rewrites if any are missing"
       ]
     }
   ]

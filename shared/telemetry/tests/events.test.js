@@ -209,7 +209,7 @@ test("durationMs always lands as a non-negative integer (number type)", () => {
     { input: "1234", expect: 1234 }, // string-int coerced
     { input: "abc", expect: 0 }, // unparseable → 0
     { input: "", expect: 0 }, // empty string → 0 (NOT '' on the wire)
-    { input: true, expect: 1 }, // boolean true coerces to 1 (Number(true)) — kept, not dropped
+    { input: true, expect: 1 }, // boolean true coerces to 1 — drop guarded by clamp
   ];
   for (const { input, expect } of cases) {
     const ev = buildSkillCompleted(ENVELOPE, {

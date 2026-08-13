@@ -8,7 +8,7 @@
 
 ### Prereq checks
 - `node --version` → v20.11.0
-- `pac help` → PAC CLI Version 2.7.3 (>= 2.7.0 verified)
+- `pac help` → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 
 ### Auth check
 - `pac auth list` → active profile aurora365-user1@auroratstgeo.onmicrosoft.com
@@ -48,7 +48,7 @@
 - Plan has 1 page → fast path taken (inlined build, no Task subagent dispatched)
 - Data mode: dataverse
 - Read sample: plugins/model-apps/samples/2-wizard-multi-step.tsx (wizard pattern reference)
-- Read ${CLAUDE_PLUGIN_ROOT}/references/verified-icons.txt to source icon names
+- Read ${PLUGIN_ROOT}/references/verified-icons.txt to source icon names
 - Wrote page.tsx (~7 KB)
 - Post-write icon verification: grep `from "@fluentui/react-icons"` in page.tsx; verified `PersonRegular`, `DocumentRegular`, `CheckmarkCircleRegular` against verified-icons.txt — all present
 

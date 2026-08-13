@@ -8,7 +8,7 @@
 v20.18.2
 
 `pac help`
-PAC CLI Version 2.7.4+g06bb2eb (.NET 10.0.8) — >= 2.7.0 confirmed.
+PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8) — > 2.10.0 confirmed.
 
 ### Step 2: Authenticate and Select Environment
 
@@ -127,9 +127,13 @@ genpage-plan.md written to D:/temp/support-tickets/genpage-plan.md
 - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/check-auth.js` (second run)
   - Result: ok=true, identitiesMatch=true, envUrl=https://aurorabapenv610b3.crmtest.dynamics.com
 - Dispatched genpage-entity-builder agent
-  - Created table: cr_ticket (schema: cr_Ticket, entitySet: cr_tickets)
-  - Created columns: cr_name (primary), cr_priority (picklist 4 options), cr_status (picklist 4 options), cr_duedate (datetime DateOnly)
-  - Seeded 10 sample records via $batch
+  - Reads Solution=Crdec34, Publisher Prefix=cr from plan ## Environment
+  - Wrote D:/temp/support-tickets/provision-input.json with:
+    - Table: cr_ticket (columns: cr_name/primary, cr_priority/picklist, cr_status/picklist, cr_duedate/datetime)
+    - Sample data: 10 cr_ticket records
+    - Solution: Crdec34 (embedded in JSON)
+  - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/provision-entities.js --env https://aurorabapenv610b3.crmtest.dynamics.com --input @D:/temp/support-tickets/provision-input.json --apply --sample-data`
+  - SDK handles metadata propagation
   - Transactional log: entity-creation-log.md
 
 ## Phase 3 — App selection

@@ -114,7 +114,7 @@ After implementation, always run a standalone verification phase that:
 | `/integrate-webapi` | Phase 5 | File inventory matches plan, all imports resolve, build passes |
 | `/audit-permissions` | Phase 6 | Findings report generated, all tables audited, cross-checks complete |
 | `/create-site` | Phase 6 | All pages render, design foundations applied, build passes |
-| `/create-webroles` | Stop hook | Web role YAML validates (schema, naming conventions, booleans) |
+| `/create-webroles` | PostToolUse hook | Web role YAML validates (schema, naming conventions, booleans) |
 
 **Hook-based validation** — Skills tracked in `hooks/hooks.json` get automatic validation when they complete. The `PostToolUse` hook on `Skill` dispatches to per-skill validator scripts via `run-skill-posttool-validation.js`. Validators use `approve()` / `block(reason)` from `scripts/lib/validation-helpers.js`.
 
@@ -227,7 +227,7 @@ LLMs are probabilistic. When an LLM constructs inline bash commands for Datavers
 Skills invoke scripts via `node` with CLI arguments:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-table-permission.js" \
+node "${PLUGIN_ROOT}/scripts/create-table-permission.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --permissionName "<Permission Name>" \
   --tableName "<table_logical_name>" \

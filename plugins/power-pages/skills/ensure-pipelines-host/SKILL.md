@@ -21,7 +21,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 <!-- alm-lint-ignore: SKILL-must-read-manifest — this skill manages the Pipelines host environment (deploymentenvironments / deploymentpipelines tables on the host), not the source-env solution. The site's .solution-manifest.json is irrelevant to host lifecycle: a host can be provisioned before any solution exists, and a single host is shared across many solutions. ALM-aware-by-default does not apply. -->
 
@@ -184,13 +184,13 @@ Steps:
 
 1. Run `verify-alm-prerequisites.js`:
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
+   node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
    ```
    Capture `.envUrl` (`devEnvUrl`), `.token` (`DEV_TOKEN`), `.userId`, `.tenantId`, `.organizationId`. Stop on auth failure with the script's remediation message.
 
 2. Run `detect-project-context.js` (non-fatal — skill is also valid outside a Power Pages project):
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
+   node "${PLUGIN_ROOT}/scripts/lib/detect-project-context.js"
    ```
    Capture `.siteName` and `.solutionManifest` for messaging.
 
@@ -221,13 +221,13 @@ Steps:
 
 ### Phase 1.5 — Ground in current Pipelines host documentation
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md`
+> Reference: `${PLUGIN_ROOT}/references/alm-docs-grounding.md`
 
 Cap this step at ~30 seconds. If MCP search / fetch errors out, log a one-line note and continue — this skill must remain runnable offline.
 
 1. Run `microsoft_docs_search` with the query: `Power Platform Pipelines host environment Platform Host Custom Host`.
 2. Fetch `https://learn.microsoft.com/en-us/power-platform/alm/pipelines` (and at most one sister page on host setup, default-custom-host configuration, or admin role requirements) in parallel via `microsoft_docs_fetch`.
-3. Extract a one-paragraph summary of what Microsoft Learn currently says about Platform vs Custom Host trade-offs, the resolution order (org-db setting → BAP env metadata → tenant default), and admin role requirements. Compare against this skill's own *Resolution order* section and `${CLAUDE_PLUGIN_ROOT}/references/cicd-pipeline-patterns.md`; flag any divergence (e.g. new Platform-Host SKU, changed default-custom-host setting name, new tenant policy controls).
+3. Extract a one-paragraph summary of what Microsoft Learn currently says about Platform vs Custom Host trade-offs, the resolution order (org-db setting → BAP env metadata → tenant default), and admin role requirements. Compare against this skill's own *Resolution order* section and `${PLUGIN_ROOT}/references/cicd-pipeline-patterns.md`; flag any divergence (e.g. new Platform-Host SKU, changed default-custom-host setting name, new tenant policy controls).
 4. Use the summary to inform Phase 2+ decisions. Do not silently change skill behavior — surface any divergence to the user as a soft warning before Phase 3 (Confirm action with user).
 
 ### Phase 2 — Run resolution order to find host
@@ -272,7 +272,7 @@ Steps:
 3. **If `isPlatform === true`**, mirror the default-custom-tenant-setting check (lines 148–213 in tsx). Reuse the existing `discover-pipelines-host.js`:
 
    ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
+   node "${PLUGIN_ROOT}/scripts/lib/discover-pipelines-host.js" \
      --envUrl "{devEnvUrl}" --token "{DEV_TOKEN}" --userId "{userId}"
    ```
    - `found: false` → tenant has no admin default custom host. `finalHostEnvId = orgSettingHostEnvId` (the PE). Set `RESOLUTION.status = "AvailableUsingPlatformHost"`.
@@ -524,7 +524,7 @@ Track the total eligible count separately — when `eligible.length > 5`, surfac
 - `eligible.length <= 5` → empty string (no suffix; all envs visible).
 - `eligible.length > 5` → ` Showing top 5 of {N}; the remaining {N-5} eligible env(s) can be reached via the "Other (paste URL)" entry.` (leading space).
 
-When the user picks "Other (paste URL)", **pre-fill** the URL input with `pac env list --output json` results so they can paste-or-pick from the full tenant inventory rather than typing a URL by hand.
+When the user picks "Other (paste URL)", **pre-fill** the URL input with the environment list from `node "${PLUGIN_ROOT}/scripts/lib/list-environments.js"` (parses `pac env list` into JSON `{ displayName, environmentId, environmentUrl, uniqueName, active }`; the old `pac env list --output json` is invalid on current PAC CLI) so they can paste-or-pick from the inventory rather than typing a URL by hand.
 
 **Test scenarios to verify when changing this prompt:**
 - 0 eligible → sub-option `a` dropped (sub-prompt shows only `b` / `c`).
@@ -613,7 +613,7 @@ The lowest-friction host-provisioning path. Calls the idempotent BAP `getOrCreat
 **Call:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
+node "${PLUGIN_ROOT}/scripts/lib/provision-platform-host.js" \
   --bapToken "{BAP_TOKEN}" \
   --correlationId "{uuid v4}"
 ```
@@ -770,7 +770,7 @@ This path was previously a manual click-through to PPAC. As of 2026-05-08 it's f
 **Call the helper:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
+node "${PLUGIN_ROOT}/scripts/lib/install-pipelines-app.js" \
   --bapToken "{BAP_TOKEN}" \
   --envId "{envId}" \
   --instanceApiUrl "{instanceApiUrl}" \
@@ -896,9 +896,20 @@ This file is consumed by `setup-pipeline` and `deploy-pipeline`.
 
 Record skill usage:
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "EnsurePipelinesHost"`.
+
+**Refresh the ALM plan (if one exists):**
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
+  --projectRoot "." \
+  --phase ensure-pipelines-host \
+  --render
+```
+
+This updates `planData.hostResolution` from the `docs/alm/last-host-check.json` you just wrote (host-only — no pipeline yet) and drops the pre-run NoHost risks, then re-renders `docs/alm-plan.html`. **Do this here, not just in setup-pipeline Phase 7** — a host install can take 18+ minutes and cross a session boundary, so deferring the refresh risks the plan never reflecting the host. When `docs/.alm-plan-data.json` is absent (standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op. The centralized PostToolUse hook also reconciles the plan as a backstop, but refreshing at the source keeps the rendered plan current immediately.
 
 Present summary table:
 
@@ -1040,7 +1051,7 @@ Existing helpers reused (no changes):
 
 ## Validation script
 
-`skills/ensure-pipelines-host/scripts/validate-ensure-host.js` (PostToolUse Stop hook, registered via `TRACKED_SKILLS` in `scripts/lib/powerpages-hook-utils.js`):
+`skills/ensure-pipelines-host/scripts/validate-ensure-host.js` (run by the centralized PostToolUse hook on the `Skill` tool; the skill is tracked automatically because `skills/ensure-pipelines-host/SKILL.md` exists — see `scripts/lib/powerpages-hook-utils.js`):
 
 - If no `docs/alm/last-host-check.json` in cwd → exit 0 (not an ensure-host session).
 - If present: validate `schemaVersion === 1` or `2` (forward-compatible); required fields populated (`tenantId`, `sourceEnvUrl`, `resolutionStatus`); `ready === true` for non-terminal-error statuses; `finalHostEnvUrl` populated when `ready === true`.

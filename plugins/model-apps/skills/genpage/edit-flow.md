@@ -14,6 +14,17 @@ to `genpage-edit-planner`, then applies the edit inline.
 
 The planner has already validated prereqs and confirmed auth.
 
+**Capture the environment URL first.** Everything below — the download, connector
+discovery, and the edit planner — must target the same environment, and connector
+discovery is mutating, so it must never fall back to "whatever `pac auth` points at
+now":
+
+```bash
+node "${PLUGIN_ROOT}/scripts/check-auth.js" --require-pac
+```
+
+Keep the returned org URL as `envUrl` for the rest of the edit session.
+
 **CRITICAL — never guess or invent app names or page names.** You must discover
 them by running the PAC CLI commands below. Hallucinating page names from context
 (repo names, prior conversation, sample apps) is wrong and confuses the user.
@@ -78,7 +89,8 @@ pac model genpage download `
 The download creates a `<working-dir>/<page-id>/` folder with fixed filenames:
 `page.tsx` (source), `config.json` (entity list + model), `prompt.txt` (original
 prompt). Downstream phases operate on `<working-dir>/<page-id>/page.tsx` for
-editing and uploading, and read `config.json.dataSources` in Phase 3.
+editing and uploading, and read `config.json.dataSources` plus
+`config.json.connectorBindings` in Phase 3.
 
 ## Edit Phase 3: Generate RuntimeTypes (Conditional)
 
@@ -94,15 +106,65 @@ pac model genpage generate-types `
 Pass the exact entity list from `config.json.dataSources`. If `dataSources` is an
 empty array, the page is mock-data only — skip this phase.
 
+Also read `config.json.connectorBindings`.
+
+> **Connectors are owned by `genpage-connector-builder`, dispatched by this
+> top-level edit orchestrator.** Unlike the create flow, the mode here is already
+> `edit` and `envUrl` was captured in Edit Phase 1, so discovery can safely run
+> before edit planning when the intent already names a connector source. (If the
+> need only surfaces during the edit planner's clarification, it returns
+> `connector_discovery_required` and discovery runs then — see Edit Phase 4.)
+> Read the existing `config.json.connectorBindings` (the current bindings) and
+> decide the connector action from the edit intent:
+>
+> - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
+>   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
+>   `envUrl` from Edit Phase 1, the existing bindings, and the edit intent. The
+>   builder owns the feature gate: when connectors are OFF it preserves existing
+>   bindings and adds none; when ON it discovers and returns the updated set. It
+>   writes `<working-dir>/connectors.json` (bare array) and
+>   `<working-dir>/connector-bindings.md`.
+> - **Preserve connectors unchanged:** do not invoke the builder and do not create
+>   a replacement `connectors.json`; omit `--connectors` on upload so pac preserves
+>   deployed bindings. Still pass the existing `connectorBindings` summary into the
+>   edit planner so it can preserve connector-backed code correctly.
+> - **Clear all connectors:** write `[]` to `<working-dir>/connectors.json` and a
+>   `connector-bindings.md` body of exactly `No connector bindings.`, then pass
+>   `--connectors` during upload so pac clears `config.json.connectorBindings`.
+
+- Do not add or persist connection IDs. Env-specific `ConnectionId` values belong
+  to the connectionreference row and ALM deployment settings, not the page config.
+
 ## Edit Phase 4: Plan the Edit
 
 Invoke the `genpage-edit-planner` agent via the `Task` tool. Pass:
 
 - The user's edit intent: `$ARGUMENTS`
 - The working directory (absolute path)
-- The plugin root: `${CLAUDE_PLUGIN_ROOT}`
+- The plugin root: `${PLUGIN_ROOT}`
 - The app-id and page-id
+- **The environment URL** — the `envUrl` this edit session resolved. Required: the planner
+  echoes it back if it has to ask for connector discovery, and discovery must target the
+  environment being edited, not whatever `pac auth` happens to be pointing at.
 - The download directory: `<working-dir>/<page-id>/`
+- The connector action: preserve, add, replace, discover, or clear
+- The connector contract: the full body of `<working-dir>/connector-bindings.md`
+  when written by the builder/clear path, or a faithful summary of the existing
+  `config.json.connectorBindings` when preserving unchanged connectors
+- The connector upload file status: `<working-dir>/connectors.json` when upload
+  must replace/clear bindings, or `none — omit --connectors` when preserving
+
+Tell the planner that connector discovery is orchestrator-owned: it must use the
+forwarded connector contract and must not invoke `genpage-connector-builder`.
+
+**If the planner returns `{ "action": "connector_discovery_required", … }`** instead
+of an edit plan, a connector need surfaced during its clarification — after the
+connector action was already fixed as "preserve". Do **not** proceed to Phase 5.
+Dispatch `genpage-connector-builder` with **Mode: `edit`**, the returned `envUrl`
+and `intent`, then re-invoke the edit planner with the refreshed connector action,
+contract, and upload-file status (`<working-dir>/connectors.json`). Skipping this
+ships connector code with no deployed binding, because upload would still omit
+`--connectors`.
 
 The planner reads `page.tsx`, `config.json`, and `prompt.txt` for context, gathers
 any clarification from the user, presents the edit plan via plan mode, and writes
@@ -114,17 +176,21 @@ Read `<working-dir>/genpage-edit-plan.md` for the approved change list and
 preservation constraints.
 
 Also read:
-- `${CLAUDE_PLUGIN_ROOT}/references/rules.md` — all code-gen
+- `${PLUGIN_ROOT}/references/rules.md` — all code-gen
   rules still apply to edits (Fluent UI V9 only, makeStyles with tokens, WCAG AA,
   no `100vh`/`100vw`, etc.)
 - `<working-dir>/RuntimeTypes.ts` — if generated in Edit Phase 3, for verified
   column names
 - `<working-dir>/<page-id>/page.tsx` — the current source
+- `${PLUGIN_ROOT}/references/connectors.md` — if `config.json.connectorBindings`
+  is non-empty or the edit adds connector-backed data
 
 Apply each change from the edit plan using targeted `Edit` operations on
 `<working-dir>/<page-id>/page.tsx`. **Preserve the functionality** listed under
 "Preservation Constraints" in the plan. Use ONLY verified column names from
-RuntimeTypes.ts when the edit touches data access.
+RuntimeTypes.ts when the edit touches Dataverse data access. Use ONLY logical
+names, datasets, table GUIDs, and operations from the seeded connector bindings
+or approved edit plan when the edit touches connector data access.
 
 Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
 
@@ -134,12 +200,25 @@ This is an **update** (existing page-id), so `--prompt` must describe the
 **delta of changes only** — not a re-statement of the original page description.
 See SKILL.md Phase 6 "`--prompt` semantics".
 
+Connector binding rules for edit deploy:
+- **Add / replace / discover connectors:** the `genpage-connector-builder` agent
+  (Mode: `edit`) has already gated on the flag and written the full desired binding
+  set to `<working-dir>/connectors.json`. Pre-flight that `pac model genpage upload
+  --help` contains `--connectors` and include `--connectors "<working-dir>/connectors.json"`
+  in the upload.
+- **Code/visual-only edit (connectors unchanged):** omit `--connectors`; pac
+  preserves existing bindings.
+- **Remove every connector:** write `[]` to `connectors.json` and pass
+  `--connectors` so pac clears `config.json.connectorBindings`.
+- Never write connection IDs.
+
 ```powershell
 pac model genpage upload `
   --app-id <app-id> `
   --page-id <page-id> `
   --code-file <working-dir>/<page-id>/page.tsx `
   --data-sources "entity1,entity2" `
+  --connectors "<working-dir>/connectors.json" `
   --prompt "<User's edit request — only the changes, not the full page>" `
   --model "<current-model-id>" `
   --agent-message "Description of what was changed in this upload"
@@ -148,6 +227,7 @@ pac model genpage upload `
 Use `--page-id` for updates. Omit `--add-to-sitemap` (the page is already in
 the sitemap).
 Omit `--data-sources` when `config.json.dataSources` was empty.
+Omit `--connectors` when connector bindings are unchanged.
 
 ## Edit Phase 7: Verify (Optional)
 

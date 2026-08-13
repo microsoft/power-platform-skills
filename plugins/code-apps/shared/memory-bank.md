@@ -104,6 +104,7 @@ Update after:
 | Environment    | [ENVIRONMENT_NAME]             |
 | Environment ID | [ENVIRONMENT_GUID]             |
 | App URL        | [APP_URL]                      |
+| CLI Binary     | [pa / power-apps]              |
 | Created Date   | [DATE]                         |
 | Status         | [In Progress/Created/Deployed] |
 
@@ -121,7 +122,7 @@ Update after:
 - [x] Prerequisites validated (Node.js)
 - [x] Environment ID confirmed
 - [x] Scaffolded from template
-- [x] Initialized with npx power-apps init
+- [x] Initialized with `pa app init` (or `power-apps init`)
 - [x] Built successfully
 - [x] Deployed to Power Platform
 - App URL: [URL]

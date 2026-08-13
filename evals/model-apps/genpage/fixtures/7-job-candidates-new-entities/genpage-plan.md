@@ -17,8 +17,9 @@ D:\Projects\power-platform-skills\plugins\model-apps
 ## Environment
 
 - Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- Environment URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
 - App: Recruitment Hub (33333333-2222-3333-4444-555555555555)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: cr
 
@@ -41,6 +42,16 @@ D:\Projects\power-platform-skills\plugins\model-apps
   |--------|------|----------|-------|
   | department | string | yes | Department owning the requisition |
   | openings | int | yes | Number of openings (>=0) |
+- Choice Columns:
+
+  | Column Suffix | Options |
+  |---------------|---------|
+  | none | none |
+- Relationships:
+
+  | Type | Related Table | Lookup Suffix | Cascade |
+  |------|---------------|---------------|---------|
+  | none | none | none | none |
 
 ### candidate
 
@@ -68,6 +79,10 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 None.
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 
 - DataGrid layout, sortable, resizable columns
@@ -77,12 +92,23 @@ None.
 
 ## Relevant Samples
 
-- plugins/model-apps/samples/9-list-with-caching.tsx (Dataverse list + window cache)
-
+| Page | Sample | Reason |
+|------|--------|--------|
+| Candidates | 9-list-with-caching.tsx | Dataverse list + window cache |
 ## Per-Page Specifications
 
 ### Candidates
 
+
+- **File:** page.tsx
+- **Purpose:** List of candidates with status, interview score, recruiter, requisition link
+- **Entities:** cr_candidate, cr_jobrequisition
+- **Needs caching:** true
+- **Key Features:** Candidate grid with status badges, interview score, recruiter, requisition lookup text, and sample data.
+- **Components:** DataGrid, Badge, Text, Spinner, MessageBar, and PeopleRegular/BriefcaseRegular icons.
+- **Layout:** Full-width sortable/resizable grid with responsive overflow handling.
+- **Data Binding:** queryTable("cr_candidate") on mount selecting candidate columns and lookup formatted values; use window de-dupe and cache.
+- **Interactions:** Sort and resize columns; no edit actions required in the generated page.
 - File: page.tsx
 - Entities: cr_candidate (primary), cr_jobrequisition (lookup target)
 - Fetch on mount with window cache `__genpage_candidates_v1`

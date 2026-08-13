@@ -20,7 +20,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, TaskCreate, TaskUpdate, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # force-link-environment
 
@@ -42,7 +42,7 @@ The action is reversible by running Force Link again from the previous host.
 
 ## Phase 1.5 — Microsoft Learn grounding (required)
 
-Before any Dataverse call, refresh the agent's grounding by fetching the doc above via `mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch`. If the doc has updated behaviors (e.g., new permission requirements, new warning text), surface them to the user before continuing. See `${CLAUDE_PLUGIN_ROOT}/references/alm-docs-grounding.md` for the shared pattern.
+Before any Dataverse call, refresh the agent's grounding by fetching the doc above via `mcp__plugin_power-pages_microsoft-learn__microsoft_docs_fetch`. If the doc has updated behaviors (e.g., new permission requirements, new warning text), surface them to the user before continuing. See `${PLUGIN_ROOT}/references/alm-docs-grounding.md` for the shared pattern.
 
 ## Phases
 
@@ -65,7 +65,7 @@ Create all tasks at Phase 1 start with `TaskCreate`. Mark each `in_progress` whe
 Reuse the shared verifier:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
+node "${PLUGIN_ROOT}/scripts/lib/verify-alm-prerequisites.js"
 ```
 
 Specifically required:
@@ -135,7 +135,7 @@ GET {hostEnvUrl}/api/data/v9.1/deploymentenvironments?$filter=environmentid eq '
 ### Step 3.2 — Create the record on the new host (when Step 3.1 returned zero hits)
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
+node "${PLUGIN_ROOT}/scripts/lib/create-deployment-environment.js" \
   --hostEnvUrl <hostEnvUrl> \
   --token <hostToken> \
   --name "<display name>" \
@@ -184,7 +184,7 @@ If the user picks Cancel, exit cleanly (no marker file written) and recommend `/
 ## Phase 5 — Execute Force Link
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/lib/force-link-environment.js" \
+node "${PLUGIN_ROOT}/scripts/lib/force-link-environment.js" \
   --hostEnvUrl <hostEnvUrl> \
   --token <hostToken> \
   --deploymentEnvironmentId <guid>
@@ -228,7 +228,7 @@ Present a summary table with:
 - Validation status
 - Reminder: "You can undo this by running `/power-pages:force-link-environment` from the previous host."
 
-Record skill usage per `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`.
+Record skill usage per `${PLUGIN_ROOT}/references/skill-tracking-reference.md`.
 
 ---
 

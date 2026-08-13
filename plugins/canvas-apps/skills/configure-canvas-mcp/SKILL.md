@@ -1,7 +1,7 @@
 ---
 name: configure-canvas-mcp
 version: 2.1.0
-description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps". DO NOT USE WHEN prerequisites are missing — direct the user to install .NET 10 SDK first.
+description: Configure the Canvas Authoring MCP server for the current coauthoring session. USE WHEN "configure MCP", "set up MCP server", "MCP not working", "connect Canvas Apps MCP", "canvas-authoring not available", "MCP not configured", "set up canvas apps".
 author: Microsoft Corporation
 user-invocable: true
 allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
@@ -12,20 +12,6 @@ allowed-tools: Bash, AskUserQuestion, mcp__canvas-authoring__connect
 This skill configures the Canvas Authoring MCP server for the user's current Power Apps coauthoring session. The MCP server is auto-registered by the plugin — this skill connects it to a specific app session.
 
 ## Instructions
-
-### 0. Check prerequisites
-
-Verify that .NET 10 SDK or higher is installed:
-
-```bash
-dotnet --list-sdks
-```
-
-If a version 10.x.y or higher is not listed, tell the user:
-
-> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it first to use this skill. https://dotnet.microsoft.com/download/dotnet/10.0
-
-Then wait for the user to install it before continuing. If they say it's installed, run the command again to confirm. If it's still not found, repeat the message until they have it installed.
 
 ### 1. Ask for the studio URL
 
@@ -46,19 +32,20 @@ Parse the following from the studio URL:
 - **ENV_ID**: the path segment between `/e/` and the next `/` (e.g. `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`).
 - **APP_ID**: URL-decode the `app-id` query parameter value, then take the last segment after the final `/` (e.g. `6fc3e3d1-292b-4281-8826-577f78512e56`)
 - **MAKER_HOSTNAME**: the hostname of the URL (e.g. `make.powerapps.com`)
-- **CLUSTER_CATEGORY**: determined from MAKER_HOSTNAME (see table below)
+- **ENVIRONMENT_CATEGORY**: determined from MAKER_HOSTNAME (see table below)
 
-**Determine CLUSTER_CATEGORY from MAKER_HOSTNAME:**
+**Determine ENVIRONMENT_CATEGORY from MAKER_HOSTNAME:**
 
-| MAKER_HOSTNAME               | CLUSTER_CATEGORY |
-| ---------------------------- | ---------------- |
-| `make.powerapps.com`         | `prod`           |
-| `make.preview.powerapps.com` | `prod`           |
-| `make.gov.powerapps.us`      | `gov`            |
-| `make.high.powerapps.us`     | `high`           |
-| `make.apps.appsplatform.us`  | `dod`            |
-| `make.powerapps.cn`          | `china`          |
-| Any other hostname           | `test`           |
+| MAKER_HOSTNAME               | ENVIRONMENT_CATEGORY |
+| ---------------------------- | -------------------- |
+| `make.powerapps.com`         | `prod`               |
+| `make.preview.powerapps.com` | `prod`               |
+| `make.preprod.powerapps.com` | `preprod`            |
+| `make.gov.powerapps.us`      | `gov`                |
+| `make.high.powerapps.us`     | `high`               |
+| `make.apps.appsplatform.us`  | `dod`                |
+| `make.powerapps.cn`          | `china`              |
+| Any other hostname           | `test`               |
 
 **Example:**
 
@@ -67,7 +54,7 @@ Example URL: `https://make.powerapps.com/e/Default-91bee3d9-0c15-4f17-8624-c92bb
 - ENV_ID → `Default-91bee3d9-0c15-4f17-8624-c92bb8b36ead`
 - APP_ID → `6fc3e3d1-292b-4281-8826-577f78512e56`
 - MAKER_HOSTNAME → `make.powerapps.com`
-- CLUSTER_CATEGORY → `prod`
+- ENVIRONMENT_CATEGORY → `prod`
 
 ### 3. Configure the MCP server
 
@@ -77,24 +64,37 @@ Call the `connect` MCP tool to connect the server to the user's coauthoring sess
 mcp__canvas-authoring__connect(
   environment_id: ENV_ID,
   app_id: APP_ID,
-  cluster_category: CLUSTER_CATEGORY,
-  // Optional — include only if the user has expressed a preference (see below):
-  auth_flow: "broker" | "browser",
-  login_hint: "user@contoso.com"
+  environment_category: ENVIRONMENT_CATEGORY,
+  // Optional — include only if the user has expressed a preference or a prior sign-in failed (see below):
+  auth_flow: "broker" | "browser" | "devicecode",
+  login_hint: "user@contoso.com",
+  tenant_id: "00000000-0000-0000-0000-000000000000",
+  force_account_select: true
 )
 ```
 
-**Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation:
+**Optional parameters — do NOT prompt the user for these.** Only include them if the user has already expressed a preference earlier in the conversation, or if a prior connect attempt failed:
 
-- `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user.
-- `auth_flow`: Pass `"browser"` or `"broker"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Omit otherwise to use the default.
+- `login_hint`: Pass the user's UPN or email **only if** they have indicated they want to connect as a specific/different user (e.g. "log in as alice@contoso.com"). These values cannot be derived from the maker portal URL — never guess. Omit otherwise to use the first signed-in user. When reconnecting to switch environment/app, reuse the same `login_hint` value as the previous successful connect (if known) so the same user is reused without re-prompting.
+- `auth_flow`: Pass `"browser"`, `"broker"`, or `"devicecode"` **only if** the user has explicitly stated a preferred auth flow (e.g. "use browser sign-in"). Use `"devicecode"` on headless/SSH hosts where neither broker nor browser flow can pop a UI — the verification URL and user code are surfaced via an MCP elicitation request and require a client that supports elicitation. Omit otherwise to use the default.
+- `tenant_id`: Pass a tenant GUID **only** for Entra B2B guest access — set it to the host/resource tenant where the user is a guest so the token is issued by that tenant rather than the user's home tenant. Combine with `login_hint` (the guest's home UPN) to pre-fill the account. Omit for normal same-tenant sign-in.
+- `force_account_select`: Pass `true` **only** to force the account picker instead of silently reusing a cached account — set this when a previous connect failed with a 401/403 and no `login_hint` was given, so the user can pick the correct account. Omit otherwise.
 
-If the call fails, report the error to the user and suggest checking that:
+If the `mcp__canvas-authoring__connect` tool is **not available** (the MCP server did not start), run the following command to check whether the server failed to launch due to a missing .NET 10 SDK:
+
+```bash
+dotnet --list-sdks
+```
+
+If a version 10.x.y or higher is **not** listed, tell the user:
+
+> ⚠️ .NET 10 SDK is required to run the Canvas Authoring MCP server. It looks like you don't have it installed. Please install it from https://dotnet.microsoft.com/download/dotnet/10.0 and then try again.
+
+If the tool is available but the call returns an error, report the error and suggest checking that:
 
 1. The studio URL is correct and the browser tab is still open
 2. Coauthoring is enabled in the app settings
-3. .NET 10 SDK is correctly installed
-4. If sign-in failed, the user may need to specify `auth_flow` (`broker` vs. `browser`) or a `login_hint` (UPN/email) to authenticate as the correct account
+3. If sign-in failed, the user may need to specify `auth_flow` (`broker`, `browser`, or `devicecode`) or a `login_hint` (UPN/email) to authenticate as the correct account. On a headless/SSH host, use `auth_flow: "devicecode"`. If a cached account keeps getting picked, retry with `force_account_select: true`. For Entra B2B guest access, set `tenant_id` to the host tenant.
 
 ### 4. Confirm
 

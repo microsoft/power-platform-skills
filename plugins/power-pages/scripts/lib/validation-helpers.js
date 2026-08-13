@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 
 // Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
 const approve = () => { process.exit(0); };
@@ -89,14 +89,24 @@ function findPath(dir, target) {
 }
 
 /**
- * Finds the project root directory (containing powerpages.config.json).
+ * Finds the project root directory of a Power Pages site.
+ *
+ * A project root is marked by EITHER:
+ *   - `powerpages.config.json` — code/SPA sites (`pac pages download-code-site`), OR
+ *   - a `.powerpages-site/` directory — declarative design-studio sites
+ *     (`pac pages download`; standard or enhanced data model). These have NO
+ *     `powerpages.config.json`.
+ *
+ * Code sites have both markers; declarative sites have only
+ * `.powerpages-site/`. Checking for either makes root discovery work for both site types.
+ *
  * @returns {string|null} Project root path, or null
  */
 function findProjectRoot(dir) {
   let current = path.resolve(dir);
   while (true) {
-    const configPath = path.join(current, 'powerpages.config.json');
-    if (fs.existsSync(configPath)) {
+    if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
+        fs.existsSync(path.join(current, '.powerpages-site'))) {
       return current;
     }
 
@@ -107,8 +117,11 @@ function findProjectRoot(dir) {
     current = parent;
   }
 
+  // Fallback: search subdirectories for either marker (config first, then .powerpages-site/).
   const fallbackConfigPath = findPath(dir, 'powerpages.config.json');
-  return fallbackConfigPath ? path.dirname(fallbackConfigPath) : null;
+  if (fallbackConfigPath) return path.dirname(fallbackConfigPath);
+  const fallbackSiteDir = findPath(dir, '.powerpages-site');
+  return fallbackSiteDir ? path.dirname(fallbackSiteDir) : null;
 }
 
 /**
@@ -124,6 +137,168 @@ function findPowerPagesSiteDir(dir, subdir) {
 /** UUID v4 validation regex */
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Dataverse publishes one environment-host family per supported cloud:
+//   Commercial/GCC: <org>[.api].crm{region?}.dynamics.com
+//   GCC High:       <org>[.api].crm.microsoftdynamics.us
+//   DoD:            <org>[.api].crm.appsplatform.us
+//   China:          <org>[.api].crm.dynamics.cn
+// See: https://learn.microsoft.com/power-apps/developer/data-platform/discovery-service#global-discovery-service
+const DATAVERSE_HOST_PATTERNS = [
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\d*\.dynamics\.com$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.microsoftdynamics\.us$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.appsplatform\.us$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.dynamics\.cn$/,
+];
+
+// These are the first-party service hosts used by this plugin's cloud maps and
+// the repository's Power Platform cloud map. Keep this exact-host list narrow:
+// an Authorization header must never follow a caller-controlled URL to an
+// arbitrary host just because it happens to use HTTPS.
+const POWER_PLATFORM_SERVICE_HOSTS = new Set([
+  'api.powerplatform.com',
+  'api.gov.powerplatform.microsoft.us',
+  'api.high.powerplatform.microsoft.us',
+  'high.api.powerplatform.microsoft.us',
+  'api.appsplatform.us',
+  'dod.api.powerplatform.microsoft.us',
+  'api.powerplatform.partner.microsoftonline.cn',
+  'api.bap.microsoft.com',
+  'gov.api.bap.microsoft.us',
+  'high.api.bap.microsoft.us',
+  'dod.api.bap.microsoft.us',
+  'api.flow.microsoft.com',
+  'gov.api.flow.microsoft.us',
+  'high.gov.api.flow.microsoft.us',
+  'high.api.flow.microsoft.us',
+  'dod.api.flow.microsoft.us',
+  'api.flow.microsoft.cn',
+  'service.flow.microsoft.com',
+  'gov.service.flow.microsoft.us',
+  'high.gov.service.flow.microsoft.us',
+  'high.service.flow.microsoft.us',
+  'dod.service.flow.microsoft.us',
+  'service.flow.microsoft.cn',
+]);
+
+const BAP_HOSTS = new Set([
+  'api.bap.microsoft.com',
+  'gov.api.bap.microsoft.us',
+  'high.api.bap.microsoft.us',
+  'dod.api.bap.microsoft.us',
+]);
+
+function isDataverseHost(hostname) {
+  return DATAVERSE_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
+function parseTrustedMicrosoftUrl(value, {
+  purpose = 'URL',
+  allowPath = true,
+  allowedHost = (hostname) => isDataverseHost(hostname) || POWER_PLATFORM_SERVICE_HOSTS.has(hostname),
+} = {}) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${purpose} must be a non-empty string.`);
+  }
+
+  // WHATWG URL parsing removes tabs and newlines before validation and treats
+  // backslashes as path separators for special schemes. Reject those before
+  // parsing; ordinary spaces remain allowed in OData query expressions and are
+  // percent-encoded by URL.href below.
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) {
+    throw new Error(`${purpose} contains control characters or backslashes.`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${purpose} is not a valid URL.`);
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`${purpose} must use HTTPS.`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${purpose} must not contain credentials.`);
+  }
+  if (parsed.hash) {
+    throw new Error(`${purpose} must not contain a fragment.`);
+  }
+
+  // URL.port is empty for an explicit default :443, so inspect the original
+  // authority as well. Microsoft service endpoints used here never require a
+  // caller-selected port. URL schemes are case-insensitive, so capture the raw
+  // authority without requiring callers to use lowercase `https://`.
+  const authorityMatch = /^https:\/\/([^/?#]*)/i.exec(value);
+  if (!authorityMatch) {
+    throw new Error(`${purpose} must use HTTPS.`);
+  }
+  const authority = authorityMatch[1];
+  if (authority.includes(':')) {
+    throw new Error(`${purpose} must not contain a port.`);
+  }
+  if (!/^[A-Za-z0-9.-]+$/.test(authority) || parsed.hostname.includes('xn--')) {
+    throw new Error(`${purpose} contains unsafe host characters.`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!allowedHost(hostname)) {
+    throw new Error(`${purpose} host "${hostname}" is not an allowed Microsoft Dataverse or Power Platform endpoint.`);
+  }
+  if (!allowPath && (parsed.pathname !== '/' || parsed.search)) {
+    throw new Error(`${purpose} must be an HTTPS origin without a path or query.`);
+  }
+
+  return parsed;
+}
+
+function validateDataverseEnvironmentUrl(value, purpose = 'Dataverse environment URL') {
+  return parseTrustedMicrosoftUrl(value, {
+    purpose,
+    allowPath: false,
+    allowedHost: isDataverseHost,
+  }).origin;
+}
+
+function validateTokenResourceUrl(value) {
+  const parsed = parseTrustedMicrosoftUrl(value, {
+    purpose: 'Token resource URL',
+    allowPath: false,
+  });
+  return parsed.origin + (value.endsWith('/') ? '/' : '');
+}
+
+function validateAuthenticatedRequestUrl(value) {
+  return parseTrustedMicrosoftUrl(value, {
+    purpose: 'Authenticated request URL',
+    allowPath: true,
+  }).href;
+}
+
+function validateBapUrl(value, { allowPath = true } = {}) {
+  return parseTrustedMicrosoftUrl(value, {
+    purpose: 'BAP URL',
+    allowPath,
+    allowedHost: (hostname) => BAP_HOSTS.has(hostname),
+  }).href;
+}
+
+function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location header') {
+  const trustedInitiatingUrl = validateBapUrl(initiatingUrl);
+  let resolvedLocation;
+  try {
+    resolvedLocation = new URL(location, trustedInitiatingUrl).href;
+  } catch {
+    throw new Error(`${purpose} is not a valid URL.`);
+  }
+
+  const trustedPollingUrl = validateBapUrl(resolvedLocation);
+  if (new URL(trustedPollingUrl).origin !== new URL(trustedInitiatingUrl).origin) {
+    throw new Error(`${purpose} points to a different host than the initiating BAP request.`);
+  }
+  return trustedPollingUrl;
+}
+
 /**
  * Gets an Azure CLI access token for the given resource URL.
  * The `--allow-no-subscriptions` flag is only valid on `az login` (other `az`
@@ -134,9 +309,11 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  */
 function getAuthToken(resourceUrl) {
   try {
-    return execSync(
-      `az account get-access-token --resource "${resourceUrl}" --query accessToken -o tsv`,
-      { encoding: 'utf8', timeout: 15000 }
+    const trustedResourceUrl = validateTokenResourceUrl(resourceUrl);
+    return execFileSync(
+      'az',
+      ['account', 'get-access-token', '--resource', trustedResourceUrl, '--query', 'accessToken', '-o', 'tsv'],
+      { encoding: 'utf8', timeout: 15000, shell: false }
     ).trim();
   } catch {
     return null;
@@ -147,11 +324,30 @@ function getAuthToken(resourceUrl) {
  * Gets the environment URL from `pac env who`.
  * @returns {string|null} Environment URL, or null
  */
+// Pure parser (exported for unit testing — getEnvironmentUrl() shells out, so the
+// regex itself is tested here against raw banner text rather than through execSync).
+// PAC CLI labels the environment URL differently across versions / commands:
+// `pac env who` on 2.8.x prints it under "Org URL:" (inside "Organization
+// Information"); older/other builds emit "Environment URL:". Match EITHER — with
+// only the "Environment URL:" form this returned null on 2.8.x and every caller
+// relying on the pac-env-who fallback (verify-alm-prerequisites when --envUrl is
+// omitted, the datamodel / solution / permissions validators) silently failed.
+// Example 2.8.1 line: `  Org URL:    https://org4a2942d9.crm17.dynamics.com/`
+function parseEnvironmentUrl(whoOutput) {
+  if (!whoOutput) return null;
+  const match = whoOutput.match(/(?:Org URL|Environment URL):\s*(https:\/\/[^\s]+)/i);
+  if (!match) return null;
+  try {
+    return validateDataverseEnvironmentUrl(match[1]);
+  } catch {
+    return null;
+  }
+}
+
 function getEnvironmentUrl() {
   try {
     const output = execSync('pac env who', { encoding: 'utf8', timeout: 15000 });
-    const match = output.match(/Environment URL:\s*(https:\/\/[^\s]+)/i);
-    return match ? match[1].replace(/\/+$/, '') : null;
+    return parseEnvironmentUrl(output);
   } catch {
     return null;
   }
@@ -189,10 +385,14 @@ function getPacAuthInfo() {
  * @returns {Promise<{ statusCode: number, body: string, headers?: object } | { error: string }>}
  */
 function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 15000 }) {
+  const authorizationHeader = Object.entries(headers)
+    .find(([name, value]) => name.toLowerCase() === 'authorization' && value);
+  const requestUrl = authorizationHeader ? validateAuthenticatedRequestUrl(url) : url;
+
   return new Promise((resolve) => {
     const https = require('https');
     const http = require('http');
-    const u = new URL(url);
+    const u = new URL(requestUrl);
     const mod = u.protocol === 'https:' ? https : http;
     const req = mod.request(
       {
@@ -223,6 +423,64 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
   });
 }
 
+/**
+ * Single Dataverse OData GET (v9.2 headers, `Prefer: odata.maxpagesize=5000`),
+ * throws on non-2xx. `url` is absolute — pass an `@odata.nextLink` straight back in.
+ * @param {string} url - absolute URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @returns {Promise<object>} parsed JSON body
+ */
+async function odataGet(url, token, request = makeRequest) {
+  const res = await request({
+    url,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'OData-MaxVersion': '4.0',
+      'OData-Version': '4.0',
+      Prefer: 'odata.maxpagesize=5000',
+    },
+    timeout: 30000,
+  });
+  if (res.error) throw new Error(`OData request failed: ${res.error}`);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`HTTP ${res.statusCode} from ${url}: ${(res.body || '').slice(0, 400)}`);
+  }
+  return JSON.parse(res.body);
+}
+
+/**
+ * Follows `@odata.nextLink`, aggregating every page's `value[]` into one array.
+ * `maxPages` is a runaway-loop safety cap (100 × 5000 ≈ 500K rows). FAILS CLOSED:
+ * if the cap is reached while `@odata.nextLink` is still present, throws rather than
+ * silently returning a truncated set — a partial result would produce wrong
+ * table/env-var counts for ALM sizing/splitting with no signal. Callers that want
+ * partial results must catch and downgrade accuracy intentionally.
+ * @param {string} url - absolute starting URL
+ * @param {string} token - bearer token
+ * @param {Function} [request=makeRequest] - injectable for tests
+ * @param {number} [maxPages=100]
+ * @returns {Promise<object[]>}
+ */
+async function odataGetAll(url, token, request = makeRequest, maxPages = 100) {
+  const out = [];
+  let next = url;
+  let p = 0;
+  for (; p < maxPages && next; p++) {
+    const page = await odataGet(next, token, request);
+    if (Array.isArray(page.value)) out.push(...page.value);
+    next = page['@odata.nextLink'] || null;
+  }
+  if (next) {
+    throw new Error(
+      `odataGetAll hit the ${maxPages}-page cap with @odata.nextLink still present ` +
+      `(${out.length} rows so far) — result would be truncated. Raise maxPages or narrow the query.`,
+    );
+  }
+  return out;
+}
+
 /** Cloud → Power Platform API base URL mapping */
 const CLOUD_TO_API = {
   'Public': 'https://api.powerplatform.com',
@@ -250,9 +508,17 @@ module.exports = {
   findProjectRoot,
   findPowerPagesSiteDir,
   UUID_REGEX,
+  validateDataverseEnvironmentUrl,
+  validateTokenResourceUrl,
+  validateAuthenticatedRequestUrl,
+  validateBapUrl,
+  validateBapPollingUrl,
   getAuthToken,
   makeRequest,
+  odataGet,
+  odataGetAll,
   getEnvironmentUrl,
+  parseEnvironmentUrl,
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,

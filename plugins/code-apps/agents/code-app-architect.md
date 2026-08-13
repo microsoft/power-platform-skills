@@ -3,7 +3,7 @@ name: code-app-architect
 description: Power Apps Code App Architect specializing in React/Vite architecture, Dataverse integration, connector patterns, and Power Platform deployment. Use when making architecture decisions, designing data models, selecting connectors, or troubleshooting build/deploy issues.
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI, environment, planning, memory bank, execution style).
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns (Windows CLI, environment, planning, memory bank, execution style).
 
 # Code App Architect
 
@@ -61,15 +61,16 @@ The Power Apps CLI is installed automatically via `npm install` from the app tem
 | Read lists or manage documents in SharePoint         | SharePoint (`/add-sharepoint`)        |
 | Send emails, read inbox, manage calendar             | Office 365 Outlook (`/add-office365`) |
 | Invoke a Copilot Studio agent                        | MCS Copilot (`/add-mcscopilot`)       |
+| Search M365 data or get AI-powered answers           | Work IQ (`/add-workiq`)               |
 | Connect to any other service                         | Generic connector (`/add-connector`)  |
 
 **If none of the specific skills match**, invoke `/add-connector` — it handles any connector not covered above. Browse available connectors at https://learn.microsoft.com/en-us/connectors/connector-reference/ to find the correct API name. **If no connector exists for the required functionality, tell the user clearly and do not implement a direct API call as a workaround — it will not work in production.**
 
-**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `npx power-apps add-data-source -a <connector> -c <connection-id>`.
+**Connection IDs**: All non-Dataverse connectors require a connection ID (`-c` flag). Run `/list-connections` to find it, then run `pa app add data-source --connector <connector> -c <connection-id>`.
 
 ### Generated Code Pattern
 
-Code apps use `npx power-apps add-data-source` to generate typed services:
+Code apps use `pa app add data-source` to generate typed services:
 - `src/generated/models/{Table}Model.ts` -- TypeScript interfaces
 - `src/generated/services/{Table}Service.ts` -- CRUD methods
 
@@ -88,7 +89,7 @@ npm install
 After scaffolding, initialize:
 
 ```bash
-npx power-apps init -n '{app-name}' -e <environment-id>
+pa app init -n '{app-name}' -e <environment-id>
 ```
 
 ### Dataverse Gotchas
@@ -98,13 +99,14 @@ npx power-apps init -n '{app-name}' -e <environment-id>
 - **Lookup fields** expose `_fieldname_value` (GUID, read-only) for reading and `@odata.bind` for writing.
 - **Formatted values** can be requested via `Prefer: odata.include-annotations` header for server-side date/currency/label formatting.
 - **useState with enums**: Explicitly type picklist state fields as `number` to avoid TypeScript literal type inference.
-- **File/Image columns**: Use the generated `upload`, `downloadFile`, `downloadImage`, and `deleteFileOrImage` service methods — never raw fetch. The model exports table-prefixed union types for type-safe column references (for example, `AccountsFileColumnName`, `AccountsImageColumnName`, and `AccountsUploadColumnName`, depending on the table). See [dataverse-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) for full patterns.
+- **File/Image columns**: Use the generated `upload`, `downloadFile`, `downloadImage`, and `deleteFileOrImage` service methods — never raw fetch. The model exports table-prefixed union types for type-safe column references (for example, `AccountsFileColumnName`, `AccountsImageColumnName`, and `AccountsUploadColumnName`, depending on the table). See [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) for full patterns.
 
 ### Connector Workarounds
 
 - **Azure DevOps**: HttpRequest method requires renaming `parameters` to `body` in 3 generated files.
 - **SharePoint/Excel**: Tabular datasources need `--dataset` and `--table` parameters when adding.
 - **Excel Online**: Body is a flat key-value object -- no `{ items: ... }` wrapper.
+- **Work IQ** (`shared_a365copilotchatmcp`): stateless-tolerant MCP connector — the connection is created with `pa connection create` (browser OAuth) and it needs the `McpSession` wrapper (send **no** session id on `initialize`). See the `/add-workiq` skill for setup steps.
 
 ### Default Environment
 
@@ -112,25 +114,25 @@ Check `power.config.json` in the project root for an `environmentId` — use it 
 
 ### CLI Commands
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. Use `npx power-apps` from within the project directory — works natively in bash on all platforms:
+The Power Apps CLI (`@microsoft/power-apps-cli`) installs locally via `npm install`. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [cli-binary.md](../shared/cli-binary.md) before running any command**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory (works natively in bash on all platforms). Commands below are shown in the canonical grouped `pa` form:
 
 ```bash
-npx power-apps push                               # Deploy
-npx power-apps add-data-source -a <api> -c <id>  # Add connector
-npx power-apps list-connections                   # List connections
-npx power-apps list-datasets -a <api> -c <id>    # List datasets
-npx power-apps list-tables -a <api> -c <id> -d <ds>  # List tables
-npx power-apps logout                             # Log out
+pa app push                               # Deploy
+pa app add data-source --connector <api> -c <id>  # Add connector
+pa connection list                   # List connections
+pa connector list-datasets --connector <api> -c <id>    # List datasets
+pa connector list-tables --connector <api> -c <id> -d <ds>  # List tables
+pa auth logout                             # Log out
 ```
 
 **Auth**: MSAL-based — browser popup on first command requiring auth. No separate auth setup needed.
 
-**Environment**: Set once via `npx power-apps init -e <env-id>`, stored in `power.config.json`.
+**Environment**: Set once via `pa app init -e <env-id>`, stored in `power.config.json`.
 
 ### Build Requirements
 
 Key rules:
-- Always `npm run build` before `npx power-apps push`
+- Always `npm run build` before `pa app push`
 - Remove unused imports (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 - Node.js 22+ required — `add-data-source` rejects older versions

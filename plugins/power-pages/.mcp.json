@@ -1,12 +1,15 @@
 {
-    "playwright": {
-        "command": "node",
-        "args": [
-            "${CLAUDE_PLUGIN_ROOT}/scripts/launch-playwright-mcp.js"
-        ]
-    },
-    "microsoft-learn": {
-        "type": "http",
-        "url": "https://learn.microsoft.com/api/mcp"
+    "mcpServers": {
+        "playwright": {
+            "command": "node",
+            "args": [
+                "-e",
+                "const fs=require('node:fs'); const path=require('node:path'); const fail=(message)=>{throw new Error('[Power Pages Playwright MCP] '+message);}; const declaredRoot=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT; if(!declaredRoot) fail('PLUGIN_ROOT or CLAUDE_PLUGIN_ROOT must be set; refusing to resolve the launcher from the current working directory.'); if(!path.isAbsolute(declaredRoot)) fail('Declared plugin root must be an absolute path: '+declaredRoot+'.'); let root; try{root=fs.realpathSync(declaredRoot);}catch(error){fail('Declared plugin root is invalid: '+declaredRoot+' ('+(error.code||error.message)+').');} let rootStat; try{rootStat=fs.statSync(root);}catch(error){fail('Could not inspect declared plugin root: '+root+' ('+(error.code||error.message)+').');} if(!rootStat.isDirectory()) fail('Declared plugin root is not a directory: '+declaredRoot+'.'); const candidate=path.resolve(root,'scripts','launch-playwright-mcp.js'); let entry; try{entry=fs.realpathSync(candidate);}catch(error){fail('Launcher was not found under the declared plugin root: '+candidate+'.');} const relative=path.relative(root,entry); if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative)) fail('Resolved launcher escapes the declared plugin root: '+entry+'.'); let entryStat; try{entryStat=fs.statSync(entry);}catch(error){fail('Could not inspect resolved launcher: '+entry+' ('+(error.code||error.message)+').');} if(!entryStat.isFile()) fail('Resolved launcher is not a file: '+entry+'.'); const mod=require(entry); if(!mod||typeof mod.launch!=='function') fail('Launcher did not export launch(): '+entry+'.'); mod.launch();"
+            ]
+        },
+        "microsoft-learn": {
+            "type": "http",
+            "url": "https://learn.microsoft.com/api/mcp"
+        }
     }
 }

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"/>
 <title>Table Permissions Plan — __SITE_NAME__</title>
 <style>
 :root {
@@ -216,7 +217,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         </div>
 
         <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:16px;">
-          <button id="expandAllBtn" onclick="toggleExpandAll()" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
+          <button id="expandAllBtn" style="padding:5px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-dim);font-size:12px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:all 0.15s;">Expand All</button>
         </div>
         <div id="permsContainer"></div>
       </div>
@@ -225,20 +226,51 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   </div>
 </div>
 
-<script>
+<script nonce="__ATTR_CSP_NONCE__">
 // Data is populated by the table-permissions-architect agent
-const SITE_NAME = "__SITE_NAME__";
-
-const ROLES = __ROLES_DATA__;
+const ROLES = __JSON_ROLES_DATA__;
 // Each role: { id, name, desc, builtin, isNew, color }
 // builtin: true only for "Authenticated Users" and "Anonymous Users"
 // isNew: true if proposed by this plan, false if already exists in .powerpages-site/web-roles/
 
-const PERMS = __PERMISSIONS_DATA__;
+const PERMS = __JSON_PERMISSIONS_DATA__;
 // Each perm: { id, name, displayName, table, scope, read, create, write, delete, append, appendto, roles (array of role ids), parent (perm id or null), parentRelationship, rationale: { scope, read, create, write, delete, append, appendto }, isNew }
 
-const RATIONALE = __RATIONALE_DATA__;
+const RATIONALE = __JSON_RATIONALE_DATA__;
 // Array of { icon, title, desc }
+
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function safeIcon(value) {
+  const icon = String(value ?? '');
+  if (!/^(?:&#(?:x[0-9a-f]+|\d+);)+$/i.test(icon)) return esc(icon);
+
+  let valid = true;
+  const decoded = icon.replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_, hex, decimal) => {
+    const codePoint = Number.parseInt(hex || decimal, hex ? 16 : 10);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+      valid = false;
+      return '';
+    }
+    return String.fromCodePoint(codePoint);
+  });
+  return valid ? esc(decoded) : esc(icon);
+}
+
+function safeScope(value) {
+  return ['Global', 'Contact', 'Account', 'Parent', 'Self'].includes(value) ? value : 'Self';
+}
+
+function safeColor(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value ?? '')) ? value : '#8890a4';
+}
 
 // Tab navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -251,7 +283,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 });
 
 function getRoleName(id) { return ROLES.find(r => r.id === id)?.name || id; }
-function getRoleColor(id) { return ROLES.find(r => r.id === id)?.color || "#8890a4"; }
+function getRoleColor(id) { return safeColor(ROLES.find(r => r.id === id)?.color); }
 
 const scopeColors = {
   Global: 'var(--critical)', Contact: 'var(--pass)', Account: 'var(--accent)',
@@ -292,10 +324,10 @@ function renderRationale() {
   let html = '';
   RATIONALE.forEach(r => {
     html += `<div class="principle">
-      <div class="principle-icon">${r.icon}</div>
+      <div class="principle-icon">${safeIcon(r.icon)}</div>
       <div>
-        <div class="principle-title">${r.title}</div>
-        <div class="principle-desc">${r.desc}</div>
+        <div class="principle-title">${esc(r.title)}</div>
+        <div class="principle-desc">${esc(r.desc)}</div>
       </div>
     </div>`;
   });
@@ -309,19 +341,23 @@ function renderRoles() {
   const sortedRoles = [...ROLES].sort((a, b) => (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0));
   sortedRoles.forEach(r => {
     const perms = PERMS.filter(p => p.roles.includes(r.id));
+    const roleColor = safeColor(r.color);
     html += `<div class="card" style="cursor:default;${r.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;">
         <div style="display:flex;align-items:center;gap:10px;">
-          <div style="width:10px;height:10px;border-radius:50%;background:${r.color};flex-shrink:0;"></div>
+          <div style="width:10px;height:10px;border-radius:50%;background:${roleColor};flex-shrink:0;"></div>
           <div>
-            <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${r.name}</span>
+            <span style="font-size:14px;font-weight:700;color:var(--text-bright)">${esc(r.name)}</span>
             ${r.builtin ? '<span class="builtin-badge">BUILT-IN</span>' : r.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
-            <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${r.desc}</div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">${esc(r.desc)}</div>
           </div>
         </div>
       </div>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;">
-        ${perms.length > 0 ? perms.map(p => `<span style="font-size:10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 8px;color:var(--text);"><span class="scope-tag scope-${p.scope}" style="font-size:9px;padding:1px 5px;min-width:auto;margin-right:4px;">${p.scope}</span>${p.name}</span>`).join('') : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">No direct table permissions</span>'}
+        ${perms.length > 0 ? perms.map(p => {
+          const scope = safeScope(p.scope);
+          return `<span style="font-size:10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 8px;color:var(--text);"><span class="scope-tag scope-${scope}" style="font-size:9px;padding:1px 5px;min-width:auto;margin-right:4px;">${esc(scope)}</span>${esc(p.name)}</span>`;
+        }).join('') : '<span style="font-size:11px;color:var(--text-dim);font-style:italic;">No direct table permissions</span>'}
       </div>
     </div>`;
   });
@@ -345,34 +381,34 @@ function renderPerms() {
 
   function renderPermCard(p, depth) {
     const parentName = p.parent ? PERMS.find(x => x.id === p.parent)?.name : null;
+    const scope = safeScope(p.scope);
     const privs = ['Read','Create','Write','Delete','Append','AppendTo'];
     const privFlags = { Read: p.read, Create: p.create, Write: p.write, Delete: p.delete, Append: p.append, AppendTo: p.appendto };
-    const indent = depth * 32;
     const children = childrenOf[p.id] || [];
 
     let html = `<div style="position:relative;">`;
 
-    html += `<div class="card" style="border-left:3px solid ${scopeColors[p.scope]};padding:0;${p.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
-      <div class="expandable-header" onclick="this.parentElement.classList.toggle('expanded')">
+    html += `<div class="card" style="border-left:3px solid ${scopeColors[scope]};padding:0;${p.isNew ? 'background:var(--accent-bg);border-color:var(--accent-border);' : ''}">
+      <div class="expandable-header">
         ${depth > 0 ? '<span style="font-size:15px;color:var(--purple);font-weight:700;margin-right:2px;">&#8627;</span>' : ''}
-        <span class="scope-tag scope-${p.scope}">${p.scope}</span>
-        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${p.name}</span>
+        <span class="scope-tag scope-${scope}">${esc(scope)}</span>
+        <span style="font-size:13px;font-weight:600;color:var(--text-bright);flex:1;">${esc(p.name)}</span>
         ${p.isNew ? '<span class="new-badge">PROPOSED</span>' : '<span class="existing-badge">EXISTING</span>'}
-        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${p.table}</code>
+        <code style="font-size:11px;color:var(--accent);background:var(--accent-bg);padding:1px 6px;border-radius:3px;border:1px solid var(--accent-border);">${esc(p.table)}</code>
         <span style="display:flex;gap:3px;">${privs.map(pr => `<span class="priv ${privFlags[pr] ? 'priv-on' : 'priv-off'}">${pr[0]}${pr === 'AppendTo' ? 'T' : ''}</span>`).join('')}</span>
         ${children.length > 0 ? `<span style="font-size:10px;color:var(--purple);font-weight:700;font-family:var(--mono);background:var(--purple-bg);border:1px solid var(--purple-border);padding:1px 6px;border-radius:3px;">${children.length} child${children.length > 1 ? 'ren' : ''}</span>` : ''}
         <span class="expand-chevron">&#9654;</span>
       </div>
       <div class="expandable-body">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;font-size:12px;">
-          <div><div class="field-label">Scope</div><span class="scope-tag scope-${p.scope}" style="font-size:10px;padding:1px 6px;min-width:auto;">${p.scope}${p.scope === 'Parent' && parentName ? ' \u2192 ' + parentName : ''}</span></div>
-          <div><div class="field-label">Display Name</div><span style="color:var(--text-bright);font-weight:600;">${p.displayName || p.name}</span></div>
-          <div><div class="field-label">Table Logical Name</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${p.table}</span></div>
-          <div><div class="field-label">Roles</div>${p.roles.map(rid => `<span style="color:${getRoleColor(rid)};font-weight:600;margin-right:6px;">${getRoleName(rid)}</span>`).join('')}</div>
+          <div><div class="field-label">Scope</div><span class="scope-tag scope-${scope}" style="font-size:10px;padding:1px 6px;min-width:auto;">${esc(scope)}${scope === 'Parent' && parentName ? ' \u2192 ' + esc(parentName) : ''}</span></div>
+          <div><div class="field-label">Display Name</div><span style="color:var(--text-bright);font-weight:600;">${esc(p.displayName || p.name)}</span></div>
+          <div><div class="field-label">Table Logical Name</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${esc(p.table)}</span></div>
+          <div><div class="field-label">Roles</div>${p.roles.map(rid => `<span style="color:${getRoleColor(rid)};font-weight:600;margin-right:6px;">${esc(getRoleName(rid))}</span>`).join('')}</div>
           <div style="grid-column:span 2"><div class="field-label">Privileges</div>${privs.map(pr => `<span class="priv ${privFlags[pr] ? 'priv-on' : 'priv-off'}" style="margin-right:4px;">${pr}: ${privFlags[pr] ? '\u2713' : '\u2717'}</span>`).join('')}</div>
-          ${p.parentRelationship ? `<div style="grid-column:span 2"><div class="field-label">Parent Relationship</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${p.parentRelationship}</span> <span style="font-size:11px;color:var(--text-dim);">\u2192 ${parentName}</span></div>` : ''}
+          ${p.parentRelationship ? `<div style="grid-column:span 2"><div class="field-label">Parent Relationship</div><span style="color:var(--text);font-family:var(--mono);font-size:11px;">${esc(p.parentRelationship)}</span> <span style="font-size:11px;color:var(--text-dim);">\u2192 ${esc(parentName)}</span></div>` : ''}
         </div>
-        ${p.rationale ? (() => { const labels = {read:'Read',create:'Create',write:'Write',delete:'Delete',append:'Append',appendto:'AppendTo'}; return `<div style="margin-top:12px;"><div class="field-label" style="margin-bottom:6px;">Reasoning</div><div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;"><ul class="reasoning-list">${p.rationale.scope ? `<li><strong>Scope:</strong> ${p.rationale.scope}</li>` : ''}${Object.entries(labels).map(([k,l]) => p.rationale[k] ? `<li><strong>${l}:</strong> ${p.rationale[k]}</li>` : '').join('')}</ul></div></div>`; })() : ''}
+        ${p.rationale ? (() => { const labels = {read:'Read',create:'Create',write:'Write',delete:'Delete',append:'Append',appendto:'AppendTo'}; return `<div style="margin-top:12px;"><div class="field-label" style="margin-bottom:6px;">Reasoning</div><div style="font-size:12px;color:var(--text);background:var(--surface2);padding:10px 14px;border-radius:var(--radius-sm);border-left:2px solid var(--accent);line-height:1.8;"><ul class="reasoning-list">${p.rationale.scope ? `<li><strong>Scope:</strong> ${esc(p.rationale.scope)}</li>` : ''}${Object.entries(labels).map(([k,l]) => p.rationale[k] ? `<li><strong>${l}:</strong> ${esc(p.rationale[k])}</li>` : '').join('')}</ul></div></div>`; })() : ''}
       </div>
     </div>`;
 
@@ -393,6 +429,9 @@ function renderPerms() {
   roots.forEach(p => { html += renderPermCard(p, 0); });
 
   c.innerHTML = html;
+  c.querySelectorAll('.expandable-header').forEach(header => {
+    header.addEventListener('click', () => header.parentElement.classList.toggle('expanded'));
+  });
 }
 
 // Expand All toggle
@@ -408,6 +447,7 @@ function toggleExpandAll() {
 }
 
 // Init
+document.getElementById('expandAllBtn').addEventListener('click', toggleExpandAll);
 renderRationale();
 renderRoles();
 renderPerms();

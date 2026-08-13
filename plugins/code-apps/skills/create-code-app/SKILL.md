@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -23,7 +23,7 @@ model: opus
 
 ### Step 0: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md). Skip completed steps.
 
 ### Step 1: Validate Prerequisites
 
@@ -61,6 +61,7 @@ Once you have their description:
    - Based on their answers, recommend the best approach:
      - **Store and manage custom business data** (tables, forms, CRUD) → Dataverse (`/add-dataverse`)
      - **Interact with specific services** (send emails, post messages, manage files) → the appropriate connector
+     - **Search M365 data or get AI-powered answers** (emails, files, people, company knowledge) → Work IQ (`/add-workiq`)
    - If they mention existing Dataverse tables, SharePoint lists, or connectors by name, use those directly
 3. Ask about UI requirements: key screens, layout, interactions, theme preference
 4. Ask any clarifying questions now -- resolve all ambiguity before entering plan mode
@@ -97,21 +98,23 @@ Verify: `package.json` exists, `node_modules/` created.
 
 ### Step 5: Initialize
 
+> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA app init …` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps init …` (the `init` verb and its `-n`/`-e` flags are unchanged on both binaries).
+
 ```bash
-npx power-apps init -n '{user-provided-app-name}' -e <environment-id>
+pa app init -n '{user-provided-app-name}' -e <environment-id>
 ```
 
 **Finding the environment ID:** It's the GUID in the make.powerapps.com URL: `https://make.powerapps.com/environments/<env-id>/home`. If you don't pass `-e`, the CLI will prompt for it interactively.
 
 **Authentication:** On first run, a browser window opens for Microsoft sign-in. Complete the login and the command continues. No separate auth setup is needed.
 
-See [preferred-environment.md](${CLAUDE_PLUGIN_ROOT}/shared/preferred-environment.md) for environment selection details.
+See [preferred-environment.md](${PLUGIN_ROOT}/shared/preferred-environment.md) for environment selection details.
 
-**`npx power-apps init` failure:**
+**`pa app init` failure:**
 
 - Non-zero exit: Report the exact output and STOP. Do not continue to Step 6.
 - "environmentId not found" or environment validation error: Verify the environment ID is correct and the user has maker permissions in that environment, then retry.
-- Example: _"The `npx power-apps init` command failed: `[error text]`. Please check that environment ID `32a51012-...` is correct and that you have maker permissions in that environment."_
+- Example: _"The `pa app init` command failed: `[error text]`. Please check that environment ID `32a51012-...` is correct and that you have maker permissions in that environment."_
 
 **Critical:** Read `power.config.json` after init and verify `environmentId` is set correctly.
 
@@ -127,8 +130,10 @@ npm run build
 
 Verify `dist/` folder created with `index.html` and `assets/`.
 
+> Deploy via the resolved CLI: `$PA app push` on `pa`, or `power-apps push` on `power-apps`-only projects (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)).
+
 ```bash
-npx power-apps push
+pa app push
 ```
 
 **Capture app URL** from output: `https://apps.powerapps.com/play/e/{env-id}/app/{app-id}`
@@ -157,6 +162,7 @@ Invoke the `/add-*` skills identified in the plan (Step 3). Run each in sequence
 | Work with SharePoint lists or docs         | `/add-sharepoint`  |
 | Send emails, read inbox, manage calendar   | `/add-office365`   |
 | Invoke a Copilot Studio agent              | `/add-mcscopilot`  |
+| Search M365 data or get AI-powered answers | `/add-workiq`      |
 | Connect to another service                 | `/add-connector`   |
 
 Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
@@ -167,7 +173,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 
 **This is the core step.** Build the actual app features described in the plan from Step 3.
 
-1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
+1. **Review generated services**: Use `Grep` to find methods in generated service files (they can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)). Do NOT read entire generated files.
 2. **Build components**: Create React components for each screen/feature in the plan
 3. **Connect data**: Wire components to generated services (use `*Service.getAll()`, `*Service.create()`, etc.)
 4. **Apply theme**: Use the user's theme preference (default: dark theme per development standards)
@@ -176,7 +182,7 @@ Each `/add-*` skill runs `npm run build` to catch errors. Do NOT deploy yet.
 **Key rules:**
 
 - Use generated services for all data access -- never use fetch/axios directly
-- Read [dataverse-reference.md](${CLAUDE_PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
+- Read [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) if working with Dataverse (picklist fields, virtual fields, lookups have critical gotchas)
 - Remove unused imports before building (TS6133 strict mode)
 - Don't edit files in `src/generated/` unless fixing known issues
 
@@ -191,7 +197,7 @@ Fix any TypeScript errors. Verify `dist/` contains the updated app.
 Ask the user: _"Ready to deploy to [environment name]? This will update the live app."_ Wait for explicit confirmation before proceeding.
 
 ```bash
-npx power-apps push
+pa app push
 ```
 
 ### Step 10: Summary
@@ -200,7 +206,7 @@ Provide:
 
 - App name, environment, app URL, project location
 - What was built: features, data sources, components
-- Next steps: how to iterate (`npm run build && npx power-apps push`), how to add more data sources
+- Next steps: how to iterate (`npm run build && pa app push`), how to add more data sources
 - Suggest what else the app could do:
   - `/add-datasource` -- add another data source (describe what you need, and the plugin will recommend the best approach)
   - `/add-dataverse` -- store and manage custom business data
@@ -208,6 +214,7 @@ Provide:
   - `/add-teams` -- send and read Teams messages
   - `/add-sharepoint` -- work with SharePoint lists or documents
   - `/add-office365` -- send emails, manage calendar
+  - `/add-workiq` -- search M365 data or get AI-powered answers about company info
   - `/add-connector` -- connect to any other service
 - Manage at https://make.powerapps.com/environments/<environment-id>/home
 
@@ -246,29 +253,29 @@ cd powerapps-task-tracker-20260302
 npm install
 
 # Step 5: Initialize (browser login prompt on first run; CLI prompts for env ID if -e omitted)
-npx power-apps init -n 'Task Tracker' -e <environment-id>
+pa app init -n 'Task Tracker' -e <environment-id>
 
 # Step 6: Baseline deploy (pre-approved as part of scaffold flow)
 npm run build
-npx power-apps push
+pa app push
 # → App URL: https://apps.powerapps.com/play/e/32a51012-.../app/<app-id>
 
 # Step 7: Add Dataverse (via /add-dataverse)
-npx power-apps add-data-source -a dataverse -t cr123_task
+pa app add data-source --connector dataverse --table cr123_task
 npm run build   # verify connector — no deploy yet
 
 # Step 9: Final deploy (requires user confirmation)
 npm run build
-npx power-apps push
+pa app push
 ```
 
 **Files changed:**
 
 | File                                          | Change                                                |
 | --------------------------------------------- | ----------------------------------------------------- |
-| `power.config.json`                           | Created by `npx power-apps init` — contains `environmentId` |
-| `src/generated/models/Cr123_taskModel.ts`     | Generated by `npx power-apps add-data-source`               |
-| `src/generated/services/Cr123_taskService.ts` | Generated by `npx power-apps add-data-source`               |
+| `power.config.json`                           | Created by `pa app init` — contains `environmentId` |
+| `src/generated/models/Cr123_taskModel.ts`     | Generated by `pa app add data-source`               |
+| `src/generated/services/Cr123_taskService.ts` | Generated by `pa app add data-source`               |
 | `src/components/TaskList.tsx`                 | Created — renders task list with status filter        |
 | `src/components/AddTaskForm.tsx`              | Created — form to add new tasks                       |
 | `src/App.tsx`                                 | Updated — wires components to `Cr123_taskService`     |
@@ -290,7 +297,7 @@ What was built:
 - Mark complete / delete actions
 - Dataverse table `cr123_task` (Title, Description, DueDate, IsComplete)
 
-To redeploy: npm run build && npx power-apps push (from the project folder)
+To redeploy: npm run build && pa app push (from the project folder)
 
 What you can add next:
 - /add-teams — post task updates to a Teams channel
@@ -313,7 +320,7 @@ What you can add next:
 
 - [x] Step 1: Prerequisites validated
 - [x] Step 4: Scaffold (npx degit)
-- [x] Step 5: Initialize (npx power-apps init)
+- [x] Step 5: Initialize (pa app init)
 - [x] Step 6: Baseline deploy
 - [x] Step 7: Add Dataverse (cr123_task)
 - [x] Step 8: Implement app (TaskList, AddTaskForm)
@@ -345,19 +352,19 @@ What you can add next:
 
 ```bash
 # Step 6: Get connection ID (via /list-connections)
-npx power-apps list-connections
+pa connection list
 # → ConnectionId: conn-sp-xyz789  (SharePoint Online)
 
 # Step 7: Discover sites
-npx power-apps list-datasets -a sharepointonline -c conn-sp-xyz789
+pa connector list-datasets --connector sharepointonline -c conn-sp-xyz789
 # → https://contoso.sharepoint.com/sites/Projects
 
 # Step 8: Discover tables
-npx power-apps list-tables -a sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects'
+pa connector list-tables --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects'
 # → Project Milestones, Documents, Team Wiki
 
 # Step 9: Add connector
-npx power-apps add-data-source -a sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects' -t 'Project Milestones'
+pa app add data-source --connector sharepointonline -c conn-sp-xyz789 -d 'https://contoso.sharepoint.com/sites/Projects' --table 'Project Milestones'
 
 # Step 11: Build to verify
 npm run build   # → success

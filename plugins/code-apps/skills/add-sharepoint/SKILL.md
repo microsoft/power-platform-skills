@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -26,7 +26,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md).
 
 ### Step 2: Plan
 
@@ -84,7 +84,7 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 
 ### Step 6: Get Connection ID
 
-Find the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md)):
+Find the SharePoint Online connection ID (see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md)):
 
 Run the `/list-connections` skill. Find the SharePoint Online connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
@@ -93,13 +93,13 @@ Run the `/list-connections` skill. Find the SharePoint Online connection in the 
 List available SharePoint sites the user has access to:
 
 ```bash
-npx power-apps list-datasets -a sharepointonline -c <connection-id>
+pa connector list-datasets --connector sharepointonline -c <connection-id>
 ```
 
 Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
 
-**If `npx power-apps list-datasets` fails or returns no results:**
-- Auth error: Run `npx power-apps logout`, then retry — the CLI will re-prompt browser login.
+**If `pa connector list-datasets` fails or returns no results:**
+- Auth error: Run `pa auth logout` (or `power-apps logout` on `power-apps`-only projects), then retry — the CLI will re-prompt browser login.
 - Empty list: Confirm the connection ID is for a SharePoint Online connection and the user has access to at least one site. STOP if the list is empty after confirming.
 - Any other non-zero exit: Report the exact error output. STOP.
 
@@ -108,10 +108,10 @@ Present the sites to the user and ask which one(s) they want to connect to. If t
 For each selected site, list the available lists and document libraries:
 
 ```bash
-npx power-apps list-tables -a sharepointonline -c <connection-id> -d '<site-url>'
+pa connector list-tables --connector sharepointonline -c <connection-id> -d '<site-url>'
 ```
 
-**If `npx power-apps list-tables` fails or returns no results:**
+**If `pa connector list-tables` fails or returns no results:**
 - Confirm the site URL from Step 7 is exact (copy from the output — do not retype).
 - If still empty, the user may not have access to that site's lists. Ask them to verify permissions in SharePoint.
 - Any other non-zero exit: Report the exact error output. STOP.
@@ -120,13 +120,13 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 
 ### Step 9: Add Connector
 
-SharePoint is a tabular datasource -- requires `-c` (connection ID), `-d` (site URL), and `-t` (list name):
+SharePoint is a tabular datasource -- requires `-c` (connection ID), `-d` (site URL), and `--table` (list name):
 
 ```bash
-npx power-apps add-data-source -a sharepointonline -c <connection-id> -d '<site-url>' -t '<table-name>'
+pa app add data-source --connector sharepointonline -c <connection-id> -d '<site-url>' --table '<table-name>'
 ```
 
-Run the command for each list or library the user selected. The `-d` (dataset) is the SharePoint site URL from Step 7, `-t` (table) is the list/library name from Step 8.
+Run the command for each list or library the user selected. The `-d` (dataset) is the SharePoint site URL from Step 7, `--table` is the list/library name from Step 8.
 
 ### Step 10: Configure
 
@@ -173,7 +173,7 @@ const content = await SharePointOnlineService.GetFileContent({
 - Document library operations use folder/file IDs or server-relative URLs
 - Choice columns use **string values**, not integer picklist codes (unlike Dataverse)
 
-Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
 
 ### Step 11: Build
 

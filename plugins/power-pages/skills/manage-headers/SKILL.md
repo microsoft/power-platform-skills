@@ -15,7 +15,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, TaskCreate,
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Manage Headers
 
@@ -137,7 +137,7 @@ For **existing** settings: use `Edit` on the YAML file directly — change the `
 For **new** settings: use the shared create script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/create-site-setting.js" \
+node "${PLUGIN_ROOT}/scripts/create-site-setting.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --name "<setting-name>" \
   --value "<value>" \
@@ -169,7 +169,7 @@ Use `references/headers-reference.md` for authoritative descriptions and validat
 Then run the transform:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" \
+node "${PLUGIN_ROOT}/skills/manage-headers/scripts/transform-headers.js" \
   --projectRoot "<PROJECT_ROOT>" \
   --annotations "<REVIEW_DIR>/header-annotations.json"
 ```
@@ -184,7 +184,7 @@ Plain-language summary: what was changed, what gaps remain, and what is already 
 
 ### 5.3 Record skill usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 >
 > Use `--skillName "ManageHeaders"`.
 

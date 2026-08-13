@@ -30,6 +30,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;border-radius:var(--radius);background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;font-family:var(--mono);}
 .topbar-title{font-size:16px;font-weight:700;color:var(--text-bright);}
+.topbar-sub-row{display:flex;align-items:center;gap:10px;margin-top:1px;}
 .topbar-sub{font-size:11px;color:var(--text-dim);margin-top:1px;}
 .plan-status{font-size:10px;font-weight:700;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:0.6px;background:var(--accent-bg);color:var(--accent);border:1px solid var(--accent-border);}
 .plan-status.draft{background:var(--high-bg);color:var(--high);border-color:var(--high-border);}
@@ -319,10 +320,12 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
     <div class="logo">PP</div>
     <div>
       <div class="topbar-title">ALM Plan &mdash; __SITE_NAME__</div>
-      <div class="topbar-sub">Generated __GENERATED_AT__</div>
+      <div class="topbar-sub-row">
+        <div class="topbar-sub">Generated __GENERATED_AT__</div>
+        <span class="plan-status">__PLAN_STATUS__</span>
+      </div>
     </div>
   </div>
-  <span class="plan-status">__PLAN_STATUS__</span>
 </div>
 
 <div class="layout">
@@ -419,6 +422,7 @@ footer.page-footer{text-align:center;padding:12px;font-size:12px;color:var(--tex
       <div class="card" style="margin-top:20px;font-size:12px;color:var(--text-dim);">
         <strong>Approved by:</strong> <span id="approved-by">__APPROVED_BY__</span> &nbsp;&middot;&nbsp;
         <strong>Approval date:</strong> <span id="approval-date">__APPROVAL_DATE__</span>
+        __COMPLETED_LINE__
       </div>
     </div>
 

@@ -4,7 +4,7 @@ This file provides guidance to AI Agents when working with the **power-apps** pl
 
 ## What This Plugin Is
 
-A plugin for building and deploying Power Apps code apps using React + Vite + TypeScript, connected to Power Platform via connectors (Dataverse, SharePoint, Teams, Azure DevOps, OneDrive, Excel, Office 365, and more). Apps are deployed via the Power Apps NPX CLI (`npx power-apps push`).
+A plugin for building and deploying Power Apps code apps using React + Vite + TypeScript, connected to Power Platform via connectors (Dataverse, SharePoint, Teams, Azure DevOps, OneDrive, Excel, Office 365, and more). Apps are deployed via the Power Apps NPX CLI (`pa app push`).
 
 ## Local Development
 
@@ -17,7 +17,7 @@ claude --plugin-dir /path/to/plugins/power-apps
 ## Architecture
 
 ```
-.claude-plugin/plugin.json        <- Plugin metadata (name, version, keywords)
+.plugin/plugin.json               <- Open Plugins metadata (name, version, keywords)
 AGENTS.md                         <- Plugin guidance for AI agents (this file)
 agents/
   code-app-architect.md           <- Agent persona for architecture decisions
@@ -89,7 +89,7 @@ Power Apps code apps run in a sandbox — direct HTTP calls (`fetch`, `axios`, G
 
 ### Generated Services
 
-`npx power-apps add-data-source` generates typed TypeScript services in `src/generated/`:
+`pa app add data-source` generates typed TypeScript services in `src/generated/`:
 - `src/generated/models/{Name}Model.ts` — TypeScript interfaces
 - `src/generated/services/{Name}Service.ts` — CRUD methods
 
@@ -97,12 +97,12 @@ Always use generated services for data access.
 
 ### CLI
 
-The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. All commands use `npx power-apps <verb>` from within the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed.
+The Power Apps CLI (`@microsoft/power-apps-cli`) is installed locally via `npm install` as part of the app template. It ships two binaries — grouped **`pa`** (preferred) and flat **`power-apps`** (fallback). **Resolve which one the project has via [shared/cli-binary.md](./shared/cli-binary.md) first**, then invoke it with `npx --no-install <pa|power-apps>` from the project directory — runs natively in bash on all platforms, no PowerShell wrapper needed. Commands below use the canonical grouped `pa` form:
 
 ```bash
-npx power-apps push                   # Deploy app
-npx power-apps add-data-source -a ... # Add connector
-npx power-apps list-connections       # List connections
+pa app push                   # Deploy app
+pa app add data-source --connector ... # Add connector
+pa connection list       # List connections
 ```
 
 ### Scaffolding
@@ -120,4 +120,4 @@ After modifying this plugin:
 1. Run `claude --debug` to see plugin loading details
 2. Test skill invocation with `/create-code-app`
 3. Verify connector-first guardrails are enforced
-4. Test CLI commands (`npx power-apps push`, `npx power-apps add-data-source`, etc.)
+4. Test CLI commands (`pa app push`, `pa app add data-source`, etc.)

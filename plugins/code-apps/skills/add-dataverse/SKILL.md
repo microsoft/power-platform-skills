@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, LSP, TaskCreate, TaskUpdate,
 model: opus
 ---
 
-**📋 Shared Instructions: [shared-instructions.md](${CLAUDE_PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
+**📋 Shared Instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - Cross-cutting concerns.
 
 **References:**
 
@@ -97,7 +97,7 @@ Use safe functions from [table-management-reference.md](./references/table-manag
 For each table:
 
 ```bash
-npx power-apps add-data-source -a dataverse -t <table-logical-name>
+pa app add data-source --connector dataverse --table <table-logical-name>
 ```
 
 Can add multiple tables by running the command for each one.

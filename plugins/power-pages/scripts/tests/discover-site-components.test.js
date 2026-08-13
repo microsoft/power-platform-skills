@@ -2,12 +2,30 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   discoverSiteComponents,
   PPC_TYPE_LABELS,
   PPC_DEFAULT_INCLUDE,
 } = require('../lib/discover-site-components');
+
+// Creates a temp site root whose `.powerpages-site/table-permissions/` references
+// the given entity logical names — the SME-confirmed signal for "tables the site
+// uses" that now scopes custom-table discovery (replacing the publisher-prefix dump).
+function tempSiteWithTablePermissions(t, entityLogicalNames) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsc-site-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dir = path.join(root, '.powerpages-site', 'table-permissions');
+  fs.mkdirSync(dir, { recursive: true });
+  entityLogicalNames.forEach((entity, i) => {
+    fs.writeFileSync(path.join(dir, `perm-${i}.tablepermission.yml`),
+      `adx_entitypermission_webrole:\n- ad89f5ee-8665-f111-a826-6045bd00fdda\nentitylogicalname: ${entity}\nentityname: Perm ${i}\nid: f03fefed-8665-f111-a826-000d3a597e6a\nscope: 756150000\n`);
+  });
+  return root;
+}
 
 /**
  * Creates a fake `makeRequest` that matches URL fragments to response bodies.
@@ -169,7 +187,7 @@ test('computes missing[] diff against an existing solution', async () => {
   );
 });
 
-test('diffs custom tables by MetadataId against solutioncomponents.objectid', async () => {
+test('diffs custom tables by MetadataId against solutioncomponents.objectid', async (t) => {
   const makeRequest = fakeRequest([
     ['/powerpagecomponents?', { value: [] }],
     ['/workflows?', { value: [] }],
@@ -183,12 +201,16 @@ test('diffs custom tables by MetadataId against solutioncomponents.objectid', as
             LogicalName: 'crd50_already',
             SchemaName: 'crd50_Already',
             DisplayName: { UserLocalizedLabel: { Label: 'Already' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
           {
             MetadataId: 'meta-missing',
             LogicalName: 'crd50_missing',
             SchemaName: 'crd50_Missing',
             DisplayName: { UserLocalizedLabel: { Label: 'Missing' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
         ],
       },
@@ -199,12 +221,14 @@ test('diffs custom tables by MetadataId against solutioncomponents.objectid', as
     ],
   ]);
 
+  const projectRoot = tempSiteWithTablePermissions(t, ['crd50_already', 'crd50_missing']);
   const result = await discoverSiteComponents({
     envUrl: 'https://example.crm.dynamics.com',
     token: 'tok',
     siteId: 'site-guid',
     publisherPrefix: 'crd50',
     solutionId: 'sol-guid',
+    projectRoot,
     makeRequest,
   });
 
@@ -258,7 +282,7 @@ test('matching is case-insensitive on solution object IDs', async () => {
   assert.equal(result.missing.powerpagecomponents.length, 0);
 });
 
-test('discovers env vars and custom tables when publisherPrefix is passed', async () => {
+test('discovers env vars and scopes custom tables to site references (not publisher prefix)', async (t) => {
   const makeRequest = fakeRequest([
     ['/powerpagecomponents?', { value: [] }],
     ['/workflows?', { value: [] }],
@@ -288,24 +312,34 @@ test('discovers env vars and custom tables when publisherPrefix is passed', asyn
             LogicalName: 'crd50_invoice',
             SchemaName: 'crd50_Invoice',
             DisplayName: { UserLocalizedLabel: { Label: 'Invoice' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
           {
             MetadataId: 'meta-other-widget',
-            // A custom table from a different publisher — must be filtered out client-side.
+            // A custom table the site does NOT reference — dropped by the site-reference
+            // scoping (not by prefix). Even shares no prefix concern: it's simply unused.
             LogicalName: 'other_widget',
             SchemaName: 'other_Widget',
             DisplayName: { UserLocalizedLabel: { Label: 'Widget' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
         ],
       },
     ],
   ]);
 
+  // Site references ONLY crd50_invoice (not other_widget). The scoping must keep
+  // crd50_invoice and drop other_widget — because it isn't referenced, NOT because
+  // of its prefix (the whole point of the fix).
+  const projectRoot = tempSiteWithTablePermissions(t, ['crd50_invoice']);
   const result = await discoverSiteComponents({
     envUrl: 'https://example.crm.dynamics.com',
     token: 'tok',
     siteId: 'site-guid',
     publisherPrefix: 'crd50',
+    projectRoot,
     makeRequest,
   });
 

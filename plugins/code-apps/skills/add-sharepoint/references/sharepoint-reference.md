@@ -100,7 +100,7 @@ await SharePointOnlineService.PatchItem({
 | Error                                             | Cause                                        | Fix                                                                                                |
 | ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `"Column 'X' does not exist"`                     | Using display name instead of internal name  | Check generated model for actual property name; may need `_x0020_` encoding                        |
-| `"The list 'X' does not exist"`                   | List name doesn't match exactly              | Verify list display name via `npx power-apps list-tables`; names are case-sensitive |
+| `"The list 'X' does not exist"`                   | List name doesn't match exactly              | Verify list display name via `pa connector list-tables`; names are case-sensitive |
 | `"Value does not fall within the expected range"` | Invalid choice value or column type mismatch | Verify the exact choice option strings; SharePoint choices are case-sensitive                      |
 | `"Item does not exist"`                           | Using wrong ID format or deleted item        | SharePoint list item IDs are sequential integers, not GUIDs                                        |
 | `"Access denied"`                                 | Insufficient SharePoint permissions          | User needs at least Edit permission on the list                                                    |
@@ -127,7 +127,7 @@ await SharePointOnlineService.PatchItem({
 
 ## Generated Service Patterns
 
-After running `npx power-apps add-data-source -a sharepointonline`, the generated `SharePointOnlineService.ts` provides methods that work across all connected lists. The `dataset` (site URL) and `table` (list name) parameters select which list to operate on:
+After running `pa app add data-source --connector sharepointonline`, the generated `SharePointOnlineService.ts` provides methods that work across all connected lists. The `dataset` (site URL) and `table` (list name) parameters select which list to operate on:
 
 ```typescript
 import { SharePointOnlineService } from "../generated/services/SharePointOnlineService";
@@ -169,4 +169,4 @@ await SharePointOnlineService.DeleteItem({
 });
 ```
 
-Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${CLAUDE_PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).
+Use `Grep` to find specific methods in `src/generated/services/SharePointOnlineService.ts` (generated files can be very large -- see [connector-reference.md](${PLUGIN_ROOT}/shared/connector-reference.md#inspecting-large-generated-files)).

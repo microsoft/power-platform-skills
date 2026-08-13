@@ -12,7 +12,7 @@ allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Skill, Task
 model: opus
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Backend Integration
 
@@ -71,7 +71,7 @@ Use the **Explore agent** to quickly scan the site for existing backend integrat
 Check whether the user's Dataverse environment has existing custom actions that could be leveraged in the integration:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
+node "${PLUGIN_ROOT}/scripts/list-custom-actions.js" "<ENV_URL>"
 ```
 
 The script returns Custom APIs (modern) and Custom Process Actions (legacy) with their names, descriptions, binding types, and parameters. If custom actions are found, note them — they will be factored into the recommendation in Phase 3.
@@ -127,7 +127,7 @@ If the request could map to multiple approaches and the right choice isn't clear
 
 ### 3.1 Apply the Decision Framework
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/skills/integrate-backend/references/decision-framework.md`
+> Reference: `${PLUGIN_ROOT}/skills/integrate-backend/references/decision-framework.md`
 
 Use the decision matrix, intent mapping, and **Secure Action Principle** from the reference to determine the right approach. Consider:
 
@@ -286,7 +286,7 @@ Prepare a JSON object with these keys:
 Write the plan to `<PROJECT_ROOT>/docs/backend-plan.html` (create `docs/` if needed). Use the render script:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/render-backend-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/render-backend-plan.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
 The render script refuses to overwrite existing files. If the default path exists, choose a new descriptive filename (e.g., `backend-plan-payments.html`).
@@ -388,7 +388,7 @@ Remind the user to deploy with `/deploy-site` if they haven't already.
 
 ### 4.4 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "IntegrateBackend"`.
 

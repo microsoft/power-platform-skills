@@ -1,15 +1,66 @@
 'use strict';
 
-// Integration test for discover-site-components.js — runs against a real HTTP
-// mock server (not injected makeRequest) so we validate the actual network
-// code paths, URL construction, authorization header handling, and pagination.
+// Integration test for discover-site-components.js against a real local HTTP
+// server. Production rejects HTTP and non-Microsoft hosts before sending bearer
+// tokens, so these tests inject the local-only transport while still exercising
+// URL construction, authorization header handling, and pagination end to end.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { startMock } = require('./mock-dataverse');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { makeLocalRequest, startMock } = require('./mock-dataverse');
 const {
   discoverSiteComponents,
 } = require('../../lib/discover-site-components');
+
+// Temp site root whose table permissions reference the given entities — the
+// site-referenced scoping signal that replaced the publisher-prefix table dump.
+function makeSiteRoot(entityLogicalNames) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsc-int-'));
+  const dir = path.join(root, '.powerpages-site', 'table-permissions');
+  fs.mkdirSync(dir, { recursive: true });
+  entityLogicalNames.forEach((entity, i) => {
+    fs.writeFileSync(path.join(dir, `perm-${i}.tablepermission.yml`),
+      `adx_entitypermission_webrole:\n- ad89f5ee-8665-f111-a826-6045bd00fdda\nentitylogicalname: ${entity}\nentityname: Perm ${i}\nid: f03fefed-8665-f111-a826-000d3a597e6a\nscope: 756150000\n`);
+  });
+  return root;
+}
+
+function startHeaderMock() {
+  return startMock([
+    {
+      method: 'GET',
+      matcher: '/headers',
+      headers: { 'x-test-header': 'present' },
+      body: { ok: true },
+    },
+  ]);
+}
+
+test('integration transport omits response headers by default', async () => {
+  const mock = await startHeaderMock();
+  try {
+    const result = await makeLocalRequest({ url: `${mock.baseUrl}/headers` });
+    assert.equal(Object.hasOwn(result, 'headers'), false);
+  } finally {
+    await mock.close();
+  }
+});
+
+test('integration transport includes response headers when requested', async () => {
+  const mock = await startHeaderMock();
+  try {
+    const result = await makeLocalRequest({
+      url: `${mock.baseUrl}/headers`,
+      includeHeaders: true,
+    });
+    assert.equal(result.headers['x-test-header'], 'present');
+  } finally {
+    await mock.close();
+  }
+});
 
 test('integration: discover follows @odata.nextLink pagination against a real HTTP server', async () => {
   let mockBase = null;
@@ -63,6 +114,7 @@ test('integration: discover follows @odata.nextLink pagination against a real HT
       token: 'fake-integration-token',
       siteId: 'site-42',
       solutionId: 'sol-integration',
+      makeRequest: makeLocalRequest,
     });
 
     assert.equal(result.powerpagecomponents.total, 4, 'should aggregate both pages');
@@ -101,7 +153,7 @@ test('integration: discover surfaces HTTP 500 with a clear error', async () => {
   ]);
   try {
     await assert.rejects(
-      discoverSiteComponents({ envUrl: mock.baseUrl, token: 'x', siteId: 'site-42' }),
+      discoverSiteComponents({ envUrl: mock.baseUrl, token: 'x', siteId: 'site-42', makeRequest: makeLocalRequest }),
       /HTTP 500/
     );
   } finally {
@@ -119,6 +171,7 @@ test('integration: discover survives an empty site (no components, no solutionId
       envUrl: mock.baseUrl,
       token: 'x',
       siteId: 'site-empty',
+      makeRequest: makeLocalRequest,
     });
     assert.equal(result.powerpagecomponents.total, 0);
     assert.deepEqual(Object.keys(result.powerpagecomponents.byType), []);
@@ -153,6 +206,7 @@ test('integration: countSolutionMembership cross-site safety check flags ppcs no
       'sol-xyz',
       'fake-token',
       sitePpcIdSet,
+      makeLocalRequest,
     );
     assert.equal(result.total, 5);
     assert.equal(result.byComponentType[10373], 3);
@@ -180,6 +234,7 @@ test('integration: countSolutionMembership returns empty crossSitePpcs when site
       'sol-xyz',
       'fake-token',
       null,
+      makeLocalRequest,
     );
     assert.deepEqual(result.crossSitePpcs, [],
       'no cross-site check when caller did not supply the site set');
@@ -217,23 +272,31 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
             LogicalName: 'contoso_account',
             SchemaName: 'contoso_Account',
             DisplayName: { UserLocalizedLabel: { Label: 'Account' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
           {
             MetadataId: 'meta-2',
             LogicalName: 'other_widget',
             SchemaName: 'other_Widget',
             DisplayName: { UserLocalizedLabel: { Label: 'Widget' } },
+            IsCustomEntity: true,
+            IsManaged: false,
           },
         ],
       },
     },
   ]);
+  // Site references contoso_account only -> other_widget is dropped (unreferenced).
+  const projectRoot = makeSiteRoot(['contoso_account']);
   try {
     const result = await discoverSiteComponents({
       envUrl: mock.baseUrl,
       token: 'x',
       siteId: 'site-42',
       publisherPrefix: 'contoso',
+      projectRoot,
+      makeRequest: makeLocalRequest,
     });
     assert.equal(result.envVars.length, 1);
     assert.equal(result.envVars[0].schemaName, 'contoso_FeatureFlag');
@@ -246,5 +309,6 @@ test('integration: discover with publisherPrefix queries env vars + tables endpo
     assert.equal(edCalls.length, 1);
   } finally {
     await mock.close();
+    fs.rmSync(projectRoot, { recursive: true, force: true });
   }
 });

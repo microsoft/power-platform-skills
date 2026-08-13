@@ -1,0 +1,52 @@
+{
+  "form": {
+    "fields": [
+      {
+        "name": "new_name",
+        "required": true
+      },
+      {
+        "name": "new_tier",
+        "required": false
+      }
+    ],
+    "notesControl": true,
+    "sectionColumns": [
+      1,
+      1
+    ]
+  },
+  "view": {
+    "entity": "new_customer",
+    "columns": [
+      {
+        "name": "new_name",
+        "width": 100
+      },
+      {
+        "name": "new_tier",
+        "width": 100
+      }
+    ]
+  },
+  "chart": {
+    "entity": "new_customer",
+    "measure": "count",
+    "groupBy": "new_tier"
+  },
+  "app": {
+    "areas": [
+      {
+        "groups": [
+          {
+            "subAreas": [
+              {
+                "entity": "new_customer"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

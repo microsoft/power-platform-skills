@@ -9,7 +9,7 @@ allowed-tools: Read, Bash, AskUserQuestion, Glob, Grep, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
-> **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Deploy Power Pages Code Site
 
@@ -248,7 +248,7 @@ Confirm `.powerpages-site` exists and list its contents (`web-roles/`, `site-set
 
 ### 5.2 Record Skill Usage
 
-> Reference: `${CLAUDE_PLUGIN_ROOT}/references/skill-tracking-reference.md`
+> Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "DeploySite"`.
 
@@ -270,7 +270,7 @@ git commit -m "Deploy site to Power Pages"
 Run the activation status check:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/check-activation-status.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 Evaluate the JSON result:
@@ -323,7 +323,7 @@ Use `AskUserQuestion` to confirm before proceeding:
 **If "Yes"**: Run the cache-clearing script, passing the project root:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/clear-site-cache.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
 The script reads `siteName` from `powerpages.config.json`, looks up the website via the Power Platform API, and restarts it to flush the runtime cache.

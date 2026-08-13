@@ -31,8 +31,9 @@ function runCli(args, env = {}) {
   });
 }
 
-test('SECTION_MAP recognizes the five known per-skill files', () => {
+test('SECTION_MAP recognizes the six known per-skill files', () => {
   const expected = [
+    'scan-code.json',
     'scan-site.json',
     'manage-headers.json',
     'manage-firewall.json',
@@ -44,6 +45,27 @@ test('SECTION_MAP recognizes the five known per-skill files', () => {
     assert.equal(typeof SECTION_MAP[file].id, 'string');
     assert.equal(typeof SECTION_MAP[file].label, 'string');
   }
+});
+
+test('buildSections renders scan-code findings with severity totals', (t) => {
+  const dir = withTempDir(t);
+  writeJson(dir, 'scan-code.json', {
+    status: 'ok',
+    findings: [
+      { id: 'a', severity: 'critical', category: 'vulnerability', title: 't' },
+      { id: 'b', severity: 'high', category: 'secret', title: 't' },
+      { id: 'c', severity: 'warning', confidence: 'HIGH', title: 't' },
+    ],
+  });
+
+  const { sections, totals } = buildSections(dir, 'data.json');
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].id, 'code-scan');
+  assert.equal(sections[0].label, 'Code & Packages');
+  assert.equal(sections[0].findings.length, 3);
+  assert.equal(totals.critical, 1);
+  assert.equal(totals.high, 1);
+  assert.equal(totals.warning, 1);
 });
 
 test('SEVERITIES lists the seven supported severity buckets in precedence order', () => {
