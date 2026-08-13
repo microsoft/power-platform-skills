@@ -12,6 +12,8 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion, TaskCreate, TaskUpdate, 
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+
 > **Plugin check**: Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # Migrate Power Pages Site from Standard to Enhanced Data Model
@@ -222,6 +224,8 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 ---
 
 ### 1.3 Site Discovery and Validate Data Model
+
+<!-- not-a-gate: The `AskUserQuestion` references in this section are the template-family selection tree (pure data-gathering that only shapes the step 1.6 package check — no side effect to undo) plus prose mentions of the tool's 4-option limit. Per approval-gates.md §2, data-gathering prompts are not approval gates. -->
 
 **Goal**: Find the site in the environment and verify it's on SDM (not already EDM)
 
