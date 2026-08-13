@@ -178,10 +178,19 @@ const KIND_HANDLERS = {
   // removed AND published, or when the app+sitemap are deleted outright (which is what the step
   // before this one just did).
   //
-  // So the delete IS the check. Attempting it and reading the platform's answer is strictly better
-  // than a pre-flight scan: it is authoritative (the platform's own dependency graph, not our model
-  // of it), it covers every surface the platform tracks rather than just sitemap XML, and it has no
-  // TOCTOU window — a pre-check can go stale between the check and the delete, this cannot.
+  // So the delete IS the check. Attempting it and reading the platform's answer beats a pre-flight
+  // scan: it is authoritative (the platform's own dependency graph, not our model of it), and it has
+  // no TOCTOU window — a pre-check can go stale between the check and the delete, this cannot.
+  //
+  // KNOWN GAP, measured rather than assumed: that graph covers SITEMAP references only. A page
+  // embedded in a FORM through the `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was
+  // built with a page in its `RefId`, saved and published, and the page still reported ZERO
+  // dependents and deleted with a 204. The form's own required-components list names the PCF
+  // (component type 66) and never the page, because `RefId` is an opaque
+  // `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
+  // We accept that gap here because this step only ever deletes pages THIS build authored and is
+  // tearing down the app that owns them; it is not closable by asking the platform, and a formxml
+  // scan is the only thing that would close it.
   genpage: {
     // A page another app still references is a SKIP, not a failure — see isDependencyBlocked.
     tolerateDependencyBlock: true,
