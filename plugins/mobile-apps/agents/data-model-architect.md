@@ -163,8 +163,9 @@ Classify every planned column before finalizing its table decision:
 1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept, but verify it by exact target GET. Reuse if it fits; Extend only when live managed properties permit the planned custom columns. If it is missing, Block — never create a custom imitation.
 2. **Existing custom table by name** → if the proposed logical name already exists in the Step 3 results, it MUST be Reuse or Extend. See collision check below.
 3. **Existing custom table by concept** → if a different-named existing table serves the same business purpose (e.g., an existing `cr8142a_site` table for a new "Inspection Site" entity), prefer Extend over Create.
-4. **Create** → only when no existing table — standard or custom — serves the entity's purpose, the proposed custom logical name is absent in the target, and every required-existing dependency is verified.
-5. **Block** → apply before all mutations when any target fact is unavailable or incompatible. Do not downgrade Block to Create or Rename-and-Create.
+4. **Extension-cost guardrail** → reuse remains preferred when the existing record is authoritative/shared, but do not extend a merely similar custom table by default when the app would add more than 8 columns or more than 50% of the final required schema. Prefer a new app-owned table unless shared identity, integrations, security, or reporting make the existing table the true system of record. Record the metadata-write tradeoff and rationale in `Why`.
+5. **Create** → only when no existing table — standard or custom — serves the entity's purpose, the proposed custom logical name is absent in the target, and every required-existing dependency is verified.
+6. **Block** → apply before all mutations when any target fact is unavailable or incompatible. Do not downgrade Block to Create or Rename-and-Create.
 
 > **⚠️ Plan-time collision check (HARD).** Before classifying any entity as `Create`, look up its **proposed logical name** (e.g. `cr8142a_inspection`) in the Step 3 IsCustomEntity result. If a row with that exact `LogicalName` already exists, the entity **CANNOT** be classified as `Create`. Apply the following decision tree in order:
 >
@@ -191,6 +192,13 @@ Build a table:
 
 Order new tables so foreign keys can resolve. See [dataverse-reference.md § Pre-flight ordering](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#pre-flight-ordering):
 
+Before assigning tiers, remove redundant relationships. Dataverse already
+provides `ownerid`, `createdby`, `modifiedby`, `createdon`, and `modifiedon` on
+user-owned tables. Do not create app-prefixed lookups that duplicate those
+standard ownership/audit relationships unless the business meaning is distinct
+(for example, `approvedby` or `assignedinspector`). Reuse the standard columns
+and document their role instead.
+
 - **Tier 0** — reference tables (no lookups out)
 - **Tier 1** — primary entities (lookups to Tier 0)
 - **Tier 2** — dependent tables (lookups to Tier 1+)
@@ -213,7 +221,13 @@ This step exists because of the runtime constraint documented at [`shared/refere
 
 2. **Per entry, branch on `recommends`:**
 
-   - **`recommends: calc-column`** — confirm the `cardinality` is `1:1` (calc columns CANNOT traverse 1:many or M:N). If cardinality is wrong, downgrade silently to `chained-fetch` and add a `DONE_WITH_CONCERNS` note. Otherwise, propose a calculated column on the **primary entity of that screen** (the entity its primary `Data` service queries):
+   - **`recommends: calc-column`** — first classify the projection instead of assuming every dotted path is a supported formula:
+     - **Supported calculated projection** — a scalar value reachable only through N:1 lookups and supported by the target Dataverse formula capability. Emit a calc column.
+     - **Lookup annotation** — the screen only needs the related record's display name already exposed by the lookup. Reuse the lookup annotation; create no column.
+     - **Materialized projection** — the value must be snapshotted for history/offline use or the formula capability is unsupported. Emit an ordinary column and state which create/update flow owns synchronization.
+     - **Chained fetch** — 1:many, M:N, aggregate, conditional, or otherwise unsupported navigation. Create no column; the screen-builder fetches it.
+
+     Confirm the `cardinality` is `1:1` (calc columns CANNOT traverse 1:many or M:N). If cardinality or formula capability is unsupported, choose `materialized projection` only when snapshot semantics are required; otherwise downgrade to `chained-fetch` and add a `DONE_WITH_CONCERNS` note. For a supported calculation, propose a calculated column on the **primary entity of that screen** (the entity its primary `Data` service queries):
      - **Logical name:** `<prefix>_<resolved_field>_calc` (lowercased, e.g. `cr3e9_gatename_calc`)
      - **Schema name:** PascalCase variant (e.g. `Cr3e9_GateName_calc`)
      - **Display name:** human label from the planner's `field` value (e.g. "Gate name")

@@ -151,7 +151,7 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
  * Falls back to the active az tenant and then unqualified az token lookup.
  * @returns {Promise<string|null>} Access token, or null if unavailable
  */
-async function getAuthToken(resourceUrl) {
+async function getAuthToken(resourceUrl, explicitTenantId = null) {
   // Candidates are produced LAZILY, in priority order. This used to be an array
   // literal, and an array literal evaluates every element before `.filter()`
   // runs — so each call paid for the WWW-Authenticate probe AND an
@@ -162,6 +162,7 @@ async function getAuthToken(resourceUrl) {
   // Short-circuiting preserves the exact preference order and fallback below —
   // it only skips work once a candidate has already minted a token.
   const candidateProducers = [
+    () => explicitTenantId,
     () => process.env.POWER_PLATFORM_TENANT_ID,
     () => process.env.DATAVERSE_TENANT_ID,
     () => getDataverseTenantFromChallenge(resourceUrl),

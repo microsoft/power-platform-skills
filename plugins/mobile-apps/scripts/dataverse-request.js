@@ -5,7 +5,7 @@
 //
 // Arguments:
 //   envUrl   - Dataverse environment URL (e.g., https://org123.crm.dynamics.com)
-//   method   - HTTP method: GET, POST, PATCH, DELETE — OR — BATCH-RECORDS (see below)
+//   method   - HTTP method: GET, POST, PATCH, DELETE, BATCH-RECORDS, or BATCH-METADATA
 //   apiPath  - API path after /api/data/v9.2/ (e.g., "EntityDefinitions?$filter=...")
 //              For BATCH-RECORDS mode, this is treated as a label (e.g. "Tier 0") for logging only.
 //
@@ -13,6 +13,7 @@
 //   --body <json>      Request body as JSON string
 //   --include-headers  Include response headers in output (for OData-EntityId etc.)
 //   --solution <name>  Sets MSCRM.SolutionUniqueName header (target metadata at a solution)
+//   --tenant-id <id>   Uses the resolved environment tenant without shell-global state
 //
 // BATCH-RECORDS mode (record-level inserts only — NEVER use for metadata writes):
 //   node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations '<json>' [--concurrency 5] [--solution <name>]
@@ -27,6 +28,15 @@
 //   USE FOR: record inserts via /add-sample-data (no Dataverse metadata lock)
 //   DO NOT USE FOR: EntityDefinitions / Attributes / RelationshipDefinitions POSTs — those serialize via the
 //   metadata lock server-side; parallel calls return 429 / MetadataLockHeldException.
+//
+// BATCH-METADATA mode (strictly sequential metadata operations in one process):
+//   node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations '<json>' --tenant-id <id>
+//
+//   Operations:
+//   [{ "index": 0, "method": "POST", "apiPath": "EntityDefinitions", "body": { ... } }, ...]
+//
+//   This is NOT an OData $batch and never runs writes concurrently. It reuses one
+//   token and Node process while preserving operation order and metadata-lock safety.
 //
 // Output (JSON to stdout):
 //   Success: { "status": 200, "data": { ... } }
@@ -44,7 +54,8 @@ function parseArgs() {
   if (args.length < 3) {
     process.stderr.write(
       'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>]\n' +
-        '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>]\n'
+      '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>]\n'
     );
     process.exit(1);
   }
@@ -57,6 +68,8 @@ function parseArgs() {
   let solution = null;
   let operations = null;
   let concurrency = 5;
+  let tenantId = null;
+  let continueOnError = false;
 
   for (let i = 3; i < args.length; i++) {
     if (args[i] === '--body' && args[i + 1]) {
@@ -70,10 +83,25 @@ function parseArgs() {
     } else if (args[i] === '--concurrency' && args[i + 1]) {
       const n = parseInt(args[++i], 10);
       if (Number.isFinite(n) && n >= 1 && n <= 20) concurrency = n;
+    } else if (args[i] === '--tenant-id' && args[i + 1]) {
+      tenantId = args[++i];
+    } else if (args[i] === '--continue-on-error') {
+      continueOnError = true;
     }
   }
 
-  return { envUrl, method, apiPath, body, includeHeaders, solution, operations, concurrency };
+  return {
+    envUrl,
+    method,
+    apiPath,
+    body,
+    includeHeaders,
+    solution,
+    operations,
+    concurrency,
+    tenantId,
+    continueOnError,
+  };
 }
 
 async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, solution) {
@@ -102,10 +130,20 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
 }
 
 async function main() {
-  const { envUrl, method, apiPath, body, includeHeaders, solution, operations, concurrency } =
-    parseArgs();
+  const {
+    envUrl,
+    method,
+    apiPath,
+    body,
+    includeHeaders,
+    solution,
+    operations,
+    concurrency,
+    tenantId,
+    continueOnError,
+  } = parseArgs();
 
-  let token = await getAuthToken(envUrl);
+  let token = await getAuthToken(envUrl, tenantId);
   if (!token) {
     process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
     process.exit(1);
@@ -130,8 +168,37 @@ async function main() {
       process.exit(1);
     }
 
-    const results = await runBatch(envUrl, ops, token, solution, concurrency);
+    const results = await runBatch(envUrl, ops, token, solution, concurrency, tenantId);
     console.log(JSON.stringify({ status: 200, data: results }));
+    return;
+  }
+
+  if (method === 'BATCH-METADATA') {
+    if (!operations) {
+      process.stderr.write('BATCH-METADATA requires --operations <json-array>\n');
+      process.exit(1);
+    }
+    let ops;
+    try {
+      ops = JSON.parse(operations);
+    } catch (e) {
+      process.stderr.write(`--operations is not valid JSON: ${e.message}\n`);
+      process.exit(1);
+    }
+    if (!Array.isArray(ops)) {
+      process.stderr.write('--operations must be a JSON array\n');
+      process.exit(1);
+    }
+
+    const result = await runMetadataBatch(
+      envUrl,
+      ops,
+      token,
+      solution,
+      tenantId,
+      continueOnError,
+    );
+    console.log(JSON.stringify({ status: result.failed ? 207 : 200, data: result.results }));
     return;
   }
 
@@ -148,7 +215,7 @@ async function main() {
 
     // Retry on 401 with token refresh
     if (res.statusCode === 401 && attempt < maxRetries) {
-      token = await getAuthToken(envUrl);
+      token = await getAuthToken(envUrl, tenantId);
       if (!token) {
         process.stderr.write('Token refresh failed. Run `az login` again.\n');
         process.exit(1);
@@ -248,7 +315,7 @@ function looksLikeDuplicate(data) {
 //
 // USE FOR: record inserts (no metadata lock). DO NOT USE FOR: metadata writes — they serialize via
 // the Dataverse metadata lock server-side and parallel calls return 429 / MetadataLockHeldException.
-async function runBatch(envUrl, ops, token, solution, initialCap) {
+async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
   // Normalize input: every op gets a deterministic slot. Honour caller-supplied `index` if present
   // (so caller can correlate results to its own row identity), otherwise use position-in-array.
   const normalized = ops.map((op, i) => ({
@@ -267,7 +334,7 @@ async function runBatch(envUrl, ops, token, solution, initialCap) {
       while (inflight < cap && nextIndex < normalized.length) {
         const op = normalized[nextIndex++];
         inflight++;
-        runOneOperation(envUrl, op, token, solution)
+        runOneOperation(envUrl, op, token, solution, tenantId)
           .then((result) => {
             results[op._slot] = { ...result, index: op.index };
             // Adaptive cap: drop to 3 on first 429 we see, to ease pressure
@@ -299,7 +366,7 @@ async function runBatch(envUrl, ops, token, solution, initialCap) {
 
 // Runs a single record-create POST with full retry semantics (matches the single-op main() loop).
 // Returns { index, status, recordId?, error? }.
-async function runOneOperation(envUrl, op, initialToken, solution) {
+async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
   const { index, entitySet, body } = op;
   if (!entitySet || !body) {
     return { index, status: 0, error: 'Operation missing entitySet or body' };
@@ -323,7 +390,7 @@ async function runOneOperation(envUrl, op, initialToken, solution) {
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getAuthToken(envUrl);
+      const refreshed = await getAuthToken(envUrl, tenantId);
       if (refreshed) {
         token = refreshed;
         continue;
@@ -367,6 +434,140 @@ async function runOneOperation(envUrl, op, initialToken, solution) {
   }
 
   return { index, status: 0, error: 'Exhausted retries' };
+}
+
+async function runMetadataBatch(
+  envUrl,
+  ops,
+  initialToken,
+  defaultSolution,
+  tenantId,
+  continueOnError,
+) {
+  const results = [];
+  let token = initialToken;
+  let failed = false;
+
+  for (let slot = 0; slot < ops.length; slot++) {
+    const op = ops[slot] || {};
+    const index = typeof op.index === 'number' ? op.index : slot;
+    const method = String(op.method || '').toUpperCase();
+    const apiPath = op.apiPath;
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method) || !apiPath) {
+      results.push({ index, status: 0, error: 'Operation requires a valid method and apiPath' });
+      failed = true;
+      if (!continueOnError) break;
+      continue;
+    }
+
+    let body = null;
+    if (op.body !== undefined && op.body !== null) {
+      try {
+        body = typeof op.body === 'string' ? op.body : JSON.stringify(op.body);
+      } catch (error) {
+        results.push({ index, status: 0, error: `Body serialize failed: ${error.message}` });
+        failed = true;
+        if (!continueOnError) break;
+        continue;
+      }
+    }
+
+    const started = Date.now();
+    const executed = await runOneMetadataOperation(
+      envUrl,
+      method,
+      apiPath,
+      body,
+      token,
+      Boolean(op.includeHeaders),
+      op.solution || defaultSolution,
+      tenantId,
+    );
+    token = executed.token;
+    const result = {
+      index,
+      status: executed.status,
+      data: executed.data,
+      durationMs: Date.now() - started,
+    };
+    if (executed.headers) result.headers = executed.headers;
+    if (executed.error) result.error = executed.error;
+    if (executed.rateLimited) result.rateLimited = true;
+    results.push(result);
+
+    if (executed.status < 200 || executed.status >= 300) {
+      failed = true;
+      if (!continueOnError) break;
+    }
+  }
+
+  return { results, failed };
+}
+
+async function runOneMetadataOperation(
+  envUrl,
+  method,
+  apiPath,
+  body,
+  initialToken,
+  includeHeaders,
+  solution,
+  tenantId,
+) {
+  let token = initialToken;
+  let rateLimited = false;
+  const maxRetries = 4;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Response headers are always needed internally for Retry-After handling.
+    // The caller-facing result still honors includeHeaders below.
+    const res = await doRequest(envUrl, method, apiPath, body, token, true, solution);
+    if (res.error) {
+      if (attempt < maxRetries) continue;
+      return { status: 0, error: res.error, token, rateLimited };
+    }
+
+    if (res.statusCode === 401 && attempt < maxRetries) {
+      const refreshed = await getAuthToken(envUrl, tenantId);
+      if (!refreshed) {
+        return { status: 401, error: 'Token refresh failed', token, rateLimited };
+      }
+      token = refreshed;
+      continue;
+    }
+
+    if (res.statusCode === 429 && attempt < maxRetries) {
+      const retryAfter = res.headers?.['retry-after'];
+      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000;
+      rateLimited = true;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      continue;
+    }
+
+    let data = null;
+    if (res.body) {
+      try {
+        data = JSON.parse(res.body);
+      } catch {
+        data = res.body;
+      }
+    }
+
+    return {
+      status: res.statusCode,
+      data,
+      headers: includeHeaders ? res.headers : undefined,
+      token,
+      rateLimited,
+    };
+  }
+
+  return { status: 0, error: 'Exhausted retries', token, rateLimited };
 }
 
 // Extract the GUID from an OData-EntityId header value, e.g.

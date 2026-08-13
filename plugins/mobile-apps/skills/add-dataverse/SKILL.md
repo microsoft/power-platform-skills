@@ -136,7 +136,9 @@ If empty, instruct `az login` and stop.
 **Script invocation contract — read this once, all subsequent calls in this skill follow it:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> <METHOD> <apiPath> [--body '<json>'] [--include-headers]
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> <METHOD> <apiPath> \
+  [--body '<json>'] [--include-headers] \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 - Three positional args, in order: `<envUrl>`, `<METHOD>` (GET / POST / PATCH / DELETE), `<apiPath>` (everything after `/api/data/v9.2/`).
@@ -144,24 +146,25 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> <METHOD> 
 - `--include-headers` adds response headers (needed for `OData-EntityId` after a record create).
 - Output is JSON: `{ "status": <code>, "data": <body> }`. Token refresh on 401 and back-off on 429 are automatic — never wrap with manual retry.
 
-**Export the resolved tenant once (HARD — saves a round trip on every later call).** `resolve-environment.js` already returned `tenantId` in Step 1. Export it before any Dataverse call so `dataverse-request.js` short-circuits tenant discovery instead of re-probing the `WWW-Authenticate` challenge on each invocation:
+**Pass the resolved tenant explicitly (HARD — saves discovery and survives fresh shells).** `resolve-environment.js` already returned `tenantId` in Step 1. Substitute that literal value into every `--tenant-id` argument; do not rely on an exported or shell-local variable because separate tool executions may use fresh shells.
 
-```bash
-export POWER_PLATFORM_TENANT_ID='<tenantId-from-resolve-environment>'
-```
-
-If the tenant is unknown, skip the export — discovery still works, it is just slower.
+If the tenant is unknown, omit `--tenant-id` — discovery still works, it is just slower.
 
 Acquire a Dataverse access token and verify connectivity:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET WhoAmI
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET WhoAmI \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
+
+The explicit tenant is also reused for token refresh after a 401 and takes
+priority over shell environment variables and Azure account discovery.
 
 `WhoAmI` is the Dataverse identity endpoint — capital W/A/I (case-sensitive). The response gives `UserId`, `BusinessUnitId`, `OrganizationId` but **does NOT include the publisher prefix**. To get the publisher prefix, query the solution's publisher (defaults to `Default`; pass a different solution name if the env uses a custom solution):
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" <envUrl> [solutionName]
+node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" <envUrl> [solutionName] \
+  --tenant-id '<tenantId-from-resolve-environment>'
 # solutionName defaults to "Default" if omitted
 ```
 
@@ -181,7 +184,8 @@ Do not use the custom-table list as the source of truth, and do not issue one re
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Build the `$filter` by OR-ing every planned logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example), and it replaces 2N requests (one entity GET plus one attributes GET per table) with one. Keep the `$expand` `$select` list to base `AttributeMetadata` properties only — a single query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions), so fetch `OptionSet` details separately for the rare column that needs them.
@@ -192,7 +196,7 @@ Read the results as follows:
 - **A planned name absent from `value[]`** — the table does not exist. This is the equivalent of a 404 in the matrix below.
 - Interpret `IsCustomizable` and `CanCreateAttributes` as managed properties and read their `.Value` fields.
 
-If the batched query itself fails (non-2xx), retry it once; if it fails again, split it into per-table queries so one unreadable name cannot hide the rest. Any name still unreadable after that is classified `create` — the POST-time collision rescue in Step 5a is the safety net, and it recovers by extending or renaming rather than failing. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
+If the batched query itself fails (non-2xx), retry it once; if it fails again, split it into per-table queries so one unreadable name cannot hide the rest. Any name still unreadable after that is `unverified`: STOP before writes for that reconciliation scope. Authentication, permission, timeout, and malformed-response failures are not evidence that a name is free. If the URL would exceed a practical length with very many tables, split it into a few filtered queries — still far fewer than one request per table.
 
 **Only if the plan contains alternate keys or M:N relationships**, add the matching expands so Steps 5b and 5d never need their own per-item probes. `EntityDefinitions` also supports expanding [`Keys`, `ManyToManyRelationships`, `ManyToOneRelationships`, and `OneToManyRelationships`](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions):
 
@@ -212,7 +216,7 @@ Build and print a reconciliation matrix before Step 5:
 | Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `defer` | dependent columns `defer` | Never recreate a standard or managed table. Drop the dependent lookups/columns from this run, continue with everything else, and list them under Deferred in Step 9. |
 | Present; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `extend` | incompatible column `adapt` | Auto-rename the planned column via the probe sequence below, record it in the alias map, and create it alongside the existing one. Never modify or delete the existing column. |
 | Present; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `reuse` | missing columns `defer` | The target cannot be extended by this workflow. Reuse the columns that do exist, drop the rest from this run, and list them under Deferred in Step 9. |
-| Batched query failed (non-2xx) after retry and per-table split | `create` | unknown | Proceed; Step 5a's POST-time collision rescue resolves it by extend or rename. |
+| Batched query failed (non-2xx) after retry and per-table split | `unverified` | unknown | STOP before writes for the affected reconciliation scope and surface the concrete environment/auth/permission error. |
 
 `replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement, so a conflict resolves to `adapt` (rename beside it) or `defer` (leave it out) instead — both of which leave existing data untouched.
 
@@ -227,13 +231,34 @@ Build and print a reconciliation matrix before Step 5:
 **Print before starting:**
 > "→ Creating/extending <N> tables in tier order (sequential — Dataverse serializes metadata writes). For each: pre-flight check, then 'Creating <table>…' before the POST and '✓ <table>' on 2xx response."
 
-> **⚠️ Concurrency rule — do not violate.** All Dataverse metadata operations in Steps 5, 6, and 6b are **strictly sequential**: issue one HTTP request, wait for a 2xx response, then issue the next. Do NOT batch, parallelize, or fire concurrent requests. Dataverse serializes metadata writes via an exclusive lock; parallel calls return `429 TooManyRequests`, `MetadataLockHeldException`, or `404 EntityNotFound` for lookups whose parent hasn't committed yet.
+> **⚠️ Concurrency rule — do not violate.** All Dataverse metadata operations in Steps 5, 6, and 6b are **strictly sequential**: issue one HTTP request, wait for a 2xx response, then issue the next. Do NOT parallelize or use OData `$batch`. Dataverse serializes metadata writes via an exclusive lock; parallel calls return `429 TooManyRequests`, `MetadataLockHeldException`, or `404 EntityNotFound` for lookups whose parent hasn't committed yet.
 >
 > Specifically:
 > - **Within a tier:** create tables one at a time.
 > - **Across tiers:** Tier 0 fully done (all tables + all columns committed) before any Tier 1 POST.
 > - **Lookups:** POST to `/RelationshipDefinitions` only **after** both endpoint tables exist and have returned 2xx.
 > - **Extensions:** column POSTs to an existing table are also serial — same lock applies.
+
+For multiple already-reconciled operations, prefer the local `BATCH-METADATA`
+executor. It is **not** OData `$batch`: one Node process reuses one token and
+issues requests strictly one at a time in array order, stopping on the first
+non-2xx response by default.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
+  BATCH-METADATA schema-writes \
+  --operations '<ordered-json-array>' \
+  --solution '<solution-uniquename-from-memory-bank>' \
+  --tenant-id '<tenantId-from-resolve-environment>'
+```
+
+Each operation is `{ "index", "method", "apiPath", "body" }`; an operation may
+override the command-level `solution`. Build the array only after the full
+metadata snapshot and desired/live diff. Preserve dependency order: new tables
+with ordinary columns inline, extension columns, relationships, projections,
+then alternate keys. Never pass `--continue-on-error` for schema creation. The
+result includes per-operation `status` and `durationMs`; after a failure,
+reconcile that component and resume with only the remaining operations.
 
 #### Step 5a — Pre-flight collision check (from the Step 4 snapshot)
 
@@ -252,7 +277,8 @@ Only re-probe a single name when Step 4's batch did not cover it (for example a 
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes"
+  "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Tombstones and hidden collisions are **not** reliably visible to either form — Dataverse can report a name as free and still reject the POST minutes later. Those are caught by the POST-time collision rescue below, which is the real safety net:
@@ -386,7 +412,8 @@ For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
   --body '<json-body-with-all-columns-inline>' \
-  --solution '<solution-uniquename-from-memory-bank>'
+  --solution '<solution-uniquename-from-memory-bank>' \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 **Complete-payload self-check (HARD — do this before the POST, no extra tooling):** re-read the body you just built against the plan and confirm all five statements. If any fails, fix the body and re-check; never POST a partial table and repair it with per-column POSTs.
@@ -464,7 +491,8 @@ For each `Extend` decision, POST a new column to the existing table.
 >
 > ```bash
 > node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
->   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName"
+>   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName" \
+>   --tenant-id '<tenantId-from-resolve-environment>'
 > ```
 >
 > Build a local `{ lowerCaseLogicalName → { AttributeType, AttributeTypeName, IsManaged, IsCustomizable } }` map and classify **every** planned non-lookup column before issuing any POST. Prefer `AttributeTypeName.Value` when `AttributeType` is `Virtual`, so File and Image columns are not incorrectly treated as compatible generic virtual attributes:
@@ -483,7 +511,8 @@ After the complete comparison passes, POST the missing-column queue **one column
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Attributes" \
   --body '<column-json>' \
-  --solution '<solution-uniquename-from-memory-bank>'
+  --solution '<solution-uniquename-from-memory-bank>' \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 **Recovery after a partial Create:** do not re-POST the whole `EntityDefinitions` body because the table now exists and Dataverse returns `0x80060888`. Fetch that table's complete attribute snapshot once, run the same local comparison, and sequentially POST only the missing non-lookup columns. This is the only time a table originally classified as Create should use the per-column path.
@@ -532,7 +561,8 @@ Column shapes that have non-obvious gotchas (handle carefully):
   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
     RelationshipDefinitions \
     --body '<json-body-from-skeleton-above>' \
-    --solution '<solution-uniquename-from-memory-bank>'
+    --solution '<solution-uniquename-from-memory-bank>' \
+    --tenant-id '<tenantId-from-resolve-environment>'
   ```
 
   **Pre-flight the lookup (HARD — required for idempotent re-runs).** A lookup can only pre-exist if the **referencing (child) table** already existed at Step 4, so when the child was created in this run, skip the probe and POST. Otherwise look for the lookup's foreign-key column — the lowercased `Lookup.SchemaName`, e.g. `<prefix>_<parent>id` — in that child table's Step 4 attribute snapshot:
@@ -643,7 +673,8 @@ This step exists because of the runtime constraint documented at [`shared/refere
      --type <Type column verbatim: string|datetime|decimal|integer|boolean> \
      --formula "<dotted path from Resolves column, e.g. cr3e9_flightid.cr3e9_gateid.cr3e9_gatename>" \
      --display "<human-friendly label inferred from the column name minus _calc suffix>" \
-     --solution '<solution-uniquename-from-memory-bank>'
+     --solution '<solution-uniquename-from-memory-bank>' \
+     --tenant-id '<tenantId-from-resolve-environment>'
    ```
 
 5. **One at a time, sequentially.** Calc-column creation is metadata mutation — same concurrency rule as table creation. Print `✓ <calc-column>` after each success.
@@ -671,7 +702,8 @@ This step exists because of the runtime constraint documented at [`shared/refere
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Keys" \
   --body '<entity-key-json>' \
-  --solution '<solution-uniquename-from-memory-bank>'
+  --solution '<solution-uniquename-from-memory-bank>' \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Body skeleton:
@@ -689,7 +721,8 @@ Body skeleton:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName&\$expand=Keys(\$select=SchemaName,KeyAttributes,EntityKeyIndexStatus)"
+  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName&\$expand=Keys(\$select=SchemaName,KeyAttributes,EntityKeyIndexStatus)" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 | Existing key state | Action |
@@ -731,7 +764,8 @@ Only after **every** Step 5 metadata POST and **every** Step 6 `npx power-apps a
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" \
-  --body "{\"ParameterXml\":\"<importexportxml><entities><entity>cr123_table1</entity><entity>cr123_table2</entity></entities></importexportxml>\"}"
+  --body "{\"ParameterXml\":\"<importexportxml><entities><entity>cr123_table1</entity><entity>cr123_table2</entity></entities></importexportxml>\"}" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 Build the entity list from all tables that were **created or extended** in Steps 4–5. Skip reused-as-is tables — they don't need republishing.
@@ -744,7 +778,8 @@ Confirm every created or extended table is queryable after publish with **one** 
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=LogicalName,DisplayName&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'"
+  "EntityDefinitions?\$select=LogicalName,DisplayName&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'" \
+  --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
 - **Every expected name present in `value[]`** → confirmed.

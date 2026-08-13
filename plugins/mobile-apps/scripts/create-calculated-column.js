@@ -15,6 +15,7 @@
 //     --formula "<navigation>.<...>.<resolved_field>" \
 //     [--display "Display Name"] \
 //     [--solution <solution-unique-name>] \
+//     [--tenant-id <tenant-id>] \
 //     [--formula-xml '<full workflow xml>']
 //
 // Exit codes:
@@ -44,6 +45,7 @@ function parseArgs() {
     formulaXml: null,
     display: null,
     solution: null,
+    tenantId: null,
   };
 
   for (let i = 1; i < argv.length; i++) {
@@ -57,6 +59,7 @@ function parseArgs() {
       case '--formula-xml': out.formulaXml = next; i++; break;
       case '--display':     out.display = next; i++; break;
       case '--solution':    out.solution = next; i++; break;
+      case '--tenant-id':   out.tenantId = next; i++; break;
       default:
         usage(`Unknown flag: ${flag}`);
     }
@@ -248,7 +251,7 @@ async function postAttribute({ envUrl, table, payload, token, solution }) {
 
 async function main() {
   const args = parseArgs();
-  let token = await getAuthToken(args.envUrl);
+  let token = await getAuthToken(args.envUrl, args.tenantId);
   if (!token) {
     process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
     process.exit(1);
@@ -314,7 +317,7 @@ async function main() {
 
     // Token refresh on 401
     if (res.statusCode === 401 && attempt < 2) {
-      const fresh = await getAuthToken(args.envUrl);
+      const fresh = await getAuthToken(args.envUrl, args.tenantId);
       if (!fresh) break;
       // mutate token via closure for next iteration
       // (simpler than rewriting the loop body)

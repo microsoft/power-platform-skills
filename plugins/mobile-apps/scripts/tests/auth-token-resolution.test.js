@@ -65,11 +65,11 @@ function makeFakeAz(t) {
 
 // Runs getAuthToken in a child process so PATH/env manipulation cannot leak
 // into the test runner, and returns both the token and the az invocation log.
-function runGetAuthToken(t, env = {}) {
+function runGetAuthToken(t, env = {}, explicitTenantId = null) {
   const { dir, logPath } = makeFakeAz(t);
   const script = `
     const { getAuthToken } = require(${JSON.stringify(HELPERS)});
-    getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)})
+    getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)}, ${JSON.stringify(explicitTenantId)})
       .then((token) => { process.stdout.write(String(token)); })
       .catch((error) => { process.stderr.write(String(error)); process.exit(1); });
   `;
@@ -93,6 +93,22 @@ function runGetAuthToken(t, env = {}) {
   const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
   return { token: result.stdout.trim(), log };
 }
+
+test('explicit tenant argument short-circuits shell environment and discovery', (t) => {
+  const { token, log } = runGetAuthToken(
+    t,
+    {
+      POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
+      DATAVERSE_TENANT_ID: 'secondary-tenant',
+      FAKE_AZ_ACCOUNT_TENANT: 'tenant-from-az-account',
+    },
+    'explicit-tenant',
+  );
+
+  assert.equal(token, 'token-for:explicit-tenant');
+  assert.doesNotMatch(log, /account show/);
+  assert.equal(log.trim().split('\n').length, 1);
+});
 
 test('env-supplied tenant short-circuits: no `az account show` is spawned', (t) => {
   const { token, log } = runGetAuthToken(t, {
