@@ -33,12 +33,16 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
+| [Git](https://git-scm.com/downloads) | Commits made by most skills | `winget install Git.Git` |
 | [PAC CLI](https://learn.microsoft.com/power-platform/developer/cli/introduction) | Deploy, activate, data model | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) | Data model, sample data, activation | `winget install Microsoft.AzureCLI` |
+| [GitHub CLI](https://github.com/cli/cli#installation) (optional) | `/report-issue` only | `winget install GitHub.cli` |
+
+Installing from the marketplace copies the skill files and nothing else, so none of these tools come with it. Run [`/setup-prerequisites`](#setup-prerequisites) to check what is on your machine, install what is missing, and sign the two CLIs in.
 
 ## Skills
 
-The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 32 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -390,6 +394,20 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 
 ### Support
 
+#### `/setup-prerequisites`
+
+> "Set up the plugin" · "Check my setup" · "pac is not recognized"
+
+Gets a machine ready to use the plugin. Checks Node.js, Git, the .NET SDK, the Power Platform CLI, and the Azure CLI, plus the optional GitHub CLI, installs whatever is missing, and signs the CLIs in.
+
+- Reports each tool's version and sign-in state before changing anything
+- Asks before every install, one tool at a time, showing the exact command
+- Installs via winget on Windows and Homebrew on macOS; hands back commands on Linux
+- Offers a PAC CLI update when a newer version is published
+- Warns when the Power Platform and Azure CLIs are signed into different tenants
+- Offers the GitHub CLI as optional, so a machine without it still reads as ready
+- A failed install never stops the run — everything outstanding lands in the final summary
+
 #### `/report-issue`
 
 > "Report a bug with the create-site skill"
@@ -443,6 +461,7 @@ The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAU
 A common end-to-end workflow looks like this:
 
 ```
+0.  /setup-prerequisites    →  Install the CLIs and sign in (first run only)
 1.  /create-site            →  Scaffold + design + build pages
 2.  /deploy-site            →  Upload to Power Pages environment
 3.  /activate-site          →  Provision a public URL
