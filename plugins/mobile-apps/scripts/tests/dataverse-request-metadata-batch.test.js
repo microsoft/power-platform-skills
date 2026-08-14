@@ -10,19 +10,36 @@ const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 
-test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-metadata-batch-'));
-  const azLog = path.join(tempDir, 'az.log');
+function makeFakeAz(t, source) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-fake-az-'));
+  const fakeAzScript = path.join(tempDir, 'az.js');
   const fakeAz = path.join(tempDir, 'az');
+  const fakeAzCmd = path.join(tempDir, 'az.cmd');
+
+  fs.writeFileSync(fakeAzScript, source);
   fs.writeFileSync(
     fakeAz,
-    `#!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_AZ_LOG"
-printf '%s\\n' '{"accessToken":"test-token"}'
-`,
+    `#!${process.execPath}\nrequire(${JSON.stringify(fakeAzScript)});\n`,
     { mode: 0o755 },
   );
+  fs.writeFileSync(
+    fakeAzCmd,
+    `@echo off\r\n"${process.execPath}" "${fakeAzScript}" %*\r\n`,
+  );
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  return tempDir;
+}
+
+test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {
+  const tempDir = makeFakeAz(
+    t,
+    `const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.FAKE_AZ_LOG, args.join(' ') + '\\n');
+process.stdout.write('{"accessToken":"test-token"}\\n');
+`,
+  );
+  const azLog = path.join(tempDir, 'az.log');
 
   const requests = [];
   let active = 0;
@@ -67,7 +84,7 @@ printf '%s\\n' '{"accessToken":"test-token"}'
     {
       env: {
         ...process.env,
-        PATH: `${tempDir}:${process.env.PATH}`,
+        PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
         FAKE_AZ_LOG: azLog,
       },
     },
@@ -93,16 +110,10 @@ printf '%s\\n' '{"accessToken":"test-token"}'
 });
 
 test('BATCH-METADATA does not turn a post-throttle collision into success', async (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-metadata-collision-'));
-  const fakeAz = path.join(tempDir, 'az');
-  fs.writeFileSync(
-    fakeAz,
-    `#!/bin/sh
-printf '%s\\n' '{"accessToken":"test-token"}'
-`,
-    { mode: 0o755 },
+  const tempDir = makeFakeAz(
+    t,
+    `process.stdout.write('{"accessToken":"test-token"}\\n');\n`,
   );
-  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
   let requestCount = 0;
   const server = http.createServer((req, res) => {
@@ -131,7 +142,7 @@ printf '%s\\n' '{"accessToken":"test-token"}'
       '--tenant-id',
       'explicit-tenant',
     ],
-    { env: { ...process.env, PATH: `${tempDir}:${process.env.PATH}` } },
+    { env: { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH}` } },
   );
 
   const output = JSON.parse(stdout);

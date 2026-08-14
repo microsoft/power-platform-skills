@@ -58,8 +58,19 @@ process.exit(1);
 function makeFakeAz(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-az-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const scriptPath = path.join(dir, 'az.js');
   const azPath = path.join(dir, 'az');
-  fs.writeFileSync(azPath, FAKE_AZ, { mode: 0o755 });
+  const azCmdPath = path.join(dir, 'az.cmd');
+  fs.writeFileSync(scriptPath, FAKE_AZ.replace(/^#![^\n]*\n/, ''));
+  fs.writeFileSync(
+    azPath,
+    `#!${process.execPath}\nrequire(${JSON.stringify(scriptPath)});\n`,
+    { mode: 0o755 },
+  );
+  fs.writeFileSync(
+    azCmdPath,
+    `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
+  );
   return { dir, logPath: path.join(dir, 'az.log') };
 }
 

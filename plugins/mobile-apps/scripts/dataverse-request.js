@@ -5,7 +5,7 @@
 //
 // Arguments:
 //   envUrl   - Dataverse environment URL (e.g., https://org123.crm.dynamics.com)
-//   method   - HTTP method: GET, POST, PATCH, DELETE, BATCH-RECORDS, or BATCH-METADATA
+//   method   - HTTP method: GET, POST, PUT, PATCH, DELETE, BATCH-RECORDS, or BATCH-METADATA
 //   apiPath  - API path after /api/data/v9.2/ (e.g., "EntityDefinitions?$filter=...")
 //              For BATCH-RECORDS mode, this is treated as a label (e.g. "Tier 0") for logging only.
 //
@@ -16,7 +16,7 @@
 //   --tenant-id <id>   Uses the resolved environment tenant without shell-global state
 //
 // BATCH-RECORDS mode (record-level inserts only — NEVER use for metadata writes):
-//   node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations '<json>' [--concurrency 5] [--solution <name>]
+//   node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations '<json>' [--concurrency 5] [--solution <name>] [--tenant-id <id>]
 //
 //   --operations '<json>'   Required. JSON array of operations:
 //                           [{ "index": 0, "entitySet": "cr3e9_jobsites", "body": { ... } }, ...]
@@ -30,7 +30,7 @@
 //   metadata lock server-side; parallel calls return 429 / MetadataLockHeldException.
 //
 // BATCH-METADATA mode (strictly sequential metadata operations in one process):
-//   node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations '<json>' --tenant-id <id>
+//   node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations '<json>' --tenant-id <id> [--continue-on-error]
 //
 //   Operations:
 //   [{ "index": 0, "method": "POST", "apiPath": "EntityDefinitions", "body": { ... } }, ...]
@@ -53,9 +53,9 @@ function parseArgs() {
   const args = process.argv.slice(2);
   if (args.length < 3) {
     process.stderr.write(
-      'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>]\n' +
-      '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>]\n' +
-      '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>]\n'
+      'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>] [--tenant-id <id>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>] [--tenant-id <id>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>] [--continue-on-error]\n'
     );
     process.exit(1);
   }

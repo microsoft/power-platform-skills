@@ -149,6 +149,8 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
  * Gets an Azure CLI access token for the given resource URL.
  * Targets the env's tenant from Dataverse auth challenge when available.
  * Falls back to the active az tenant and then unqualified az token lookup.
+ * @param {string} resourceUrl Dataverse resource URL to request a token for
+ * @param {string|null} explicitTenantId Resolved environment tenant; skips tenant discovery when valid
  * @returns {Promise<string|null>} Access token, or null if unavailable
  */
 async function getAuthToken(resourceUrl, explicitTenantId = null) {
