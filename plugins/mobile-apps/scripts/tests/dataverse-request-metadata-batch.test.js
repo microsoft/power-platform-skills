@@ -9,47 +9,25 @@ const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
+const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 
-function makeFakeAz(t, source) {
+function makeTempDir(t) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-fake-az-'));
-  const fakeAzScript = path.join(tempDir, 'az.js');
-  const fakeAz = path.join(tempDir, 'az');
-  const fakeAzCmd = path.join(tempDir, 'az.cmd');
-
-  fs.writeFileSync(fakeAzScript, source);
-  fs.writeFileSync(
-    fakeAz,
-    `#!${process.execPath}\nrequire(${JSON.stringify(fakeAzScript)});\n`,
-    { mode: 0o755 },
-  );
-  fs.writeFileSync(
-    fakeAzCmd,
-    `@echo off\r\n"${process.execPath}" "${fakeAzScript}" %*\r\n`,
-  );
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
   return tempDir;
 }
 
-function withPrependedPath(dir, overrides = {}) {
-  const env = { ...process.env, ...overrides };
-  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
-  const currentPath = pathEntry?.[1] ?? '';
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() === 'path') delete env[key];
-  }
-  env.PATH = `${dir}${path.delimiter}${currentPath}`;
-  return env;
+function fakeAzEnv(overrides = {}) {
+  return {
+    ...process.env,
+    NODE_OPTIONS: `--require=${fakeAzPreload}`,
+    FAKE_AZ_STATIC_TOKEN: 'test-token',
+    ...overrides,
+  };
 }
 
 test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {
-  const tempDir = makeFakeAz(
-    t,
-    `const fs = require('node:fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_AZ_LOG, args.join(' ') + '\\n');
-process.stdout.write('{"accessToken":"test-token"}\\n');
-`,
-  );
+  const tempDir = makeTempDir(t);
   const azLog = path.join(tempDir, 'az.log');
 
   const requests = [];
@@ -93,7 +71,7 @@ process.stdout.write('{"accessToken":"test-token"}\\n');
       'explicit-tenant',
     ],
     {
-      env: withPrependedPath(tempDir, {
+      env: fakeAzEnv({
         FAKE_AZ_LOG: azLog,
       }),
     },
@@ -119,10 +97,7 @@ process.stdout.write('{"accessToken":"test-token"}\\n');
 });
 
 test('BATCH-METADATA does not turn a post-throttle collision into success', async (t) => {
-  const tempDir = makeFakeAz(
-    t,
-    `process.stdout.write('{"accessToken":"test-token"}\\n');\n`,
-  );
+  makeTempDir(t);
 
   let requestCount = 0;
   const server = http.createServer((req, res) => {
@@ -151,7 +126,7 @@ test('BATCH-METADATA does not turn a post-throttle collision into success', asyn
       '--tenant-id',
       'explicit-tenant',
     ],
-    { env: withPrependedPath(tempDir) },
+    { env: fakeAzEnv() },
   );
 
   const output = JSON.parse(stdout);

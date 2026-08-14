@@ -23,72 +23,27 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const HELPERS = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
+const FAKE_AZ_PRELOAD = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 // Connection to port 1 is refused immediately, so the challenge probe (when it
 // is reached at all) resolves fast and deterministically offline.
 const UNREACHABLE_ENV_URL = 'https://127.0.0.1:1';
 
-// The fake `az` writes one line per invocation to $FAKE_AZ_LOG, then emulates
-// just the two subcommands getAuthToken uses:
+// The Node preload intercepts `execFileSync('az', ...)`, writes one line per
+// invocation to $FAKE_AZ_LOG, then emulates the two subcommands getAuthToken uses:
 //   az account show --query tenantId -o tsv
 //   az account get-access-token --resource <url> [--tenant <id>] ...
 // $FAKE_AZ_FAIL_TENANTS is a comma-separated list of tenants for which token
 // acquisition should fail (exit 1), letting a test drive the fallback chain.
-const FAKE_AZ = `#!/usr/bin/env node
-const fs = require('fs');
-const args = process.argv.slice(2);
-fs.appendFileSync(process.env.FAKE_AZ_LOG, args.join(' ') + '\\n');
-
-if (args[0] === 'account' && args[1] === 'show') {
-  process.stdout.write((process.env.FAKE_AZ_ACCOUNT_TENANT || '') + '\\n');
-  process.exit(0);
-}
-
-if (args[0] === 'account' && args[1] === 'get-access-token') {
-  const tenantIndex = args.indexOf('--tenant');
-  const tenant = tenantIndex === -1 ? '' : args[tenantIndex + 1];
-  const failing = (process.env.FAKE_AZ_FAIL_TENANTS || '').split(',').filter(Boolean);
-  if (tenant && failing.includes(tenant)) process.exit(1);
-  process.stdout.write('token-for:' + (tenant || 'active-account') + '\\n');
-  process.exit(0);
-}
-
-process.exit(1);
-`;
-
-function makeFakeAz(t) {
+function makeFakeAzLog(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-az-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const scriptPath = path.join(dir, 'az.js');
-  const azPath = path.join(dir, 'az');
-  const azCmdPath = path.join(dir, 'az.cmd');
-  fs.writeFileSync(scriptPath, FAKE_AZ.replace(/^#![^\n]*\n/, ''));
-  fs.writeFileSync(
-    azPath,
-    `#!${process.execPath}\nrequire(${JSON.stringify(scriptPath)});\n`,
-    { mode: 0o755 },
-  );
-  fs.writeFileSync(
-    azCmdPath,
-    `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
-  );
-  return { dir, logPath: path.join(dir, 'az.log') };
+  return path.join(dir, 'az.log');
 }
 
-function withPrependedPath(dir, overrides = {}) {
-  const env = { ...process.env, ...overrides };
-  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
-  const currentPath = pathEntry?.[1] ?? '';
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() === 'path') delete env[key];
-  }
-  env.PATH = `${dir}${path.delimiter}${currentPath}`;
-  return env;
-}
-
-// Runs getAuthToken in a child process so PATH/env manipulation cannot leak
+// Runs getAuthToken in a child process so preload/env manipulation cannot leak
 // into the test runner, and returns both the token and the az invocation log.
 function runGetAuthToken(t, env = {}, explicitTenantId = null) {
-  const { dir, logPath } = makeFakeAz(t);
+  const logPath = makeFakeAzLog(t);
   const script = `
     const { getAuthToken } = require(${JSON.stringify(HELPERS)});
     getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)}, ${JSON.stringify(explicitTenantId)})
@@ -98,7 +53,9 @@ function runGetAuthToken(t, env = {}, explicitTenantId = null) {
 
   const result = spawnSync(process.execPath, ['-e', script], {
     encoding: 'utf8',
-    env: withPrependedPath(dir, {
+    env: {
+      ...process.env,
+      NODE_OPTIONS: `--require=${FAKE_AZ_PRELOAD}`,
       FAKE_AZ_LOG: logPath,
       // Cleared unless a test opts in — the ambient shell may have them set.
       POWER_PLATFORM_TENANT_ID: '',
@@ -106,7 +63,7 @@ function runGetAuthToken(t, env = {}, explicitTenantId = null) {
       FAKE_AZ_ACCOUNT_TENANT: '',
       FAKE_AZ_FAIL_TENANTS: '',
       ...env,
-    }),
+    },
   });
 
   assert.equal(result.status, 0, `getAuthToken failed: ${result.stderr}`);
