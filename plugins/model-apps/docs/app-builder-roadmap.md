@@ -71,41 +71,36 @@ are in [`architecture.md`](architecture.md).
 
 ---
 
-## 🎯 MVP gaps vs the MDA Agentic Authoring spec
+## 🎯 MVP gaps
 
-Evaluated 2026-08-12 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
-(§3 MVP definition + §5 stack rank). **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
-data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
-gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
-Insight Card summaries (`ai.summaries`), and
+Assessed 2026-08-12. **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
+data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
+gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
+Insight Card summaries (`ai.summaries`), and
 the dedup/verify quality gates. The open MVP items:
 
-- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
-  refresh flag on new apps, and turn it on when editing an app that isn't on it yet (spec rank 20). Not set today.
-- ✅ **Roles + JTBD as first-class planning outputs** (spec rank 1, P0) — the Level-(c) design flow now models
+- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (P0) — set the app-module header/nav
+  refresh flag on new apps, and turn it on when editing an app that isn't on it yet. Not set today.
+- ✅ **Roles + JTBD as first-class planning outputs** (P0) — the Level-(c) design flow now models
   **personas** and their **jobs-to-be-done**: the author declares the entity access each job needs, the builder
   unions it into one security role per persona, and the plan/preview surfaces the proposed roles for review. Built
   on the SDK security surface (`createPersonaRole`). JTBD-driven view/summary/sitemap coherence (below) still builds
   further on this.
 - 🔲 **Default-on + coherence wiring** — the AI agents, Insight Card summaries, and (once added) Wave 2 exist as
   primitives, but the SKILL flow must **enable them by default** and author **JTBD-quality** content (entity-specific
-  summary prompts per the §4 Group G guidelines, the _right_ view columns). A ✅ primitive is necessary but not
-  sufficient for the spec's coherence bar.
+  summary prompts, the _right_ view columns). A ✅ primitive is necessary but not sufficient for a coherent app.
 
 Important, P1 (not MVP-gating; tracked here for visibility):
-- ✅ **Security roles per persona** (spec rank 14, Group N P1) — `personas[]` authors one security role per persona,
+- ✅ **Security roles per persona** — `personas[]` authors one security role per persona,
   sized from its jobs-to-be-done, and grants the app to each role so it **opens for non-admins**, not just sysadmins.
   Idempotent + converging (replace-privileges), fail-closed on a foreign same-name role, torn down with the app.
-  **Column-level (field) security** and **access teams / hierarchy security** (Group N P3) remain a tracked SDK
+  **Column-level (field) security** and **access teams / hierarchy security** remain a tracked SDK
   follow-up.
-- 🔲 **Rich AI descriptions on every artifact** (rank 22) · **quick-find / relevance-search config** (rank 23) ·
-  **custom app theme + logo** (rank 18 — the `design` block styles gen pages, not the app theme).
+- 🔲 **Rich AI descriptions on every artifact** · **quick-find / relevance-search config** ·
+  **custom app theme + logo** (the `design` block styles gen pages, not the app theme).
 
-P0.5 stretch (not built): **modern grid visualizations by default** (rank 11, contingent on the SDK grid-customizer)
-and **MCP server + Catalyst by default** (rank 12). The spec's §5 stack rank carries a status column annotated from
-this roadmap; it is refreshed on `master` in `powerplatform-modelpages-ade` (last synced 2026-08-12, plugin v2.4.3).
-**Keep the two in step** — when a row here flips, update that column in the same pass, or the spec silently goes
-stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped).
+P0.5 stretch (not built): **modern grid visualizations by default** (contingent on the SDK grid-customizer)
+and **MCP server + Catalyst by default**.
 
 ---
 
@@ -217,7 +212,7 @@ stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped)
 - 🔲 **Conditional `updateTable` (If-Match / skip-if-unchanged)** — the SDK's `updateTable` does an unconditional GET→PUT of the whole `EntityDefinitions` row (strips `@odata.etag`, no `If-Match`), so a concurrent Maker edit to another property of the SAME table in the GET→PUT window is last-writer-wins. This is pre-existing (icons/audit already use `updateTable`); the quick-create flag adds one more caller. Follow-ups: preserve the ETag + conditional PUT (retry/surface 412), and skip the PUT when the requested flag is already set (avoids a redundant write on every opted-in rebuild). Same class as the build's `requireSuccessfulPush` 412 posture for artifacts.
 
 ### Phase: Forms, views & data-load polish (from the 2026-07-15 V1↔V2 comparison review)
-Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a sample data-load). **Status 2026-07-27: all 8 addressed — the "Allow quick create" table flag (#8) now ships; auto-GENERATING the Quick Create form's field layout remains a follow-up (see below).** Severity from the source doc.
+From a review comparing two generated Project Management apps plus a sample data-load. **Status 2026-07-27: all 8 addressed — the "Allow quick create" table flag (#8) now ships; auto-GENERATING the Quick Create form's field layout remains a follow-up (see below).** Severity as assessed in that review.
 - ✅ **[High] Validate lookup binds; stop silent data-load lookup failures** — DONE. `validateAppSpec` now validates `$parents` (junction) the same as `$parent` and flags a `$parent`/`$parents.match` that resolves to no parent sample row (the bind would be dropped and the lookup left unset); `buildSeedGroup` THROWS (fail loud) on an unresolvable parent instead of silently skipping. Runs inside `runner.run` (clean phase failure). `app-spec.js` sampleData validation + `entity-provision.js` buildSeedGroup.
 - ✅ **[Medium] Don't truncate parent lookups in default-view enrichment** — DONE. `defaultViewColumns` now reserves the parent-lookup slots up front and caps *scalar* columns at the remaining budget, then appends every lookup — so a lookup-heavy table never drops a parent link (`sdk-build.js`). Teardown's `{ includeLookups:false }` reset path unchanged.
 - ✅ **[Medium] Normalize N:N relationship schema-name ordering** — DONE. `manyToManySchemaName` sorts the two entity logical names alphabetically before composing, so the N:N name is stable regardless of `entity1`/`entity2` declaration order (`app-spec.js`). 1:N keeps its semantic `referenced_referencing` order; explicit `schemaName` still wins.
