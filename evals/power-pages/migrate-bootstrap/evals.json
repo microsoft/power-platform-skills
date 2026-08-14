@@ -1,5 +1,5 @@
 {
-  "skill_name": "bootstrap-migrate-v3-to-v5",
+  "skill_name": "migrate-bootstrap",
   "evals": [
     {
       "id": 1,
@@ -21,7 +21,7 @@
         "A final consent gate is presented before the outward-facing upload",
         "pac pages upload (not upload-code-site) is run against the <folder>V5 directory",
         "The Bootstrap 5 runtime flag flip is explicitly verified after upload rather than trusting the upload exit code",
-        "The site is validated via /test-site and skill usage is recorded with --skillName BootstrapMigrateV3ToV5"
+        "The site is validated via /test-site and skill usage is recorded with --skillName MigrateBootstrap"
       ]
     },
     {

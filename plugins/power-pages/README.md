@@ -390,7 +390,7 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 
 ### Migration
 
-#### `/bootstrap-migrate-v3-to-v5`
+#### `/migrate-bootstrap`
 
 > "Upgrade my Power Pages site from Bootstrap 3 to Bootstrap 5"
 

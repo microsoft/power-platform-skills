@@ -1,5 +1,5 @@
 ---
-name: bootstrap-migrate-v3-to-v5
+name: migrate-bootstrap
 description: >-
   Migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap 5. Downloads the
   site, runs the pac pages bootstrap-migrate engine, reviews the change report, applies
@@ -65,9 +65,9 @@ confirmed, and the required commands are available.
    then `pac auth create --environment "<URL>"` and re-verify. Capture the environment name, URL,
    and ID.
 
-<!-- gate: bootstrap-migrate-v3-to-v5:1.confirm-env | category=consent | cancel-leaves=nothing -->
+<!-- gate: migrate-bootstrap:1.confirm-env | category=consent | cancel-leaves=nothing -->
 
-> 🚦 **Gate (consent · bootstrap-migrate-v3-to-v5:1.confirm-env):** Confirm the target environment before any download, migration, or upload. Running the migration against the wrong environment is destructive, so this confirmation is mandatory.
+> 🚦 **Gate (consent · migrate-bootstrap:1.confirm-env):** Confirm the target environment before any download, migration, or upload. Running the migration against the wrong environment is destructive, so this confirmation is mandatory.
 
 4. Confirm the target environment with the user (`AskUserQuestion`: use this environment / choose
    another via `pac org list` + `pac org select`).
@@ -114,9 +114,9 @@ and `upload` confirmed available, `PAC_LOG` path captured.
   pac pages list
   ```
 
-<!-- gate: bootstrap-migrate-v3-to-v5:2.1.select-site | category=plan | cancel-leaves=nothing -->
+<!-- gate: migrate-bootstrap:2.1.select-site | category=plan | cancel-leaves=nothing -->
 
-  > 🚦 **Gate (plan · bootstrap-migrate-v3-to-v5:2.1.select-site):** Choose which website to download when more than one exists. Canceling leaves nothing changed.
+  > 🚦 **Gate (plan · migrate-bootstrap:2.1.select-site):** Choose which website to download when more than one exists. Canceling leaves nothing changed.
 
   Present the websites via `AskUserQuestion`, then download the selected site:
 
@@ -214,9 +214,9 @@ running the engine.
 
 **Actions**:
 
-<!-- gate: bootstrap-migrate-v3-to-v5:4.run-engine | category=consent | cancel-leaves=nothing -->
+<!-- gate: migrate-bootstrap:4.run-engine | category=consent | cancel-leaves=nothing -->
 
-> 🚦 **Gate (consent · bootstrap-migrate-v3-to-v5:4.run-engine):** Explicit consent before running `pac pages bootstrap-migrate`. The engine writes a new `<SITE_FOLDER>V5` copy and never edits the source, so canceling leaves nothing changed.
+> 🚦 **Gate (consent · migrate-bootstrap:4.run-engine):** Explicit consent before running `pac pages bootstrap-migrate`. The engine writes a new `<SITE_FOLDER>V5` copy and never edits the source, so canceling leaves nothing changed.
 
 1. Get explicit consent to run the engine (`AskUserQuestion`: "Run the Bootstrap 5 migration on
    `<SITE_FOLDER>`? This creates a new `<SITE_FOLDER>V5` copy and does not modify the original.").
@@ -277,9 +277,9 @@ the `MIGRATED_FOLDER` files.
 
 1. Group the residual items by category (grid hierarchy, navbar structure, panel/card styling,
    page-header, pager, btn-block, Liquid edge cases, partial paths).
-<!-- gate: bootstrap-migrate-v3-to-v5:6.residual-fixes | category=progress | cancel-leaves=nothing -->
+<!-- gate: migrate-bootstrap:6.residual-fixes | category=progress | cancel-leaves=nothing -->
 
-> 🚦 **Gate (progress · bootstrap-migrate-v3-to-v5:6.residual-fixes):** Per-category consent before applying each residual fix to the `MIGRATED_FOLDER` files. Changes are local to the V5 copy and committed per category; canceling leaves nothing outward-facing changed.
+> 🚦 **Gate (progress · migrate-bootstrap:6.residual-fixes):** Per-category consent before applying each residual fix to the `MIGRATED_FOLDER` files. Changes are local to the V5 copy and committed per category; canceling leaves nothing outward-facing changed.
 
 2. For **each category**, get per-category consent (`AskUserQuestion`: "Apply the `<category>` fixes
    to `<N>` file(s)?"). On consent:
@@ -314,9 +314,9 @@ Verify both (`Grep`/`Read`). If either is missing, the flag flip silently no-ops
 
 ### 7.2 Final consent gate, then upload
 
-<!-- gate: bootstrap-migrate-v3-to-v5:7.2.upload | category=final | cancel-leaves=nothing -->
+<!-- gate: migrate-bootstrap:7.2.upload | category=final | cancel-leaves=nothing -->
 
-> 🚦 **Gate (final · bootstrap-migrate-v3-to-v5:7.2.upload):** Final sign-off before the first outward-facing change. `pac pages upload` publishes the Bootstrap 5 site and auto-enables the runtime flag. Canceling before upload leaves the live site untouched.
+> 🚦 **Gate (final · migrate-bootstrap:7.2.upload):** Final sign-off before the first outward-facing change. `pac pages upload` publishes the Bootstrap 5 site and auto-enables the runtime flag. Canceling before upload leaves the live site untouched.
 
 This is the first **outward-facing** change. Get explicit consent (`AskUserQuestion`: "Upload
 `<MIGRATED_FOLDER>` to environment `<ENV_NAME>`? This publishes the Bootstrap 5 site and enables the
@@ -377,7 +377,7 @@ restart.
    panels/cards, forms, pagination) for layout regressions introduced by the migration.
 3. **Record skill usage** — follow `${PLUGIN_ROOT}/references/skill-tracking-reference.md`, passing
    `--projectRoot "<MIGRATED_FOLDER>"` (the folder containing `powerpages.config.json`) and
-   `--skillName "BootstrapMigrateV3ToV5"`. Tracking only writes when the project is a **code site**
+   `--skillName "MigrateBootstrap"`. Tracking only writes when the project is a **code site**
    (`.powerpages-site/site-settings/` exists); for a traditional/native download the script exits
    silently as a no-op — that is expected, so call it unconditionally and don't treat the no-op as an
    error. If tracking files are written, include them in the final commit.

@@ -1,6 +1,6 @@
 # Migration Engine Reference — `pac pages bootstrap-migrate` and the auto flag-flip
 
-This reference documents the CLI engine the `/bootstrap-migrate-v3-to-v5` skill orchestrates: what
+This reference documents the CLI engine the `/migrate-bootstrap` skill orchestrates: what
 `pac pages bootstrap-migrate` does, what it produces, and how `pac pages upload`
 automatically flips the server-side Bootstrap 5 runtime flag.
 
