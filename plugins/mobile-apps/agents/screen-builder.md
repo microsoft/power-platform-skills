@@ -116,28 +116,25 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   ```
 
   For lookup labels, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
-- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full reference (with cost-profile rationale, calc-column naming, and pattern examples) is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
+- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. Follow [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) mechanically.
 
   1. **Follow the spec's `resolution`.**
      - `formatted-lookup`: select the real lookup value and render with
        `lookupName`; create no shadow field.
-     - `calc-column`: verify the planned `_calc` column exists in the generated
-       model, select it, and render it read-only.
-     - `materialized-projection`: verify the planned ordinary target column
-       exists, select it, and never treat it as authoritative for reads that
-       require the source ID. If this screen writes the projection source, also
-       implement the exact Gate 3 `Projection write-through` action after the
-       source write succeeds. Missing write-through instructions are `BLOCKED`.
      - `chained-fetch`: follow the table below.
+     - `external-projection-required`: return `BLOCKED`; omit the field until a
+       maker-created/server-owned projection exists and reconciliation verifies it.
   2. **For chained fetches, branch on archetype × cardinality:**
 
      | Archetype | Cardinality | Action |
      |---|---|---|
-     | List (`top ≥ 5`), Tab-root, Dashboard | 1:1 (N:1 lookup chain) | **STOP — do not create an N+1 fetch.** Return `BLOCKED` because Gate 2 should have selected formatted lookup, a supported calc column, or an owned materialized projection before implementation. |
+     | List (`top ≥ 5`), Tab-root, Dashboard | 1:1 (N:1 lookup chain) | **STOP — do not create an N+1 fetch.** Use the direct formatted lookup or return `BLOCKED` for an external projection. |
      | Detail (single record) | 1:1 (N:1 lookup chain) | Scaffold a chained `<RelatedService>.get(record._<lookup>_value, { select: [...] })` in the screen's load step. One record on screen = one extra round trip is fine. Display via `lookupName(...)` or direct field read. |
-     | Any | 1:many or M:N | Scaffold a chained `<ChildService>.getAll({ filter: \`_<parentid>_value eq '${id}'\`, select: [...] })`. Calc columns CANNOT traverse 1:many or M:N — chained fetch is the ONLY pattern. |
+     | Detail/Form/Modal | 1:many | Scaffold a bounded chained `<ChildService>.getAll({ filter: \`_<parentid>_value eq '${id}'\`, select: [...] })`. |
+     | Any | M:N | Require an explicit generated intersect-table service/query contract; otherwise return `BLOCKED`. |
 
-  3. **Verify before exit.** Every UI field in your spec must have either (a) a `select` entry on the primary fetch (covered by direct column or calc column) OR (b) a chained fetch path. If a field has neither, return `BLOCKED [<screen_name>]: field <field> on <screen> has no fetch path — add to spec or add calc column`.
+  3. **Verify before exit.** Every UI field must have a primary `select`,
+     formatted lookup, or bounded chained fetch. Otherwise return `BLOCKED`.
 
   4. **No silent projection fallback.** Do not create a copied local field or
      one-time refresh script from the builder. Projection ownership belongs to

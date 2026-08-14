@@ -215,13 +215,16 @@ and document their role instead.
 ## Step 6a — Cross-entity Read Audit
 
 **Print before starting:**
-> "→ Auditing planned screens for cross-entity reads (calc-column candidates)…"
+> "→ Auditing planned screens for supported cross-entity read paths…"
 
 **Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gate 4a/4b lands.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. This step proposes those calc columns based on the screen plan; `/setup-datamodel` (or `/add-dataverse`) Phase 6.1b creates them.
+This step exists because the generated SDK has no `$expand`. It classifies each
+cross-entity field into a supported formatted lookup or bounded chained fetch.
+Dataverse does not support defining calculated/formula expressions through
+code, so this audit never proposes generated formula metadata.
 
 **Algorithm:**
 
@@ -231,49 +234,26 @@ This step exists because of the runtime constraint documented at [`shared/refere
 
    - **`formatted-lookup`** — reuse the lookup annotation through
      `lookupName` / `formattedValue`; create no column.
-   - **`calc-column`** — verify that the value is scalar, traverses only N:1
-     lookups, and is supported by the target formula capability. Emit a
-     calculated column only after those checks pass.
-   - **`materialized-projection`** — emit an ordinary column only when the
-     screen planner supplied a real offline/hot-path reason plus
-     `refresh_owner` and `reconcile_via`. Allowed owners in this V2 are
-     generated `client-write-through` logic or an `existing-cloud-flow`;
-     do not require Dataverse AI or a Custom API.
    - **`chained-fetch`** — create no column; the screen-builder performs the
      separate service read.
+   - **`external-projection-required`** — record a blocker for a hot
+     list/dashboard field that cannot use the direct lookup annotation. Omit
+     the field until the user supplies a maker-created formula column or other
+     server-owned projection.
 
-     Confirm the `cardinality` is `1:1` (calc columns CANNOT traverse 1:many or M:N). If cardinality or formula capability is unsupported, choose `materialized projection` only when snapshot semantics are required; otherwise downgrade to `chained-fetch` and add a `DONE_WITH_CONCERNS` note. For a supported calculation, propose a calculated column on the **primary entity of that screen** (the entity its primary `Data` service queries):
-     - **Logical name:** `<prefix>_<resolved_field>_calc` (lowercased, e.g. `cr3e9_gatename_calc`)
-     - **Schema name:** PascalCase variant (e.g. `Cr3e9_GateName_calc`)
-     - **Display name:** human label from the planner's `field` value (e.g. "Gate name")
-     - **Type:** matches the resolved field's TypeScript type → Dataverse type (`string` → `Edm.String`, `datetime` → `Edm.DateTimeOffset`, `decimal` / `money` → `Edm.Decimal`, `integer` → `Edm.Int32`, `boolean` → `Edm.Boolean`)
-     - **Formula source:** the dotted path from the planner's `source` field, normalized — e.g. `cr3e9_flightid → cr3e9_gateid → cr3e9_gatename` becomes `cr3e9_flightid.cr3e9_gateid.cr3e9_gatename`. The formula is N:1 lookup chain only; no aggregations, no conditionals, no string concat in v0.
-
-   If a requested calc formula is unsupported, downgrade to `chained-fetch`
-   unless offline/hot-path evidence justifies a fully owned materialized
-   projection. Never create an unowned copied display field.
-
-3. **De-duplicate.** A field driven by N screens (e.g. "Gate name" used on home, list, AND detail) collapses to ONE calc-column row in the addendum. Track all driving screens in the `Driven by` column.
-
-4. **Cap at 20 calc columns per parent entity.** If you exceed, truncate and add a `DONE_WITH_CONCERNS` note — large calc-column counts indicate a denormalization problem that should be solved at the data-model level (probably an extracted entity), not by piling on calc columns.
+3. **De-duplicate.** Collapse identical source/resolution pairs and track all
+   consuming screens.
 
 5. **Emit the addendum.** Write the `### Cross-entity Reads (auto-derived from screen plan)` subsection of `_dm_section.md`. Schema:
 
    ```markdown
    ### Cross-entity Reads (auto-derived from screen plan)
 
-   | Target/read path | Resolution | On table | Type | Source | Refresh owner | Flow ID | Reconcile via | Driven by |
-   |---|---|---|---|---|---|---|---|---|
-   | cr3e9_flightnumber_calc | calc-column | cr3e9_inspection | string | cr3e9_flightid.cr3e9_flightnumber | none | none | none | inspections list |
-   | lookupName(record, 'cr3e9_gateid') | formatted-lookup | cr3e9_inspection | string | cr3e9_gateid | none | none | none | home |
-   | cr3e9_productname | materialized-projection | cr3e9_stockmovement | string | cr3e9_productid.cr3e9_name | existing-cloud-flow | 00000000-0000-4000-8000-000000000000 | InventoryProjectionReconcile | offline movement list |
-
-   **Chained-fetch fields (informational — screen-builder will scaffold these, no schema changes):**
-
-   | Field | On screen | Cardinality | Source |
+   | Field | Resolution | Source | Driven by |
    |---|---|---|---|
-   | Defect count | inspection detail | 1:many | cr3e9_inspectionzoneid → cr3e9_defect |
-   | Inspector email | inspection detail | 1:1 | _ownerid_value → systemuser.internalemailaddress |
+   | Flight | formatted-lookup | cr3e9_flightid primary display | inspections list |
+   | Inspector email | chained-fetch | _ownerid_value → systemuser.internalemailaddress | inspection detail |
+   | Gate code | external-projection-required | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home |
    ```
 
    In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.

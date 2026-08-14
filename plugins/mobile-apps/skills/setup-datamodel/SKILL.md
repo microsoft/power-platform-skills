@@ -140,13 +140,11 @@ Arguments:
 
 `/add-dataverse` creates tables in tier order, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
 
-**Cross-entity resolutions from the screen plan** — if `## Data Model`
-includes `### Cross-entity Reads`, `/add-dataverse` Step 5c applies only the
-schema-backed rows: supported calculated columns and explicitly owned
-materialized projections. Formatted lookups and chained fetches require no
-schema mutation. Materialized projections must name client write-through or a
-cloud flow plus deterministic reconciliation; Dataverse AI and Custom APIs are
-not required.
+**Cross-entity reads from the screen plan** — the approved
+`### Cross-entity Reads` subsection contains formatted lookups, bounded chained
+fetches, or `external-projection-required` blockers. `/add-dataverse` never
+synthesizes calculated/formula definitions through code. A user-supplied,
+maker-created computed column is validated as an existing dependency before reuse.
 
 Skip if Phase 2 chose Path C (no Dataverse).
 

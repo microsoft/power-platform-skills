@@ -500,7 +500,7 @@ sections and their dependents, re-render, and return without asking the user.
 ### Step 5c — Cross-entity Read Audit before Gate 2
 
 **Print before spawning:**
-> "→ Auditing the locked screen plan for cross-entity reads (calc-column candidates from related_entity_fields blocks)…"
+> "→ Auditing the locked screen plan for supported cross-entity read paths…"
 
 **Run condition:** always execute this orchestration step after internal screen
 spec generation. Run the architect audit only when `related_entity_fields`
@@ -510,7 +510,10 @@ exists; Gate 2 and Gate 3 still run when it does not.
 `related_entity_fields:`. Zero matches skips only 5c.1 and continues directly
 to Gate 2.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
+This step exists because the SDK has no `$expand`. It classifies each related
+field as a formatted lookup, bounded chained fetch, or
+`external-projection-required`. It never synthesizes Dataverse formula
+definitions through code.
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 

@@ -184,7 +184,7 @@ Do not use the custom-table list as the source of truth, and do not issue one re
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)" \
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=MetadataId,LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName,SourceType,SourceTypeMask)" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
@@ -206,11 +206,39 @@ If the batched query itself fails (non-2xx), retry it once; if it fails again, s
 
 Do not add these expands when the plan has no keys or M:N relationships — they enlarge the response for no benefit, and standard tables carry many of both.
 
+#### Step 4a — Targeted derived-metadata barrier
+
+The base attribute snapshot cannot prove that a same-named lookup, choice,
+Boolean, or computed dependency has the same semantics.
+
+1. Write planned derived contracts to
+   `<working_dir>/.tmp/derived-metadata-expected.json`: `table`,
+   `logicalName`, `kind`, `type`, `sourceType`, plus lookup target, exact
+   integer/label options, or exact source-type mask and `FormulaDefinition`.
+2. Use one `BATCH-METADATA` operation list for affected existing tables. Query
+   relationship targets, applicable choice/Boolean typed collections with
+   `OptionSet`, and typed computed metadata. Do not spawn one process per column.
+3. Any non-2xx response, missing slot, malformed options, absent lookup target,
+   or unavailable formula definition makes the scope `unverified`; stop before writes.
+4. Normalize live rows to
+   `<working_dir>/.tmp/derived-metadata-live.json`, then run:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-derived-metadata.js" \
+     --expected "<working_dir>/.tmp/derived-metadata-expected.json" \
+     --actual "<working_dir>/.tmp/derived-metadata-live.json"
+   ```
+
+Lookups require an exact target set. Planned choices require matching integer
+and label mappings. Ordinary columns require `SourceType` 0. A maker-created
+computed dependency is reusable only when source type, source-type mask, and
+exact `FormulaDefinition` match; the `Invalid` mask bit always blocks reuse.
+
 Build and print a reconciliation matrix before Step 5:
 
 | Target result | Table decision | Column decisions | Action |
 |---|---|---|---|
-| Present; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
+| Present; all planned base and derived metadata compatible | `reuse` | existing columns `reuse` | No schema write. |
 | Present; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
 | Absent; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
 | Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `defer` | dependent columns `defer` | Never recreate a standard or managed table. Drop the dependent lookups/columns from this run, continue with everything else, and list them under Deferred in Step 9. |
@@ -224,7 +252,7 @@ Build and print a reconciliation matrix before Step 5:
 
 **No dead ends (HARD):** a data-modelling conflict must never stop the run. Adapt it (rename beside the existing object) or defer it (drop it from this run), then keep going and report it in Step 9. Only environment faults stop this skill — failed auth, an environment mismatch, or a target the user has no privilege to write to. Those are not data-modelling problems and the user cannot resolve them by editing the plan.
 
-**Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
+**Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, and key resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing.
 
 ### Step 5 — Create / extend tables
 
@@ -603,7 +631,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
 
   **Pre-flight M:N:** a relationship can only pre-exist on a table that already existed at Step 4. If **either** endpoint was just created in this run, skip the probe — nothing can be there. Otherwise read `ManyToManyRelationships` from that table's Step 4 snapshot: present → skip (already exists); absent → proceed. Query `RelationshipDefinitions(SchemaName='<prefix>_<table1>_<table2>')?$select=SchemaName` only when the snapshot did not cover it.
 
-  **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly or via a calculated column approach. Flag this in the Step 7 summary if any M:N relationships are created.
+  **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly. Flag this in the Step 7 summary if any M:N relationships are created.
 
 - **Column `@odata.type` and required fields — reference table (verified against Dataverse OData API):**
 
@@ -649,73 +677,23 @@ If the column type is not a simple string/int/boolean, surface a one-line confir
 
 After all mutations, re-run the existing-tables query (Step 4) to confirm everything landed.
 
-### Step 5c — Apply cross-entity read resolutions
+### Step 5c — Enforce the supported computed-column boundary
 
-**Print before starting:**
-> "→ Applying schema-backed cross-entity resolutions from the plan (calculated and owned materialized columns only)."
+Dataverse metadata exposes `FormulaDefinition`, but Microsoft does not support
+defining calculated, rollup, or formula expressions through code. Legacy
+workflow XAML and generated formula serialization must not be synthesized.
 
-**Run condition:** the planner / data-model-architect emits a `### Cross-entity Reads (auto-derived from screen plan)` subsection inside `## Data Model` of `native-app-plan.md` when the screen plan reads any field from a related entity. Parse that subsection. If absent or empty, **skip Step 5c entirely** — proceed to Step 6.
+- Do not invoke `create-calculated-column.js`; it is a fail-closed guard for
+  legacy callers.
+- Use formatted lookup annotations or bounded chained fetches.
+- For hot-list fields that cannot use those paths, record
+  `external-projection-required` and omit them from mutation.
+- A maker-created computed column may be reused only after Step 4 metadata
+  reconciliation validates its source type and exact `FormulaDefinition`.
+- Never create an ordinary copied field without an explicit external owner.
 
-This step follows the resolution ladder in [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). `formatted-lookup` and `chained-fetch` rows are documentation only. `calc-column` and `materialized-projection` rows require schema work.
-
-**Algorithm:**
-
-1. Parse the `### Cross-entity Reads` table. Each row has columns:
-   `Target/read path | Resolution | On table | Type | Source | Refresh owner | Flow ID | Reconcile via | Driven by`.
-   Ignore `formatted-lookup` and `chained-fetch` rows.
-2. **Run AFTER all regular columns + relationships from Step 5b have been created** (the formula chain references real columns + lookups; creating the calc column before its dependencies returns HTTP 400 from Dataverse).
-3. **Pre-flight each row against the Step 4 snapshot.** A calculated column is an ordinary attribute, so an existing one is already in its table's snapshot. If the table was created in this run, nothing can pre-exist — POST directly. Otherwise: logical name present → skip the row and log `↻ <calc-column> (already exists, skipped)`; absent → create it. `create-calculated-column.js` does **not** probe for existence, so without this check a re-run returns `0x80044153 attribute already exists`.
-
-4. **For each `calc-column` row**, invoke the helper:
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
-     --table <on-table> \
-     --column <calc-column-logical-name> \
-     --type <Type column verbatim: string|datetime|decimal|integer|boolean> \
-     --formula "<dotted path from Resolves column, e.g. cr3e9_flightid.cr3e9_gateid.cr3e9_gatename>" \
-     --display "<human-friendly label inferred from the column name minus _calc suffix>" \
-     --solution '<solution-uniquename-from-memory-bank>' \
-     --tenant-id '<tenantId-from-resolve-environment>'
-   ```
-
-5. **For each `materialized-projection` row**, require both a non-`none`
-   `Refresh owner` and `Reconcile via`. Create the target as an ordinary column
-   only after its refresh implementation is verifiable:
-   - `client-write-through` requires every source-edit/create screen in Gate 3
-     to include a projection write-through action;
-   - `existing-cloud-flow` requires a verified flow ID.
-
-   Write the complete mapping to `<project-root>/projection-plan.json`, then
-   preserve the table's `Flow ID` as JSON `flowId` for every
-   `existing-cloud-flow` projection. A flow display name is not a substitute.
-   Validate its source/lookup scope before the target column exists:
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/reconcile-projections.js" \
-     --plan "<project-root>/projection-plan.json" \
-     --env-url "<envUrl>" \
-     --validate-only \
-     --tenant-id "<tenantId>"
-   ```
-
-   Validation-only mode never selects or updates the future target column.
-   After it returns `VALID`, create the target as an ordinary column using the
-   same sequential attribute-creation path as Step 5b. Step 6b must publish
-   that column before the first full reconciliation run. Then run the same
-   command without `--validate-only`; this is the mandatory deterministic full
-   rebuild path. This workflow does not require Dataverse AI, a Custom API, or
-   a plug-in. Missing implementation evidence is `BLOCKED` before creation.
-6. **One at a time, sequentially.** Both column types are metadata mutations.
-   Print the resolution and target after each success.
-7. **On failure** — the helper script prints the OData error inline. Common cases:
-   - `400 — formula references unknown attribute` → the relationship or column the formula needs has not been created yet. Verify Step 5b finished cleanly before retrying.
-   - `400 — calculated formula not allowed on this navigation` → the dotted path tries to traverse 1:many or M:N. The architect should have caught this at Step 6a; flag in summary, skip the row, continue.
-   - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step for a fault isolated to one row (a bad formula, an unsupported traversal).
-
-8. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c and return `BLOCKED`; do not present an incomplete projection contract as ready.
-
-9. After all rows are processed, the publish step (Step 6b) below picks up the columns automatically.
+Reference:
+https://learn.microsoft.com/power-apps/developer/data-platform/specialized-columns
 
 ### Step 5d — Create alternate keys for unique business identifiers
 
