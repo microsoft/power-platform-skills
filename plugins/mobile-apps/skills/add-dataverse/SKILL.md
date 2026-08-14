@@ -649,22 +649,24 @@ If the column type is not a simple string/int/boolean, surface a one-line confir
 
 After all mutations, re-run the existing-tables query (Step 4) to confirm everything landed.
 
-### Step 5c — Create calculated columns from `### Cross-entity Reads`
+### Step 5c — Apply cross-entity read resolutions
 
 **Print before starting:**
-> "→ Creating calculated columns from the plan's ### Cross-entity Reads subsection (one HTTP call per row). Skip if the subsection is absent."
+> "→ Applying schema-backed cross-entity resolutions from the plan (calculated and owned materialized columns only)."
 
 **Run condition:** the planner / data-model-architect emits a `### Cross-entity Reads (auto-derived from screen plan)` subsection inside `## Data Model` of `native-app-plan.md` when the screen plan reads any field from a related entity. Parse that subsection. If absent or empty, **skip Step 5c entirely** — proceed to Step 6.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads): the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards, tab roots) MUST be denormalized via calculated columns at the data-model layer. The `### Chained-fetch fields (informational)` subsection (if present) is documentation only — the screen-builder handles those at scaffold time, no schema change.
+This step follows the resolution ladder in [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). `formatted-lookup` and `chained-fetch` rows are documentation only. `calc-column` and `materialized-projection` rows require schema work.
 
 **Algorithm:**
 
-1. Parse the `### Cross-entity Reads` table. Each row has columns: `Calc column | On table | Type | Resolves | Driven by`.
+1. Parse the `### Cross-entity Reads` table. Each row has columns:
+   `Target/read path | Resolution | On table | Type | Source | Refresh owner | Flow ID | Reconcile via | Driven by`.
+   Ignore `formatted-lookup` and `chained-fetch` rows.
 2. **Run AFTER all regular columns + relationships from Step 5b have been created** (the formula chain references real columns + lookups; creating the calc column before its dependencies returns HTTP 400 from Dataverse).
 3. **Pre-flight each row against the Step 4 snapshot.** A calculated column is an ordinary attribute, so an existing one is already in its table's snapshot. If the table was created in this run, nothing can pre-exist — POST directly. Otherwise: logical name present → skip the row and log `↻ <calc-column> (already exists, skipped)`; absent → create it. `create-calculated-column.js` does **not** probe for existence, so without this check a re-run returns `0x80044153 attribute already exists`.
 
-4. **Per row**, invoke the helper:
+4. **For each `calc-column` row**, invoke the helper:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
@@ -677,15 +679,43 @@ This step exists because of the runtime constraint documented at [`shared/refere
      --tenant-id '<tenantId-from-resolve-environment>'
    ```
 
-5. **One at a time, sequentially.** Calc-column creation is metadata mutation — same concurrency rule as table creation. Print `✓ <calc-column>` after each success.
-6. **On failure** — the helper script prints the OData error inline. Common cases:
+5. **For each `materialized-projection` row**, require both a non-`none`
+   `Refresh owner` and `Reconcile via`. Create the target as an ordinary column
+   only after its refresh implementation is verifiable:
+   - `client-write-through` requires every source-edit/create screen in Gate 3
+     to include a projection write-through action;
+   - `existing-cloud-flow` requires a verified flow ID.
+
+   Write the complete mapping to `<project-root>/projection-plan.json`, then
+   preserve the table's `Flow ID` as JSON `flowId` for every
+   `existing-cloud-flow` projection. A flow display name is not a substitute.
+   Validate its source/lookup scope before the target column exists:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/reconcile-projections.js" \
+     --plan "<project-root>/projection-plan.json" \
+     --env-url "<envUrl>" \
+     --validate-only \
+     --tenant-id "<tenantId>"
+   ```
+
+   Validation-only mode never selects or updates the future target column.
+   After it returns `VALID`, create the target as an ordinary column using the
+   same sequential attribute-creation path as Step 5b. Step 6b must publish
+   that column before the first full reconciliation run. Then run the same
+   command without `--validate-only`; this is the mandatory deterministic full
+   rebuild path. This workflow does not require Dataverse AI, a Custom API, or
+   a plug-in. Missing implementation evidence is `BLOCKED` before creation.
+6. **One at a time, sequentially.** Both column types are metadata mutations.
+   Print the resolution and target after each success.
+7. **On failure** — the helper script prints the OData error inline. Common cases:
    - `400 — formula references unknown attribute` → the relationship or column the formula needs has not been created yet. Verify Step 5b finished cleanly before retrying.
    - `400 — calculated formula not allowed on this navigation` → the dotted path tries to traverse 1:many or M:N. The architect should have caught this at Step 6a; flag in summary, skip the row, continue.
    - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step for a fault isolated to one row (a bad formula, an unsupported traversal).
 
-7. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c, report how many rows were created and how many were skipped, and continue to Step 6 rather than issuing the remaining doomed calls. Re-running the skill after the cause is fixed creates only the missing calc columns.
+8. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c and return `BLOCKED`; do not present an incomplete projection contract as ready.
 
-8. After all rows are processed, the publish step (Step 6b) below picks up calc columns automatically — no extra publish call needed.
+9. After all rows are processed, the publish step (Step 6b) below picks up the columns automatically.
 
 ### Step 5d — Create alternate keys for unique business identifiers
 

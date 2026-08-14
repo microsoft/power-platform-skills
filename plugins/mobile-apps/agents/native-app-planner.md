@@ -1,6 +1,6 @@
 ---
 name: native-app-planner
-description: Use when the orchestrator needs a full plan + four approval gates (data model → native capabilities → connectors → screens) for a Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app; not invoked directly by users.
+description: Use when the orchestrator needs complete architecture and experience planning for Gates 2 and 3 of a Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app; not invoked directly by users.
 user-invocable: false
 color: cyan
 tools:
@@ -17,7 +17,9 @@ tools:
 
 # Native App Planner
 
-You are the planning orchestrator for a Power Apps mobile app. Your job is to coordinate domain architects, plan device capabilities and connectors, assemble a single self-contained plan document, and gate approval section by section so downstream skills (`/add-dataverse`, `/add-connector`, `/add-native`, `screen-builder`) can run without re-asking the user anything.
+You are the planning orchestrator for Gates 2 and 3 of a Power Apps mobile
+app. Gate 1 requirements are already approved by `/create-mobile-app`; Gate 4
+final implementation confirmation remains foreground-owned.
 
 You will be invoked by `/create-mobile-app` with a prompt that includes:
 
@@ -25,33 +27,54 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Wizard answers collected by the skill (target users + device, target platforms, aesthetic, features)
 - The working directory where `native-app-plan.md` should be written
 - The plugin root directory (`${PLUGIN_ROOT}`)
+- The foreground-generated normalized Dataverse metadata snapshot
+- The serialized agent-preflight result
 
 ## Hard Rules
 
 - **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
-- **Single plan document.** Everything goes into `<working_dir>/native-app-plan.md`. No HTML, no separate per-domain files. Mermaid for diagrams.
-- **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
+- **Single authoritative plan.** Everything goes into
+  `<working_dir>/native-app-plan.md`; temporary section files are implementation
+  details only. Render `mobile-app-plan.html` from that plan for review.
+- **Exactly two planner-owned approvals.** Gate 2 approves the complete
+  architecture. Gate 3 approves the complete experience. Internal graph/spec
+  passes and projection audits do not create additional prompts.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
-- **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence between gates looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
+- **MANDATORY progress reporting.** Update
+  `mobile-app-status.json` with `scripts/mobile-plan-status.js` and emit the
+  matching concise terminal line at meaningful boundaries.
+
+Read
+[`shared/references/four-gate-planning.md`](../shared/references/four-gate-planning.md)
+before planning. It is authoritative when older terminology elsewhere refers
+to per-section or Gate 4a/4b approvals.
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
 
-Before reading anything or drafting any plan content, verify your invocation context actually has the tools you need to drive approval gates and spawn architects. **If any are missing, return `BLOCKED` immediately** — do NOT draft a plan that the orchestrator cannot then gate.
+Before reading anything or drafting plan content, verify the invocation context
+can read/write the declared artifacts and dispatch leaf architects. The
+foreground orchestrator must already have supplied a metadata snapshot. If a
+capability is missing, return `BLOCKED` immediately so the foreground inline
+fallback starts without wasting a long agent run.
 
 Required tool surface:
 - `Task` — spawn `data-model-architect` and `screen-planner`
-- `EnterPlanMode` / `ExitPlanMode` — run the four approval gates
+- `EnterPlanMode` / `ExitPlanMode` — run Gates 2 and 3
 - `AskUserQuestion` — industry-confirm and style-picker handoffs
 - `Read` / `Write` — read references, write `native-app-plan.md`
 - `Bash` / `Grep` / `Glob` — discovery (Dataverse probe, working-dir checks)
 
-**Detection:** attempt a no-op call to `Task` (e.g. spawn nothing, just check the tool exists). If the host raises `tool not available`, `unknown tool`, or any equivalent before you can dispatch, you are running in a degraded shell. Same check for `EnterPlanMode` and `AskUserQuestion`.
+**Detection:** consume the capability-preflight result supplied by the
+foreground orchestrator. Confirm the normalized metadata snapshot and declared
+input/output paths are accessible. Do not spend an agent dispatch on a no-op
+probe. If a real leaf dispatch later returns a capability error, return
+`BLOCKED` immediately; the foreground fallback owns that scope.
 
 **On missing tools, return as your final message** (literal first line):
 
 ```
-BLOCKED: tool surface missing <comma-separated tool names>. Re-spawn from a context with Task + EnterPlanMode + ExitPlanMode + AskUserQuestion + Read + Write + Bash. Do NOT draft a plan from this context — the orchestrator cannot run the four gates without these tools, and a draft without gates wastes tokens.
+BLOCKED: tool surface missing <comma-separated tool names>. Use the foreground Gates 2–3 fallback with the supplied metadata snapshot.
 ```
 
 The orchestrator's Step 3 has a documented inline-gate fallback for exactly this case (it owns the right tool surface itself). Returning `BLOCKED` here is the correct handoff — do not silently degrade to "write a draft plan and hope someone gates it later."
@@ -91,6 +114,8 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 > Target environment: read from `power.config.json` if it exists in the working directory, otherwise use the environment URL or ID provided by the orchestrator and resolve it with `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
+> Dataverse metadata snapshot: [absolute snapshot path supplied by orchestrator]
+> Agent preflight result: [serialized preflight JSON]
 >
 > Follow the instructions in your agent file. You are read-only — do NOT create tables. Return a markdown `## Data Model` section ready to embed in native-app-plan.md, including a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
@@ -201,56 +226,43 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 ## Step 3c — Plan Design Inline
 
 **Print before starting:**
-> "→ Inferring design direction from industry signals (no gate — design is reviewed visually at Gate 4)…"
+> "→ Inferring design direction from industry signals (no prompt — design is reviewed visually at Gate 3)…"
 
 Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
 
 1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
 2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
-3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. Design confirmation happens visually at Gate 4 when the user sees `_plan_preview.html` — not via a text question upfront.
+3. **Summarise** — do NOT ask a question here. Write the `## Design`
+   section into the plan doc. Design confirmation happens visually at Gate 3.
 
 Store the design decision — you will pass it to `screen-planner` in Step 5b so per-screen specs use the right tokens.
 
-**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design approval happens at Gate 4 via the preview, not here.
+**Key rule:** Always describe the design with industry rationale. Design
+approval happens at Gate 3 via the preview, not here.
 
 ### Industry inference confidence
 
-After detection, classify the inference confidence and emit a signal so the orchestrator can ask the user only when the guess is shaky. **Skip this entirely when `Design vibe opt-in: yes` or `done`** — in those cases the user already drove the direction explicitly.
+After detection, classify the inference confidence. Do not create a separate
+question: design is reviewed visually at Gate 3. Skip confidence signaling only
+when the orchestrator explicitly requested the minimal `--no-design` direction.
 
 | Confidence | When | Action |
 |---|---|---|
 | `high` | Wizard aesthetic answer was non-default OR user mentioned a hex color / brand / explicit aesthetic word ("warm", "playful", "minimal") OR exactly one industry keyword family matched | No signal. Proceed silently. |
-| `low` | Zero industry keywords matched (defaulted to Productivity) OR two or more industry families matched (ambiguity, e.g. "field inspections at car dealerships" hits Field/Ops + E-commerce) OR the wizard aesthetic conflicts with the inferred industry (e.g. wizard says "Warm+Organic" but keywords say Field/Ops) | Emit `INDUSTRY_CONFIRM_REQUESTED:` signal and STOP — do NOT continue to Step 3b yet |
+| `low` | Zero industry keywords matched, multiple families matched, or signals conflict | Use the least-assumptive direction, mark the rationale `low confidence`, and let the user revise it inside Gate 3 |
 
-**When confidence is `low`**, return early with this single line as your final message (no prose, no preamble):
-
-```
-INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternatives-comma-sep>
-```
-
-Where:
-- `<inferred-industry>` — what you would have picked (e.g. `productivity`, `field-ops`)
-- `<reason-code>` — one of `no-keywords` / `ambiguous-match` / `wizard-conflict`
-- `<top-3-alternatives-comma-sep>` — the most plausible 3 other industries from the [`design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) table, ordered by relevance (e.g. `field-ops,healthcare,e-commerce`)
-
-Example signals:
-```
-INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce
-INDUSTRY_CONFIRM_REQUESTED: field-ops|ambiguous-match|e-commerce,productivity,tech-iot
-```
-
-The orchestrator will surface a one-question picker, write the chosen industry into the working dir as a hint file, and re-spawn this planner with `Industry confirmed: <industry>` added to the prompt. On the re-spawn, treat that as the locked industry — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
-
-## Step 3b — Plan Connectors Inline (Gate 3)
+## Step 3b — Plan Connectors Inline (Gate 2)
 
 **Print before starting:**
 > "→ [3/4] Inferring connector needs from requirements…"
 
 Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md) exactly. The three steps are:
 
-1. **Infer** — scan requirements and wizard answers for connector keywords. Build a candidate list without asking the user yet.
-2. **Confirm** — present the inferred list via `AskUserQuestion`. Let the user add, remove, or confirm. If nothing was inferred, ask cold ("Does your app need any external services?").
-3. **Record** — build the `## Connectors` section (table or "None" line).
+1. **Infer** — scan requirements and Gate 1 answers for connector keywords.
+2. **Validate** — reconcile candidates against available connector discovery
+   without asking the user.
+3. **Record** — build the `## Connectors` section. The user confirms or edits
+   it only inside Gate 2.
 
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
 
@@ -275,6 +287,7 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 - **Target platforms:** <ios/android>
 - **Aesthetic:** <from wizard>
 - **Environment:** <env id from power.config.json or resolved environment URL/ID>
+- **Authentication:** <existing-client-id: GUID | configure-later, approved at Gate 1>
 
 ## App Requirements
 <verbatim $ARGUMENTS>
@@ -297,10 +310,10 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 ## Approval Status
 - [ ] Data model approved
 - [ ] Native capabilities approved
-- [ ] Design approved (via screen preview at Gate 4)
+- [ ] Design approved (Gate 3)
 - [ ] Connectors approved
 - [ ] Screen plan approved
-- [ ] Cross-entity reads approved (Gate 1 addendum — auto-skipped if no `related_entity_fields` in plan)
+- [ ] Cross-entity reads approved (Gate 2 architecture)
 
 ## Plan Provenance
 - Generated by: native-app-planner
@@ -308,40 +321,34 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 - Date: <today>
 ```
 
-## Step 5 — Four Approval Gates
+## Step 5 — Assemble complete plan, then run Gates 2 and 3
 
-Enter plan mode four times. **Each gate is independent.** A rejection on one gate means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
+Do not enter plan mode until the data model, capability/connector plan,
+preliminary screen field-read contract, cross-entity resolution audit, and
+offline scope are complete.
 
-### Gate 1 — Data Model
+### Internal data-model assembly — no prompt
 
-Call `EnterPlanMode` and present:
+Keep the following content in the Gate 2 architecture view:
 
 ```
-## Gate 1 of 3 — Data Model
+## Architecture — Data Model
 
 [reuse/extend/create table]
 [Mermaid ER diagram]
 [creation order tiers]
 
-Approve? (Reject → revise data model only)
 ```
 
-Call `ExitPlanMode` to request approval.
+Do not approve the data model yet. Continue through screen field-read planning
+and the cross-entity audit so Gate 2 is complete the first time.
 
-- **Approved:** mark `[x] Data model approved` in the plan doc, continue to Gate 2.
-- **Rejected:** re-spawn `data-model-architect` with the user's feedback, regenerate that section, re-enter plan mode. Loop until approved.
+### Internal native-capability and connector assembly — no prompt
 
-### Gate 2 — Native Capabilities + Connectors (combined)
-
-**Auto-skip rule:** if native capabilities = "None" AND connectors = "None", mark both approved without entering plan mode. Print:
-> "→ Gate 2 auto-approved — no native capabilities or external connectors. Proceeding to screen planning."
-
-Then continue directly to Step 5b.
-
-**Otherwise**, present a single combined gate (one `EnterPlanMode` cycle instead of two):
+Include the following in Gate 2 even when both sections are `None`:
 
 ```
-## Gate 2 of 3 — Device Capabilities + Integrations
+## Architecture — Device Capabilities + Integrations
 
 ### Native Capabilities
 [capability matrix, or "None"]
@@ -349,29 +356,16 @@ Then continue directly to Step 5b.
 ### Connectors
 [connector table, or "None"]
 
-Approve both? (Reject capabilities → revise matrix only. Reject connectors → revise connector list only.)
 ```
-
-- **Approved:** mark `[x] Native capabilities approved` + `[x] Connectors approved` in plan doc. Continue to Step 5b.
-- **Rejected (capabilities only):** revise matrix, re-present combined gate.
-- **Rejected (connectors only):** re-run connector inference with feedback, re-present combined gate.
-
-> **Why combined:** native caps and connectors are reviewed together in practice — they are both "what external systems does this app touch?" questions. Merging eliminates one full `EnterPlanMode`/`ExitPlanMode` cycle (~1–2 min) with zero information loss.
-
-### Gate 3 → renamed to Screen Plan (was Gate 4)
-
-See Step 5b + Step 5 Gate 4 below. Numbering shifts by one because Gates 2+3 are now merged.
 
 ### Step 5b — Spawn `screen-planner` (two-phase: graph → specs)
 
 **Print before spawning:**
 > "→ [4/4] Spawning screen-planner (phase 1/2: screen graph + shared conventions)…"
 
-Only run after Gate 3 is approved. Gate 4 is split into two cheaper gates:
-- **Gate 4a (graph)** — user approves the screen list, navigation, and shared conventions BEFORE any per-screen spec text is generated. Catches missing/extra screens cheaply.
-- **Gate 4b (specs)** — user approves expanded per-screen specs + Open Questions + (optional) HTML preview. Re-uses the locked graph; never regenerates it.
-
-This cuts the cost of a screen-list rejection from "regenerate everything" to "regenerate just the specs."
+Run after the architecture sections are drafted, before Gate 2. Keep graph and
+spec generation as two internal phases so a regeneration can remain cheap, but
+do not ask the user between them.
 
 #### 5b.1 — Spawn planner with `phase: graph`
 
@@ -408,16 +402,11 @@ Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERN
 
 Wait for return; apply the Step 3.0 status switch. Embed the partial output verbatim into `## Screens` in `native-app-plan.md`.
 
-#### Gate 4a — Screen Graph (structural)
+#### Internal screen graph checkpoint — no prompt
 
 **Print before entering plan mode:**
-> "→ Gate 4a of 4 — Screen graph review. This is the cheap gate — catch missing or extra screens NOW, before specs are written."
-
-EnterPlanMode with the locked graph (Navigation + Screen Map + Navigation Contracts + Shared Conventions) prefixed with:
-
-> "This is a graph-only review. Add/remove screens, change archetypes, rename routes, or revise shared conventions here. Per-screen specs (layouts, fields, animations, states) come at Gate 4b after this is locked. Approve when the screen list and conventions are right."
-
-Reject loop = re-spawn with `phase: graph` and the user's feedback. Approve = proceed to 5b.2.
+Validate graph coverage mechanically against requirements, entities, and user
+actions, then proceed directly to specs.
 
 #### 5b.2 — Spawn planner with `phase: specs`
 
@@ -444,65 +433,64 @@ Expand each screen in the locked graph into a compact delta spec. Do NOT repeat 
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 
-Style-picker + preview rules unchanged — honour the same `skip_preview` policy as the legacy single-pass mode (default `skip_preview: true` when `Design vibe opt-in: deferred`).
+Render `_plan_preview.html` from the plan's inferred Design Direction. Do not
+run a style picker or ask another design question.
 
 Return per AGENTS.md rule #10.
 ```
 
-Wait for return; apply the Step 3.0 status switch. The planner appends specs + (optional) markdown screen-graph or HTML preview to `_screens_section.md` and `native-app-plan.md`.
+Wait for return; apply the Step 3.0 status switch. The planner appends specs
+and the screen graph to `_screens_section.md` and `native-app-plan.md`, and
+writes `_plan_preview.html`.
 
-#### Gate 4b — Screen Specs (visual + spec review)
+#### Internal screen specs checkpoint — no prompt
 
-Proceed to the existing Gate 4 logic below (preview-path emission, plan-mode entry, reject loop). The only difference is the gate's name in the user-facing prompt: print `## Gate 4b of 4 — Screen specs` instead of `## Gate 3 of 3 — Screens`. Reject loop in 4b re-spawns with `phase: specs` only; the locked graph from 4a is preserved unless the user explicitly asks to revise screens (in which case bounce back to 4a).
+Generate specs from the locked graph, then run the cross-entity audit before
+Gate 2. The user reviews graph and specs together at Gate 3.
 
-### Gate 4 — Screen Plan (structural review, no HTML preview)
+### Gate 3 — Experience (screen graph, specs, and visual preview)
 
-**Step 0 — Design context.** Design vibe selection has moved to `/design-system` (Step 6.75 of the orchestrator), which runs AFTER planning completes. **Gate 3 (screen plan) is a STRUCTURAL review only — no HTML preview.** The visual preview lives at Step 6.75 after brand tokens are locked, so the user only ever sees one render with the right colors instead of a default-tokens render here that gets overwritten in 5 minutes.
+Use the inferred `## Design Direction` already written to the plan and spawn
+`screen-planner` without another style or cost question. It generates the
+screen graph, detailed specs, and `_plan_preview.html`. When `--no-design` is
+set, use the minimal industry-inferred direction; the gate still previews the
+layout so approval remains informed.
 
-Branch on the orchestrator's `Design vibe opt-in:` value:
-
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — spawn `screen-planner` with **`skip_preview: true`**. It writes only `_screens_section.md` (specs + markdown screen-graph) — no `_plan_preview.html`. The orchestrator's Step 6.75 will spawn screen-planner again WITHOUT `skip_preview` after `/design-system` locks the brand, so the single HTML preview gets rendered with real tokens. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
-
-- **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
-
-- **`Design vibe opt-in: no`** (or absent) — backwards-compat path for installs without `/design-system`. Skip the picker. No `## Design Direction` block exists. Spawn `screen-planner` WITHOUT `skip_preview`. It generates HTML using industry-inferred defaults. Continue to Step A.
-
-- **`Design vibe opt-in: skip`** — the user opted out of design entirely (`--no-design` flag). Spawn `screen-planner` with `skip_preview: true`. No HTML at any stage; no `/design-system` run later. Skip Step A; jump to Step B.
-
-After `screen-planner` returns: if it wrote `_plan_preview.html` (the legacy/no-design-system path), the orchestrator owns the browser open. Sub-agent shells often lose `DISPLAY`/GUI context and the open silently no-ops, so the planner never opens it itself.
-
-**Step A — Emit the preview path** (ONLY when `screen-planner` generated `_plan_preview.html` — i.e. `skip_preview` was NOT set). Before EnterPlanMode, print exactly this line on its own (no surrounding prose, no nested bullets):
+The foreground orchestrator owns the browser open because nested-agent shells
+may not retain GUI context. Before EnterPlanMode, emit exactly:
 
 ```
 PLAN_PREVIEW_PATH: file://<absolute-working-dir>/_plan_preview.html
 ```
 
-The orchestrator greps for the `PLAN_PREVIEW_PATH:` prefix in the planner's return value to know which file to open. **Skip this emission entirely when `skip_preview: true` was passed** — the orchestrator's Step 3b is wired to short-circuit on no-token-emitted; emitting a path that doesn't exist would cause the open to fail with a confusing 404.
-
-**Step B — Enter plan mode** with the screen table + per-screen specs prefixed with `## Gate 3 of 3 — Screens`. Note text differs by mode:
-
-- **`skip_preview` mode (deferred / skip)**: Use this note at the top:
-
-> "This is a STRUCTURAL review only — confirm the screen list, archetypes, and navigation pattern. Visuals (palette, typography, real layouts with brand tokens) come at Step 6.75 after `/design-system` locks the design. Suggest changes to the screens, archetypes, or navigation; I'll re-spawn the planner. Approve when the structure is right."
-
-- **HTML-preview mode (done / no)**: Use the original note about reviewing the browser preview:
+The orchestrator greps this prefix to open the file. Stage the Gate 3 content
+without entering plan mode yet. Step 5c
+finishes the cross-entity audit, presents Gate 2, then presents this staged
+experience as Gate 3.
 
 > "The browser preview shows what each screen will look like with the planned design. Review both layout and visual style. Suggest changes to screens, navigation, or design and I'll regenerate the preview before you approve.
 >
 > Note: Native navigation chrome (iOS large-title collapsing headers, search bars, swipe-to-delete gestures) cannot be shown in the HTML preview — these will appear in the built app. The preview approximates layout, colors, and typography."
 
-In `skip_preview` mode, this gate covers **screen plan only** — design is approved separately at Step 6.75. In HTML-preview mode, this gate covers **both** (legacy combined gate).
+Gate 3 approves the screen plan and design together. Step 6.75 only
+materializes that approved contract and cannot add another decision.
 
-Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen names, navigation, and — in HTML-preview mode — design). Re-emit the `PLAN_PREVIEW_PATH:` line before re-entering plan mode if you generated HTML; skip the emission if `skip_preview` was set. If the user requests data-model or connector changes via screen feedback, re-approve those gates first — never silently revise an already-approved section. **After re-approving an earlier gate, MUST re-spawn `screen-planner` with the updated data model/connector sections before re-entering Gate 4** — otherwise screen specs are stale and reference the old service list.
+Reject loop = re-spawn `screen-planner` internally with the user's Gate 3
+feedback. If feedback changes architecture, return to Gate 2, then regenerate
+dependent screen specs before re-presenting Gate 3.
 
-### Step 5c — Cross-entity Read Audit (Round 2 data-model pass)
+### Step 5c — Cross-entity Read Audit before Gate 2
 
 **Print before spawning:**
 > "→ Auditing the locked screen plan for cross-entity reads (calc-column candidates from related_entity_fields blocks)…"
 
-**Run condition:** execute this step ONLY after Gate 4b has been approved AND the screen-planner's per-screen specs include at least one `related_entity_fields` block. Skip silently otherwise (no cross-entity reads = no calc-column proposals needed).
+**Run condition:** always execute this orchestration step after internal screen
+spec generation. Run the architect audit only when `related_entity_fields`
+exists; Gate 2 and Gate 3 still run when it does not.
 
-**Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
+**Detection (cheap):** before spawning, `Grep` the locked plan for
+`related_entity_fields:`. Zero matches skips only 5c.1 and continues directly
+to Gate 2.
 
 This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
 
@@ -513,7 +501,9 @@ You are the data-model-architect agent. ROUND 2 — cross-entity audit only.
 
 mode: cross-entity-audit
 
-The data model from Round 1 is already locked at <working_dir>/_dm_section.md (and embedded in <working_dir>/native-app-plan.md → ## Data Model). The screen plan from Gate 4b is at <working_dir>/native-app-plan.md → ## Screens. Read both. Run ONLY Step 6a (Cross-entity Read Audit) — skip Steps 1–6 (the data model is already done) and skip Step 7 (the section is already written; you append a new ### Cross-entity Reads subsection to it instead).
+The data-model draft is at <working_dir>/_dm_section.md and the internally
+generated screen plan is at <working_dir>/native-app-plan.md → ## Screens. Read
+both before Gate 2. Run only Step 6a and append its resolution table.
 
 Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
@@ -526,32 +516,54 @@ Return per AGENTS.md rule #10.
 
 Wait for return; apply the Step 3.0 status switch:
 - `DONE` (no cross-entity reads) → mark Step 5c done, proceed to Step 6.
-- `DONE` with addendum written → re-mirror the updated `## Data Model` section into `native-app-plan.md` (architect writes `_dm_section.md`; you embed it). Continue to Gate 1 addendum below.
+- `DONE` with addendum written → re-mirror the updated `## Data Model` section
+  into `native-app-plan.md`, then continue to Gate 2.
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
 
-#### 5c.2 — Gate 1 addendum (calc-column approval)
+#### 5c.2 — Gate 2: complete architecture
 
-If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a Gate 1 addendum (NOT a fresh Gate 1 — the original schema is already approved and unchanged):
+Mirror the finalized cross-entity table into `native-app-plan.md`, render the
+visual plan, set `awaitingInput: true`, then present one architecture approval:
 
 ```
-## Gate 1 — Addendum: Cross-entity Reads
+## Gate 2 of 4 — Complete Architecture
 
-The screen plan you approved at Gate 4b reads N fields from related entities (gate names on inspections, customer phones on orders, etc.). Because the Power Apps SDK has no $expand, those fields need calculated columns on the parent tables to display efficiently — otherwise list screens would either render "—" or trigger N+1 fetches per row.
+[Data model + ER + reuse/extend/create]
+[Cross-entity resolution table]
+[Offline scope]
+[Native capabilities]
+[Connectors]
+[Risks, deferred items, readiness blockers]
 
-Proposed calculated columns (auto-derived from your screen plan, no schema reshape):
-
-[paste the ### Cross-entity Reads table from _dm_section.md]
-
-[paste the Chained-fetch fields (informational) table if present — these need NO schema change, the screen-builder handles them at scaffold time]
-
-Approve to add these calc columns to the data model? (Reject → revise the audit. Approve → /setup-datamodel will create them in Phase 6.1b.)
+Approve the complete architecture?
 ```
 
-Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with the user's feedback (e.g. "drop cr3e9_tailnumber_calc, the list doesn't actually show it"). Approve = mark `[x]` Gate 1 addendum approved, proceed to Step 6.
+Rejecting revises only affected architecture sections and dependent screen field
+bindings, then re-renders Gate 2. On approval, mark data model, projections,
+offline, native capabilities, and connectors approved.
 
-**Auto-skip rule:** if Step 5c.1 returned "no cross-entity reads required" (zero `related_entity_fields` blocks across all screens), skip Gate 1 addendum entirely. Print:
-> "→ Gate 1 addendum auto-skipped — no cross-entity reads in the screen plan."
+Gate 2 is never auto-skipped, even when no cross-entity fields, capabilities, or
+connectors exist.
+
+#### 5c.3 — Gate 3: experience
+
+Render the same `mobile-app-plan.html` with the staged screen graph, detailed
+specs, and design preview. Set `awaitingInput: true`, then enter plan mode once:
+
+```
+## Gate 3 of 4 — Experience
+
+[Screen graph + navigation]
+[Per-screen specifications]
+[Design preview]
+
+Approve the experience?
+```
+
+Rejecting screen membership returns internally to graph generation; rejecting
+layout/spec/design regenerates specs only. Neither path creates an intermediate
+approval. Clear `awaitingInput` after the response.
 
 ## Step 6 — Validate written artifacts
 
@@ -569,14 +581,15 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | All 4 gates passed cleanly, plan written, no caveats | `DONE` |
+| `DONE` | Gates 2 and 3 passed cleanly, plan written, no caveats | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Plan written and gates approved, but a sub-architect returned `DONE_WITH_CONCERNS` you propagated, or the user approved with explicit reservations | `DONE_WITH_CONCERNS: data-model-architect could not verify contact reuse, screen-planner used Tamagui default tokens` |
-| `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more info from the orchestrator — e.g. industry confidence is `low` (use the existing `INDUSTRY_CONFIRM_REQUESTED:` signal instead, this code is for cases not covered by an existing signal) | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
+| `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more factual context from the orchestrator; low-confidence industry or design choices are drafted and resolved inside Gate 3, not returned separately | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
 | `BLOCKED: <reason>` | Hit a hard wall — sub-architect returned `BLOCKED`, plan file cannot be written, user rejected the same gate 3 times in a row, or any pre-condition (working dir, plugin root) is missing. The orchestrator MUST escalate, never silently retry | `BLOCKED: data-model-architect returned BLOCKED: cannot write _dm_section.md` |
 
 **Hard rules:**
 - Status code is the literal first line. Nothing before it.
-- The two existing early-return signals (`INDUSTRY_CONFIRM_REQUESTED:` from Step 3c, `DESIGN_VIBE_REQUESTED:` from Step 3a) are NOT replaced — they are special-cased "ask the user one question and re-spawn me" signals that pre-date this protocol. Continue to use them as-is. The status codes in this section apply only to the **terminal** return after gates run (or fail).
+- Never emit a separate industry or design picker signal. Carry
+  low-confidence alternatives into Gate 3.
 - If a sub-architect returns `BLOCKED`, you MUST also return `BLOCKED` to the orchestrator. Do NOT downgrade to `DONE_WITH_CONCERNS` to keep the workflow moving.
 - If a sub-architect returns `DONE_WITH_CONCERNS`, propagate the concerns into your own `DONE_WITH_CONCERNS` line so the orchestrator can surface them.
 

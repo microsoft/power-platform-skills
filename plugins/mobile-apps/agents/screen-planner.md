@@ -387,16 +387,27 @@ For each screen the user adds, provide this compact shape:
       source: <dotted path from primary entity to resolved column, e.g. cr3e9_flightid → cr3e9_gateid → cr3e9_gatename>
       cardinality: "1:1" | "1:many" | "M:N"
       archetype_class: list | detail | tab-root | dashboard
-      recommends: calc-column | chained-fetch
+      resolution: formatted-lookup | calc-column | chained-fetch | materialized-projection
+      refresh_owner: none | client-write-through | existing-cloud-flow
+      reconcile_via: none | <deterministic command or flow name>
   ```
 
-  **Mechanical derivation of `recommends`** (no judgement — pick from this table):
+  **Mechanical derivation of `resolution`:**
 
-  | `archetype_class` | `cardinality` | `recommends` |
-  |---|---|---|
-  | `list`, `tab-root`, `dashboard` | `1:1` | `calc-column` |
-  | `detail` | `1:1` | `chained-fetch` |
-  | any | `1:many` or `M:N` | `chained-fetch` (calc columns can't traverse) |
+  | Need | `archetype_class` | `cardinality` | `resolution` |
+  |---|---|---|---|
+  | Direct lookup primary display name on the primary record | any | `1:1` | `formatted-lookup` |
+  | Multi-hop related display name | `list`, `tab-root`, `dashboard` | `1:1` | `calc-column` when supported; otherwise owned `materialized-projection` |
+  | Other scalar hot-path field | `list`, `tab-root`, `dashboard` | `1:1` | `calc-column` when formula support is verified |
+  | Other scalar cold-path field | `detail` | `1:1` | `chained-fetch` |
+  | Collection/aggregate | any | `1:many` or `M:N` | `chained-fetch` |
+  | Unsupported scalar required offline or on a measured hot path | any | `1:1` | `materialized-projection` |
+
+  `materialized-projection` requires `refresh_owner` and `reconcile_via`.
+  Prefer `client-write-through` for app-owned writes and `existing-cloud-flow` when
+  changes can originate from other clients. Neither Dataverse AI nor a Custom
+  API is required for projection freshness. `existing-cloud-flow` also requires
+  a verified `flow_id`; a display name alone is not implementation evidence.
 
   **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
@@ -410,20 +421,33 @@ For each screen the user adds, provide this compact shape:
       source: cr3e9_flightid → cr3e9_flightnumber
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      resolution: calc-column
+      refresh_owner: none
+      reconcile_via: none
     - field: "Gate name"
       source: cr3e9_flightid → cr3e9_gateid → cr3e9_gatename
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      resolution: calc-column
+      refresh_owner: none
+      reconcile_via: none
     - field: "Defect count"
       source: cr3e9_inspectionzoneid → cr3e9_defect (1:many)
       cardinality: "1:many"
       archetype_class: list
-      recommends: chained-fetch
+      resolution: materialized-projection
+      refresh_owner: existing-cloud-flow
+      flow_id: 00000000-0000-4000-8000-000000000000
+      reconcile_via: InventoryProjectionReconcile
   ```
 
   **Hard rule:** if the screen displays a related-entity field but you do NOT emit a `related_entity_fields` block for it, the data-model-architect cannot propose the calc column, the screen-builder will hit `BLOCKED` at scaffold time, and the user will see a `—` cell in the built app. The block is the ONLY signal — there is no fallback inference.
+- **Projection write-through** (REQUIRED on every form/action that changes the
+  source of a `materialized-projection` owned by `client-write-through`) — name
+  the projection, affected target service/filter, target copied column, and
+  failure behavior. The source save is not complete until the projection update
+  succeeds or an explicit retryable concern is persisted. Omit when no
+  client-owned materialized projection depends on the write.
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly list each lookup field with its `@odata.bind` name + entity set, e.g. `'cr3e9_Project@odata.bind': '/cr3e9_projects(<guid>)'`. Without this the screen-builder will guess and silently lose the relationship. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
@@ -715,7 +739,27 @@ Then append the markdown block to the Step 5 write target (`plan_path` in `phase
 **Print before starting:**
 > "→ Generating _plan_preview.html so you can see each screen visually before code is written…"
 
-After writing `_screens_section.md`, generate a `preview.html` from the plan specs — before any TSX exists. This gives the planner a visual to show the user at Gate 4.
+After writing `_screens_section.md`, generate the experience area used by
+`mobile-app-plan.html` before any TSX exists. This is a plan dashboard, not a
+runtime screenshot.
+
+Use the Power Pages plan-review strengths without copying its site-specific
+branding:
+
+- sticky header with plan phase and progress;
+- visible `INPUT REQUIRED` banner when `mobile-app-status.json.awaitingInput`
+  is true;
+- sidebar navigation for Architecture, Offline, Integrations, Screens, Risks,
+  and Approvals;
+- summary cards for table/screen/capability/connector counts;
+- status pills for approved, pending, blocked, and deferred items;
+- phone frames for representative screens;
+- explicit label: `Plan preview — implementation has not started`.
+
+The authoritative full-plan renderer is
+`scripts/render-mobile-plan.js`. Screen-planner owns representative phone-frame
+markup only; the planner/orchestrator renders the combined dashboard after
+merging the section into `native-app-plan.md`.
 
 Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
 
@@ -725,7 +769,7 @@ Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-htm
 - **Actions:** render buttons with their labels. No click behavior needed.
 - **Baseline screens** (Login, OAuth callback, Splash): skip — users know what those look like.
 
-Write the file:
+When running in legacy standalone preview mode, write the phone-frame file:
 
 ```text
 Write file_path="<working_dir>/_plan_preview.html"

@@ -18,13 +18,14 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
 - **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
-- **Fail gracefully.** On insertion failure, log the error and continue with remaining records — never auto-rollback. The user can re-run after fixing the issue.
-- **Idempotent re-runs.** If a previous run partially completed, the second run reads `memory-bank.md`'s seeded-data table and skips records already inserted.
+- **Fail closed on incomplete fixtures.** The default result is `BLOCKED` when any requested row fails or a required dependency cannot be resolved. `DONE_WITH_CONCERNS` is allowed only after explicit `--allow-partial` approval.
+- **Business-key idempotency.** Re-runs query each requested fixture by a stable business key. Never use table row counts or stale GUID ranges to decide that a fixture already exists.
+- **Durable exact resume.** `.sample-data-journal.json` records every requested business key as `pending`, `created`, `reused`, `failed`, `blocked`, or `skipped`. Re-runs revalidate journal entries against live Dataverse and retry only missing/failed rows.
 - **Solution-scoped inserts.** Always pass `--solution <uniqueName>` so records land in our solution, not the default.
 
 ## Workflow
 
-1. Verify project + auth → 2. Discover tables → 3. Select tables + count → 4. Generate + preview → 5. Insert → 6. Summary
+1. Verify project + auth → 2. Discover live metadata → 3. Define fixture keys + dependencies → 4. Generate + preview → 5. Execute resumable seed plan → 6. Exact summary
 
 ## Prototype Seed Reuse
 
@@ -72,13 +73,16 @@ If empty, instruct `az login` and stop.
 test -f .datamodel-manifest.json
 ```
 
-If present, parse the JSON. It already contains `logicalName`, `displayName`, `status` (`new` / `extended` / `reused`), and `columns` for every table the project uses. **This is the preferred path** — fast, no API calls.
+If present, parse the JSON. It scopes the tables and planned columns, but it
+does not replace live insertion metadata. Entity-set names, primary IDs,
+required columns, lookup navigation properties, choice values, alternate keys,
+and File/Image limits must still be verified from the selected environment.
 
 ```bash
 cat .datamodel-manifest.json | jq '.tables[] | { logicalName, displayName, columnCount: (.columns | length) }'
 ```
 
-Skip Step 2b.
+Use the manifest to scope Step 2b rather than skipping live metadata discovery.
 
 #### Step 2b — Path B: query OData (fallback)
 
@@ -89,36 +93,34 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true"
 ```
 
-For each table the project uses, fetch its custom columns:
+For each table the project uses, fetch its live insertion metadata:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true"
+  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,EntitySetName,PrimaryIdAttribute,PrimaryNameAttribute&\$expand=Attributes(\$select=LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,MaxLength)"
 ```
 
-Build the same `{ logicalName, displayName, columns: [...] }` shape the manifest provides.
+Also query `ManyToOneRelationships`, `Keys`, and the derived
+Picklist/MultiSelect/File/Image metadata needed by the selected columns. If
+required metadata cannot be read, return `BLOCKED` before any record POST.
 
-### Step 3 — Select tables + count
+### Step 3 — Select tables + fixture keys
 
 All tables from the manifest are evaluated — including reused ones — because a mobile app that surfaces data from a shared table still needs rows to render on first launch. The only exception is standard system tables (e.g. `contact`, `account`, `systemuser`) where seeding is risky in shared production environments.
 
-**Pre-seeding row-count check (HARD — runs for every table before generating any rows):**
+**Business-key precheck (HARD — runs for every requested fixture before any
+mutation):**
 
-For each table, query its current record count using the entity set name from the manifest (or derive it by appending `s` to the logical name as a fallback):
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>"
-```
-
-Count the rows returned in the `value` array.
-
-| Existing record count | Action |
+| Table class | Preferred business key |
 |---|---|
-| **≥5** | **Skip this table entirely.** Log: `↷ <table> (≥5 records exist, skipping)`. Do not generate or insert any rows. |
-| **<5** | Seed enough new rows to reach the per-class target count. If some records already exist (e.g. 2), generate only the gap (e.g. 3 more to reach 5). |
+| Reference | code, SKU, email, or another natural identifier |
+| Transaction | document number or explicit seed correlation key |
+| Detail / line | parent business key plus stable line number |
+| Event / ledger | deterministic idempotency key |
 
-If all tables already have ≥5 records, print `→ All tables already have ≥5 records. Nothing to seed.` and stop.
+Query every exact key with `$filter`. Zero matches means create, one means
+reuse, and more than one means `BLOCKED` because the proposed key is not unique.
+Existing unrelated rows never satisfy the fixture.
 
 **Per-table count by class** (classify each table from manifest signals before generating; this beats a uniform `5` because reference tables don't need volume and transactional tables need state spread):
 
@@ -147,7 +149,11 @@ For the selected tables, build a dependency graph from lookup columns:
 2. Tables with lookups only to Tier 0 → Tier 1
 3. Continue until all selected tables are tiered
 
-If a selected table references an UNSELECTED parent, ask the user whether to add the parent to the selection or skip the lookup field. Don't silently insert null lookups.
+Before previewing or inserting, resolve every required dependency to either an
+earlier-tier fixture or an existing record queried by business key. Validate the
+exact lookup navigation property and target `EntitySetName`. If a required
+dependency is unavailable, mark the dependent fixture `blocked` and stop before
+mutation. Never silently insert a null lookup.
 
 ### Step 4 — Generate sample data + preview
 
@@ -250,16 +256,82 @@ For tables with lookups, also show which parent record each child references:
 
 > `cr3e9_inspection rows reference cr3e9_jobsite records by SiteName above.`
 
-#### Step 4d — Proceed to insert
+#### Step 4d — Build the executable seed plan
 
-After the preview is shown, proceed directly to Step 5. No confirmation prompt — the row-count pre-check (Step 3) already ensures no existing data is overwritten.
+Write `<project-root>/.tmp/sample-data-plan.json`. It is the complete input to
+`scripts/seed-sample-data.js` and contains live metadata plus stable keys:
+
+```json
+{
+  "runId": "inventory-demo-v1",
+  "tables": [{
+    "logicalName": "cr123_product",
+    "entitySetName": "cr123_products",
+    "primaryIdColumn": "cr123_productid",
+    "tier": 0,
+    "requiredColumns": ["cr123_sku", "cr123_name"],
+    "choiceColumns": ["cr123_status"],
+    "rows": [{
+      "businessKey": { "cr123_sku": "PEP-20OZ-001" },
+      "body": {
+        "cr123_sku": "PEP-20OZ-001",
+        "cr123_name": "Cola 20 oz",
+        "cr123_status": 100000003
+      }
+    }]
+  }]
+}
+```
+
+Lookup rows use symbolic dependencies instead of copied GUIDs:
+
+```json
+{
+  "businessKey": { "cr123_ordernumber": "SEED-PO-001" },
+  "body": { "cr123_ordernumber": "SEED-PO-001" },
+  "lookups": [{
+    "property": "cr123_Supplier",
+    "targetTable": "cr123_supplier",
+    "businessKey": { "cr123_suppliercode": "SUP-001" }
+  }]
+}
+```
+
+Choice integers must come from Step 4b's live option metadata. The executor
+verifies them again before the first POST.
+
+#### Step 4e — Proceed to insert
+
+After the preview is shown, proceed directly to Step 5. No confirmation prompt
+is added: exact business-key reconciliation guarantees that unrelated existing
+data is neither treated as the fixture nor overwritten.
 
 ### Step 5 — Insert sample data
 
 **Print before starting:**
 > "→ Inserting <total> records across <N> tables in dependency-tier order (parallel within each tier, cap 5 concurrent)…"
 
-Insert in the tier order from Step 3c. **Within a tier, parallelize across both tables and rows** via the script's `BATCH-RECORDS` mode — single Node process, `Promise.all` with concurrency cap of 5. Across tiers stays sequential (children need parent GUIDs from prior tier's responses).
+Run the executable helper as the only supported insertion path:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/seed-sample-data.js" \
+  --plan "<project-root>/.tmp/sample-data-plan.json" \
+  --journal "<project-root>/.sample-data-journal.json" \
+  --env-url "<envUrl>" \
+  --solution "<solutionUniqueName>" \
+  --tenant-id "<tenantId>"
+```
+
+It validates dependencies, re-queries every business key, verifies live choice
+values, resolves current GUIDs, inserts one dependency tier at a time, and
+atomically persists the journal after every tier. It exits nonzero when any row
+is `failed` or `blocked`.
+
+Use `--allow-partial` only after explicit user approval. That mode returns
+`DONE_WITH_CONCERNS`; it never reports `DONE`.
+
+The following subsections define how the executor's plan is constructed and how
+media is handled. Do not bypass the helper with hand-written POST loops.
 
 > **⚠️ Parallelism applies ONLY to record inserts.** Schema operations (table / column / relationship creation) MUST stay sequential — see [`/add-dataverse` Step 5 concurrency rule](../add-dataverse/SKILL.md#step-5--create--extend-tables). Records have no metadata lock; metadata writes do. Mixing them up returns 429 / `MetadataLockHeldException`.
 
@@ -311,7 +383,11 @@ For each tier from 0 → N:
 
    > `→ ✓ <table>: <primary-name-value> (<guid>)`
 
-4. **Handle failures.** If any operation in the tier returned non-2xx or `error`, skip child rows whose parent failed but **continue to the next tier** with the rows that DID succeed. Rationale: aborting Tier 1 leaves Tiers 2+ empty, defeating the coverage contract. Document each skipped child and tier knock-on in the Step 6 summary.
+4. **Handle failures.** Record each failed operation immediately in
+   `.sample-data-journal.json`. In the default mode, stop before issuing later
+   tiers and return `BLOCKED`; dependent rows become `blocked` with the failed
+   parent business key in their error. Continue independent rows only when the
+   user explicitly approved `--allow-partial`.
 
 #### Step 5c — Insert child tables with lookups (also via BATCH-RECORDS)
 
@@ -324,7 +400,7 @@ For Tier 1+ tables, build each row's body with `@odata.bind` referencing the par
     "entitySet": "cr3e9_inspections",
     "body": {
       "cr3e9_inspectionnumber": "INS-001",
-      "cr3e9_status": 100000000,
+      "cr3e9_status": "<live integer from Step 4b>",
       "cr3e9_Site@odata.bind": "/cr3e9_jobsites(<parent-guid-from-tier-0>)"
     }
   }
@@ -385,60 +461,39 @@ After each tier's `BATCH-RECORDS` response, fill `recordId` from the in-memory `
 
 #### Step 5e — Track results + memory-bank
 
-The `BATCH-RECORDS` response is your tracking source. For each tier's response array:
+`.sample-data-journal.json` is the authoritative tracking source. The executor
+atomically updates each business key after every tier with:
 
-- **Successes** (`status` 200-299, `recordId` present) → append to your in-memory `{ index → { table, primaryNameValue, recordId } }` map.
-- **Failures** (`status` 0 / 4xx / 5xx with `error`) → append to a per-tier failure list for the Step 6 summary.
+- status;
+- current record ID, when verified;
+- attempt count;
+- exact failure/block reason;
+- last update timestamp.
 
-After **all tiers complete** (or after a strict-default stop), batch-write to `memory-bank.md` under `## Seeded sample data` so subsequent runs are idempotent. One row per table per run:
-
-```markdown
-## Seeded sample data
-
-| Date | Table | Records inserted | First GUID | Last GUID |
-|---|---|---|---|---|
-| <ISO> | cr3e9_jobsite | 5 | <guid1> | <guid5> |
-```
-
-Write all rows in a single `Edit` call after the run, not per-tier — avoids race-on-file-write across iterations and keeps the audit log atomic.
+Write only a concise run summary and journal path to `memory-bank.md`. Do not
+copy GUID ranges into memory as a second source of truth.
 
 #### Step 5f — Recovery / resume from a failed tier
 
-If a tier fails partway and you need to retry, **do NOT write a hand-rolled `seed-resume.js` that hardcodes parent GUIDs from the prior run's stdout.** That pattern is the #1 source of `Entity '<table>' With Id = <guid> Does Not Exist` 404s, because (a) the prior run may not have actually committed the parent rows it printed, and (b) GUIDs from a re-created table are stale immediately.
-
-**The only safe resume pattern:**
-
-1. **Re-query parent GUIDs by a stable business key.** For every parent table referenced in the failed tier's `@odata.bind` values, run a fresh GET filtered by the row's natural identifier (name, tail-number, code — whatever you used as the primary name when seeding). Example:
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-     "<parentEntitySet>?\$select=<parentIdColumn>,<naturalKey>&\$filter=startswith(<naturalKey>,'<seed prefix>')&\$top=50"
-   ```
-
-   Build a fresh `{ naturalKey → guid }` map from the response.
-
-2. **Re-query EntitySetName for every lookup target** (Step 5a). Don't trust a cached value from the prior session — table EntitySetName is stable, but the cache file may be from a different project.
-
-3. **If the parent query returns fewer rows than expected, STOP.** Don't proceed with a partial map — surface the count to the user:
-
-   > `⛔ Resume aborted: expected <N> parent rows in <table>, found <K>. Re-run /add-sample-data from Tier 0 (don't trust the prior session's GUIDs).`
-
-4. **Re-issue the failed tier as a normal Step 5b/5c BATCH-RECORDS call** with the freshly-queried GUIDs and EntitySetNames substituted into the operations array. Same `--solution` flag, same concurrency rules.
-
-5. **Continue forward** through subsequent tiers using the new in-memory `{ index → recordId }` map seeded from this resume's response.
-
-> **Why no `--resume` flag exists today:** the strict-default failure mode ("stop the tier, surface failures, let user re-run") combined with the live-query rule above is the resume mechanism. A flag would imply the script can magically figure out what's already there — it can't, because partial commits and concurrent edits make any cache lie. The user owns the recovery decision; the agent's job is to follow the live-query pattern, never to invent a stateful resume helper.
+Re-run the same `seed-sample-data.js` command with the same plan and journal.
+The helper revalidates every journal entry by business key, rebuilds current
+parent-ID maps, reuses rows that still exist, and retries only missing/failed
+fixtures. Never write a separate resume script or paste GUIDs from prior output.
 
 ### Step 6 — Summary
 
 ```
-✅ Sample data seeded
+Sample-data result: <DONE | DONE_WITH_CONCERNS | BLOCKED>
 ─────────────────────────────────────────────
 Environment   : <envUrl>
 Solution      : <solution>
-Tables seeded : <list with counts, e.g. cr3e9_jobsite (5), cr3e9_inspection (5)>
-Total records : <N>
-Failures      : <K> (see list below if K > 0)
+Requested     : <N>
+Created       : <N>
+Reused        : <N>
+Failed        : <N>
+Blocked       : <N>
+Skipped       : <N>
+Journal       : <project-root>/.sample-data-journal.json
 
 Next steps:
   npm run dev          # Open the app — home screen now shows real data
@@ -446,7 +501,8 @@ Next steps:
 ─────────────────────────────────────────────
 ```
 
-If any record failed, print a sub-table of the failures with the error messages so the user can diagnose.
+If any record failed or was blocked, print its table, business key, attempts,
+and exact error from the journal. The default process result must be nonzero.
 
 ## Hard rules
 

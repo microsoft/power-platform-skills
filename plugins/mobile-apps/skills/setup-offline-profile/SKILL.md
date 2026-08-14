@@ -18,6 +18,13 @@ model: opus
 
 End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (and any other compatible Power Apps client) can use to download data for offline access.
 
+**Orchestrated mode:** when invoked as
+`/setup-offline-profile --skip-planning --plan <native-app-plan.md>`, read the
+Gate 2-approved offline section as the complete configuration contract. Skip
+the architect and Step 3.5 questions, validate that every required field is
+present, and proceed directly to mutation. Missing or ambiguous configuration
+is `BLOCKED`; never re-prompt inside the create-app flow.
+
 **Scope of v0**: authoring only. This skill creates the Dataverse entities (`mobileofflineprofile`, `mobileofflineprofileitem`, `mobileofflineprofileitemassociation`) and writes the full app-level offline config — profile metadata, per-table scope, and the temporary SDK-workaround fields — to `offline-profile.json`. **This skill does NOT modify `power.config.json`** (that file is owned by `npx power-apps init` and its schema is controlled upstream). It also does NOT scaffold an offline runtime (SQLite store, sync engine, write queue) in the generated app — that's gated on upstream `@microsoft/power-apps-native-host` runtime support.
 
 **Out of scope for v0**:
@@ -27,7 +34,7 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Load approved plan or spawn architect → 3.5 Standalone-only configuration approval → 4. Enable table prerequisites → 5. POST profile shell → 6. POST profile items → 7. POST associations/columns → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
@@ -144,6 +151,10 @@ Decision tree — evaluate in order:
 
 ### Step 3 — Spawn architect agent
 
+If `--skip-planning` is present, do not spawn the agent. Parse the approved
+offline configuration from `--plan`, write the equivalent `_offline_section.md`
+locally, and continue to Step 4 after validation.
+
 **Print before starting:**
 > "→ Spawning mobile-app:offline-profile-architect agent (read-only) to design the profile…"
 
@@ -167,6 +178,10 @@ The agent returns `_offline_section.md` in the working directory. Read it. Parse
 - `BLOCKED: <reason>` → STOP, surface to user, do not silently retry.
 
 ### Step 3.5 — Configuration review (interactive AskUserQuestion flow)
+
+Run this section only for standalone invocations. In `--skip-planning` mode,
+the create-app Gate 2 approval is already authoritative; skip directly to Step
+4 with no question.
 
 **Print before starting:**
 > "→ Presenting the proposed offline profile configuration. You'll tap an option to accept, adjust, or cancel — no need to type."

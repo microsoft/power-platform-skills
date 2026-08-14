@@ -36,6 +36,8 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 - `working_dir` — absolute path to project root (auto-detected or passed by orchestrator)
 - Optional flags: `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`, `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- `--skip-planning --plan <native-app-plan.md>` — materialize the Gate
+  3-approved design without asking questions
 - Optional: `--refresh <dimension>` — palette | typography | components | density | negatives | motion
 - Optional: `--reskin` — full theme swap
 - Optional: `--add-dark-mode` — derive + wire dark theme
@@ -73,6 +75,13 @@ Detect invocation mode:
 ```
 
 For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
+
+**Approved-plan fast path:** when `--skip-planning --plan <path>` is present,
+read the approved `## Design Direction` and `## Screens` sections. Validate that
+palette, typography, density, surface, motion, and negatives are complete.
+Skip every `AskUserQuestion`, cost picker, brand-input picker, and style picker;
+generate the three brand artifacts directly. Missing required fields are
+`BLOCKED`, not permission to reopen planning after Gate 4.
 
 **Drift detection (Mode B only — existing brand/ present):**
 

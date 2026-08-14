@@ -124,20 +124,36 @@ Whenever a UI field on a screen displays data sourced from an entity OTHER than 
 - Inspection detail shows "Inspector email" → email lives on `systemuser`, screen fetches `cr3e9_inspection` → cross-entity read
 - Order detail shows "Customer phone" → phone lives on `contact`, screen fetches `salesorder` → cross-entity read
 
-### Why two patterns exist (calculated column AND chained fetch)
+### Resolution ladder
 
 The Power Apps SDK's `IGetAllOptions` / `IGetOptions` interfaces have **no `expand` field**. Passing `$expand` is silently dropped at runtime — the related fields come back `undefined`, the screen renders `—`, and the user thinks the data is missing. So the standard OData answer ("just expand the lookup") doesn't work.
 
-Two patterns remain. Their cost profiles are very different, so the right pick depends on **screen archetype × relationship cardinality**:
+Use the first valid option in this order:
 
-- **Calculated column** — denormalize the related field onto the parent table at the data-model layer. One round trip per page load, no N+1, no per-row jank. Best for hot paths (lists, dashboards, tab roots).
-- **Chained fetch** — call a second `Service.get(...)` inside the screen's load step. One extra network round trip per screen load. Acceptable for cold paths (a single detail screen). Disastrous on lists (one extra fetch per row × 50 rows = N+1 fetch storm).
+1. **Formatted lookup value** — when the UI needs only the primary display name
+   of a direct lookup on the record being fetched, read the lookup's formatted annotation with
+   `lookupName(record, '<lookup>')` / `formattedValue(...)`. This is live and
+   adds no schema or extra request.
+2. **Supported calculated column** — for scalar N:1 fields on lists,
+   dashboards, tab roots, or offline hot paths. Dataverse computes the value at
+   read time; it is not a stale copied string.
+3. **Chained fetch** — for detail/cold paths and 1:many or M:N collections.
+4. **Materialized projection** — only when offline or measured hot-path
+   requirements cannot be met by the first three options.
+
+Materialized projections are ordinary copied columns and therefore require an
+explicit refresh owner and reconciliation command. In this V2 scope, ownership
+may be implemented by generated client write-through logic or a Power Automate
+cloud flow. Do not require Dataverse AI, a Custom API, or a plug-in merely to
+keep a display projection fresh.
 
 ### Decision table (the rule)
 
 | Screen archetype | Relationship | Action |
 |---|---|---|
-| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | 1:1 (N:1 lookup chain) | **REFUSE to scaffold the field.** Recommend the user re-run `/setup-datamodel` (or `/add-dataverse` for existing apps) to add a calc column on the parent entity. Do NOT scaffold N+1 chained fetches on list screens — visible jank on a list of 50. |
+| Any | Direct lookup primary display name only | Use formatted lookup annotation; no new column |
+| List/dashboard | Multi-hop display name or aggregate | Use a supported calc/rollup when possible; otherwise an owned materialized projection. Never issue one related query per list row |
+| **List** (`top ≥ 5`), **Tab-root**, **Dashboard** | 1:1 (N:1 lookup chain) | Use a supported calculated column. If unsupported and offline/hot-path evidence requires a copy, use an owned materialized projection; otherwise remove the field from the hot path |
 | **Detail** (single record, cold path) | 1:1 (N:1 lookup chain) | Scaffold a chained fetch in the screen's load step. One extra round trip is fine for a single record. |
 | **Any screen** | 1:many or M:N | Scaffold a chained `*Service.getAll(...)` with `_<parentid>_value eq '${id}'` filter. **Calc columns CANNOT traverse 1:many or M:N** — Dataverse only supports calc-column formulas across N:1 (single-valued) navigation properties. |
 
@@ -211,6 +227,39 @@ const defectsResult = await Cr3e9_defectsService.getAll({
 
 **Hard rule — NEVER chain inside a list `map()` / `FlatList renderItem`.** That's the N+1 trap: 50 list rows × 1 extra fetch each = 50 extra network calls per page load. Visible scroll jank. Battery drain on mobile. If a list needs cross-entity data, it needs a calc column — not a chained fetch.
 
+### Pattern C: Materialized projection (last resort)
+
+Use an ordinary target column only when the field must be available offline, a
+supported calculated formula cannot express it, or measured list performance
+requires a local copy.
+
+Every materialized projection row in the plan must include:
+
+```yaml
+resolution: materialized-projection
+source: cr123_product.cr123_name
+target: cr123_stockmovement.cr123_productname
+refresh_owner: client-write-through | existing-cloud-flow
+flow_id: <verified GUID; required for existing-cloud-flow>
+refresh_trigger: movement create and product rename
+freshness: immediate | eventual(<duration>)
+reconcile_via: scripts/reconcile-projections.js --projection <name>
+failure_behavior: surface concern and keep authoritative lookup ID
+```
+
+Client write-through updates the projection whenever the generated app changes
+the source or creates the target. Every affected source-write screen must carry
+that action in its approved spec. Because other clients can bypass the app, it
+is sufficient only for development or single-client deployments unless a
+verified existing cloud flow also owns cross-client refresh.
+
+Every projection is recorded in `projection-plan.json`; the bundled
+`scripts/reconcile-projections.js` provides deterministic scoped or full
+rebuilds. The authoritative relationship/lookup ID must always remain present. The copied
+display value is never the source of truth. The plan is
+`DEVELOPMENT_READY`, not `PRODUCTION_READY`, while any materialized projection
+lacks both an incremental owner and a full reconciliation path.
+
 ### Limits
 
 - **Calc columns can only traverse N:1** (single-valued navigation properties). 1:many and M:N must use chained fetch.
@@ -239,6 +288,8 @@ The screen-planner emits a `related_entity_fields` block in each per-screen spec
 | Sort | `orderBy` | `['createdon desc', 'cr123_id asc']` |
 | Reduce payload | `select` | `['id', 'name', 'status']` |
 | Cross-entity field (list / hot) | calc column | `cr3e9_gatename_calc` in `select` |
+| Lookup display name | formatted lookup annotation | `lookupName(record, 'cr3e9_productid')` |
+| Offline unsupported scalar | owned materialized projection | ordinary copied column + refresh/reconcile contract |
 | Cross-entity field (detail / cold) | chained `Service.get` | `Cr3e9_flightsService.get(flightId)` after primary fetch |
 | expand/join fields | NOT SUPPORTED in current generated options | use calc column or chained fetch — see Cross-entity Reads above |
 

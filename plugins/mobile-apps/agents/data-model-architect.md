@@ -22,6 +22,9 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
+- **Normalized Dataverse metadata snapshot (preferred)** — written by the
+  foreground orchestrator after environment/auth verification. Read this
+  instead of rediscovering metadata when supplied.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
 - **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
 
@@ -87,6 +90,11 @@ If it fails, skip Step 3 and Step 5's live queries, prepend a `Dataverse access 
 
 **Print before starting:**
 > "→ Discovering existing custom tables in the environment (cap: top 10 by relevance)…"
+
+If the orchestrator supplied a normalized snapshot, validate its environment
+URL/tenant and use it for Steps 3 and 5. Do not repeat live discovery inside
+the nested agent. If the snapshot is missing or mismatched, return
+`NEEDS_CONTEXT` so the foreground can regenerate it.
 
 Query custom tables to discover conceptual reuse candidates. This broad query is advisory only; Step 5 still queries every selected custom, standard, and managed table by exact logical name before classifying it:
 
@@ -219,13 +227,20 @@ This step exists because of the runtime constraint documented at [`shared/refere
 
 1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first (graph-only mode after Gate 4a). If absent, parse `<working_dir>/native-app-plan.md` and extract the `## Screens` section. Walk every per-screen spec and collect every `related_entity_fields` block.
 
-2. **Per entry, branch on `recommends`:**
+2. **Per entry, branch on `resolution`:**
 
-   - **`recommends: calc-column`** — first classify the projection instead of assuming every dotted path is a supported formula:
-     - **Supported calculated projection** — a scalar value reachable only through N:1 lookups and supported by the target Dataverse formula capability. Emit a calc column.
-     - **Lookup annotation** — the screen only needs the related record's display name already exposed by the lookup. Reuse the lookup annotation; create no column.
-     - **Materialized projection** — the value must be snapshotted for history/offline use or the formula capability is unsupported. Emit an ordinary column and state which create/update flow owns synchronization.
-     - **Chained fetch** — 1:many, M:N, aggregate, conditional, or otherwise unsupported navigation. Create no column; the screen-builder fetches it.
+   - **`formatted-lookup`** — reuse the lookup annotation through
+     `lookupName` / `formattedValue`; create no column.
+   - **`calc-column`** — verify that the value is scalar, traverses only N:1
+     lookups, and is supported by the target formula capability. Emit a
+     calculated column only after those checks pass.
+   - **`materialized-projection`** — emit an ordinary column only when the
+     screen planner supplied a real offline/hot-path reason plus
+     `refresh_owner` and `reconcile_via`. Allowed owners in this V2 are
+     generated `client-write-through` logic or an `existing-cloud-flow`;
+     do not require Dataverse AI or a Custom API.
+   - **`chained-fetch`** — create no column; the screen-builder performs the
+     separate service read.
 
      Confirm the `cardinality` is `1:1` (calc columns CANNOT traverse 1:many or M:N). If cardinality or formula capability is unsupported, choose `materialized projection` only when snapshot semantics are required; otherwise downgrade to `chained-fetch` and add a `DONE_WITH_CONCERNS` note. For a supported calculation, propose a calculated column on the **primary entity of that screen** (the entity its primary `Data` service queries):
      - **Logical name:** `<prefix>_<resolved_field>_calc` (lowercased, e.g. `cr3e9_gatename_calc`)
@@ -234,7 +249,9 @@ This step exists because of the runtime constraint documented at [`shared/refere
      - **Type:** matches the resolved field's TypeScript type → Dataverse type (`string` → `Edm.String`, `datetime` → `Edm.DateTimeOffset`, `decimal` / `money` → `Edm.Decimal`, `integer` → `Edm.Int32`, `boolean` → `Edm.Boolean`)
      - **Formula source:** the dotted path from the planner's `source` field, normalized — e.g. `cr3e9_flightid → cr3e9_gateid → cr3e9_gatename` becomes `cr3e9_flightid.cr3e9_gateid.cr3e9_gatename`. The formula is N:1 lookup chain only; no aggregations, no conditionals, no string concat in v0.
 
-   - **`recommends: chained-fetch`** — do NOT add any column. The screen-builder handles this at scaffold time per the decision table in `data-performance.md`. Just include the entry in the addendum's `Chained-fetch fields (informational)` row so the user sees what the screen-builder will scaffold.
+   If a requested calc formula is unsupported, downgrade to `chained-fetch`
+   unless offline/hot-path evidence justifies a fully owned materialized
+   projection. Never create an unowned copied display field.
 
 3. **De-duplicate.** A field driven by N screens (e.g. "Gate name" used on home, list, AND detail) collapses to ONE calc-column row in the addendum. Track all driving screens in the `Driven by` column.
 
@@ -245,11 +262,11 @@ This step exists because of the runtime constraint documented at [`shared/refere
    ```markdown
    ### Cross-entity Reads (auto-derived from screen plan)
 
-   | Calc column | On table | Type | Resolves | Driven by |
-   |---|---|---|---|---|
-   | cr3e9_flightnumber_calc | cr3e9_inspection | string | cr3e9_flightid.cr3e9_flightnumber | inspections list |
-   | cr3e9_gatename_calc | cr3e9_inspection | string | cr3e9_flightid.cr3e9_gateid.cr3e9_gatename | home, inspections list |
-   | cr3e9_tailnumber_calc | cr3e9_inspection | string | cr3e9_flightid.cr3e9_aircraftid.cr3e9_tailnumber | inspections list |
+   | Target/read path | Resolution | On table | Type | Source | Refresh owner | Flow ID | Reconcile via | Driven by |
+   |---|---|---|---|---|---|---|---|---|
+   | cr3e9_flightnumber_calc | calc-column | cr3e9_inspection | string | cr3e9_flightid.cr3e9_flightnumber | none | none | none | inspections list |
+   | lookupName(record, 'cr3e9_gateid') | formatted-lookup | cr3e9_inspection | string | cr3e9_gateid | none | none | none | home |
+   | cr3e9_productname | materialized-projection | cr3e9_stockmovement | string | cr3e9_productid.cr3e9_name | existing-cloud-flow | 00000000-0000-4000-8000-000000000000 | InventoryProjectionReconcile | offline movement list |
 
    **Chained-fetch fields (informational — screen-builder will scaffold these, no schema changes):**
 

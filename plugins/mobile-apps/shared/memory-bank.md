@@ -103,11 +103,12 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 ## Seeded sample data
 
-_Written by `/add-sample-data`. Tracks records inserted so re-runs are idempotent and the user can clean up later if needed._
+_Written by `/add-sample-data`. `.sample-data-journal.json` is the authoritative
+per-record resume state. This table records only run-level outcomes._
 
-| Date | Table | Records inserted | First GUID | Last GUID |
-|---|---|---|---|---|
-| | | | | |
+| Date | Run ID | Result | Requested | Created | Reused | Failed | Blocked | Journal |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| | | DONE / DONE_WITH_CONCERNS / BLOCKED | | | | | | `.sample-data-journal.json` |
 
 ## Build history
 
