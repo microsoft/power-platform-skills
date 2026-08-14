@@ -74,10 +74,10 @@ are in [`architecture.md`](architecture.md).
 ## 🎯 MVP gaps vs the MDA Agentic Authoring spec
 
 Evaluated 2026-08-12 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
-(§3 MVP definition + §5 stack rank). **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as
-first-class planning outputs, data model + sample data
-+ auto-number + dedup, Active/Inactive + authored views, main forms, charts, gen-page landings, custom SVG sitemap
-icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart), Insight Card summaries (`ai.summaries`), and
+(§3 MVP definition + §5 stack rank). **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
+data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
+gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
+Insight Card summaries (`ai.summaries`), and
 the dedup/verify quality gates. The open MVP items:
 
 - 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
