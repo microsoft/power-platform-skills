@@ -116,26 +116,26 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   ```
 
   For lookup labels, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
-- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full reference (with cost-profile rationale, calc-column naming, and pattern examples) is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
+- **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full supported-path reference is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
 
-  1. **Calc column check first.** Open `src/generated/models/<PrimaryEntity>Model.ts` and search for a column matching `<prefix>_<field>_calc` (or any `_calc`-suffixed column resolving the field you need). If present, add it to your `select: [...]` and render directly. Done — no chained fetch needed.
-  2. **No calc column? Branch on screen archetype × cardinality** (archetype is in your spec under `**Archetype:**`):
+  1. **Follow the planned recommendation** from `related_entity_fields`.
 
-     | Archetype | Cardinality | Action |
+     | Recommendation | Action |
      |---|---|---|
-     | List (`top ≥ 5`), Tab-root, Dashboard | 1:1 (N:1 lookup chain) | **STOP — do NOT chain a fetch in the list `map()` / `renderItem`.** Emit a `// TODO(cross-entity-read):` header comment naming the field, the related entity, and the recommended `<prefix>_<field>_calc` column to add. Render the cell as `'—'` for now. Then return `BLOCKED [<screen_name>]: list field <field> requires cross-entity read; needs calc column <prefix>_<field>_calc on <primary_entity> — re-run /setup-datamodel (or /add-dataverse for existing apps) to add the calc column.` Do NOT scaffold an N+1 fetch storm. |
-     | Detail (single record) | 1:1 (N:1 lookup chain) | Scaffold a chained `<RelatedService>.get(record._<lookup>_value, { select: [...] })` in the screen's load step. One record on screen = one extra round trip is fine. Display via `lookupName(...)` or direct field read. |
-     | Any | 1:many or M:N | Scaffold a chained `<ChildService>.getAll({ filter: \`_<parentid>_value eq '${id}'\`, select: [...] })`. Calc columns CANNOT traverse 1:many or M:N — chained fetch is the ONLY pattern. |
+     | `formatted-lookup` | Select the real `_<lookup>_value` field and render `lookupName(record, '<lookupLogicalName>')`. |
+     | `chained-fetch` | Perform one bounded related `get` / `getAll` in the screen load step, never inside `map()` or `renderItem`. |
+     | `external-projection-required` | Render no fake fallback data. Return `BLOCKED` and name the field/source. The user must supply a supported server-owned projection outside this workflow. |
 
-  3. **Verify before exit.** Every UI field in your spec must have either (a) a `select` entry on the primary fetch (covered by direct column or calc column) OR (b) a chained fetch path. If a field has neither, return `BLOCKED [<screen_name>]: field <field> on <screen> has no fetch path — add to spec or add calc column`.
+  2. **Verify before exit.** Every UI field in your spec must have either a
+     primary select, formatted lookup annotation, or bounded chained fetch.
+     Otherwise return `BLOCKED [<screen_name>]: field <field> requires an external projection`.
 
-  4. **TODO comment shape** (when emitting at step 2 / list branch):
+  3. **TODO comment shape** for an external projection:
 
      ```ts
      // TODO(cross-entity-read): screen displays <field> from related <entity>.
-     // Re-run /setup-datamodel (or /add-dataverse for existing apps) and add calc
-     // column <prefix>_<field>_calc to <primary_entity> for one-round-trip reads.
-     // List screens MUST NOT chain fetches in renderItem — N+1 storm.
+     // Supply a maker-created formula column or another server-owned projection,
+     // then rerun Dataverse reconciliation. Never chain reads in renderItem.
      ```
 
 - **HARD RULE — server-managed columns are NEVER in a create or update payload.** The Dataverse server owns these fields; including them in a `*Service.create({...})` or `*Service.update({...})` returns HTTP 400 on every save. Generated `create()` types may include server-managed fields (`ownerid`, `statecode`, primary IDs, etc.) because they mirror the full model; do **not** satisfy those types by emitting junk values. For any screen with create/update behavior, use a narrow write helper/type whose input contains only editable fields. If the skeleton imports an app-level helper, call it; otherwise define the helper inside your assigned screen file. Do **not** create or modify shared `src/utils/`, `src/hooks/`, or service files from a screen-builder. Forbidden keys in any create/update payload:

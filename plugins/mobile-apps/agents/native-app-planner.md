@@ -498,13 +498,16 @@ Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen
 ### Step 5c — Cross-entity Read Audit (Round 2 data-model pass)
 
 **Print before spawning:**
-> "→ Auditing the locked screen plan for cross-entity reads (calc-column candidates from related_entity_fields blocks)…"
+> "→ Auditing the locked screen plan for supported cross-entity read paths…"
 
-**Run condition:** execute this step ONLY after Gate 4b has been approved AND the screen-planner's per-screen specs include at least one `related_entity_fields` block. Skip silently otherwise (no cross-entity reads = no calc-column proposals needed).
+**Run condition:** execute this step ONLY after Gate 4b has been approved AND the screen-planner's per-screen specs include at least one `related_entity_fields` block. Skip silently otherwise.
 
 **Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
+This step exists because the SDK has no `$expand`. It verifies that every
+cross-entity field uses a formatted lookup or bounded chained fetch, and flags
+hot-path fields that require an externally supplied projection. It never
+synthesizes calculated/formula metadata.
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
@@ -530,22 +533,23 @@ Wait for return; apply the Step 3.0 status switch:
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
 
-#### 5c.2 — Gate 1 addendum (calc-column approval)
+#### 5c.2 — Gate 1 addendum (cross-entity read paths)
 
 If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a Gate 1 addendum (NOT a fresh Gate 1 — the original schema is already approved and unchanged):
 
 ```
 ## Gate 1 — Addendum: Cross-entity Reads
 
-The screen plan you approved at Gate 4b reads N fields from related entities (gate names on inspections, customer phones on orders, etc.). Because the Power Apps SDK has no $expand, those fields need calculated columns on the parent tables to display efficiently — otherwise list screens would either render "—" or trigger N+1 fetches per row.
+The screen plan reads N fields from related entities. The generated SDK has no
+$expand, so each field must use a formatted lookup, a bounded chained fetch, or
+an external server-owned projection.
 
-Proposed calculated columns (auto-derived from your screen plan, no schema reshape):
+Proposed read paths:
 
 [paste the ### Cross-entity Reads table from _dm_section.md]
 
-[paste the Chained-fetch fields (informational) table if present — these need NO schema change, the screen-builder handles them at scaffold time]
-
-Approve to add these calc columns to the data model? (Reject → revise the audit. Approve → /setup-datamodel will create them in Phase 6.1b.)
+Approve these read paths? Any `external-projection-required` row remains a
+blocker until the user supplies that projection outside this workflow.
 ```
 
 Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with the user's feedback (e.g. "drop cr3e9_tailnumber_calc, the list doesn't actually show it"). Approve = mark `[x]` Gate 1 addendum approved, proceed to Step 6.

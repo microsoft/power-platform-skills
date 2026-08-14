@@ -379,7 +379,7 @@ For each screen the user adds, provide this compact shape:
 - **Profile content** — REQUIRED on the Profile screen only. List 2-4 app-specific profile sections based on the app requirements and target users, for example `Role + team`, `Assigned site/territory`, `Default queue filters`, `App support/contact`, `Environment/app version`. Include any generated service needed for those sections; otherwise use local/static app context plus `useAuth()`.
 - **Sign-out affordance** — REQUIRED on the Profile screen and omitted from every other screen. Write `visible Button "Sign out" using useAuth().signOut with confirm`; sign-out returns to `/login` after completion.
 - **Data** — which generated services it calls, with method names (e.g., bounded lookup: `AccountsService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`; cursor list: `InspectionsService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'inspectionid asc'], select: [...] })` plus `skipToken` continuation support)
-- **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect`'s Step 6a Cross-entity Read Audit reads this block to decide which calculated columns to propose. Mechanical schema:
+- **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect` audits that each field has a supported read path. Mechanical schema:
 
   ```yaml
   related_entity_fields:
@@ -387,16 +387,19 @@ For each screen the user adds, provide this compact shape:
       source: <dotted path from primary entity to resolved column, e.g. cr3e9_flightid → cr3e9_gateid → cr3e9_gatename>
       cardinality: "1:1" | "1:many" | "M:N"
       archetype_class: list | detail | tab-root | dashboard
-      recommends: calc-column | chained-fetch
+      recommends: formatted-lookup | chained-fetch | external-projection-required
   ```
 
   **Mechanical derivation of `recommends`** (no judgement — pick from this table):
 
   | `archetype_class` | `cardinality` | `recommends` |
   |---|---|---|
-  | `list`, `tab-root`, `dashboard` | `1:1` | `calc-column` |
+  | `list`, `tab-root`, `dashboard` | direct lookup primary display | `formatted-lookup` |
+  | `list`, `tab-root`, `dashboard` | any other `1:1` related field | `external-projection-required` |
   | `detail` | `1:1` | `chained-fetch` |
-  | any | `1:many` or `M:N` | `chained-fetch` (calc columns can't traverse) |
+  | `list`, `tab-root`, `dashboard` | `1:many` or `M:N` per-row field/aggregate | `external-projection-required` |
+  | `detail` | `1:many` | `chained-fetch` |
+  | `detail` | `M:N` | `external-projection-required` unless a generated intersect-table service and exact bounded query contract are already named in the approved data model |
 
   **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
@@ -410,17 +413,17 @@ For each screen the user adds, provide this compact shape:
       source: cr3e9_flightid → cr3e9_flightnumber
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      recommends: formatted-lookup
     - field: "Gate name"
       source: cr3e9_flightid → cr3e9_gateid → cr3e9_gatename
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      recommends: external-projection-required
     - field: "Defect count"
       source: cr3e9_inspectionzoneid → cr3e9_defect (1:many)
       cardinality: "1:many"
       archetype_class: list
-      recommends: chained-fetch
+      recommends: external-projection-required
   ```
 
   **Hard rule:** if the screen displays a related-entity field but you do NOT emit a `related_entity_fields` block for it, the data-model-architect cannot propose the calc column, the screen-builder will hit `BLOCKED` at scaffold time, and the user will see a `—` cell in the built app. The block is the ONLY signal — there is no fallback inference.

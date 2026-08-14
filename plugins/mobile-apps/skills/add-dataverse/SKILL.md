@@ -184,7 +184,7 @@ Do not use the custom-table list as the source of truth, and do not issue one re
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)" \
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=MetadataId,LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName,SourceType,SourceTypeMask)" \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
 
@@ -206,11 +206,76 @@ If the batched query itself fails (non-2xx), retry it once; if it fails again, s
 
 Do not add these expands when the plan has no keys or M:N relationships — they enlarge the response for no benefit, and standard tables carry many of both.
 
+#### Step 4a — Targeted derived-metadata barrier
+
+The base attribute snapshot is sufficient for ordinary columns, but it cannot
+prove that a same-named lookup, choice, Boolean, or computed column has the same
+semantics. Before classifying any such existing column as compatible:
+
+1. Write the planned derived-column contract to
+   `<working_dir>/.tmp/derived-metadata-expected.json`. Each row contains:
+   `table`, `logicalName`, `kind`, `type`, `sourceType`, plus:
+   - `lookupTarget` for lookups;
+   - exact integer/label `options` for Choice, MultiSelect Choice, and Boolean;
+   - exact `sourceTypeMask` and serialized `formulaDefinition` for an explicitly
+     approved, maker-created computed dependency.
+2. Build one `BATCH-METADATA` GET operation list for the affected existing
+   tables only. Reuse one process/token and query:
+   - `ManyToOneRelationships` once per child table containing planned lookups;
+   - the applicable derived attribute collections
+     (`PicklistAttributeMetadata`, `MultiSelectPicklistAttributeMetadata`,
+     `BooleanAttributeMetadata`) once per table/type, expanding `OptionSet`;
+   - the applicable typed attribute collection once per table/type for any
+     explicitly reused computed column, selecting
+     `LogicalName,SourceType,SourceTypeMask,FormulaDefinition`.
+
+   Do not issue one process per column and do not scan every customizable table.
+   The exact planned names from Step 4 are the scope.
+   Write the operation array to
+   `<working_dir>/.tmp/derived-metadata-operations.json`, then run:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
+     BATCH-METADATA derived-reconciliation \
+     --operations "$(cat <working_dir>/.tmp/derived-metadata-operations.json)" \
+     --tenant-id '<tenantId-from-resolve-environment>'
+   ```
+
+   Do not pass `--continue-on-error`; the first unreadable required metadata
+   collection must stop the barrier.
+3. Any non-2xx response, missing result slot, malformed option metadata, absent
+   lookup target, or unavailable `FormulaDefinition` makes that scope
+   `unverified`. **STOP before writes.** Authentication, throttling, permission,
+   and parse failures are never compatibility evidence.
+4. Normalize the live results into
+   `<working_dir>/.tmp/derived-metadata-live.json`. Each row uses:
+   `table`, `logicalName`, `type`, `sourceType`, `sourceTypeMask`,
+   `lookupTargets`, `options: [{ value, label }]`, and `formulaDefinition`.
+   Lookup target arrays must contain exactly the approved target. Choice
+   mappings must be non-empty with unique integer values and non-empty labels;
+   Boolean mappings must contain exactly values 0 and 1. Then run:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-derived-metadata.js" \
+     --expected "<working_dir>/.tmp/derived-metadata-expected.json" \
+     --actual "<working_dir>/.tmp/derived-metadata-live.json"
+   ```
+
+5. A lookup is compatible only when its complete target set matches. Planned choice
+   values must exist with the same labels; extra live values are allowed.
+   Ordinary planned columns require `SourceType` 0. A maker-created computed
+   dependency is reusable only when its source type, source-type mask, and exact
+   `FormulaDefinition` match the approved artifact; the `Invalid` mask bit
+   always blocks reuse.
+
+This phase is read-only and uses the V2 long-lived executor. It must not add
+per-column child-process/token overhead back into the fast path.
+
 Build and print a reconciliation matrix before Step 5:
 
 | Target result | Table decision | Column decisions | Action |
 |---|---|---|---|
-| Present; all planned columns compatible | `reuse` | existing columns `reuse` | No schema write. |
+| Present; all planned base and derived metadata compatible | `reuse` | existing columns `reuse` | No schema write. |
 | Present; custom columns missing; table customizable and can create attributes | `extend` | compatible `reuse`; absent custom `create` | Queue missing ordinary columns for sequential creation; relationships remain Pass 2. |
 | Absent; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
 | Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `defer` | dependent columns `defer` | Never recreate a standard or managed table. Drop the dependent lookups/columns from this run, continue with everything else, and list them under Deferred in Step 9. |
@@ -372,7 +437,7 @@ If the retry also returns a collision signature, continue probing the remaining 
 
 Run this step in two explicit passes:
 
-1. **Pass 1 — tables + ordinary columns:** create every new table with all planned non-lookup columns inline, then extend existing tables with any missing non-lookup columns. Calculated columns remain deferred to Step 5c.
+1. **Pass 1 — tables + ordinary columns:** create every new table with all planned non-lookup columns inline, then extend existing tables with any missing non-lookup columns. Computed formula definitions are never synthesized by this workflow.
 2. **Pass 2 — lookups + relationships:** only after Pass 1 has succeeded for every tier, create the planned `RelationshipDefinitions`. A lookup is created by its relationship and must not appear in a table's initial `Attributes` array.
 
 Both passes remain strictly sequential. Do not use `$batch` for metadata writes.
@@ -603,7 +668,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
 
   **Pre-flight M:N:** a relationship can only pre-exist on a table that already existed at Step 4. If **either** endpoint was just created in this run, skip the probe — nothing can be there. Otherwise read `ManyToManyRelationships` from that table's Step 4 snapshot: present → skip (already exists); absent → proceed. Query `RelationshipDefinitions(SchemaName='<prefix>_<table1>_<table2>')?$select=SchemaName` only when the snapshot did not cover it.
 
-  **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly or via a calculated column approach. Flag this in the Step 7 summary if any M:N relationships are created.
+  **In the generated service:** M:N relationships are queried via the intersect entity name (e.g., `cr123_tag_inspection`) — the SDK does not expose a direct M:N navigation helper; the screen-builder must query the intersect table directly. Flag this in the Step 7 summary if any M:N relationships are created.
 
 - **Column `@odata.type` and required fields — reference table (verified against Dataverse OData API):**
 
@@ -649,43 +714,24 @@ If the column type is not a simple string/int/boolean, surface a one-line confir
 
 After all mutations, re-run the existing-tables query (Step 4) to confirm everything landed.
 
-### Step 5c — Create calculated columns from `### Cross-entity Reads`
+### Step 5c — Enforce the supported computed-column boundary
 
-**Print before starting:**
-> "→ Creating calculated columns from the plan's ### Cross-entity Reads subsection (one HTTP call per row). Skip if the subsection is absent."
+Dataverse metadata exposes `FormulaDefinition`, but Microsoft explicitly does
+not support defining calculated, rollup, or formula expressions through code.
+Legacy workflow XAML and generated formula serialization must not be synthesized.
 
-**Run condition:** the planner / data-model-architect emits a `### Cross-entity Reads (auto-derived from screen plan)` subsection inside `## Data Model` of `native-app-plan.md` when the screen plan reads any field from a related entity. Parse that subsection. If absent or empty, **skip Step 5c entirely** — proceed to Step 6.
+- Do not invoke `create-calculated-column.js`; it is a fail-closed guard for
+  legacy callers.
+- Cross-entity fields must use a supported formatted lookup annotation or
+  bounded chained fetch as documented in `data-performance.md`.
+- For a hot list field that cannot use either path, mark it
+  `external-projection-required` and omit it from this mutation run. The user
+  may create a formula column in Power Apps or supply another server-owned
+  projection outside this PR, then rerun Step 4a to validate and reuse it.
+- Never create an ordinary copied field without an explicit refresh owner.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads): the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards, tab roots) MUST be denormalized via calculated columns at the data-model layer. The `### Chained-fetch fields (informational)` subsection (if present) is documentation only — the screen-builder handles those at scaffold time, no schema change.
-
-**Algorithm:**
-
-1. Parse the `### Cross-entity Reads` table. Each row has columns: `Calc column | On table | Type | Resolves | Driven by`.
-2. **Run AFTER all regular columns + relationships from Step 5b have been created** (the formula chain references real columns + lookups; creating the calc column before its dependencies returns HTTP 400 from Dataverse).
-3. **Pre-flight each row against the Step 4 snapshot.** A calculated column is an ordinary attribute, so an existing one is already in its table's snapshot. If the table was created in this run, nothing can pre-exist — POST directly. Otherwise: logical name present → skip the row and log `↻ <calc-column> (already exists, skipped)`; absent → create it. `create-calculated-column.js` does **not** probe for existence, so without this check a re-run returns `0x80044153 attribute already exists`.
-
-4. **Per row**, invoke the helper:
-
-   ```bash
-   node "${PLUGIN_ROOT}/scripts/create-calculated-column.js" <envUrl> \
-     --table <on-table> \
-     --column <calc-column-logical-name> \
-     --type <Type column verbatim: string|datetime|decimal|integer|boolean> \
-     --formula "<dotted path from Resolves column, e.g. cr3e9_flightid.cr3e9_gateid.cr3e9_gatename>" \
-     --display "<human-friendly label inferred from the column name minus _calc suffix>" \
-     --solution '<solution-uniquename-from-memory-bank>' \
-     --tenant-id '<tenantId-from-resolve-environment>'
-   ```
-
-5. **One at a time, sequentially.** Calc-column creation is metadata mutation — same concurrency rule as table creation. Print `✓ <calc-column>` after each success.
-6. **On failure** — the helper script prints the OData error inline. Common cases:
-   - `400 — formula references unknown attribute` → the relationship or column the formula needs has not been created yet. Verify Step 5b finished cleanly before retrying.
-   - `400 — calculated formula not allowed on this navigation` → the dotted path tries to traverse 1:many or M:N. The architect should have caught this at Step 6a; flag in summary, skip the row, continue.
-   - Surface non-recoverable errors to the user with the offending row, then proceed to the next row. Do NOT abort the whole step for a fault isolated to one row (a bad formula, an unsupported traversal).
-
-7. **Stop early on a systemic failure.** Distinguish a per-row fault from one that will repeat for every remaining row — auth failure, the target table missing, or a dependency the whole subsection relies on. On the first systemic failure, stop Step 5c, report how many rows were created and how many were skipped, and continue to Step 6 rather than issuing the remaining doomed calls. Re-running the skill after the cause is fixed creates only the missing calc columns.
-
-8. After all rows are processed, the publish step (Step 6b) below picks up calc columns automatically — no extra publish call needed.
+Reference:
+https://learn.microsoft.com/power-apps/developer/data-platform/specialized-columns
 
 ### Step 5d — Create alternate keys for unique business identifiers
 
