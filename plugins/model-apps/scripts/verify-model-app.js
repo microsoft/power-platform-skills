@@ -24,7 +24,10 @@ function makeProvision(env, workspaceDir) {
   fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
   sdk.initWorkspace();
-  return sdk;
+  // The httpClient is returned alongside the SDK because one read has no SDK surface: the role
+  // privilege check needs `EntityDefinitions(...)?$select=Privileges`, and `fetchEntityMetadata`
+  // projects that field away (see the `entityPrivileges` reader below).
+  return { sdk, httpClient };
 }
 
 // Resolve the app's sitemap XML: appmodule (by unique name) -> appmodulecomponents (type 62) ->
@@ -88,6 +91,41 @@ function readerFor(sdk, appUnique, opts) {
     commandBar: async (entity) => {
       const items = await sdk.resolveArtifact('command', { entity: String(entity).toLowerCase() });
       return !!(items && items[0] && items[0].id);
+    },
+    // rolePrivileges(roleId): what the deployed role actually GRANTS, as [{ privilegeId, depth }].
+    // The `roleprivileges` intersect row carries `privilegedepthmask` — a BITMASK (1 Basic /
+    // 2 Local / 4 Deep / 8 Global), which is NOT the same encoding as the `Depth` name the SDK
+    // writes via ReplacePrivilegesRole, so it is translated here into the depth NAME the pure
+    // comparison speaks in. A role with no privileges legitimately returns [];  a READ FAILURE
+    // must propagate (verify-spec turns a non-array into a fail-closed finding) rather than look
+    // like an empty grant.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/roleprivileges
+    rolePrivileges: async (roleId) => {
+      const DEPTH_BY_MASK = { 1: 'Basic', 2: 'Local', 4: 'Deep', 8: 'Global' };
+      const rows = await sdk.queryRecords('roleprivileges', {
+        select: ['privilegeid', 'privilegedepthmask'],
+        filter: `roleid eq ${roleId}`,
+        top: 5000,
+      });
+      return (rows || []).map((r) => ({
+        privilegeId: String((r && r.privilegeid) || ''),
+        depth: DEPTH_BY_MASK[Number(r && r.privilegedepthmask)] || '',
+      }));
+    },
+    // entityPrivileges(logical): the privilege set a table exposes. Read from the SAME source the
+    // SDK resolves against when it WRITES the role — `EntityDefinitions(LogicalName='x')` with
+    // `$select=Privileges` — so the comparison cannot disagree with the write about which
+    // PrivilegeId means "Read on account".
+    // Deliberately NOT `sdk.fetchEntityMetadata`: that returns a PROJECTED shape
+    // ({logicalName, attributes, relationships, …}) which drops `Privileges` entirely, so routing
+    // through it would silently report every privilege as unreadable.
+    // Returns null on any failure — verify-spec turns that into a finding rather than a pass.
+    entityPrivileges: async (logical) => {
+      const name = String(logical).toLowerCase();
+      const url = `/EntityDefinitions(LogicalName='${odataLit(name)}')?$select=LogicalName,Privileges`;
+      const res = await opts.httpClient.get(url);
+      if (!res || res.status < 200 || res.status >= 300) return null;
+      return (res.body && res.body.Privileges) || null;
     },
     // retrieveSetting(name, { appUniqueName }): the EFFECTIVE app-scoped value of a Dataverse setting,
     // for the AI app-feature reconcile. Wired here (not in the pure core) so the reader stays injectable
@@ -179,9 +217,9 @@ async function main() {
   const v = validateAppSpec(spec, { profile: 'deploy' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const sdk = makeProvision(env, workspaceDir);
+  const { sdk, httpClient } = makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, httpClient }));
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.

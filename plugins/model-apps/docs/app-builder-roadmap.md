@@ -234,6 +234,21 @@ Source: `IMPROVEMENTS-07-15-app-builder.md` (Project Management V1/V2 diff + a s
 - 🔲 **Spec templates** — domain starters (support desk, CRM, asset tracking) as one-shot scaffolds.
 
 ### Phase: Quality & docs
+- ✅ **Security-role and jobs-to-be-done verification (2026-08-14)** — both **metadata-only**:
+  - **`verify` now proves what a persona role GRANTS, not just that it exists.** The `role` check
+    only asserted a row carrying the SDK marker, so a role built with the wrong access — or one whose
+    privilege write failed after the row landed — verified clean. The new `role-privileges` check
+    resolves each declared `(entity, access)` to its Dataverse `PrivilegeId` from the **same
+    metadata source the SDK writes against** and asserts the role holds it at **at least** the
+    declared depth. Deliberately a **subset** check (`lib/role-privileges.js` explains why equality
+    would false-fail on `appAccess` injection, max-scope union, and shared privileges), and
+    **fail-closed** on an unreadable role or table.
+  - **`surfaces[]` is no longer documentary.** `lib/surface-resolver.js` resolves every
+    `personas[].jobs[].surfaces[]` entry against the spec's own views/forms/pages/dashboards/tables
+    /sitemap titles; `spec-lint` **warns** when one matches nothing (a warning, not an error — a
+    surface may legitimately name an OOB artifact), and `verify` adds a `job-surface` rollup that
+    reports a *deployed* failure as the job it broke ("persona P can no longer do job J") rather
+    than only "view X is missing".
 - ✅ **Sample-run UX fixes (2026-07-27, from a live Property-Listings build).**
   - ✅ **#1 live build status.** A long build now writes `<workspace>/.maker-workspace/build-status.json` (a single-object snapshot — `state`/`steps`/`lastPhase`/`lastLabel` — overwritten every step) alongside the `build-log.jsonl` trace, and prints a `▸ live progress:` path at start. So a multi-minute build is observable even when the launching shell buffers stdout. SKILL.md now tells the agent to stream (Tee, not Select-Object) and read the status file.
   - ✅ **#2 wireframes shown.** SKILL.md Phase-1 preview step now REQUIRES pasting the `preview-app.js`/`preview-form.js` wireframe output to the user (not summarizing "looks right") before the approval gate — the user must see the forms/sitemap/pages they approve.
