@@ -251,6 +251,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **Camera evidence flows MUST expose a visible `Take picture` action.** If the spec, route name, or table purpose includes camera evidence, photo evidence, proof photos, scan evidence, inspection photos, or any custom camera capture/upload flow, the screen must show a first-class button labeled `Take picture` (or a domain-specific equivalent beginning with `Take`, such as `Take evidence photo`) that calls `takePhoto()` from `src/native/camera`. Do not hide camera capture behind gallery-only upload, a file picker, an overflow menu, or a detail-only affordance. Gallery/upload can be a secondary sibling action, but camera capture must be visible in the main content or bottom action bar. After capture, if the photo is written to Dataverse, follow the create-then-navigate/upload rule: pre-generate any needed parent/evidence ID with `newId()`, check every write/upload result, and keep the user on the screen with inline error UI if capture/upload fails.
 
 - **HARD RULE — NEVER use `expo-haptics` in any generated screen.** Even though the package may appear in `package.json`, it crashes at runtime in the current rewrap binary (the native module isn't bundled into the binary the customer's app loads — `Haptics.notificationAsync()` / `Haptics.impactAsync()` throw on first call). Visual-only feedback for all interactions: button press uses `pressStyle={{ scale: 0.98 }}`, success uses a green pill / banner / snackbar, error uses inline error text + retry button, toggle uses Switch's visible state change. NEVER write `import * as Haptics from 'expo-haptics'` — it WILL crash the running app, and the screen-builder hooks will block the write anyway.
+- **HARD RULE — every package import must exist in the live project `package.json`.** Read `<working_dir>/package.json` before writing imports. Do not infer that a common companion package is installed. In particular, `react-hook-form` plus `zod` does **not** imply `@hookform/resolvers/zod`; use `z.safeParse()` with `form.setError()` unless the resolver package is explicitly listed. Local aliases and generated modules are exempt from the package check, but must resolve in `tsconfig.json`/the filesystem.
 - **React Query (`@tanstack/react-query`) is the default for server state.** The template ships it (`package.json`), and current `@microsoft/power-apps-native-host` wraps the app with `QueryClientProvider` inside `PowerAppsProvider`. **Never re-wire the provider from a screen file** and never construct a new `QueryClient` inside a component. Use `useQuery` for reads, `useMutation` for writes (create / update / delete), `useInfiniteQuery` for cursor-paginated lists, and `useQueryClient()` for invalidation. The raw `useEffect` + `useState` skeleton in Step 3 is only a fallback for screens where the spec explicitly excludes React Query (rare). Required usage rules:
   - **Query keys are arrays starting with the entity, then params.** Examples: `['inspections']`, `['inspections', { status: 'open' }]`, `['inspection', id]`. Consistent shape lets `queryClient.invalidateQueries({ queryKey: ['inspections'] })` from a sibling mutation invalidate every variant in one line.
   - **After every successful mutation, invalidate the affected query keys.** Pattern:
@@ -567,7 +568,7 @@ The hero visual principle is an app-level constraint, not a per-screen one. Appl
 | "edge-to-edge rows" | Lists never use cards. `FlatList` rows are full-width `XStack` with bottom separator only |
 | "whitespace is the hero" | Root `py` is one step above density scale. Section gap is `$10`. No more than one content block above the fold |
 | "full-bleed imagery" | Every screen with an image entity uses full-width image, no border-radius on image container |
-| "monospace data values" | Every ID, timestamp, amount, coordinate, and status code uses `fontFamily="$mono"` — not just in list metadata, everywhere |
+| "monospace data values" | Every ID, timestamp, amount, coordinate, and status code uses the verified monospace contract: `fontFamily="$mono"` only when `customConfig.fonts.mono` exists; otherwise use the shared `DataText`/`QuantityText` component or `style={{ fontFamily: 'monospace' }}` |
 
 ---
 
@@ -654,7 +655,7 @@ Write only the animations matching the policy. Do not add animations not in the 
 Before returning, re-read your completed screen and answer: **does this screen contribute to the app's one memorable thing?**
 
 Examples of what "contribute" means:
-- Memorable thing = "monospace data makes it feel precise" → every data value on your screen uses `fontFamily="$mono"`
+- Memorable thing = "monospace data makes it feel precise" → every data value uses the verified monospace contract from Step 2c; never assume `$mono` exists
 - Memorable thing = "completion screens use a quiet summary card" → your form's success state uses the summary card pattern, not a toast
 - Memorable thing = "oversized stats anchor every dashboard" → your home screen's primary metric is `fontSize="$9"` minimum
 - Memorable thing = "whitespace is the hero" → your screen does not have more than two sections above the fold
@@ -713,6 +714,8 @@ Read the effective customizations:
 - `customConfig.themes` — light/dark semantic overrides.
 
 Config v5 supplies the standard theme values listed below. Use custom token aliases only when `customConfig` defines them; never infer aliases from naming conventions.
+
+**Monospace contract:** `$mono` is not provided merely because the design plan requests monospace data. It is legal only when `customConfig.fonts.mono` is present in the file you just read. If absent, prefer an existing shared typed `DataText`/`QuantityText` component; otherwise put `style={{ fontFamily: 'monospace' }}` on `Text`. Never emit `fontFamily="$mono"` against an unregistered config.
 
 **Forbidden — do NOT use any of these in your TSX, ever:**
 
@@ -929,7 +932,7 @@ Before finishing the screen, mentally verify:
 8. **pressStyle** on tappable cards uses `{{ scale: 0.98 }}` (no opacity-only)
 9. **Accessibility** — Tamagui controls use ARIA props; React Native controls use native accessibility props. Label icon-only controls and give custom interactive stacks an appropriate role.
 10. **Color and contrast** — follows 60/30/10 rule: 60% `$background`/`$surface0`, 30% `$color2`–`$color4` or `$surface1`–`$surface3`, 10% `$blue10`/`$accentBase`. Readable text/icons never use `$color8` or weaker; inactive tabs, helper text, metadata, modal body copy, and icon affordances use `$color10` or stronger.
-11. **Monospace for data** — IDs, timestamps, coordinates, currency use `fontFamily="$mono"`
+11. **Monospace for data** — IDs, timestamps, coordinates, and currency use the verified monospace contract from Step 2c. `$mono` is forbidden unless `customConfig.fonts.mono` exists.
 12. **Button labels** — action-specific ("Save inspection", "Send for review"), never generic ("Submit", "OK", "Continue")
 14. **Anti-patterns** — check against mobile-design-philosophy.md Section 16. No centered text in content flows, no unnecessary cards, no engineer-facing strings
 15. **Typography** — if plan specifies font pairing, headings use `fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply per-archetype rules from screen-templates.md "Typography by Archetype" table. Apply negative tracking (`letterSpacing` -0.5 to -1.0) on titles at `fontSize="$7"` and above.
@@ -963,7 +966,8 @@ Before finishing the screen, mentally verify:
 37. **No raw hex outside `brand/tokens.ts`** — grep `grep -E '#[0-9a-fA-F]{3,8}' <file>` should return zero matches in your screen file. If you find one: replace with the corresponding `$token` for Tamagui primitives, or with `theme.<tokenName>` for raw RN elements.
 38. **Mobile chrome from screenshots** — headers/titles never clip under the status area; use `SafeAreaView` or `pt={insets.top}` in every loading/error/populated branch. FABs, snackbars, and sticky CTAs use `b={insets.bottom + 16}` or `b={tabBarHeight + insets.bottom + 16}` rather than a bare `b={16}`. If a screen has `BottomActionBar`, sticky form actions, or a FAB, `SafeAreaView` includes `edges={['top', 'bottom']}`.
 39. **Status cues are not doubled** — list rows use either a left status stripe with text OR a status pill, not both. Detail screens with Fail/Error states use a compact status band or tinted summary area; avoid a huge red hero that makes the record look like an app error unless the spec explicitly asks for emergency-mode field visibility.
-40. **Input ergonomics** — Tamagui inputs use web-standard props (`inputMode`, `type`, `enterKeyHint`, `autoComplete`, `onChange`, `onKeyDown`, `readOnly`). React Native inputs keep native props. Prefer native or bounded controls over free text when the data permits.
+40. **Input ergonomics** — Tamagui text inputs use `onChangeText={(value: string) => ...}` for string values; do not read `event.target.value` or `event.nativeEvent.text` from a generic `Event`. Use web-standard metadata props (`inputMode`, `type`, `enterKeyHint`, `autoComplete`, `readOnly`) where supported. React Native inputs keep native props. Prefer native or bounded controls over free text when the data permits.
+40. **Typed Sheet callbacks** — under strict TypeScript, always emit `onOpenChange={(open: boolean) => ...}` for Tamagui `Sheet`. Apply the same explicit typing to callback parameters that the component declaration does not contextually infer.
 41. **Progress preservation** — validation errors, failed saves, and refetches never clear user-entered values. Short forms guard dirty cancel/back; long or multi-step forms autosave a local draft and show a resume/discard prompt instead of starting over.
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
 43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.

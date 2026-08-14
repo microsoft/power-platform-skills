@@ -677,7 +677,7 @@ Then apply these **safe idempotent** prep steps:
 2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
 3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
 4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
-5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
+5. Merge the six path aliases and their wildcard forms into `tsconfig.json` (`@/components`, `@/components/*`, …, `@/native`, `@/native/*`) without deleting existing aliases.
 6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
 7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
 
@@ -857,11 +857,17 @@ node -e '
   json.compilerOptions.paths = json.compilerOptions.paths || {};
   const aliases = {
     "@/components": ["src/components"],
+    "@/components/*": ["src/components/*"],
     "@/hooks":      ["src/hooks"],
+    "@/hooks/*":    ["src/hooks/*"],
     "@/utils":      ["src/utils"],
+    "@/utils/*":    ["src/utils/*"],
     "@/tokens":     ["src/tokens"],
+    "@/tokens/*":   ["src/tokens/*"],
     "@/generated":  ["src/generated"],
+    "@/generated/*": ["src/generated/*"],
     "@/native":     ["src/native"],
+    "@/native/*":   ["src/native/*"],
   };
   for (const [k, v] of Object.entries(aliases)) json.compilerOptions.paths[k] = v;
   fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
@@ -869,8 +875,8 @@ node -e '
 ```
 
 Key points:
-- **Idempotent.** Re-running the script (e.g. on `/create-mobile-app` resume) overwrites the six alias keys with the same values — it does NOT touch `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser`, or any other existing `paths` entries.
-- **Six aliases, not four.** `@/generated` and `@/native` are pre-wired so `npx power-apps add-data-source` output (`src/generated/services/...`) and `/add-native` output (`src/native/camera.ts`, etc.) can be imported via the alias too. Costs nothing now and avoids a second tsconfig patch later.
+- **Idempotent.** Re-running the script (e.g. on `/create-mobile-app` resume) overwrites the twelve managed alias keys with the same values — it does NOT touch `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser`, or any other existing `paths` entries.
+- **Six alias roots plus six wildcard forms, not four roots.** TypeScript path keys are exact patterns: `@/native` does not match `@/native/camera`. Keep both forms for every root. `@/generated/*` and `@/native/*` are required for generated service/model and native-wrapper subpath imports.
 - **`baseUrl: "."`** is preserved if already set (the template ships it). The merge script defaults it to `"."` only if missing.
 - Metro auto-resolves `paths` defined in `tsconfig.json` for any project running `expo`-based bundling, so this single edit covers both the type checker AND the bundler. No `babel.config.js` plugin needed.
 
@@ -959,13 +965,17 @@ echo "✓ [Step 6.5b] SafeAreaProvider verified"
 **Print before starting:**
 > "→ [Step 6.6/13] Running scaffold tsc smoke check (~10–30 seconds)."
 
-With `node_modules/` populated, run the scaffold TypeScript gate. Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
+With `node_modules/` populated, first materialize the minimum semantic-token contract, then run the scaffold TypeScript gate. Shared components copied in Fix 7 use `$surface0`–`$surface3`, `$accentBase`, `$accentSoft`, `$accentDeep`, `$accentOnAccent`, and status aliases. Those aliases must exist before `tsc`; Step 9b may later replace their values with approved brand tokens.
+
+Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in **alias-only mode** now if `tamagui.config.ts` does not already define the complete semantic alias set. This bootstrap is idempotent and is not a substitute for the user-facing design-system step.
+
+Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
 
 ```bash
 npx tsc --noEmit
 ```
 
-`tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 (Fixes 1–7) is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes against the current working dir contents and reapply any missed edit.
+`tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 or the semantic-alias bootstrap is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes and the alias-only integration against the current working dir contents and reapply any missed edit.
 
 This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capture the full error list once, batch-fix scaffold/template causes, and rerun this gate. Do not continue to Step 6.7 or any app-specific mutation until this gate is clean. If the only failure is a missing generated schema import, preserve the template `@ts-ignore` boundary rather than generating an empty schema artifact.
 
@@ -1222,7 +1232,7 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 | `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
 | Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Step 6.6 already bootstrapped the minimum aliases before the scaffold gate; this step must idempotently preserve them and apply the approved brand values. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 
 **Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
 
