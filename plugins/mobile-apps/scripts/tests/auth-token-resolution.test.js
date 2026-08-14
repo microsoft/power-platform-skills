@@ -74,6 +74,17 @@ function makeFakeAz(t) {
   return { dir, logPath: path.join(dir, 'az.log') };
 }
 
+function withPrependedPath(dir, overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
+  const currentPath = pathEntry?.[1] ?? '';
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  env.PATH = `${dir}${path.delimiter}${currentPath}`;
+  return env;
+}
+
 // Runs getAuthToken in a child process so PATH/env manipulation cannot leak
 // into the test runner, and returns both the token and the az invocation log.
 function runGetAuthToken(t, env = {}, explicitTenantId = null) {
@@ -87,9 +98,7 @@ function runGetAuthToken(t, env = {}, explicitTenantId = null) {
 
   const result = spawnSync(process.execPath, ['-e', script], {
     encoding: 'utf8',
-    env: {
-      ...process.env,
-      PATH: `${dir}${path.delimiter}${process.env.PATH}`,
+    env: withPrependedPath(dir, {
       FAKE_AZ_LOG: logPath,
       // Cleared unless a test opts in — the ambient shell may have them set.
       POWER_PLATFORM_TENANT_ID: '',
@@ -97,7 +106,7 @@ function runGetAuthToken(t, env = {}, explicitTenantId = null) {
       FAKE_AZ_ACCOUNT_TENANT: '',
       FAKE_AZ_FAIL_TENANTS: '',
       ...env,
-    },
+    }),
   });
 
   assert.equal(result.status, 0, `getAuthToken failed: ${result.stderr}`);

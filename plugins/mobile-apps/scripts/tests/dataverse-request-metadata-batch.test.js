@@ -30,6 +30,17 @@ function makeFakeAz(t, source) {
   return tempDir;
 }
 
+function withPrependedPath(dir, overrides = {}) {
+  const env = { ...process.env, ...overrides };
+  const pathEntry = Object.entries(env).find(([key]) => key.toLowerCase() === 'path');
+  const currentPath = pathEntry?.[1] ?? '';
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  env.PATH = `${dir}${path.delimiter}${currentPath}`;
+  return env;
+}
+
 test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {
   const tempDir = makeFakeAz(
     t,
@@ -82,11 +93,9 @@ process.stdout.write('{"accessToken":"test-token"}\\n');
       'explicit-tenant',
     ],
     {
-      env: {
-        ...process.env,
-        PATH: `${tempDir}${path.delimiter}${process.env.PATH}`,
+      env: withPrependedPath(tempDir, {
         FAKE_AZ_LOG: azLog,
-      },
+      }),
     },
   );
 
@@ -142,7 +151,7 @@ test('BATCH-METADATA does not turn a post-throttle collision into success', asyn
       '--tenant-id',
       'explicit-tenant',
     ],
-    { env: { ...process.env, PATH: `${tempDir}${path.delimiter}${process.env.PATH}` } },
+    { env: withPrependedPath(tempDir) },
   );
 
   const output = JSON.parse(stdout);
