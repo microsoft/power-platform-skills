@@ -52,24 +52,33 @@ test('agent preflight selects fallback before dispatch when snapshot is missing'
 });
 
 test('snapshot generator normalizes foreground Dataverse metadata', async () => {
+  const calls = [];
   const snapshot = await createSnapshot({
     environmentUrl: 'https://example.crm.dynamics.com',
     tableNames: ['cr1_newtable'],
+    concepts: ['product'],
     request: async (method, apiPath) => {
+      calls.push(apiPath);
       if (apiPath.startsWith('EntityDefinitions?')) {
         return {
           status: 200,
           data: { value: [{
-        LogicalName: 'cr1_product',
-        SchemaName: 'cr1_Product',
-        EntitySetName: 'cr1_products',
-        PrimaryIdAttribute: 'cr1_productid',
-        PrimaryNameAttribute: 'cr1_name',
-        IsCustomEntity: false,
-        IsManaged: true,
-        IsCustomizable: { Value: true },
-        CanCreateAttributes: { Value: true },
-        Attributes: [{
+            LogicalName: 'cr1_product',
+            SchemaName: 'cr1_Product',
+            DisplayName: { UserLocalizedLabel: { Label: 'Product' } },
+            DisplayCollectionName: { UserLocalizedLabel: { Label: 'Products' } },
+            EntitySetName: 'cr1_products',
+            PrimaryIdAttribute: 'cr1_productid',
+            PrimaryNameAttribute: 'cr1_name',
+            IsCustomEntity: false,
+            IsManaged: true,
+            IsCustomizable: { Value: true },
+            CanCreateAttributes: { Value: true },
+          }] },
+        };
+      }
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 200, data: { value: [{
           LogicalName: 'cr1_name',
           SchemaName: 'cr1_Name',
           AttributeType: 'String',
@@ -79,15 +88,83 @@ test('snapshot generator normalizes foreground Dataverse metadata', async () => 
           IsValidForCreate: true,
           IsValidForRead: true,
           IsValidForUpdate: true,
-        }],
-        ManyToOneRelationships: [{
+        }, {
+          LogicalName: 'cr1_categoryid',
+          SchemaName: 'cr1_CategoryId',
+          AttributeType: 'Lookup',
+          AttributeTypeName: { Value: 'LookupType' },
+          MetadataId: 'lookup-metadata-id',
+          SourceType: 0,
+        }, {
+          LogicalName: 'cr1_status',
+          SchemaName: 'cr1_Status',
+          AttributeType: 'Picklist',
+          AttributeTypeName: { Value: 'PicklistType' },
+          MetadataId: 'choice-metadata-id',
+          SourceType: 0,
+        }, {
+          LogicalName: 'cr1_total',
+          SchemaName: 'cr1_Total',
+          AttributeType: 'Decimal',
+          AttributeTypeName: { Value: 'DecimalType' },
+          MetadataId: 'formula-metadata-id',
+          SourceType: 3,
+        }, {
+          LogicalName: 'cr1_featured',
+          SchemaName: 'cr1_Featured',
+          AttributeType: 'Boolean',
+          AttributeTypeName: { Value: 'BooleanType' },
+          MetadataId: 'boolean-metadata-id',
+          SourceType: 0,
+        }] } };
+      }
+      if (apiPath.includes('/ManyToOneRelationships?')) {
+        return { status: 200, data: { value: [{
           SchemaName: 'cr1_Product_Category',
           ReferencingAttribute: 'cr1_categoryid',
           ReferencedEntity: 'cr1_category',
           ReferencedAttribute: 'cr1_categoryid',
-        }],
-          }] },
+        }] } };
+      }
+      if (apiPath.includes('/Keys?')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'cr1_productcode_key',
+          SchemaName: 'cr1_ProductCodeKey',
+          KeyAttributes: ['cr1_name'],
+          EntityKeyIndexStatus: 'Active',
+        }] } };
+      }
+      if (apiPath.includes('PicklistAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'cr1_status',
+          OptionSet: { Options: [
+            { Value: 1, Label: { UserLocalizedLabel: { Label: 'Active' } } },
+          ] },
+        }] } };
+      }
+      if (apiPath.includes('BooleanAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'cr1_featured',
+          OptionSet: {
+            FalseOption: { Value: 0, Label: { UserLocalizedLabel: { Label: 'No' } } },
+            TrueOption: { Value: 1, Label: { UserLocalizedLabel: { Label: 'Yes' } } },
+          },
+        }] } };
+      }
+      if (apiPath.includes('LookupAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'cr1_categoryid',
+          Targets: ['cr1_category'],
+        }] } };
+      }
+      if (apiPath.includes('DecimalAttributeMetadata')) {
+        return {
+          status: 200,
+          data: { LogicalName: 'cr1_total', FormulaDefinition: 'cr1_quantity * cr1_price' },
         };
+      }
+      if (apiPath.includes('/Microsoft.Dynamics.CRM.')) {
+        return { status: 200, data: { value: [] } };
       }
       return { status: 404, error: 'not found' };
     },
@@ -99,5 +176,55 @@ test('snapshot generator normalizes foreground Dataverse metadata', async () => 
   assert.strictEqual(snapshot.tables[0].customizable, true);
   assert.strictEqual(snapshot.tables[0].canCreateAttributes, true);
   assert.strictEqual(snapshot.tables[0].manyToOneRelationships[0].targetTable, 'cr1_category');
+  const columns = Object.fromEntries(snapshot.tables[0].columns.map((column) => [column.logicalName, column]));
+  assert.deepStrictEqual(columns.cr1_categoryid.lookupTargets, ['cr1_category']);
+  assert.deepStrictEqual(columns.cr1_status.choices, [{ value: 1, label: 'Active' }]);
+  assert.strictEqual(columns.cr1_total.formula, 'cr1_quantity * cr1_price');
+  assert.deepStrictEqual(columns.cr1_featured.choices, [
+    { value: 0, label: 'No' },
+    { value: 1, label: 'Yes' },
+  ]);
+  assert.deepStrictEqual(snapshot.tables[0].alternateKeys[0].columns, ['cr1_name']);
+  assert.deepStrictEqual(snapshot.concepts, ['product']);
   assert.deepStrictEqual(snapshot.missingProposedTables, ['cr1_newtable']);
+  assert.ok(calls.every((apiPath) => !apiPath.includes('$expand=Attributes')));
+});
+
+test('snapshot generator surfaces formula metadata request failures', async () => {
+  await assert.rejects(
+    createSnapshot({
+      environmentUrl: 'https://example.crm.dynamics.com',
+      concepts: ['product'],
+      request: async (_method, apiPath) => {
+        if (apiPath.startsWith('EntityDefinitions?')) {
+          return { status: 200, data: { value: [{
+            LogicalName: 'cr1_product',
+            SchemaName: 'cr1_Product',
+            DisplayName: { UserLocalizedLabel: { Label: 'Product' } },
+            IsCustomizable: { Value: true },
+            CanCreateAttributes: { Value: true },
+          }] } };
+        }
+        if (apiPath.includes('/Attributes?$select=')) {
+          return { status: 200, data: { value: [{
+            LogicalName: 'cr1_total',
+            AttributeType: 'Decimal',
+            MetadataId: 'formula-metadata-id',
+            SourceType: 3,
+          }] } };
+        }
+        if (apiPath.includes('/ManyToOneRelationships?') || apiPath.includes('/Keys?')) {
+          return { status: 200, data: { value: [] } };
+        }
+        if (apiPath.includes('/Attributes/Microsoft.Dynamics.CRM.')) {
+          return { status: 200, data: { value: [] } };
+        }
+        if (apiPath.includes('Attributes(formula-metadata-id)')) {
+          return { status: 500, error: 'server failure' };
+        }
+        return { status: 404, error: 'not found' };
+      },
+    }),
+    /formula metadata failed \(500\)/,
+  );
 });

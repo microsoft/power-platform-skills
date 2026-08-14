@@ -127,7 +127,7 @@ const [filters, setFilters] = React.useState({ status: 'all', dateRange: 'all', 
   <XStack flex={1} items="center" bg="$color3" rounded="$3" px="$3" gap="$2">
     <Search size={18} color="$color9" />
     <Input flex={1} placeholder="Search..." value={search}
-      onChange={event => setSearch(event.target?.value ?? event.nativeEvent?.text ?? '')}
+      onChangeText={(value: string) => setSearch(value)}
       bg="transparent" borderWidth={0} px="$0" />
   </XStack>
   <Button size="$3" icon={SlidersHorizontal} chromeless onPress={() => setShowFilters(true)}>
@@ -235,7 +235,7 @@ const [revealed, setRevealed] = React.useState(false)
 }}>
   {revealed ? (
     <Animated.Text entering={FadeIn.duration(400)}>
-      <Text fontSize="$9" fontWeight="700" fontFamily="$mono">$12,450.00</Text>
+      <Text fontSize="$9" fontWeight="700" style={{ fontFamily: 'monospace' }}>$12,450.00</Text>
     </Animated.Text>
   ) : (
     <XStack items="center" gap="$2">
@@ -352,7 +352,7 @@ Used for: field data entry with gloved hands, accessibility.
 ```tsx
 <XStack items="center" gap="$2">
   <Input flex={1} placeholder="Enter notes..." value={value}
-    onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')} />
+    onChangeText={(value: string) => onChange(value)} />
   <Button size="$3" circular chromeless
     icon={isListening ? MicOff : Mic}
     color={isListening ? '$red10' : '$color9'}
@@ -410,7 +410,7 @@ import { Ionicons } from '@expo/vector-icons'
     <Text fontWeight="600">{name}</Text>
     <Text fontSize="$1" color="$color9">{subtitle}</Text>
   </YStack>
-  <Text fontWeight="700" fontFamily="$mono">{score}</Text>
+  <Text fontWeight="700" style={{ fontFamily: 'monospace' }}>{score}</Text>
 </XStack>
 ```
 
@@ -729,7 +729,7 @@ function ValidatedInput({ label, value, onChange, validate, successMessage }) {
         borderWidth={result ? 2 : 0}
         borderColor={result?.valid ? '$green8' : result ? '$red8' : 'transparent'}>
         <Input flex={1} value={value}
-          onChange={event => onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+          onChangeText={(value: string) => onChange(value)}
           onBlur={() => setTouched(true)}
           bg="transparent" borderWidth={0} />
         {result?.valid && <CheckCircle2 size={18} color="$green10" />}
@@ -922,7 +922,7 @@ function WorkTimer({ taskId }) {
   return (
     <YStack items="center" gap="$4" p="$5">
       {/* Elapsed time display */}
-      <Text fontSize={48} fontWeight="700" fontFamily="$mono" letterSpacing={2}>
+      <Text fontSize={48} fontWeight="700" style={{ fontFamily: 'monospace' }} letterSpacing={2}>
         {formatTime(elapsed)}
       </Text>
 
@@ -973,7 +973,7 @@ Used for: project management, field service workflows, CRM pipelines.
           <YStack width={8} height={8} rounded={4} bg={column.color} />
           <Text fontWeight="700" fontSize="$3">{column.title}</Text>
         </XStack>
-        <Text fontSize="$2" color="$color8" fontFamily="$mono">{column.items.length}</Text>
+        <Text fontSize="$2" color="$color8" style={{ fontFamily: 'monospace' }}>{column.items.length}</Text>
       </XStack>
 
       {/* Column items */}
@@ -992,7 +992,7 @@ Used for: project management, field service workflows, CRM pipelines.
                   </YStack>
                 )}
                 {item.dueDate && (
-                  <Text fontSize="$1" color="$color8" fontFamily="$mono">{item.dueDate}</Text>
+                  <Text fontSize="$1" color="$color8" style={{ fontFamily: 'monospace' }}>{item.dueDate}</Text>
                 )}
               </XStack>
             </YStack>
@@ -1158,7 +1158,7 @@ Used for: ride-hailing, food delivery, field service dispatch — any real-time 
         </YStack>
         {/* ETA pill — updates in real time */}
         <YStack bg="$color2" rounded="$10" px="$3" py="$1">
-          <Text fontWeight="700" fontSize="$4" fontFamily="$mono">{eta} min</Text>
+          <Text fontWeight="700" fontSize="$4" style={{ fontFamily: 'monospace' }}>{eta} min</Text>
         </YStack>
       </XStack>
 
@@ -1261,7 +1261,7 @@ function SwipeRow({ item, onDelete, onArchive }) {
               <Text fontWeight="600">{item.title}</Text>
               <Text fontSize="$2" color="$color9" numberOfLines={1}>{item.subtitle}</Text>
             </YStack>
-            <Text fontSize="$1" color="$color8" fontFamily="$mono">{item.time}</Text>
+            <Text fontSize="$1" color="$color8" style={{ fontFamily: 'monospace' }}>{item.time}</Text>
           </XStack>
         </Animated.View>
       </GestureDetector>
@@ -1353,8 +1353,8 @@ const theme = useTheme()
       <YStack height={4} bg="$blue10" width={`${(position / duration) * 100}%`} />
     </YStack>
     <XStack justify="space-between">
-      <Text fontSize="$1" color="$color9" fontFamily="$mono">{formatTime(position)}</Text>
-      <Text fontSize="$1" color="$color9" fontFamily="$mono">-{formatTime(duration - position)}</Text>
+      <Text fontSize="$1" color="$color9" style={{ fontFamily: 'monospace' }}>{formatTime(position)}</Text>
+      <Text fontSize="$1" color="$color9" style={{ fontFamily: 'monospace' }}>-{formatTime(duration - position)}</Text>
     </XStack>
   </YStack>
 

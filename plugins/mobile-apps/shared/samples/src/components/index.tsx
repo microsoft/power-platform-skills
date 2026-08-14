@@ -224,7 +224,7 @@ export function InfoRow({
       <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
-        fontFamily={mono ? '$mono' : undefined}
+        style={mono ? { fontFamily: 'monospace' } : undefined}
         color="$color12" text="right" flex={1}
         numberOfLines={1}
       >

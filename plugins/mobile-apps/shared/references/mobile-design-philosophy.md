@@ -177,7 +177,7 @@ Use saturated status/accent colors only when they improve field readability. Yel
 6. **Consistent row structure:** Same height, padding, info architecture in a list.
 7. **Header weight:** Background difference or bottom border — never floating.
 8. **Intentional space:** Use `mt="auto"` to push actions to bottom naturally.
-9. **Monospace for data:** IDs, timestamps, coordinates, currency → `fontFamily="$mono"`.
+9. **Monospace for data:** use `$mono` only when registered; otherwise use `style={{ fontFamily: 'monospace' }}`.
 
 ---
 

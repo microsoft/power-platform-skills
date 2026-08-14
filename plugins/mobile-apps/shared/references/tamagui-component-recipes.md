@@ -302,7 +302,7 @@ export function InfoRow({
       <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
-        fontFamily={mono ? '$mono' : undefined}
+        style={mono ? { fontFamily: 'monospace' } : undefined}
         color="$color12" text="right" flex={1}
         numberOfLines={1}
       >
@@ -438,7 +438,7 @@ const shadows = {
   <Input id="email" size="$4" bg="$color3" borderWidth={0}
     focusStyle={{ borderWidth: 2, borderColor: '$blue8' }}
     value={email}
-    onChange={event => setEmail(event.target?.value ?? event.nativeEvent?.text ?? '')} />
+    onChangeText={(value: string) => setEmail(value)} />
   {error && <Text color="$red10" fontSize="$2">{error}</Text>}
 </YStack>
 ```
@@ -590,10 +590,12 @@ const theme = useTheme()
 
 ## Monospace data values
 
+Use the `$mono` token only when `customConfig.fonts.mono` is registered. The portable fallback is:
+
 ```tsx
-<Text fontFamily="$mono" fontSize="$3" color="$color10">INS-2024-0047</Text>  // ID
-<Text fontFamily="$mono" fontSize="$2">2024-03-15 14:32</Text>              // timestamp
-<Text fontFamily="$mono" fontSize="$7" fontWeight="700">$1,247.50</Text>    // currency
+<Text style={{ fontFamily: 'monospace' }} fontSize="$3" color="$color10">INS-2024-0047</Text>
+<Text style={{ fontFamily: 'monospace' }} fontSize="$2">2024-03-15 14:32</Text>
+<Text style={{ fontFamily: 'monospace' }} fontSize="$7" fontWeight="700">$1,247.50</Text>
 ```
 
 ## Bottom sheet

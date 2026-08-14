@@ -96,7 +96,7 @@ const monoFont = createFont({
 })
 ```
 
-Use `fontFamily="$mono"` for: IDs, timestamps, coordinates, measurements, serial numbers, currency amounts.
+Use `fontFamily="$mono"` for data values only when the Tamagui config registers `fonts.mono`; otherwise use `style={{ fontFamily: 'monospace' }}`.
 
 ### Pairing 5: Playfair Display + Inter (Refined / Elegant)
 

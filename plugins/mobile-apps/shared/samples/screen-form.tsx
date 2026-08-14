@@ -1,5 +1,4 @@
 import React from 'react'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { Controller, useForm } from 'react-hook-form'
 import { BackHandler, KeyboardAvoidingView, Platform, ScrollView } from 'react-native'
@@ -33,8 +32,7 @@ export default function RecipeFormScreen() {
   const [showSuccess, setShowSuccess] = React.useState(false)
   const [discardOpen, setDiscardOpen] = React.useState(false)
 
-  const { control, handleSubmit, formState } = useForm<RecipeForm>({
-    resolver: zodResolver(recipeSchema),
+  const { control, handleSubmit, formState, setError } = useForm<RecipeForm>({
     mode: 'onBlur',
     defaultValues: { title: '', description: '', servings: 2, isPublic: false },
   })
@@ -56,6 +54,16 @@ export default function RecipeFormScreen() {
   )
 
   const onSubmit = async (values: RecipeForm) => {
+    const parsed = recipeSchema.safeParse(values)
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        const field = issue.path[0]
+        if (typeof field === 'string' && field in values) {
+          setError(field as keyof RecipeForm, { message: issue.message })
+        }
+      }
+      return
+    }
     // call mutation...
     setShowSuccess(true)
     setTimeout(() => {
@@ -91,7 +99,7 @@ export default function RecipeFormScreen() {
                       autoComplete="off"
                       enterKeyHint="next"
                       value={field.value}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChangeText={(value: string) => field.onChange(value)}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -113,7 +121,7 @@ export default function RecipeFormScreen() {
                       numberOfLines={4}
                       enterKeyHint="enter"
                       value={field.value ?? ''}
-                      onChange={(event) => field.onChange(event.target?.value ?? event.nativeEvent?.text ?? '')}
+                      onChangeText={(value: string) => field.onChange(value)}
                       onBlur={field.onBlur}
                     />
                     {fieldState.error && (
@@ -135,8 +143,7 @@ export default function RecipeFormScreen() {
                       inputMode="numeric"
                       enterKeyHint="done"
                       value={String(field.value ?? '')}
-                      onChange={(event) => {
-                        const value = event.target?.value ?? event.nativeEvent?.text ?? ''
+                      onChangeText={(value: string) => {
                         field.onChange(Number(value) || 0)
                       }}
                       onBlur={field.onBlur}

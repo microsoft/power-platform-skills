@@ -71,13 +71,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary.
     - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
-    - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
+    - Do not emit planner-only question signals such as `INDUSTRY_CONFIRM_REQUESTED:` or `DESIGN_VIBE_REQUESTED:`. Draft the least-assumptive option, record alternatives as concerns, and let the foreground Gate 3 resolve them.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
 
 ## Decisions made
 
-- ✅ Markdown plan with Mermaid (no HTML rendering)
-- ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
+- ✅ Markdown plan with Mermaid plus a foreground-opened HTML companion
+- ✅ Foreground-owned approvals; planner and leaf agents are draft-only
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)

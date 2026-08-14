@@ -74,7 +74,7 @@ tone: professional-utilitarian
 - **Sizes:** body min 16pt, titles 18-22pt, page titles 28pt (modest weights — Airbnb-influenced restraint, NOT 36-52pt billboard sizes)
 - **Weight:** 400 body, 600 titles, 700 page headers
 - **Line-height:** 1.5 body, 1.25 titles
-- **Numerals:** tabular for IDs, timestamps, counts (`fontFamily="$mono"` per source `EquipmentRow.tsx` line 65)
+- **Numerals:** tabular for IDs, timestamps, and counts; use `$mono` only when registered, otherwise the portable monospace style
 - **Status case:** sentence case ("Overdue", "In progress") — NOT UPPERCASE (less aggressive, more enterprise)
 
 ### List rows (card-with-status-stripe)
@@ -97,7 +97,7 @@ Source pattern from `EquipmentRow.tsx`:
 - 4px left bar = status hue (color-coded)
 - Title left, status pill right, meta on second line
 - Tap target: entire card, 64pt+ tall
-- Mono font (`fontFamily="$mono"`) for serial numbers / IDs / timestamps
+- Monospace styling for serial numbers / IDs / timestamps (`$mono` only when registered)
 
 ### Status pills (soft-tinted)
 

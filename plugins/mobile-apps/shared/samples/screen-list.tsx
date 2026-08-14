@@ -64,7 +64,7 @@ export default function RecipesListScreen() {
             size="$4"
             placeholder="Search recipes…"
             value={query}
-            onChange={(event) => setQuery(event.target?.value ?? event.nativeEvent?.text ?? '')}
+            onChangeText={(value: string) => setQuery(value)}
           />
         </XStack>
 

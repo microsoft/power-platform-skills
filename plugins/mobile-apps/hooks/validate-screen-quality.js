@@ -162,6 +162,92 @@ function findJsxOpeningTags(content, componentNames) {
   return tags;
 }
 
+function findProjectRoot(filePath) {
+  let current = path.dirname(path.resolve(filePath));
+  while (current !== path.dirname(current)) {
+    if (fs.existsSync(path.join(current, 'package.json'))) return current;
+    current = path.dirname(current);
+  }
+  return process.cwd();
+}
+
+function projectDefinesMonoFont(filePath) {
+  const configPath = path.join(findProjectRoot(filePath), 'tamagui.config.ts');
+  if (!fs.existsSync(configPath)) return false;
+  try {
+    const config = fs.readFileSync(configPath, 'utf8');
+    return /\bfonts\s*:\s*\{[\s\S]*?\bmono\s*:/.test(config);
+  } catch {
+    return false;
+  }
+}
+
+function findInvalidMonoTokens(content, filePath) {
+  if (projectDefinesMonoFont(filePath)) return [];
+  const violations = [];
+  const re = /\bfontFamily\s*=\s*(?:["']\$mono["']|\{[^}]*["']\$mono["'][^}]*\})/g;
+  let match;
+  while ((match = re.exec(content)) !== null) {
+    violations.push({
+      rule: 'undefined-mono-font',
+      match: match[0],
+      fix: 'The active tamagui.config.ts does not register fonts.mono. Use a shared DataText/QuantityText component or style={{ fontFamily: "monospace" }} instead of fontFamily="$mono".',
+    });
+  }
+  return violations;
+}
+
+function findWebTextInputHandlers(content) {
+  const violations = [];
+  const re = /\b[A-Za-z_$][\w$]*\s*(?:\?\.|\.)target\s*(?:\?\.|\.)value\b/g;
+  let match;
+  while ((match = re.exec(content)) !== null) {
+    violations.push({
+      rule: 'web-text-input-handler',
+      match: match[0],
+      fix: 'Mobile text inputs must use onChangeText={(value: string) => ...}. Do not read DOM target.value in React Native/Tamagui screens.',
+    });
+  }
+  return violations;
+}
+
+function importsFrom(content, moduleName, importedName) {
+  const escapedModule = moduleName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escapedName = importedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    `import\\s*\\{[^}]*\\b${escapedName}\\b[^}]*\\}\\s*from\\s*["']${escapedModule}["']`,
+    'm',
+  );
+  return re.test(content);
+}
+
+function findTamaguiPropProblems(content) {
+  const violations = [];
+  const tamaguiPrimitives = new Set([
+    'Button', 'Card', 'Input', 'Label', 'ListItem', 'Paragraph', 'Separator',
+    'Spinner', 'Text', 'TextArea', 'View', 'XStack', 'YStack', 'ZStack',
+  ]);
+  if (importsFrom(content, 'tamagui', 'ScrollView')) tamaguiPrimitives.add('ScrollView');
+
+  for (const { name, tag } of findJsxOpeningTags(content, tamaguiPrimitives)) {
+    if (/\balignSelf\s*=/.test(tag)) {
+      violations.push({
+        rule: 'tamagui-longhand-prop',
+        match: tag.slice(0, 180),
+        fix: `Use the Config v5 shorthand self= on Tamagui ${name}; onlyAllowShorthands rejects alignSelf.`,
+      });
+    }
+    if (/\bcontentContainerStyle\s*=/.test(tag)) {
+      violations.push({
+        rule: 'tamagui-content-container-style',
+        match: tag.slice(0, 180),
+        fix: `contentContainerStyle is a React Native ScrollView/FlatList prop, not a Tamagui ${name} primitive prop. Move layout props to a child stack or import ScrollView from react-native.`,
+      });
+    }
+  }
+  return violations;
+}
+
 // ─── Rule 1b: Unsupported semantic button themes ────────────────────────────
 // Generic theme names like theme="active" are not guaranteed by generated
 // Tamagui configs. When unresolved, primary buttons can render as pale neutral
@@ -469,9 +555,12 @@ function findStatusVisualProblems(content) {
 
 // ─── Aggregate ───────────────────────────────────────────────────────────────
 
-function findAllViolations(content) {
+function findAllViolations(content, filePath) {
   return [
     ...findVagueTokens(content),
+    ...findInvalidMonoTokens(content, filePath),
+    ...findWebTextInputHandlers(content),
+    ...findTamaguiPropProblems(content),
     ...findUnsupportedButtonThemes(content),
     ...findRawHex(content),
     ...findInlineShadows(content),
@@ -503,6 +592,10 @@ function buildBlockMessage(filePath, violations) {
 
   const ruleHeaders = {
     'vague-token': 'Vague Tamagui tokens that do not resolve in Config v5 (causes invisible text)',
+    'undefined-mono-font': 'Undefined Tamagui monospace font token',
+    'web-text-input-handler': 'Web-style text input handler in a native screen',
+    'tamagui-longhand-prop': 'Unsupported longhand prop on a Config v5 Tamagui primitive',
+    'tamagui-content-container-style': 'React Native container prop used on a Tamagui primitive',
     'unsupported-button-theme': 'Unsupported semantic button theme (primary CTA can look disabled)',
     'raw-hex': 'Raw hex colors in screen TSX (breaks dark-mode + brand tokens)',
     'inline-shadow': 'Inline shadow props (skip dark-mode elevation fallback)',
@@ -571,6 +664,10 @@ function lineForMatch(content, match) {
 function isAutoFixable(violation) {
   return [
     'vague-token',
+    'undefined-mono-font',
+    'web-text-input-handler',
+    'tamagui-longhand-prop',
+    'tamagui-content-container-style',
     'raw-hex',
     'icon-only-control-missing-label',
     'small-touch-target-without-hitslop',
@@ -591,7 +688,7 @@ function runReportMode() {
     } catch {
       continue;
     }
-    for (const violation of findAllViolations(content)) {
+    for (const violation of findAllViolations(content, filePath)) {
       issues.push({
         validator: 'validate-screen-quality',
         file: path.relative(process.cwd(), filePath) || filePath,
@@ -637,7 +734,7 @@ process.stdin.on('end', () => {
   const content = extractContent(toolName, toolInput);
   if (!content) process.exit(0);
 
-  const violations = findAllViolations(content);
+  const violations = findAllViolations(content, filePath);
   if (violations.length === 0) process.exit(0);
 
   process.stderr.write(buildBlockMessage(filePath, violations) + '\n');

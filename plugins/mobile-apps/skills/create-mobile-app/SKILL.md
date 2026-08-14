@@ -415,7 +415,8 @@ capability failure after several minutes. Follow the capability table in
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "<resolved_environment_url>" \
   --output "<working_dir>/.tmp/dataverse-metadata-snapshot.json" \
-  --tenant-id "<resolved_tenant_id>"
+  --tenant-id "<resolved_tenant_id>" \
+  --concepts "<comma-separated domain nouns from requirements_brief>"
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/agent-preflight.js" \
   --agent native-app-planner \
@@ -446,7 +447,7 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
 > "→ Spawning planner agent. First prompt (data model) appears in ~60–90 seconds while the data-model architect analyzes your requirements. Later gates take longer — see the timing breakdown above."
 
-Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
+Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`). The planner is draft-only: nested agents never own user approval tools.
 
 ```
 Spawn agent: mobile-app:native-app-planner
@@ -469,23 +470,25 @@ Prompt:
   Agent preflight result: <paste JSON from scripts/agent-preflight.js>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Perform internal planning, then run Gate 2
-  (complete architecture) and Gate 3 (experience). Gate 1 is already approved
-  and the foreground orchestrator owns Gate 4. On terminal return, emit one of
+  Follow native-app-planner.md. Draft the complete Gate 2 architecture and
+  Gate 3 experience, including the HTML preview, but do not ask the user or
+  enter plan mode. Gate 1 is already approved; the foreground orchestrator
+  owns Gates 2, 3, and 4. On terminal return, emit one of
   `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal
   first line per AGENTS.md rule #10.
 ```
 
-The planner writes the complete plan, presents one combined architecture gate
-and one combined experience gate, and renders `mobile-app-plan.html` for both.
-Wait for it to return before continuing.
+The planner writes the complete draft and renders `mobile-app-plan.html`.
+After it returns, the foreground orchestrator always presents Gate 2 and Gate
+3. This avoids delayed failure when nested agent contexts lack approval tools.
 
-#### 3.0a — Inline-gate fallback (planner unavailable OR capability preflight failed)
+#### 3.0a — Inline-draft fallback (planner unavailable OR capability preflight failed)
 
 When preflight fails OR the planner returns a capability `BLOCKED`, the
-orchestrator runs Gates 2 and 3 inline. Do not re-spawn with the same context.
+orchestrator drafts the missing sections inline. Do not re-spawn with the same
+context. Gate presentation remains the same foreground flow described below.
 
-> "→ Planner agent unavailable in this host — running Gates 2 and 3 inline from the foreground snapshot. (No action needed.)"
+> "→ Planner agent unavailable in this host — drafting the plan inline from the foreground snapshot. (No action needed.)"
 
 Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
@@ -503,12 +506,11 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. **Run Gates 2 and 3 yourself.** Finish the screen field-read contract and
-   cross-entity resolution audit before presenting Gate 2. Gate 2 combines data
-   model, offline, projections, native capabilities, and connectors. Gate 3
-   combines the locked screen graph, detailed specs, and design preview.
-4. **Write the approved `native-app-plan.md`** with Gate 1–3 entries in
-   `## Approvals`. Gate 4 is appended by Step 3.8 immediately before mutation.
+3. Finish the screen field-read contract, shared operational-context contract,
+   and cross-entity resolution audit before the common foreground gates.
+4. Write the draft `native-app-plan.md` with only Gate 1 recorded in
+   `## Approvals`. The common foreground flow records Gates 2 and 3; Step 3.8
+   records Gate 4 immediately before mutation.
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
@@ -520,11 +522,48 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
 If the orchestrator's own `Task` tool is unavailable, use fully-inline mode:
-draft from the foreground Dataverse snapshot and screen references, then run
-Gates 2 and 3. Gate 1 is already approved; Gate 4 remains Step 3.8.
+draft from the foreground Dataverse snapshot and screen references. Gate 1 is
+already approved; the foreground flow still owns Gates 2–4.
 
-**Hard rule:** never silently skip Gate 2 or Gate 3 because the planner could
-not run. No mutation begins until Step 3.8 records Gate 4.
+**Hard rule:** never delegate Gate 2 or Gate 3 to a nested agent and never skip
+them because drafting fell back. No mutation begins until Step 3.8 records
+Gate 4.
+
+#### 3.0b — Foreground Gates 2 and 3 (always)
+
+After either the planner draft or inline-draft fallback completes, the
+foreground orchestrator owns both approvals:
+
+1. Verify the draft contains the data model, cross-entity projections, offline
+   scope, native capabilities, connectors, and a **Shared Operational Context**
+   contract naming the authoritative role source and active-scope source. If a
+   screen depends on role or store/site scope and no authoritative source is
+   available, mark it as a Gate 2 blocker; do not let builders invent local
+   role checks or active-store state.
+2. Render `mobile-app-plan.html`, set status `awaitingInput: true`, and enter
+   plan mode with exactly one architecture approval:
+
+   ```text
+   Gate 2 of 4 — Complete Architecture
+   Approve the data model, projections, offline scope, shared operational
+   context, native capabilities, connectors, risks, and blockers?
+   ```
+
+   On rejection, send the feedback to the existing idle planner when possible,
+   otherwise re-spawn it in draft-only revision mode. Re-render and present
+   Gate 2 again from the foreground.
+3. Open the generated preview per Step 3b, then enter plan mode with exactly
+   one experience approval:
+
+   ```text
+   Gate 3 of 4 — Experience
+   Approve the screen graph, navigation, detailed specs, and design preview?
+   ```
+
+   On rejection, revise the draft through the planner without giving it
+   approval ownership, then re-render and present Gate 3 again.
+4. Clear `awaitingInput` and append the approved Gate 2 and Gate 3 entries to
+   `## Approvals`.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
@@ -560,9 +599,9 @@ If no legacy design signal is returned, continue directly to Step 3b.
 
 #### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
 
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before Gate 3. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
+The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` with its Gate 3 draft. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
 
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
+**When to run this:** every time the foreground orchestrator presents or re-presents Gate 3. Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
 
 **What to do:**
 
@@ -570,7 +609,7 @@ The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan
 
    > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
 
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
+2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the foreground Gate 3 prompt.
 
 3. **Else** attempt to open in the user's default browser via the OS-portable chain:
 
@@ -581,7 +620,7 @@ The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan
      || echo "Auto-open failed. Use the link above."
    ```
 
-4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
+4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the foreground Gate 3 prompt surfaces without delay.
 
 If the planner returns without a preview path, render
 `mobile-app-plan.html` with `scripts/render-mobile-plan.js` before Gate 3. A
@@ -1493,6 +1532,9 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 2. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
 3. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
 4. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
+5. **Operational context** — if any screen varies behavior by role or active
+   store/site/location, read the approved Gate 2 Shared Operational Context
+   contract and generate one shared provider/hook before any screen skeleton.
 
 **Decision rules:**
 
@@ -1503,6 +1545,22 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 | Same bounded service + similar `.getAll()` params on 2+ screens | `use<Entity>List.ts` wrapping `useListData` | `src/hooks/` |
 | Same cursor-paginated service on 1+ unbounded screens | `use<Entity>CursorList.ts` wrapping `useCursorListData` | `src/hooks/` |
 | Entity detail + edit screens for same entity | `use<Entity>.ts` with get + save + delete | `src/hooks/` |
+| Any role-aware or active-scope-aware screen | `OperationalContextProvider` + `useOperationalContext` | `src/hooks/useOperationalContext.tsx` |
+
+**Operational-context contract (hard rule):**
+
+- The provider must resolve `role`, `activeScope`, loading, and error from the
+  exact authoritative sources approved at Gate 2. It may use generated
+  Dataverse services, authenticated claims, or an explicit route selection.
+- Wrap the protected app layout with `OperationalContextProvider` before
+  skeleton generation, and export the hook from `src/hooks/index.ts`.
+- Skeletons that need role/scope import the shared hook. They must not create
+  local active-store state, hardcode manager roles, or independently query the
+  same membership/current-scope records.
+- If Gate 2 says role or scope is not applicable, do not generate the provider.
+  If a screen requires it but the source is unresolved, stop at the
+  Navigation/skeleton gate rather than generating locked controls or silent
+  fallback behavior.
 
 **Write the files directly into the project** (not into samples — these are app-specific):
 
@@ -1996,7 +2054,8 @@ Which option? (or "none — I'll keep iterating locally")
 ## Notes
 
 - This skill is the only entry point for new project creation. Do not invoke `/add-*` skills directly during a fresh-project flow — they don't know how to read the plan and would re-prompt the user.
-- The planner agent owns the approval gates. This skill never enters plan mode itself — that would create a duplicate gate.
+- Planner and leaf agents are draft-only. This foreground skill owns Gates 2,
+  3, and 4 and is the only planning layer that enters plan mode.
 - For mid-project changes after Step 13, the user should run individual `/add-*` skills, or `/edit-app` for plan-backed app iteration.
 
 ## Reference

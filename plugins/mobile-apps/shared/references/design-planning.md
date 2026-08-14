@@ -254,7 +254,7 @@ Color: follow the 60/30/10 rule (see mobile-design-philosophy.md Section 5).
 Industry patterns: apply visual language from mobile-design-philosophy.md Section 12.
 Aesthetic direction: apply from mobile-design-philosophy.md Section 13.
 Layout: question whether cards are needed — see Section 14 (edge-to-edge rows for dense lists).
-Data values: use fontFamily="$mono" for IDs, timestamps, currency, coordinates.
+Data values: use `$mono` only when registered; otherwise use the portable monospace style fallback.
 Peak moments: note which screens have task-completion flows that deserve celebration.
 Anti-patterns: ensure no items from Section 16 checklist are present.
 Universal patterns: screen-builder will read universal-patterns.md for industry-specific

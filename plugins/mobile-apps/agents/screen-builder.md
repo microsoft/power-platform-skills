@@ -416,7 +416,13 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 
 **Functional fields:**
 - **Domain layout decisions** — read this block FIRST (added by screen-planner). It answers: what data fields matter most, what is the visual emphasis, and what makes this screen different from a generic CRUD screen. These answers are binding — they override any generic "use the sample" instinct. If this block is absent, derive the answers yourself from the entity name + archetype before writing any JSX.
-- **Role** (when present) — gates which controls render for which persona. Combine with the UX contract: e.g. `Role: Supervisor` on an override screen → render the PIN gate; `Role: Inspector (edit) / Supervisor (read)` → hide edit chevrons / submit CTA when the signed-in user is a Supervisor. The role itself does not generate auth code (that lives in shared `useAuth()`); it tells you which conditional UI branches the spec expects. If absent, treat the screen as open to all signed-in users.
+- **Role / active scope** (when present) — gates which controls render for
+  which persona and operational scope. Consume the orchestrator-generated
+  `useOperationalContext()` hook and its approved role/scope values. Never
+  resolve roles directly from `useAuth()`, hardcode manager roles, or create
+  local active-store/site state. `useAuth()` is only for identity lifecycle and
+  sign-out. If the shared hook is missing for a role/scope-aware spec, return
+  `BLOCKED` instead of inventing fallback gating.
 - **Profile content** (Profile screen only) — app-specific sections to render above sign-out. Use any generated services named in the Data field for persisted user/role/preference context; otherwise render local/static app context from the spec. Do not collapse Profile into a single sign-out button.
 - **Sign-out affordance** (Profile screen only) — binding placement and label for sign-out. Use the skeleton's `handleSignOut` when present, or implement the same confirmed `useAuth().signOut` + `router.replace('/login')` flow locally. Do not move sign-out to Home, drawer, header, overflow menus, or any business-data screen.
 - Row style override (List screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the style that best communicates the entity's key fields. Do NOT default to generic cards.
@@ -902,7 +908,7 @@ export default function <ScreenName>Screen() {
       Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
-      onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}
+      onChangeText={(value: string) => field.onChange(Number(value) || 0)}
       inputMode="numeric"
     />
     ```
@@ -1086,7 +1092,8 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
         headerLargeTitle: true,
         headerSearchBarOptions: {
           placeholder: 'Search inspections…',
-          onChangeText: (e) => setSearchQuery(e.nativeEvent.text),
+          onChangeText: (event: { nativeEvent: { text: string } }) =>
+            setSearchQuery(event.nativeEvent.text),
         },
       }}
     />
