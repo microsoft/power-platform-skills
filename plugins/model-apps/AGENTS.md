@@ -45,6 +45,7 @@ able to tell what moved from the docs alone):
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
 | [`docs/app-builder-roadmap.md`](docs/app-builder-roadmap.md) | `/app-builder` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize an app-builder capability |
+| [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
 
@@ -137,7 +138,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   the pages phase (uploads just the changed page, skips the full build) — gated on an identity-bound
   snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
   falls back to a full build. Teardown tombstones+deletes the snapshot. See
-  [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
+  [`docs/app-builder-design.md`](docs/app-builder-design.md) for the v1 scope + contract.
   **App TABLE components are pinned by OData REFERENCE** (ADO 6612527). The SDK sends
   `{ '@odata.id': '<EntitySetName>(<MetadataId>)' }` per sitemap table, NOT an `@odata.type` instance:
   `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old instance
@@ -367,8 +368,7 @@ feature-flags.json             ← Default-OFF feature flags (currently connecto
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
   app-builder-roadmap.md       ← /app-builder roadmap / TODO (Complete + Pending by phase)
-  app-builder-staged-flow-design.md ← Historical staged-flow design notes
-  changed-only-design.md       ← /app-builder --changed-only design contract
+  app-builder-design.md        ← /app-builder design record (Part I staged flow · Part II --changed-only)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
   genpage-connector-builder.md ← Orchestrator-invoked connector gate/discovery; writes connector bindings
