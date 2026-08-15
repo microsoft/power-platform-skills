@@ -2,11 +2,12 @@
 
 > **Status: IMPLEMENTED / LANDED.** This is the design record for the `/app-builder` staged-flow
 > architecture that shipped — the engine now runs it (staged flow, design-only author, generate-pages
-> stage, structural evals, fail-closed safety). It began as a re-architecture proposal (revised after
-> Sol architectural review R1; the four Critical findings were verified against the engine code and
-> resolved — see **§17 Sol R1 → resolutions**) and was subsequently implemented, reviewed, and
+> stage, structural evals, fail-closed safety). It began as a re-architecture proposal and was
+> subsequently implemented, reviewed, and
 > live-verified. It is retained as the **design rationale** the engine's code cites by section (§6, §7,
-> §9, §11, §13, §14); the section numbers are load-bearing — keep them stable.
+> §9, §11, §13, §14); the section numbers are load-bearing — keep them stable, and do not renumber
+> when trimming (§16 and §17 were removed without shifting anything else, which is why the numbering
+> skips them).
 >
 > **Current status of shipped/pending capabilities lives in [`app-builder-roadmap.md`](./app-builder-roadmap.md)**
 > (the canonical roadmap), not here — this doc is the "why", the roadmap is the "what/where". The
@@ -74,7 +75,7 @@ parity oracle. But the **flow around it** had five concrete problems:
 
 ---
 
-## 5. Execution model (corrected — resolves Critical C1)
+## 5. Execution model
 
 **Why the first draft was wrong.** `runSdkBuild` allocates a **fresh** `result.created` map on
 every invocation (`sdk-build.js:540`). Downstream phases resolve dependencies from that
@@ -141,7 +142,7 @@ invocations. `data` executes in run 1; `generate-pages` in the main loop; `ui`/`
 
 **Renamed** from the first draft: the code-gen stage is **`generate-pages`**, never `pages` — the
 engine phase `pages` (upload, a member of stage `app`) keeps its name, and using one word for
-both was ambiguous (reviewer Minor 2). **One namespace** is used for stage names across
+both was ambiguous. **One namespace** is used for stage names across
 narration, journal, and CLI.
 
 **`--stage <name>` sugar** on `build-model-app.js` maps a stage to its phase range internally
@@ -153,12 +154,12 @@ stage/phase selectors are **rejected** (today `resolvePhases` silently ignores u
 
 ---
 
-## 7. Author redesign & App Spec schema (resolves C2, I1)
+## 7. Author redesign & App Spec schema
 
 Author stops emitting `.tsx`. It produces a **design-only** spec and freezes it via consent gates
 (two shape-level design checkpoints + the single plan-mode build approval, R2 unchanged).
 
-### 7.1 Validation profiles (resolves C2)
+### 7.1 Validation profiles
 
 `validateAppSpec` is currently unconditional and requires every page's `codeFile`
 (`build-model-app.js:98`, `app-spec.js:431-438`), so an intent-only spec fails before the first
@@ -182,7 +183,7 @@ unconditional; `build-model-app.js:97-101`, `teardown-model-app.js:62-65`, `veri
 | teardown / partial cleanup | `structural` (no `codeFile` required) |
 | default programmatic build | `deploy` |
 
-### 7.2 Page shape — discriminated source (resolves I1, C4 key ambiguity)
+### 7.2 Page shape — discriminated source
 
 One `pages[]` collection; implementation state is **explicit**, not a nullable field:
 
@@ -243,7 +244,7 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
 
 ---
 
-## 8. Generate-pages stage & agent contracts (resolves I2)
+## 8. Generate-pages stage & agent contracts
 
 After run 1 (tables exist), the **main loop**:
 
@@ -271,7 +272,7 @@ After run 1 (tables exist), the **main loop**:
 
 ---
 
-## 9. Cross-page navigation & the `PAGEREF_` resolver (resolves C4)
+## 9. Cross-page navigation & the `PAGEREF_` resolver
 
 Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): navigate via
 `Xrm.Navigation.navigateTo({ pageType:'generative', pageId, data })`; custom ids go in `data:`
@@ -308,7 +309,7 @@ duplicates and orphans. The `app` stage instead:
 
 ---
 
-## 10. Look-and-feel: a **page** design contract (resolves I5)
+## 10. Look-and-feel: a **page** design contract
 
 `appDef` has no theme field or mutation (`sdk-build.js:516-518`), so a `spec.design` cannot drive
 the model-driven shell today. Scope honestly:
@@ -323,7 +324,7 @@ the model-driven shell today. Scope honestly:
 
 ---
 
-## 11. Safety & autopilot — fail-closed destructive ops (resolves C3)
+## 11. Safety & autopilot — fail-closed destructive ops
 
 Consent is mode-aware; **autopilot mode is also eval mode** (both non-interactive).
 
@@ -373,7 +374,7 @@ working dir when autopilot. The user approves the whole app shape at once.
 
 ---
 
-## 13. Verify & evals (resolves I3, I4)
+## 13. Verify & evals
 
 ### 13.1 Verify extended to pages (I4)
 
@@ -406,7 +407,7 @@ navigation resolution end-to-end.
 
 ---
 
-## 14. Engine mechanics & module extraction (resolves I6)
+## 14. Engine mechanics & module extraction
 
 `sdk-build.js` is ~1099 lines; the precedent for pure modules is `artifact-intent.js`. Extract:
 
@@ -465,55 +466,6 @@ artifact-specific SDK mutator — SDK **T2/T7 pass**).
 `sitemapSlot`; `verifySpec` page checks; `--stage`/`--non-interactive`/`--allow-destructive` flags
 + pipeline id in the CLI/journal; adapted genpage agent contracts + `Task` in the SKILL
 `allowed-tools`; round-trip metadata in `download-model-app.js`/`hydrate-spec.js`.
-
-## 16. Doc-sync checklist (expanded — Minor 1)
-
-`SKILL.md`, `references/authoring-flow.md`, `references/app-spec-schema.md`,
-`docs/architecture.md` (stage diagram), `AGENTS.md`, `CHANGELOG.md`, the README section, **plus the
-contract/round-trip/agent files most affected**: `app-spec.js`, `hydrate-spec.js`,
-`download-model-app.js`, `verify-spec.js`, the genpage agent/plan contracts, and the eval docs.
-
----
-
-## 17. Sol R1 → resolutions
-
-| # | Finding | Resolution |
-|---|---|---|
-| **C1** | Phase ranges not composable across invocations (`result.created` per run) | §5 — data pre-build → code-gen → **one full idempotent build**; run 2's discovery rehydrates `result.created` (the proven `create==edit` path). Stages are vocabulary, not write invocations. |
-| **C2** | Intent spec fails validation; `--verify`/`--only publish`/data examples are no-ops | §7.1 validation **profiles** (`design`/`plan`/`deploy`); standalone verify via `verify-model-app.js`; §6 correct stage→command mapping with required flags. |
-| **C3** | Destructive ops not fail-closed | §11 read-only **`op-diff.js`** planner; hard `--allow-destructive` gate incl. teardown; create fails on collision; approval bound to env/app/spec-hash/op-hash; env var suppresses questions only. |
-| **C4** | `PAGEREF_` source mutation not portable/idempotent | §9 stable `key`; **symbolic source preserved**; **staging-file** deployment derivative; fail-closed enumeration + create-absent-first + single resolved upload; pure `pageref-resolver.js`; sitemap-finalize commit; forward-only recovery. |
-| **I1** | Bare optional `codeFile` weakens contract | §7.2 discriminated `source:{intent|tsx}` + `schemaVersion` + stable keys + path confinement + duplicate checks; `sitemapSlot` dropped (appShell authoritative). |
-| **I2** | Reused agents don't fit the boundary | §8 generate a page-build contract for `page-builder` (owns new+edit); `edit-planner` becomes headless (no consent tools); add `Task` to SKILL `allowed-tools`. |
-| **I3** | `.tsx` snapshots are the wrong oracle | §13.2 structural/compile/nav/verified-column/token oracles; new `schema-facts` extractor for data-model. |
-| **I4** | Verify doesn't cover page invariants | §13.1 page existence/`GenPageId`/no-unresolved-`PAGEREF_` checks; verify stage mandatory + fail-closed. |
-| **I5** | Shell-theme alignment unsupported | §10 scope `spec.design` to a **page** contract + Fluent-token mapping + validation; shell theme deferred. |
-| **I6** | Stage state / perf / module ownership | §14 pipeline id + stage-attempt metadata; extract `stages.js`/`pageref-resolver.js`/`op-diff.js`/`schema-facts.js`; reject unknown selectors; **DAG removed** (single full run 2). |
-| **Minor 1/2** | Doc-sync gaps; 6-vs-7 stage ambiguity | §16 expanded doc-sync; §6 rename to `generate-pages`, one namespace, author counted as the design stage. |
-
-### 17.1 Sol R2 (confirming pass) → resolutions
-
-R2 **verified C1 sound** (run 2 rehydrates every `appDef` dependency, incl. existing pages) and
-passed I2/I3/I5 + both Minors. The remaining PARTIALs + new findings are closed as:
-
-- **New Critical — safe page deployment/recovery** → §9 protocol (staging files; fail-closed
-  enumeration; create-absent-first + immediate manifest persist; single resolved upload;
-  sitemap-finalize commit).
-- **Execution-semantics contradiction (DAG vs single run 2)** → §14: DAG removed; `--stage`
-  apply-safe only for `data`; run 1 omits `--sample-data`.
-- **Safety-plan realism** → §11: v1 scope limited to detectable ops; reuse reconciliation /
-  `diffArtifact`; scoped (not blanket) collision; TOCTOU re-check.
-- **Stable-key persistence (foundational)** → §7.3: durable `<app>_pagemanifest` web resource +
-  download reverse-normalization + legacy migration.
-- **Full-build retry idempotency** → §14: commands/dashboards become discover-reconcile.
-- **Validation/verification boundaries** → §7.1 per-caller profile matrix; §13.1 verify each nav
-  edge → actual target `GenPageId`.
-
-**R3 (convergence pass)** confirmed the execution model sound and closed the last two items: the
-**page manifest** is now a versioned durable contract with full semantic metadata + an explicit
-create/update/add-to-solution/teardown lifecycle + `pageId`s validated against enumeration (§7.3),
-and **command/dashboard reconcile** is **additive-only** in v1 with removals deferred to `op-diff`
-(§14).
 
 ## 18. SDK-alignment (target after rework)
 

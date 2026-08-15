@@ -1,10 +1,9 @@
-# `--changed-only` safe partial apply — design (Sol-approved, 7 review rounds)
+# `--changed-only` safe partial apply — design
 
-Status: **implemented; PROD-readiness reviewed; live-verified** (design: adversarial GPT-5.6 Sol, 7 rounds
-v1 *unsafe* → v7 *safe-to-implement*; implementation: adversarial GPT-5.6 Sol + Claude Opus, both max
-effort — all Critical/High findings fixed with tests; **live regression PASSED on aurorabapenv03468**).
-This is the canonical spec for the multi-deliverable build; the round-by-round design history lives in the
-session workspace (`design-changed-only-v1..v7.md`).
+Status: **implemented; PROD-readiness reviewed; live-verified.** The design went through several
+adversarial review rounds before implementation (v1 *unsafe* → v7 *safe-to-implement*), and the
+implementation was reviewed again with all Critical/High findings fixed and covered by tests.
+This is the canonical spec for the multi-deliverable build.
 
 ## v1 scope + contract (READ THIS)
 v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
@@ -112,9 +111,9 @@ keys) + measured `pageDeployedShas`. (view/sitemap/form submodes deferred — se
 (`changed-only-flow.js`): `--changed-only` flag, live identity (WhoAmI orgId + app discovery),
 snapshot read→eligibility gate→classify→pages-only fast apply via the seams (or full fallback),
 invalidate-before-write + fresh-create-only baseline + verify-gated re-bless + generation fencing, I1-gate
-exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial GPT-5.6 Sol +
-Claude Opus (max effort); all Critical/High findings fixed with tests (see the fix commit + this doc's v1
-contract/deferred sections). 8. ✅ **Live regression PASSED** (aurorabapenv03468, 2026-07-27): (1) fresh
+exception. 6. ✅ Full offline tests (919 green). 7. ✅ Implementation review — adversarial, max effort;
+all Critical/High findings fixed with tests (see the fix commit + this doc's v1
+contract/deferred sections). 8. ✅ **Live regression PASSED** (a scratch environment, 2026-07-27): (1) fresh
 `--apply --changed-only` → full build, verify 9/9, **eligible** snapshot (orgId/appId bound, debt 0);
 (2) `.tsx` byte edit → `--apply --changed-only` → **FAST pages-only** (2 steps not 12, same pageId =
 UPDATE, new measured deployedSha, verify 9/9, snapshot **re-blessed eligible**); (3) chart edit →
