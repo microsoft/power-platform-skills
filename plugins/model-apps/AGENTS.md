@@ -545,6 +545,45 @@ values in `feature-flags.json` at the plugin root.
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
 
+**Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
+shared helper.** Both currently-gated features gate at the same five places, so the rule is stated
+once here and only the per-feature specifics are tabled below:
+
+1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
+   never gate inline.
+2. **Scripts** — each entry-point script calls the shared `exitIf<Feature>Disabled()` helper (DRY —
+   never an inlined gate) and fails closed with exit 3 when OFF.
+3. **Deploy** — the SKILL phase **re-probes** the flag and treats an absent/malformed bindings
+   section as *no bindings*, so a plan authored while the flag was ON cannot deploy after it goes OFF.
+4. **ALM** — solution packaging honours the flag (or documents why it needs no gate).
+5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
+   binding table, never on an absent/sentinel section.
+
+| | `connectors` | `custom-api` |
+|---|---|---|
+| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` |
+| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` |
+| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 |
+| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) |
+| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` |
+
+One connectors-only nuance: at Phase 4.5 the `/genpage` orchestrator re-probes and passes the
+verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch — **that dispatch
+value wins over the plan's `## Connector Bindings` section.**
+
+Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
+
+- **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
+  authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
+- **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
+  plus the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb to
+  persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
+  Note the maker-facing name is "Custom API" while the shipped wire contract stays
+  `actionBindings` / `executeAction` (see `references/custom-api.md`).
+
+## TSX source lexer — known limits
+
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
@@ -572,51 +611,6 @@ Residual limits, accepted deliberately:
 
 Neither shape occurs in the corpus, and both fail *loudly* (exit 3, retryable) rather than
 silently. If you hit one, widen the tests first.
-
-**Connectors gate — the single owner is `genpage-connector-builder`.** Every connector
-entry point must go through it or the helper; the checklist of places that gate:
-
-1. Discovery + codegen — the top-level `/genpage` orchestrator dispatches
-   `genpage-connector-builder`, which runs the initial probe. At Phase 4.5 the
-   orchestrator re-probes with
-   `node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors` and passes the
-   verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch;
-   this dispatch value wins over the plan's `## Connector Bindings` section.
-2. Scripts — `list-connections.js` / `create-connection-reference.js` (`exitIfConnectorsDisabled`).
-3. Deploy — SKILL Phase 4.5 **re-probes** the flag and treats absent/malformed
-   `## Connector Bindings` as no bindings (a plan authored while ON must not deploy
-   connectors after OFF).
-4. ALM — the `--connection-refs` branch of `add-page-to-solution.js`.
-5. Codegen — `genpage-page-builder` emits connector code only when the plan has an
-   actual binding table (never on an absent/sentinel section).
-
-The **`connectors`** flag currently ships OFF: GenPage connector support needs the
-pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
-(power-platform-ux), and the maker/admin ECS setting to all be released first.
-
-**Custom API gate — the single owner is `genpage-customapi-builder`.** Every Custom API
-entry point must go through it or the helper; the checklist of places that gate:
-
-1. Discovery — `genpage-customapi-builder` runs the probe first (planner + edit-planner
-   delegate to it; they do not gate inline).
-2. Scripts — `list-custom-apis.js` (`exitIfCustomApiDisabled`).
-3. Deploy — SKILL Phase 4.6 **re-probes** the flag and treats absent/malformed
-   `## Custom API Bindings` as no bindings (a plan authored while ON must not deploy
-   Custom API bindings after OFF).
-4. ALM — none needed: `config.json`'s `actionBindings` travels inside the page's
-   `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate
-   deployment prerequisite, bound by name).
-5. Codegen — `genpage-page-builder` emits `executeAction` / `executeFunction` /
-   `listBoundActions` code only when the plan has an actual binding table (never on an
-   absent/sentinel section).
-
-The **`custom-api`** flag currently ships OFF: GenPage Custom API invocation needs the
-AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime` plus the UCI and
-Controls host runtimes, a pac CLI `model genpage upload --actions` verb
-(PowerPlatform-Scale-AdminTools) to persist `actionBindings` into `config.json`, and the
-`GenUxPluginActionAllowList` ECS setting to all be released first. Note the maker-facing name
-is "Custom API" while the shipped wire contract stays `actionBindings` / `executeAction`
-(see `references/custom-api.md`).
 
 ## Hooks & Validators
 
