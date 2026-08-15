@@ -11,8 +11,8 @@
 - `pac help` → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 
 ### Auth check
-- `pac auth list` → active profile aurora365-user1@auroratstgeo.onmicrosoft.com
-- Active environment: https://aurorabapenv4ab3f.crm10.dynamics.com/ (reported to user)
+- `pac auth list` → active profile contoso-user001@contosotest1.onmicrosoft.com
+- Active environment: https://contosobapenv0002.crm10.dynamics.com/ (reported to user)
 
 ### Entity discovery
 - `pac model list-tables --search 'cr_candidate'` — exact logical-name match: NOT FOUND
@@ -28,7 +28,7 @@
 ### Solution selection
 - Build needs metadata work (new entities) → solution selection question asked
 - AskUserQuestion solution selection question presented
-- `node dataverse-request.js https://aurorabapenv4ab3f.crm10.dynamics.com /solutions` to enumerate existing solutions
+- `node dataverse-request.js https://contosobapenv0002.crm10.dynamics.com /solutions` to enumerate existing solutions
 - dominant prefix detection: env shows mixed prefixes — no dominant prefix flagged
 - User selected: "Use Default Solution"
 - Recorded in plan: `Solution: Default`, `Publisher Prefix: cr`
@@ -51,7 +51,7 @@
   - Relationship: 1:N from cr_jobrequisition to cr_candidate (lookup: cr_jobrequisition)
   - Sample data: 2 cr_jobrequisition records, 8 cr_candidate records (parent binding via $parent/match)
   - Solution: Default (embedded in JSON)
-- node ${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js --env https://aurorabapenv4ab3f.crm10.dynamics.com --input @job-candidates/provision-input.json --apply --sample-data
+- node ${CLAUDE_PLUGIN_ROOT}/scripts/provision-entities.js --env https://contosobapenv0002.crm10.dynamics.com --input @job-candidates/provision-input.json --apply --sample-data
 - SDK handles table ordering and metadata propagation
 - Transaction log written to job-candidates/entity-creation-log.md
 

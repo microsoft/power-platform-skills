@@ -200,7 +200,7 @@ and **MCP server + Catalyst by default**.
   `resolveExistingFormId` for the same identity. `FORM_TYPE_CODE`/`FORM_GUID_RE` live in the shared
   `app-spec.js`. `artifactIdentityQuery('form')` is also type-scoped. Reviewed adversarially across three
   rounds (Sol — the name-only-identity flaw was pervasive; all High/Medium findings fixed). Live-repro
-  `zava_javavendor` (three "Information" forms) unblocked; **live-verified end-to-end on aurora** (build a
+  `zava_javavendor` (three "Information" forms) unblocked; **live-verified end-to-end** (build a
   table → it gets 3 same-named "Information" forms → edit the Main without a halt → the edit lands on the
   Main ONLY, Quick View/Card untouched → teardown resolves the Main type-scoped). Locked by resolver /
   preflight / verify / teardown / validation unit tests. **Follow-up:** a quick-view control already
@@ -279,7 +279,7 @@ SDK doesn't package.
 - 🔴 **Power Fx command on-click** — same component-library blocker (A). **JavaScript** on-click **ships**.
 - 🟡 **Titled command groups** — a titled group needs a parent command-bar row the adapter doesn't synthesize for from-scratch commands (re-confirmed live: Dataverse 400 "Group button must have parentappactionid"). Buttons emit as loose controls; **flyout / split-button menus do work**. **Unblock:** SDK synthesis of the parent group rows.
 - 🟡 **Interactive (type 10) dashboards** — different formxml machinery (streams/tiles keyed by cell id); the tile generator targets Standard (type 0). **Unblock:** an interactive-dashboard tile generator.
-- ⚠ **Business-rule validation** — org-gated on the Aurora test orgs (missing the `*ProcessWithWfomJson` action) so it can't be live-verified here, and the modern path is Power-Fx-flavored. Build behind a capability flag once an org supports it.
+- ⚠ **Business-rule validation** — org-gated on the available test orgs (missing the `*ProcessWithWfomJson` action) so it can't be live-verified here, and the modern path is Power-Fx-flavored. Build behind a capability flag once an org supports it.
 - 🟡 **Explicit app-component re-pin on an app EDIT** — a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is not re-pinned as an explicit app component: the SDK's generic surface can't add a missing `components` object to a fetched app (`setAppDefinition` was retired). Low impact — the chart is still added to the solution and shows on its table's chart pane; rebuild the app fresh, or surface the chart via a dashboard/sitemap subarea, if it must be an explicit component. **Unblock:** an SDK component-set API for a fetched app, or fetch populating `components`.
 
 ---

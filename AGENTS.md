@@ -37,6 +37,21 @@ rebuild a vendored bundle. Both carry real "why" context and disclose no content
 a committed file. When editing an existing doc, keep this rule in mind for the lines around your
 change, not just the ones you add.
 
+**CI enforcement (partial).** `node scripts/validate-no-real-environments.js` (wired into the
+`validate-repository-metadata` workflow) fails the build when a real Dataverse host, tenant, or
+previously-removed identifier appears under `plugins/model-apps/**` or `evals/model-apps/**`. It
+matches on *shape* — `org<8 hex>` is what Dataverse auto-generates, so it is rejected even though it
+starts with the otherwise-allowed word `org` — rather than only re-catching known strings. Run it
+locally after touching eval fixtures or any file that quotes an environment URL.
+
+The scan is **scoped to model-apps only**, and this is a real gap rather than an oversight: other
+plugins still carry pre-existing references of this class (for example real `org<8 hex>` orgs cited
+in power-pages provenance comments), so widening the scan today would fail unrelated PRs. Scrub a
+plugin first, then add it to `SCAN_PATHS`. The guard also cannot see the *local part* of a UPN, so
+`firstname.lastname@contoso.onmicrosoft.com` passes — use a role word (`maker@`, `tester@`).
+Captured `pac auth list` transcripts are the most common source of all three; when scrubbing one,
+prefer an **equal-length** placeholder so the fixed-width table stays aligned.
+
 ## Repository Structure
 
 ```

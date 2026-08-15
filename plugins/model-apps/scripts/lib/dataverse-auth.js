@@ -9,7 +9,7 @@ const { execFileSync } = require('child_process');
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
  * Returns null if `az` is missing, the user isn't logged in, or the resource is unreachable.
- * @param {string} envUrl - e.g. "https://aurorabapenv4ab3f.crmtest.dynamics.com"
+ * @param {string} envUrl - e.g. "https://contoso.crm.dynamics.com"
  * @returns {string|null}
  */
 function getAuthToken(envUrl) {
