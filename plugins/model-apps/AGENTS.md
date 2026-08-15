@@ -51,6 +51,11 @@ able to tell what moved from the docs alone):
 Don't duplicate content across these — **cross-link instead** (a second copy only drifts, as the file
 tree and teardown order both did before).
 
+**This repo is public.** Before adding to any of these docs, re-read the repo-root `AGENTS.md` →
+*"This Repo Is PUBLIC"*. The docs here have already had to be scrubbed once for internal repo paths,
+a real Dataverse environment name, review provenance, and indexes into documents an outside reader
+cannot open. Record that kind of context in the PR conversation instead.
+
 ## app-builder — intent → model-driven app
 
 A second skill (`/app-builder`) builds a whole **model-driven app** (tables, columns,

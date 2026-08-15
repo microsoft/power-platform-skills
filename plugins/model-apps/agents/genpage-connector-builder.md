@@ -47,7 +47,7 @@ You will be invoked via `Task` with a prompt that includes:
 - **Mode:** `create` or `edit`.
 - **Working directory** — where to write outputs and read/write logs.
 - **Plugin root** (`${PLUGIN_ROOT}`) — where the JS scripts live.
-- **Environment URL** — e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`.
+- **Environment URL** — e.g. `https://contoso.crm.dynamics.com`.
 - **Intent** — the source(s) the request implies (e.g. "SharePoint documents",
   "current weather", "Office 365 users") and, for `edit`, whether the maker wants
   to **add**, **replace**, or **remove** connector data.

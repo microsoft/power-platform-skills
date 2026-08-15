@@ -27,7 +27,7 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 - Path to `genpage-plan.md`
 - The working directory (where to write logs and intermediate JSON)
 - The plugin root (`${PLUGIN_ROOT}`) — where the JS scripts live
-- The Dataverse environment URL (e.g. `https://aurorabapenv4ab3f.crmtest.dynamics.com`)
+- The Dataverse environment URL (e.g. `https://contoso.crm.dynamics.com`)
 
 The **Solution unique name** and **Publisher Prefix** are read directly from the
 plan document's `## Environment` section (the planner always writes them — the
@@ -153,7 +153,7 @@ full entity creation specification.
 All examples below assume you have extracted from the plan's `## Environment`:
 
 ```bash
-ENV_URL="<envUrl>"          # e.g. https://aurorabapenv4ab3f.crmtest.dynamics.com
+ENV_URL="<envUrl>"          # e.g. https://contoso.crm.dynamics.com
 SOLUTION="<Solution>"        # e.g. Default
 PREFIX="<Publisher Prefix>"  # e.g. new
 ```
