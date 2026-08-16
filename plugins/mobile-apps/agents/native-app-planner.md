@@ -537,16 +537,25 @@ Return per AGENTS.md rule #10.
 
 Wait for return; apply the Step 3.0 status switch:
 - `DONE` (no cross-entity reads) → mark Step 5c done, proceed to Step 6.
-- `DONE` with addendum written → re-mirror the updated `## Data Model` section
-  into `native-app-plan.md`, then continue to Gate 2.
+- `DONE` with addendum written → re-mirror both the updated `## Data Model`
+  section and the edited `_screens_section.md` `## Screens` section into
+  `native-app-plan.md`, then continue to Gate 2. The authoritative plan must
+  contain the deferred-field removals before any approval or implementation
+  step reads it.
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
 
 #### 5c.2 — Gate 2 draft readiness
 
-Mirror the finalized cross-entity table into `native-app-plan.md` and verify the
-architecture draft includes data model, projections, offline scope, shared
-operational context, native capabilities, connectors, risks, and blockers.
+Mirror the finalized cross-entity table and updated screen section into
+`native-app-plan.md` and verify the architecture draft includes data model,
+projections, offline scope, shared operational context, native capabilities,
+connectors, risks, and blockers.
+For every `external-projection-required` row, verify the screen plan marks the
+field under `Deferred fields` and removes it from visible fields, data selects,
+filters, KPIs, counts, and layout requirements. If any deferred field remains
+implementable, return `BLOCKED: unresolved external projection remained in the
+screen contract` before foreground approval.
 Render the visual plan, but leave Gate 2 unchecked for foreground approval.
 
 #### 5c.3 — Gate 3 draft readiness

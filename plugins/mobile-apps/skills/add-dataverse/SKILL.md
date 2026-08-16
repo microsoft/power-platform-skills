@@ -229,6 +229,11 @@ Boolean, or computed dependency has the same semantics.
      --actual "<working_dir>/.tmp/derived-metadata-live.json"
    ```
 
+   Exit code `2` with valid `BLOCKED` JSON is a reconciliation result, not an
+   environment failure. Parse each incompatible row and map it through the
+   matrix below. Exit code `1`, invalid JSON, a missing result slot, or
+   unreadable/malformed live metadata is `unverified` and stops before writes.
+
 Lookups require an exact target set. Planned choices require matching integer
 and label mappings. Ordinary columns require `SourceType` 0. A maker-created
 computed dependency is reusable only when source type, source-type mask, and
@@ -243,7 +248,13 @@ Build and print a reconciliation matrix before Step 5:
 | Absent; plan says Create; logical name uses the verified publisher prefix | `create` | ordinary columns `create` inline; lookups deferred | Create once after the complete-payload self-check. |
 | Absent; plan says Reuse/Extend or dependency is standard/managed/required-existing | `defer` | dependent columns `defer` | Never recreate a standard or managed table. Drop the dependent lookups/columns from this run, continue with everything else, and list them under Deferred in Step 9. |
 | Present; same-name column has incompatible `AttributeType` / `AttributeTypeName.Value` | `extend` | incompatible column `adapt` | Auto-rename the planned column via the probe sequence below, record it in the alias map, and create it alongside the existing one. Never modify or delete the existing column. |
+| Present; lookup target or Choice/Boolean mapping is semantically incompatible; table permits extension | `extend` | incompatible derived column `adapt` | Auto-rename the planned lookup/column, propagate the alias through relationships, plan, screens, sample data, and manifest, then create it beside the existing column. |
+| Present; lookup target or Choice/Boolean mapping is semantically incompatible; table cannot be extended | `reuse` | incompatible derived column `defer` | Drop the planned column and all dependent fields from this run; record the exact mismatch under Deferred. |
+| Present; ordinary planned column has a nonzero or mismatched live `SourceType`; table permits extension | `extend` | incompatible source semantics `adapt` | Treat the live column as computed/derived, auto-rename the planned ordinary column, propagate the alias, and create it beside the existing column. Never overwrite the live definition. |
+| Present; ordinary planned column has a nonzero or mismatched live `SourceType`; table cannot be extended | `reuse` | incompatible source semantics `defer` | Drop the planned column and dependent fields from this run and record the source-type mismatch under Deferred. |
+| Present; maker-created computed column has mismatched source type, source-type mask, or `FormulaDefinition` | `reuse` | computed dependency `defer` | Never overwrite or synthesize the formula. Drop dependent screen fields from this run and require the maker/server-owned projection to be corrected before a later reconciliation. |
 | Present; columns missing but `IsCustomizable.Value=false` or `CanCreateAttributes.Value=false` | `reuse` | missing columns `defer` | The target cannot be extended by this workflow. Reuse the columns that do exist, drop the rest from this run, and list them under Deferred in Step 9. |
+| Required derived metadata is missing, duplicated, malformed, or unreadable | `unverified` | unknown | STOP before writes. This is a metadata-integrity/environment failure, not a model conflict; never adapt from incomplete evidence. |
 | Batched query failed (non-2xx) after retry and per-table split | `unverified` | unknown | STOP before writes for the affected reconciliation scope and surface the concrete environment/auth/permission error. |
 
 `replace` is not an automatic state in this workflow. Replacing a table or column requires an explicitly approved migration with dependency analysis and data movement, so a conflict resolves to `adapt` (rename beside it) or `defer` (leave it out) instead — both of which leave existing data untouched.
