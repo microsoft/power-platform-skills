@@ -36,6 +36,22 @@ function splitSections(markdown) {
   return sections;
 }
 
+function renderSectionBody(body) {
+  const parts = [];
+  const mermaidFence = /```mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/gi;
+  let cursor = 0;
+  let match;
+  while ((match = mermaidFence.exec(body)) !== null) {
+    const before = body.slice(cursor, match.index).trim();
+    if (before) parts.push(`<pre>${escapeHtml(before)}</pre>`);
+    parts.push(`<div class="diagram"><div class="mermaid">${escapeHtml(match[1].trim())}</div></div>`);
+    cursor = mermaidFence.lastIndex;
+  }
+  const after = body.slice(cursor).trim();
+  if (after) parts.push(`<pre>${escapeHtml(after)}</pre>`);
+  return parts.join('');
+}
+
 function renderPlan(markdown, status = {}) {
   const sections = splitSections(markdown);
   const nav = sections.map((section, index) =>
@@ -43,7 +59,7 @@ function renderPlan(markdown, status = {}) {
   const cards = sections.map((section, index) => `
     <section id="section-${index}">
       <h2>${escapeHtml(section.title)}</h2>
-      <pre>${escapeHtml(section.body)}</pre>
+      ${renderSectionBody(section.body)}
     </section>`).join('');
   const progress = status.total ? Math.min(100, Math.round((Number(status.completed || 0) / Number(status.total)) * 100)) : 0;
   const banner = status.awaitingInput
@@ -61,12 +77,16 @@ function renderPlan(markdown, status = {}) {
 nav{position:sticky;top:130px;align-self:start;display:grid;gap:7px}nav a{color:#1d4ed8;text-decoration:none;padding:8px;border-radius:8px}nav a:hover{background:#dbeafe}
 main{display:grid;gap:18px}section{background:white;border:1px solid #dbe2ef;border-radius:14px;padding:20px;box-shadow:0 4px 18px #0f172a12}
 h2{margin:0 0 14px;font-size:18px}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155}
+.diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.mermaid{min-width:640px;text-align:center}
 .notice{font-size:12px;color:#64748b;margin-top:8px}@media(max-width:800px){.layout{grid-template-columns:1fr}nav{position:static;display:flex;overflow:auto}}
-@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section{background:#111827;border-color:#334155}pre{color:#cbd5e1}nav a{color:#7dd3fc}}
+@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section{background:#111827;border-color:#334155}pre{color:#cbd5e1}nav a{color:#7dd3fc}.diagram{background:#f8fafc}}
 </style></head><body><header class="top"><h1>Mobile app plan</h1>
 <div class="meta"><span>Phase: ${escapeHtml(status.phase || 'planning')}</span><span>${escapeHtml(status.message || 'Review the approved architecture and experience')}</span><span>${progress}% complete</span></div>
 <div class="bar"><span></span></div><div class="notice">Plan preview only — implementation has not started unless the status says otherwise.</div></header>
-${banner}<div class="layout"><nav>${nav}</nav><main>${cards}</main></div></body></html>`;
+${banner}<div class="layout"><nav>${nav}</nav><main>${cards}</main></div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>if(window.mermaid){window.mermaid.initialize({startOnLoad:true,securityLevel:'strict',theme:'neutral'});}</script>
+</body></html>`;
 }
 
 function main() {
@@ -89,4 +109,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { escapeHtml, renderPlan, splitSections };
+module.exports = { escapeHtml, renderPlan, renderSectionBody, splitSections };

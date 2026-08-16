@@ -37,6 +37,27 @@ test('plan renderer creates navigation, progress, and input banner safely', () =
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 });
 
+test('plan renderer turns fenced Mermaid ER diagrams into safe renderable blocks', () => {
+  const markdown = [
+    '## Data Model',
+    '### ER Diagram',
+    '```mermaid',
+    'erDiagram',
+    '  ACCOUNT ||--o{ CONTACT : contains',
+    '  CONTACT {',
+    '    string name',
+    '  }',
+    '```',
+    '<script>alert(1)</script>',
+  ].join('\n');
+  const html = renderPlan(markdown);
+  assert.match(html, /class="mermaid">erDiagram/);
+  assert.match(html, /ACCOUNT \|\|--o\{ CONTACT : contains/);
+  assert.match(html, /mermaid@11\/dist\/mermaid\.min\.js/);
+  assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+});
+
 test('agent preflight selects fallback before dispatch when snapshot is missing', () => {
   const root = path.resolve(__dirname, '..', '..');
   const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-preflight-'));
