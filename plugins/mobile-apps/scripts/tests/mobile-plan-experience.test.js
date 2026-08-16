@@ -86,6 +86,8 @@ test('plan renderer separates review views and renders plan tables with statuses
   assert.match(html, /data-filter="experience"/);
   assert.match(html, /data-filter="implementation"/);
   assert.match(html, /class="plan-table"/);
+  assert.match(html, /<strong>1<\/strong><span>Dataverse tables<\/span>/);
+  assert.match(html, /<strong>1<\/strong><span>Planned screens<\/span>/);
   assert.match(html, /class="status success">Reuse verified/);
   assert.match(html, /class="status danger">Authentication required/);
   assert.match(html, /Connector status is explicit/);

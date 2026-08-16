@@ -190,9 +190,34 @@ function sectionView(title) {
   return 'architecture';
 }
 
-function countTableRows(body) {
-  const rows = body.split(/\r?\n/).filter((line) => line.trim().startsWith('|'));
+function countFirstTableRows(body) {
+  const lines = body.split(/\r?\n/);
+  let rows = [];
+  for (const line of lines) {
+    if (line.trim().startsWith('|')) {
+      rows.push(line);
+    } else if (rows.length) {
+      break;
+    }
+  }
   return Math.max(0, rows.length - 2);
+}
+
+function subsectionBody(body, heading) {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^###\s+/.test(line) && heading.test(line));
+  if (start < 0) return body;
+  const endOffset = lines.slice(start + 1).findIndex((line) => /^#{1,3}\s+/.test(line));
+  const end = endOffset < 0 ? lines.length : start + 1 + endOffset;
+  return lines.slice(start + 1, end).join('\n');
+}
+
+function countDataModelTables(body) {
+  const decisions = [...body.matchAll(/^\s*-\s*(?:Reuse|Extend|Create):\s*(\d+)/gim)];
+  if (decisions.length) {
+    return decisions.reduce((total, match) => total + Number(match[1]), 0);
+  }
+  return countFirstTableRows(subsectionBody(body, /Target Reconciliation/i));
 }
 
 function renderPlan(markdown, status = {}) {
@@ -201,9 +226,9 @@ function renderPlan(markdown, status = {}) {
   const screenSection = sections.find((section) => /screens/i.test(section.title));
   const dataSection = sections.find((section) => /data model/i.test(section.title));
   const metrics = [
-    ['Architecture tables', dataSection ? countTableRows(dataSection.body) : 0],
-    ['Planned connectors', connectorSection && !/\bnone\b/i.test(connectorSection.body) ? countTableRows(connectorSection.body) : 0],
-    ['Planned screens', screenSection ? countTableRows(screenSection.body) : 0],
+    ['Dataverse tables', dataSection ? countDataModelTables(dataSection.body) : 0],
+    ['Planned connectors', connectorSection && !/\bnone\b/i.test(connectorSection.body) ? countFirstTableRows(connectorSection.body) : 0],
+    ['Planned screens', screenSection ? countFirstTableRows(subsectionBody(screenSection.body, /Screen Map/i)) : 0],
     ['Implementation', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
   ];
   const nav = sections.map((section, index) =>
