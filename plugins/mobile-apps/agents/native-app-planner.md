@@ -489,9 +489,9 @@ The orchestrator greps this prefix to open the file. Stage the Gate 3 content
 without entering plan mode. Step 5c finishes the cross-entity audit, then this
 agent returns the complete draft.
 
-> "The browser preview shows what each screen will look like with the planned design. Review both layout and visual style. Suggest changes to screens, navigation, or design and I'll regenerate the preview before you approve.
+> "The browser preview is a concept wireframe showing planned structure and visual direction with placeholder data. It is not a screenshot of generated TSX. Review navigation, hierarchy, content emphasis, and design direction; suggest changes and I'll regenerate it before approval.
 >
-> Note: Native navigation chrome (iOS large-title collapsing headers, search bars, swipe-to-delete gestures) cannot be shown in the HTML preview — these will appear in the built app. The preview approximates layout, colors, and typography."
+> Generated TSX, native controls, dynamic states, exact spacing, and navigation chrome may differ. The post-build static preview is closer; the live device is authoritative."
 
 The foreground Gate 3 approves the screen plan and design together. If the
 orchestrator later sends revision feedback, revise only the affected draft

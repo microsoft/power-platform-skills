@@ -722,7 +722,7 @@ Then append the markdown block to the Step 5 write target (`plan_path` in `phase
 **Otherwise (`skip_preview` is false or unset)** — the legacy HTML preview branch — continue to render `_plan_preview.html`:
 
 **Print before starting:**
-> "→ Generating _plan_preview.html so you can see each screen visually before code is written…"
+> "→ Generating _plan_preview.html concept wireframes before code is written…"
 
 After writing `_screens_section.md`, generate the experience area used by
 `mobile-app-plan.html` before any TSX exists. This is a plan dashboard, not a
@@ -739,7 +739,9 @@ branding:
 - summary cards for table/screen/capability/connector counts;
 - status pills for approved, pending, blocked, and deferred items;
 - phone frames for representative screens;
-- explicit label: `Plan preview — implementation has not started`.
+- persistent label above every phone frame: `Concept wireframe — placeholder data; generated TSX and the live device are authoritative`;
+- visual treatment must remain wireframe-like rather than polished enough to be mistaken for a runtime screenshot;
+- explicit page label: `Experience concept — implementation has not started`.
 
 The authoritative full-plan renderer is
 `scripts/render-mobile-plan.js`. Screen-planner owns representative phone-frame
@@ -750,7 +752,7 @@ Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-htm
 
 - **Layout:** translate the `YStack`/`XStack`/`Card`/`Button` structure described in the spec to HTML/CSS using the component mapping (Section 1) and token tables (Section 2).
 - **Data:** for list screens, generate 3–4 plausible placeholder items based on the entity name (e.g. "Inspection #1042", "Inspection #1043"). For detail screens, populate fields with one representative placeholder record.
-- **State:** show the happy-path populated state only. No loading spinners, no error states.
+- **State:** show the happy-path populated state only and label it `Representative populated state`. No loading spinners or error states.
 - **Actions:** render buttons with their labels. No click behavior needed.
 - **Baseline screens** (Login, OAuth callback, Splash): skip — users know what those look like.
 

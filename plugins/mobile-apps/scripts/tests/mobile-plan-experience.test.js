@@ -37,7 +37,7 @@ test('plan renderer creates navigation, progress, and input banner safely', () =
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 });
 
-test('plan renderer turns fenced Mermaid ER diagrams into safe renderable blocks', () => {
+test('plan renderer turns fenced Mermaid ER diagrams into local safe HTML', () => {
   const markdown = [
     '## Data Model',
     '### ER Diagram',
@@ -51,11 +51,46 @@ test('plan renderer turns fenced Mermaid ER diagrams into safe renderable blocks
     '<script>alert(1)</script>',
   ].join('\n');
   const html = renderPlan(markdown);
-  assert.match(html, /class="mermaid">erDiagram/);
-  assert.match(html, /ACCOUNT \|\|--o\{ CONTACT : contains/);
-  assert.match(html, /mermaid@11\/dist\/mermaid\.min\.js/);
+  assert.match(html, /class="diagram er-diagram"/);
+  assert.match(html, /<h3>ACCOUNT<\/h3>/);
+  assert.match(html, /<h3>CONTACT<\/h3>/);
+  assert.match(html, /<code>\|\|--o\{<\/code>/);
+  assert.match(html, /contains/);
+  assert.match(html, /<th>name<\/th>/);
+  assert.doesNotMatch(html, /cdn\.jsdelivr\.net|mermaid\.min\.js/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+});
+
+test('plan renderer separates review views and renders plan tables with statuses', () => {
+  const markdown = [
+    '## Data Model',
+    '### Target Reconciliation',
+    '| Entity | Decision |',
+    '|---|---|',
+    '| Product | Reuse verified |',
+    '## Connectors',
+    '| Connector | Status |',
+    '|---|---|',
+    '| Dataverse | Planned |',
+    '| SharePoint | Authentication required |',
+    '## Screens',
+    '| Screen | Archetype |',
+    '|---|---|',
+    '| Home | Tab-root |',
+    '## Approvals',
+    '- Gate 2 blocked by missing connection',
+  ].join('\n');
+  const html = renderPlan(markdown, { completed: 2, total: 4 });
+  assert.match(html, /data-filter="architecture"/);
+  assert.match(html, /data-filter="experience"/);
+  assert.match(html, /data-filter="implementation"/);
+  assert.match(html, /class="plan-table"/);
+  assert.match(html, /class="status success">Reuse verified/);
+  assert.match(html, /class="status danger">Authentication required/);
+  assert.match(html, /Connector status is explicit/);
+  assert.match(html, /Concept review:/);
+  assert.match(html, /class="concern"/);
 });
 
 test('agent preflight selects fallback before dispatch when snapshot is missing', () => {

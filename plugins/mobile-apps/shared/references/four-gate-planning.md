@@ -40,9 +40,9 @@ One approval covers:
 
 - reuse/extend/create decisions and ER diagram;
 - relationships, keys, and dependency tiers;
-- formatted lookup, calculated, chained-fetch, and materialized projection
+- formatted lookup, bounded chained-fetch, and external-projection-required
   decisions;
-- refresh/reconciliation ownership for materialized projections;
+- validation of any maker-created computed dependency before reuse;
 - offline scope;
 - native capabilities and connectors;
 - risks, deferred requirements, and readiness blockers.

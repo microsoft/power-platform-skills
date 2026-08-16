@@ -36,29 +36,183 @@ function splitSections(markdown) {
   return sections;
 }
 
-function renderSectionBody(body) {
-  const parts = [];
-  const mermaidFence = /```mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/gi;
-  let cursor = 0;
-  let match;
-  while ((match = mermaidFence.exec(body)) !== null) {
-    const before = body.slice(cursor, match.index).trim();
-    if (before) parts.push(`<pre>${escapeHtml(before)}</pre>`);
-    parts.push(`<div class="diagram"><div class="mermaid">${escapeHtml(match[1].trim())}</div></div>`);
-    cursor = mermaidFence.lastIndex;
+function renderErDiagram(source) {
+  const entities = new Map();
+  const relationships = [];
+  let currentEntity = null;
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line === 'erDiagram') continue;
+    const entityStart = /^([A-Za-z_][A-Za-z0-9_]*)\s*\{$/.exec(line);
+    if (entityStart) {
+      currentEntity = entityStart[1];
+      if (!entities.has(currentEntity)) entities.set(currentEntity, []);
+      continue;
+    }
+    if (line === '}') {
+      currentEntity = null;
+      continue;
+    }
+    if (currentEntity) {
+      const field = /^(\S+)\s+(\S+)(?:\s+(.*))?$/.exec(line);
+      if (field) entities.get(currentEntity).push({
+        type: field[1],
+        name: field[2],
+        notes: field[3] || '',
+      });
+      continue;
+    }
+    const relationship = /^(\S+)\s+([|o}{.-]+)\s+(\S+)\s*:\s*(.+)$/.exec(line);
+    if (relationship) {
+      relationships.push({
+        from: relationship[1],
+        cardinality: relationship[2],
+        to: relationship[3],
+        label: relationship[4],
+      });
+      if (!entities.has(relationship[1])) entities.set(relationship[1], []);
+      if (!entities.has(relationship[3])) entities.set(relationship[3], []);
+    }
   }
-  const after = body.slice(cursor).trim();
-  if (after) parts.push(`<pre>${escapeHtml(after)}</pre>`);
+
+  if (entities.size === 0) {
+    return `<pre class="diagram-source">${escapeHtml(source)}</pre>`;
+  }
+
+  const entityCards = [...entities.entries()].map(([name, fields]) => `
+    <article class="entity-card">
+      <h3>${escapeHtml(name)}</h3>
+      ${fields.length === 0 ? '<div class="entity-empty">No columns listed</div>' : `
+      <table><tbody>${fields.map((field) => `
+        <tr><td>${escapeHtml(field.type)}</td><th>${escapeHtml(field.name)}</th><td>${escapeHtml(field.notes)}</td></tr>`).join('')}
+      </tbody></table>`}
+    </article>`).join('');
+  const relationshipRows = relationships.length === 0
+    ? ''
+    : `<div class="relationships"><h3>Relationships</h3>${relationships.map((item) =>
+      `<div><strong>${escapeHtml(item.from)}</strong> <code>${escapeHtml(item.cardinality)}</code> <strong>${escapeHtml(item.to)}</strong> — ${escapeHtml(item.label)}</div>`).join('')}</div>`;
+  return `<div class="diagram er-diagram"><div class="entity-grid">${entityCards}</div>${relationshipRows}</div>`;
+}
+
+function inlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function statusBadge(value) {
+  const normalized = String(value).trim().toLowerCase();
+  const match = normalized.match(/\b(verified|bound|approved|complete|planned|pending|deferred|blocked|unverified|authentication required|auth required)\b/);
+  if (!match) return inlineMarkdown(value);
+  const label = match[1];
+  const tone = /verified|bound|approved|complete/.test(label)
+    ? 'success'
+    : /blocked|unverified|auth/.test(label)
+      ? 'danger'
+      : /deferred/.test(label)
+        ? 'warning'
+        : 'pending';
+  return `<span class="status ${tone}">${inlineMarkdown(value)}</span>`;
+}
+
+function renderMarkdownTable(lines) {
+  const rows = lines.map((line) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()));
+  const headers = rows[0];
+  return `<div class="table-wrap"><table class="plan-table"><thead><tr>${headers.map((cell) =>
+    `<th>${inlineMarkdown(cell)}</th>`).join('')}</tr></thead><tbody>${rows.slice(2).map((row) =>
+    `<tr>${headers.map((_, index) => `<td>${statusBadge(row[index] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function renderSectionBody(body) {
+  const lines = body.split(/\r?\n/);
+  const parts = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+    const fence = /^```(\w*)/.exec(line.trim());
+    if (fence) {
+      const language = fence[1].toLowerCase();
+      const source = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test(lines[index].trim())) source.push(lines[index++]);
+      index += 1;
+      parts.push(language === 'mermaid'
+        ? renderErDiagram(source.join('\n').trim())
+        : `<pre class="code-block">${escapeHtml(source.join('\n'))}</pre>`);
+      continue;
+    }
+    const heading = /^(#{3,4})\s+(.+)$/.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      parts.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+    if (line.trim().startsWith('|') && index + 1 < lines.length && /^\s*\|?[\s:|-]+\|/.test(lines[index + 1])) {
+      const tableLines = [line, lines[index + 1]];
+      index += 2;
+      while (index < lines.length && lines[index].trim().startsWith('|')) tableLines.push(lines[index++]);
+      parts.push(renderMarkdownTable(tableLines));
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        items.push(lines[index++].replace(/^\s*[-*]\s+/, ''));
+      }
+      parts.push(`<ul>${items.map((item) =>
+        `<li${/\b(blocked|deferred|risk|unverified)\b/i.test(item) ? ' class="concern"' : ''}>${statusBadge(item)}</li>`).join('')}</ul>`);
+      continue;
+    }
+    const paragraph = [line.trim()];
+    index += 1;
+    while (
+      index < lines.length
+      && lines[index].trim()
+      && !/^(#{3,4})\s+|^```|^\s*[-*]\s+/.test(lines[index])
+      && !lines[index].trim().startsWith('|')
+    ) paragraph.push(lines[index++].trim());
+    const text = paragraph.join(' ');
+    const concern = /\b(blocked|deferred|risk|unverified)\b/i.test(text);
+    parts.push(`<p${concern ? ' class="concern"' : ''}>${statusBadge(text)}</p>`);
+  }
   return parts.join('');
+}
+
+function sectionView(title) {
+  if (/screens|design|experience/i.test(title)) return 'experience';
+  if (/approval|implementation|sample data|deployment|readiness/i.test(title)) return 'implementation';
+  return 'architecture';
+}
+
+function countTableRows(body) {
+  const rows = body.split(/\r?\n/).filter((line) => line.trim().startsWith('|'));
+  return Math.max(0, rows.length - 2);
 }
 
 function renderPlan(markdown, status = {}) {
   const sections = splitSections(markdown);
+  const connectorSection = sections.find((section) => /connectors/i.test(section.title));
+  const screenSection = sections.find((section) => /screens/i.test(section.title));
+  const dataSection = sections.find((section) => /data model/i.test(section.title));
+  const metrics = [
+    ['Architecture tables', dataSection ? countTableRows(dataSection.body) : 0],
+    ['Planned connectors', connectorSection && !/\bnone\b/i.test(connectorSection.body) ? countTableRows(connectorSection.body) : 0],
+    ['Planned screens', screenSection ? countTableRows(screenSection.body) : 0],
+    ['Implementation', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
+  ];
   const nav = sections.map((section, index) =>
-    `<a href="#section-${index}">${escapeHtml(section.title)}</a>`).join('');
+    `<a data-view="${sectionView(section.title)}" href="#section-${index}">${escapeHtml(section.title)}</a>`).join('');
   const cards = sections.map((section, index) => `
-    <section id="section-${index}">
+    <section id="section-${index}" data-view="${sectionView(section.title)}">
       <h2>${escapeHtml(section.title)}</h2>
+      ${/connectors/i.test(section.title) ? '<div class="verification-note">Connector status is explicit: planned does not mean authenticated, verified, or bound.</div>' : ''}
+      ${/screens|design/i.test(section.title) ? '<div class="concept-note"><strong>Concept review:</strong> planned structure and visual direction only. Generated TSX and the live device are authoritative.</div>' : ''}
       ${renderSectionBody(section.body)}
     </section>`).join('');
   const progress = status.total ? Math.min(100, Math.round((Number(status.completed || 0) / Number(status.total)) * 100)) : 0;
@@ -73,19 +227,24 @@ function renderPlan(markdown, status = {}) {
 .top h1{margin:0 0 8px;font-size:20px}.meta{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:#dbeafe}
 .bar{height:7px;background:#334155;border-radius:999px;margin-top:12px;overflow:hidden}.bar span{display:block;height:100%;background:#38bdf8;width:${progress}%}
 .input-banner{background:#fef3c7;color:#78350f;border-bottom:1px solid #f59e0b;padding:14px 24px;font-weight:700}
+.view-tabs{display:flex;gap:8px;max-width:1400px;margin:18px auto 0;padding:0 22px}.view-tabs button{border:1px solid #94a3b8;background:white;color:#1e293b;border-radius:999px;padding:9px 14px;font-weight:700;cursor:pointer}.view-tabs button.active{background:#1d4ed8;color:white;border-color:#1d4ed8}
+.summary{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;max-width:1400px;margin:14px auto 0;padding:0 22px}.summary article{background:white;border:1px solid #dbe2ef;border-radius:12px;padding:14px}.summary strong{display:block;font-size:24px;color:#1d4ed8}.summary span{font-size:12px;color:#64748b}
 .layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px;max-width:1400px;margin:auto;padding:22px}
 nav{position:sticky;top:130px;align-self:start;display:grid;gap:7px}nav a{color:#1d4ed8;text-decoration:none;padding:8px;border-radius:8px}nav a:hover{background:#dbeafe}
 main{display:grid;gap:18px}section{background:white;border:1px solid #dbe2ef;border-radius:14px;padding:20px;box-shadow:0 4px 18px #0f172a12}
-h2{margin:0 0 14px;font-size:18px}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155}
-.diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.mermaid{min-width:640px;text-align:center}
-.notice{font-size:12px;color:#64748b;margin-top:8px}@media(max-width:800px){.layout{grid-template-columns:1fr}nav{position:static;display:flex;overflow:auto}}
-@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section{background:#111827;border-color:#334155}pre{color:#cbd5e1}nav a{color:#7dd3fc}.diagram{background:#f8fafc}}
+h2{margin:0 0 14px;font-size:18px}h3{margin:22px 0 10px;font-size:16px}h4{margin:18px 0 8px;font-size:14px}p{line-height:1.55;color:#334155}ul{padding-left:22px;color:#334155}.code-block{white-space:pre-wrap;word-break:break-word;margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155}
+.table-wrap{overflow:auto;margin:12px 0}.plan-table{width:100%;border-collapse:collapse;font-size:13px}.plan-table th{background:#eff6ff;color:#1e3a8a;text-align:left}.plan-table th,.plan-table td{padding:9px 10px;border:1px solid #dbe2ef;vertical-align:top}.status{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.status.success{background:#dcfce7;color:#166534}.status.pending{background:#dbeafe;color:#1e40af}.status.warning{background:#fef3c7;color:#92400e}.status.danger{background:#fee2e2;color:#991b1b}
+.concern{border-left:4px solid #dc2626;background:#fef2f2;color:#7f1d1d;padding:10px 12px;border-radius:6px}.verification-note,.concept-note{padding:10px 12px;border-radius:8px;margin-bottom:14px}.verification-note{background:#eff6ff;color:#1e3a8a}.concept-note{background:#fff7ed;color:#9a3412}
+.diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.entity-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.entity-card{background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.entity-card h3,.relationships h3{margin:0;padding:10px 12px;background:#dbeafe;color:#1e3a8a;font-size:14px}.entity-card table{width:100%;border-collapse:collapse;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.entity-card td,.entity-card th{padding:7px 9px;border-top:1px solid #e2e8f0;text-align:left}.entity-card td:first-child{color:#475569}.entity-empty{padding:10px;color:#64748b}.relationships{margin-top:14px;background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.relationships div{padding:8px 12px;border-top:1px solid #e2e8f0}.relationships code{color:#7c3aed}
+.notice{font-size:12px;color:#cbd5e1;margin-top:8px}@media(max-width:800px){.summary{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}nav{position:static;display:flex;overflow:auto}}
+@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section,.summary article{background:#111827;border-color:#334155}p,ul{color:#cbd5e1}nav a{color:#7dd3fc}.diagram{background:#f8fafc}.view-tabs button{background:#111827;color:#e2e8f0}}
 </style></head><body><header class="top"><h1>Mobile app plan</h1>
 <div class="meta"><span>Phase: ${escapeHtml(status.phase || 'planning')}</span><span>${escapeHtml(status.message || 'Review the approved architecture and experience')}</span><span>${progress}% complete</span></div>
 <div class="bar"><span></span></div><div class="notice">Plan preview only — implementation has not started unless the status says otherwise.</div></header>
-${banner}<div class="layout"><nav>${nav}</nav><main>${cards}</main></div>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-<script>if(window.mermaid){window.mermaid.initialize({startOnLoad:true,securityLevel:'strict',theme:'neutral'});}</script>
+${banner}<div class="view-tabs"><button class="active" data-filter="architecture">Architecture</button><button data-filter="experience">Experience concept</button><button data-filter="implementation">Implementation status</button><button data-filter="all">All</button></div>
+<div class="summary">${metrics.map(([label, value]) => `<article><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join('')}</div>
+<div class="layout"><nav>${nav}</nav><main>${cards}</main></div>
+<script>document.querySelectorAll('[data-filter]').forEach(function(button){button.addEventListener('click',function(){var filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(function(item){item.classList.toggle('active',item===button)});document.querySelectorAll('section[data-view],nav a[data-view]').forEach(function(item){item.hidden=filter!=='all'&&item.dataset.view!==filter});});});</script>
 </body></html>`;
 }
 
@@ -109,4 +268,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { escapeHtml, renderPlan, renderSectionBody, splitSections };
+module.exports = { escapeHtml, renderErDiagram, renderPlan, renderSectionBody, splitSections };
