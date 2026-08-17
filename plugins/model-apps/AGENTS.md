@@ -123,7 +123,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
   fails **closed** rather than scanning a partial list. Classic `dashboards[]` are opt-in.
-  **All Dataverse access is via the SDK**, so metadata is persisted under
+  **All of the build's Dataverse access is via the SDK** (see "Dataverse Access From Scripts" for the
+  sanctioned exceptions elsewhere), so metadata is persisted under
   `<app-folder>/.maker-workspace/` for reuse/edits. The 14 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
@@ -682,7 +683,42 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - **Accessibility** — WCAG AA, ARIA labels, keyboard navigation, semantic HTML
 - **Complete code** — no placeholders, TODOs, or ellipses in final output
 
-## Skill Authoring Guidelines
+## Dataverse Access From Scripts
+
+**Default: go through the vendored SDK.** Anything the SDK models — tables, columns, relationships,
+views, charts, forms, commands, dashboards, app modules, sitemaps, solutions, roles, settings — is
+read and written through `createMakerSdk`. That is not style: the SDK persists metadata under
+`<app-folder>/.maker-workspace/` for reuse and edits, resolves artifact identity the same way the
+build does, and owns retry/pagination behaviour. A read that bypasses it can disagree with the write
+about which artifact it is talking about.
+
+Two escape hatches exist, and both are deliberate. The maker SDK models the *maker* surface; parts of
+Dataverse simply are not in it.
+
+| Hatch | Use for | Examples in tree |
+|---|---|---|
+| `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js`), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
+| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely |
+
+**Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
+and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
+using, as the verify reader does.
+
+When you do go direct, all four of these apply:
+
+1. **Comment WHY the SDK cannot serve it** — name the SDK method you would otherwise call and what it
+   drops or lacks. "Deliberately not `sdk.fetchEntityMetadata`" is the difference between a
+   documented exception and something a later reader "simplifies" back into a silent bug.
+2. **Absolute URL including `/api/data/v9.2`** when using the raw `httpClient`. It is the transport
+   the SDK drives, so it takes full request URLs and validates them with `new URL(url)` for its
+   same-origin guard — a relative path throws there rather than resolving against the org.
+3. **GUIDs unquoted.** Record ids and `_x_value` lookups are `Edm.Guid`; `id eq '<guid>'` fails with
+   *"A binary operator with incompatible types was detected"*. See `references/troubleshooting.md`.
+4. **Test the reader itself, not only an injected stub.** The `entityPrivileges` URL bug shipped
+   because every test injected a fake reader into `verifySpec`, so the real one was never executed —
+   and `verify-spec` catches per-entity read failures, so it would have failed silently on every live
+   run rather than crashing. Drive at least one test through the real client's request seam.
+
 
 - Keep SKILL.md under 500 lines
 - Use short, descriptive `name` field (e.g., `genpage`)
