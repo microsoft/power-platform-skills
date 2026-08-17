@@ -1,7 +1,7 @@
 # Native Mobile Experience Feedback Status
 
 This document tracks the actionable recommendations from **Native Mobile
-Experience Feedback 2026-08-15** against the mobile-app V2 reliability branch.
+Experience Feedback 2026-08-15** against the mobile-app V2 Visual branch.
 Several slides contain visual examples rather than separate requirements, so
 the table groups them by product outcome.
 
@@ -27,6 +27,22 @@ the table groups them by product outcome.
 | Let browser ER edits directly update the plan or Dataverse | Cannot be done safely | A standalone Plan HTML file cannot securely mutate local project files. Revisions are exported, validated, and used to regenerate Gate 2 and dependent screen bindings before any Dataverse mutation. |
 | Guarantee that a static preview exactly matches native rendering | Cannot be guaranteed | Plan previews are conceptual and post-build HTML previews remain static. Metro and the native player are authoritative. |
 | Measure actual battery, network, storage, and operating-system permission behavior statically | Requires device testing | Static analysis can document expected behavior, but measured resource use and OS permission wording/enforcement require an iOS or Android device run. |
+
+## Remaining Validation and Deliberate Non-goals
+
+The following work remains after the contract changes. These items are not
+missing generated-app features unless explicitly stated:
+
+| Item | Status | Completion evidence |
+|---|---|---|
+| Run a fresh end-to-end V2 Visual dogfood benchmark | Pending validation | Create a new app from a fresh template and verify Gate 2 architecture, Gate 3 visuals, Gate 4 recommendations, implementation progress, Trust Report, launch page, consolidated screen count, sample-data duration, final TypeScript state, and Metro launch. |
+| Measure actual time and screen-count improvements | Pending validation | Compare the fresh run with the previous 25-screen baseline. Current 27–30% total-time and approximately 32% screen-count reductions are estimates, not measured results. |
+| Validate battery, network, storage, and OS permission behavior | Requires device testing | Run the generated app on representative iOS and Android devices and record measured behavior. Static planning cannot provide this evidence. |
+| Automatically clone the template and install dependencies | Deliberate non-goal | Keep fresh-template materialization and `npm install` outside `/create-mobile-app` so planning cannot start against an incomplete or unauthenticated dependency tree. |
+| Reduce package installation time inside the plugin | Outside plugin control | Track template dependency size, registry latency, network conditions, and Azure Artifacts authentication separately from app-generation performance. |
+| Infer the environment from PAC CLI authentication profiles | Not applicable | Continue using `npx power-apps`, the selected environment ID, and generated `power.config.json`; do not add a second PAC-owned environment authority. |
+| Guarantee pixel-identical HTML and native previews | Cannot be guaranteed | Treat plan and static HTML previews as review aids. Metro and the native player remain authoritative for rendering validation. |
+| Add AI recommendations, carousels, gestures, or immersive imagery to every app | Scenario-dependent | Add these patterns only when the approved workflow, data source, and accessibility contract justify them. |
 
 ## Visual Quality Contract
 
