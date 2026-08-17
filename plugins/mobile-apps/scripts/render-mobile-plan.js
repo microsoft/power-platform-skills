@@ -81,18 +81,34 @@ function renderErDiagram(source) {
   }
 
   const entityCards = [...entities.entries()].map(([name, fields]) => `
-    <article class="entity-card">
-      <h3>${escapeHtml(name)}</h3>
-      ${fields.length === 0 ? '<div class="entity-empty">No columns listed</div>' : `
+    <article class="entity-card" data-er-entity>
+      <h3><span data-er-editable data-er-name>${escapeHtml(name)}</span><button type="button" class="er-icon er-edit-controls" data-er-remove-entity aria-label="Remove entity">×</button></h3>
+      <div class="entity-empty"${fields.length ? ' hidden' : ''}>No columns listed</div>
       <table><tbody>${fields.map((field) => `
-        <tr><td>${escapeHtml(field.type)}</td><th>${escapeHtml(field.name)}</th><td>${escapeHtml(field.notes)}</td></tr>`).join('')}
-      </tbody></table>`}
+        <tr data-er-field><td data-er-editable data-er-type>${escapeHtml(field.type)}</td><th data-er-editable data-er-field-name>${escapeHtml(field.name)}</th><td data-er-editable data-er-notes>${escapeHtml(field.notes)}</td><td class="er-edit-controls"><button type="button" class="er-icon" data-er-remove-field aria-label="Remove field">×</button></td></tr>`).join('')}
+      </tbody></table>
+      <button type="button" class="er-small er-edit-controls" data-er-add-field>+ Add field</button>
     </article>`).join('');
-  const relationshipRows = relationships.length === 0
-    ? ''
-    : `<div class="relationships"><h3>Relationships</h3>${relationships.map((item) =>
-      `<div><strong>${escapeHtml(item.from)}</strong> <code>${escapeHtml(item.cardinality)}</code> <strong>${escapeHtml(item.to)}</strong> — ${escapeHtml(item.label)}</div>`).join('')}</div>`;
-  return `<div class="diagram er-diagram"><div class="entity-grid">${entityCards}</div>${relationshipRows}</div>`;
+  const relationshipRows = relationships.map((item) =>
+    `<div data-er-relationship><strong data-er-editable data-er-from>${escapeHtml(item.from)}</strong> <code data-er-editable data-er-cardinality>${escapeHtml(item.cardinality)}</code> <strong data-er-editable data-er-to>${escapeHtml(item.to)}</strong> — <span data-er-editable data-er-label>${escapeHtml(item.label)}</span><button type="button" class="er-icon er-edit-controls" data-er-remove-relationship aria-label="Remove relationship">×</button></div>`).join('');
+  return `<div class="diagram er-diagram">
+    <div class="er-toolbar">
+      <strong>ER review editor</strong>
+      <span>Draft changes here, then copy or download a revision request for Gate 2. This page never mutates the approved plan directly.</span>
+      <div>
+        <button type="button" class="er-small" data-er-toggle>Edit diagram</button>
+        <button type="button" class="er-small er-edit-controls" data-er-add-entity>+ Add entity</button>
+        <button type="button" class="er-small er-edit-controls" data-er-copy>Copy revision</button>
+        <button type="button" class="er-small er-edit-controls" data-er-download>Download JSON</button>
+        <button type="button" class="er-small er-edit-controls" data-er-reset>Reset</button>
+      </div>
+      <output data-er-status aria-live="polite"></output>
+    </div>
+    <div class="er-content">
+      <div class="entity-grid">${entityCards}</div>
+      <div class="relationships"><h3>Relationships</h3><div class="relationship-empty"${relationships.length ? ' hidden' : ''}>No relationships listed</div><div data-er-relationships>${relationshipRows}</div><button type="button" class="er-small er-edit-controls" data-er-add-relationship>+ Add relationship</button></div>
+    </div>
+  </div>`;
 }
 
 function inlineMarkdown(value) {
@@ -294,6 +310,7 @@ h2{margin:0 0 14px;font-size:18px}h3{margin:22px 0 10px;font-size:16px}h4{margin
 .concern{border-left:4px solid #dc2626;background:#fef2f2;color:#7f1d1d;padding:10px 12px;border-radius:6px}.verification-note,.concept-note{padding:10px 12px;border-radius:8px;margin-bottom:14px}.verification-note{background:#eff6ff;color:#1e3a8a}.concept-note{background:#fff7ed;color:#9a3412}
 .outcome-list{display:grid;gap:10px}.outcome{border:1px solid #cbd5e1;border-left:5px solid #94a3b8;border-radius:9px;padding:12px}.outcome>div{display:flex;justify-content:space-between;gap:12px}.outcome span{text-transform:capitalize;font-size:12px;font-weight:700}.outcome p{margin:7px 0}.outcome.completed{border-left-color:#16a34a}.outcome.running{border-left-color:#2563eb}.outcome.blocked{border-left-color:#dc2626}.outcome.pending{border-left-color:#94a3b8}
 .diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.entity-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.entity-card{background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.entity-card h3,.relationships h3{margin:0;padding:10px 12px;background:#dbeafe;color:#1e3a8a;font-size:14px}.entity-card table{width:100%;border-collapse:collapse;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.entity-card td,.entity-card th{padding:7px 9px;border-top:1px solid #e2e8f0;text-align:left}.entity-card td:first-child{color:#475569}.entity-empty{padding:10px;color:#64748b}.relationships{margin-top:14px;background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.relationships div{padding:8px 12px;border-top:1px solid #e2e8f0}.relationships code{color:#7c3aed}
+.er-toolbar{display:grid;gap:7px;margin:-16px -16px 16px;padding:13px 16px;background:#e0f2fe;color:#0c4a6e}.er-toolbar>span{font-size:12px}.er-toolbar>div{display:flex;gap:7px;flex-wrap:wrap}.er-toolbar output{min-height:16px;font-size:12px;font-weight:700}.er-small,.er-icon{border:1px solid #94a3b8;background:white;color:#1e3a8a;border-radius:7px;cursor:pointer;font-weight:700}.er-small{padding:6px 9px}.er-icon{width:25px;height:25px;margin-left:auto}.entity-card h3{display:flex;align-items:center;gap:8px}.er-edit-controls{display:none}.er-diagram.editing .er-edit-controls{display:inline-block}.er-diagram.editing [data-er-editable]{background:#fff7ed;outline:1px dashed #f59e0b;border-radius:3px;padding:2px}.er-diagram.editing .entity-card,.er-diagram.editing .relationships{border-color:#f59e0b}.relationship-empty{color:#64748b}.relationships [data-er-relationship]{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .notice{font-size:12px;color:#cbd5e1;margin-top:8px}@media(max-width:800px){.summary{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}nav{position:static;display:flex;overflow:auto}}
 @media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section,.summary article{background:#111827;border-color:#334155}p,ul{color:#cbd5e1}nav a{color:#7dd3fc}.diagram{background:#f8fafc}.view-tabs button{background:#111827;color:#e2e8f0}}
 </style></head><body><header class="top"><h1>Mobile app plan</h1>
@@ -302,7 +319,30 @@ h2{margin:0 0 14px;font-size:18px}h3{margin:22px 0 10px;font-size:16px}h4{margin
 ${banner}<div class="view-tabs"><button class="active" data-filter="architecture">Architecture</button><button data-filter="experience">Experience concept</button><button data-filter="implementation">Implementation status</button><button data-filter="all">All</button></div>
 <div class="summary">${metrics.map(([label, value]) => `<article><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join('')}</div>
 <div class="layout"><nav>${nav}</nav><main>${cards}</main></div>
-<script>document.querySelectorAll('[data-filter]').forEach(function(button){button.addEventListener('click',function(){var filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(function(item){item.classList.toggle('active',item===button)});document.querySelectorAll('section[data-view],nav a[data-view]').forEach(function(item){item.hidden=filter!=='all'&&item.dataset.view!==filter});});});</script>
+<script>
+document.querySelectorAll('[data-filter]').forEach(function(button){button.addEventListener('click',function(){var filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(function(item){item.classList.toggle('active',item===button)});document.querySelectorAll('section[data-view],nav a[data-view]').forEach(function(item){item.hidden=filter!=='all'&&item.dataset.view!==filter});});});
+document.querySelectorAll('.er-diagram').forEach(function(diagram){
+  var content=diagram.querySelector('.er-content');var original=content.innerHTML;var status=diagram.querySelector('[data-er-status]');
+  function text(node,selector){var item=node.querySelector(selector);return item?item.textContent.trim():''}
+  function refreshEmpty(){diagram.querySelectorAll('[data-er-entity]').forEach(function(entity){var empty=entity.querySelector('.entity-empty');if(empty)empty.hidden=entity.querySelectorAll('[data-er-field]').length>0});var relationEmpty=diagram.querySelector('.relationship-empty');if(relationEmpty)relationEmpty.hidden=diagram.querySelectorAll('[data-er-relationship]').length>0}
+  function setEditing(editing){diagram.classList.toggle('editing',editing);diagram.querySelectorAll('[data-er-editable]').forEach(function(item){item.contentEditable=editing?'true':'false'});diagram.querySelector('[data-er-toggle]').textContent=editing?'Finish editing':'Edit diagram';status.textContent=editing?'Editing draft only — export a revision to apply it.':''}
+  function model(){return{version:1,kind:'mobile-er-revision',generatedAt:new Date().toISOString(),instruction:'Regenerate Gate 2 data model and dependent screen bindings from this revision; do not mutate Dataverse until Gate 2 and Gate 4 are approved again.',entities:Array.from(diagram.querySelectorAll('[data-er-entity]')).map(function(entity){return{name:text(entity,'[data-er-name]'),fields:Array.from(entity.querySelectorAll('[data-er-field]')).map(function(field){return{type:text(field,'[data-er-type]'),name:text(field,'[data-er-field-name]'),notes:text(field,'[data-er-notes]')}})}}),relationships:Array.from(diagram.querySelectorAll('[data-er-relationship]')).map(function(relation){return{from:text(relation,'[data-er-from]'),cardinality:text(relation,'[data-er-cardinality]'),to:text(relation,'[data-er-to]'),label:text(relation,'[data-er-label]')}})}}
+  function copyRevision(){var value=JSON.stringify(model(),null,2);if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(value).then(function(){status.textContent='Revision copied. Paste it into the Gate 2 revision prompt.'}).catch(function(){fallback(value)})}else fallback(value)}
+  function fallback(value){var area=document.createElement('textarea');area.value=value;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();status.textContent='Revision copied. Paste it into the Gate 2 revision prompt.'}
+  diagram.addEventListener('click',function(event){var target=event.target;
+    if(target.closest('[data-er-toggle]')){setEditing(!diagram.classList.contains('editing'));return}
+    if(target.closest('[data-er-reset]')){content.innerHTML=original;setEditing(true);refreshEmpty();status.textContent='Draft reset to the rendered plan.';return}
+    if(target.closest('[data-er-copy]')){copyRevision();return}
+    if(target.closest('[data-er-download]')){var blob=new Blob([JSON.stringify(model(),null,2)],{type:'application/json'});var link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='mobile-er-revision.json';link.click();URL.revokeObjectURL(link.href);status.textContent='Downloaded mobile-er-revision.json.';return}
+    if(target.closest('[data-er-add-entity]')){var card=document.createElement('article');card.className='entity-card';card.setAttribute('data-er-entity','');card.innerHTML='<h3><span data-er-editable data-er-name>NEW_ENTITY</span><button type="button" class="er-icon er-edit-controls" data-er-remove-entity aria-label="Remove entity">×</button></h3><div class="entity-empty">No columns listed</div><table><tbody></tbody></table><button type="button" class="er-small er-edit-controls" data-er-add-field>+ Add field</button>';diagram.querySelector('.entity-grid').appendChild(card);setEditing(true);refreshEmpty();return}
+    if(target.closest('[data-er-remove-entity]')){target.closest('[data-er-entity]').remove();refreshEmpty();return}
+    if(target.closest('[data-er-add-field]')){var row=document.createElement('tr');row.setAttribute('data-er-field','');row.innerHTML='<td data-er-editable data-er-type>string</td><th data-er-editable data-er-field-name>new_field</th><td data-er-editable data-er-notes></td><td class="er-edit-controls"><button type="button" class="er-icon" data-er-remove-field aria-label="Remove field">×</button></td>';target.closest('[data-er-entity]').querySelector('tbody').appendChild(row);setEditing(true);refreshEmpty();return}
+    if(target.closest('[data-er-remove-field]')){target.closest('[data-er-field]').remove();refreshEmpty();return}
+    if(target.closest('[data-er-add-relationship]')){var row=document.createElement('div');row.setAttribute('data-er-relationship','');row.innerHTML='<strong data-er-editable data-er-from>FROM_ENTITY</strong> <code data-er-editable data-er-cardinality>||--o{</code> <strong data-er-editable data-er-to>TO_ENTITY</strong> — <span data-er-editable data-er-label>relates to</span><button type="button" class="er-icon er-edit-controls" data-er-remove-relationship aria-label="Remove relationship">×</button>';diagram.querySelector('[data-er-relationships]').appendChild(row);setEditing(true);refreshEmpty();return}
+    if(target.closest('[data-er-remove-relationship]')){target.closest('[data-er-relationship]').remove();refreshEmpty()}
+  });setEditing(false);refreshEmpty();
+});
+</script>
 </body></html>`;
 }
 

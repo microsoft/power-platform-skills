@@ -590,6 +590,14 @@ foreground orchestrator owns both approvals:
    capabilities, connectors, risks, and blockers?
    ```
 
+   The ER diagram in Plan HTML is editable. If the user chooses `Revise` and
+   supplies copied JSON from the editor or a downloaded
+   `mobile-er-revision.json`, validate `kind: mobile-er-revision`, require
+   non-empty unique entity names and field names, and pass the complete payload
+   to the planner. Regenerate the data model, decision rationale, cross-entity
+   audit, and dependent screen bindings before re-rendering. Do not translate
+   browser edits directly into Dataverse mutations.
+
    On rejection, send the feedback to the existing idle planner when possible,
    otherwise re-spawn it in draft-only revision mode. Re-render and present
    Gate 2 again from the foreground.

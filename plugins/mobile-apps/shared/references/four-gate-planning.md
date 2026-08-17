@@ -50,6 +50,13 @@ Rejecting Gate 2 regenerates only the affected architecture sections and any
 dependent screen field bindings. It does not create a separate projection
 addendum prompt.
 
+The Plan HTML ER review editor may be used before approval to add, remove, or
+revise draft entities, fields, and relationships. Browser edits never mutate
+`native-app-plan.md` or Dataverse. The user must copy or download
+`mobile-er-revision.json` and submit it through Gate 2 `Revise`; regenerate the
+data model, rationale, cross-entity audit, and dependent screen bindings from
+that payload before presenting Gate 2 again.
+
 ## Gate 3 — Experience
 
 One approval covers:
