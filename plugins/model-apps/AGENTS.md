@@ -327,6 +327,34 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   nothing. This is the F5 "convergence" mitigation: the build is additive (edits to existing artifacts
   aren't re-applied in place — teardown + rebuild to converge), and verify makes any resulting
   divergence **loud**.
+- **`scripts/probe-persona.js` → `scripts/lib/persona-probe.js`** — read-only **authorization** probes run
+  AS each persona via Dataverse impersonation. `role-privileges` (above, in verify) compares metadata: it
+  proves the role HOLDS the declared privileges. Whether the persona can actually perform the operation
+  additionally depends on record ownership, business-unit placement, team membership, sharing, and
+  server-side plug-ins — none of which appear in `roleprivileges` — so this executes real reads and
+  reports what happens. Impersonation makes it human-free: effective privileges are the INTERSECTION of
+  caller and target, so a System Administrator driving it cannot mask a permission the persona lacks.
+  The principal comes from `personas[].assignTo.users[]`, which already holds `systemuserid` GUIDs —
+  exactly what the legacy `MSCRMCallerID` header takes, so the common case needs **no directory lookup and
+  no application user**; it upgrades to the preferred `CallerObjectId` when `azureactivedirectoryobjectid`
+  is readable. Three things carry the design:
+  (1) It probes the **negative** direction — for each persona it reads an entity another persona declares
+  and this one does not. An over-broad role is invisible from the inside because everything the user tries
+  succeeds, so it is only detectable by trying something that should fail. `appmodule` is never probed
+  negatively (the build injects it for every persona, so it would fail on every run).
+  (2) An empty `200` on a negative probe is **inconclusive, never a pass**: Dataverse returns 403 for *no
+  privilege* but a filtered 200 for *a narrower scope*, and an empty result is indistinguishable from
+  "authorized but the table is empty". Calling that a pass would manufacture confidence in the one
+  direction that matters. Inconclusive results do not fail the run but are always counted and listed, so
+  an all-inconclusive run cannot masquerade as clean.
+  (3) A **`WhoAmI` canary** runs first. The dangerous failure is not a 403 (loud) but the header being
+  accepted and IGNORED — every probe would then run as the signed-in admin and report false passes.
+  `WhoAmI` returns the effective user id, so comparing it to the impersonated id detects that silently.
+  A 403 there reports the real cause: the caller needs `prvActOnBehalfOfAnotherUser`, assigned **directly**
+  (a team-inherited grant does not satisfy it). Read-only by default; `--allow-mutations` only *plans*
+  write probes. **Scope limit, stated so results are not over-read:** this exercises the Web API, so it
+  says nothing about UCI navigation, form/control visibility, client script, the command bar, layout or
+  accessibility. A green run means the data operations are authorized, never that the app works.
 - **`scripts/ai-preflight.js`** — standalone preflight report: prints each AI feature's on/off status
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
@@ -448,6 +476,7 @@ scripts/
   download-model-app.js        ← app-builder: pull a deployed app into an editable spec (edit flow)
   teardown-model-app.js        ← app-builder: classifier-safe reverse-of-build teardown
   verify-model-app.js          ← app-builder: reconcile the spec against the deployed app
+  probe-persona.js             ← app-builder: run authorization probes AS each persona via Dataverse impersonation (read-only)
   preview-form.js              ← app-builder: ASCII form wireframe for authoring review
   preview-app.js               ← app-builder: ASCII whole-app design preview (data model + sitemap + forms + page-intents + design)
   write-app-spec-doc.js        ← app-builder: renders the readable model-app-plan.md design doc from app-spec.json
@@ -474,6 +503,7 @@ scripts/
     spec-shape.js              ← shared structural normalization for both authoring gates
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
+    persona-probe.js           ← pure: plan/interpret impersonated authorization probes (allow + deny) per persona
     odata.js                   ← OData literal escaping helpers
     genpage-cli.js             ← pac model genpage upload/list/download wrapper
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
@@ -865,6 +895,7 @@ az account set --subscription <sub-id>
 node scripts/check-auth.js --env <envUrl>       # az token + WhoAmI preflight (pac optional; --require-pac for genpage)
 node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply --verify
 node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
+node scripts/probe-persona.js     --env <envUrl> --spec @<dir>/app-spec.json   # authorization AS each persona (read-only)
 node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply
 ```
 

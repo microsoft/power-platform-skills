@@ -30,6 +30,27 @@ smoke-eval assertion that could never pass live.
   serializers that hardcode 1033 with no caller override
   ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
+- **`probe-persona.js` — authorization probes run AS each persona.** The
+  `role-privileges` check below compares metadata and stops there; whether a
+  persona can actually perform an operation also depends on record ownership,
+  business-unit placement, team membership, sharing and server-side plug-ins,
+  none of which appear in `roleprivileges`. This runs real reads under Dataverse
+  impersonation, so it needs no human and no application user: effective
+  privileges are the intersection of caller and target, and
+  `personas[].assignTo.users[]` already carries the `systemuserid` the legacy
+  `MSCRMCallerID` header takes (upgrading to `CallerObjectId` when the Entra
+  object id is readable). It also probes the **negative** direction — reading an
+  entity another persona declares and this one does not — because an over-broad
+  role is invisible from the inside, where everything the user tries succeeds.
+  An empty `200` on a negative probe is reported **inconclusive, never a pass**
+  (Dataverse answers "no privilege" with 403 but "narrower scope" with a
+  filtered 200, which is indistinguishable from an empty table), and a `WhoAmI`
+  canary runs first to catch the impersonation header being accepted and
+  silently IGNORED — which would otherwise run every probe as the signed-in
+  admin and report false passes. Read-only by default. It exercises the Web API,
+  so it says nothing about UCI navigation, form visibility, client script or
+  layout: a green run means the data operations are authorized, not that the app
+  works.
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
   marker, so a role built with the wrong access — or one whose privilege write
