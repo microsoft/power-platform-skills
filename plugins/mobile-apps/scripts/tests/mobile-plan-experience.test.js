@@ -128,7 +128,8 @@ test('plan renderer separates review views and renders plan tables with statuses
   assert.match(html, /class="status success">Reuse verified/);
   assert.match(html, /class="status danger">Authentication required/);
   assert.match(html, /Connector status is explicit/);
-  assert.match(html, /Concept review:/);
+  assert.match(html, /DESIGN CONCEPT — NOT THE GENERATED APP/);
+  assert.match(html, /data-view-banner="experience" hidden/);
   assert.match(html, /class="concern"/);
   assert.match(html, /Expand all screen specs/);
   assert.match(html, /class="plan-subsection"/);

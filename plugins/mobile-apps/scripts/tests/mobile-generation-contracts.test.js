@@ -163,6 +163,22 @@ test('screen contracts require escaped user-entered OData values', () => {
   assert.match(result.stderr, /unsafe-odata-interpolation/);
 });
 
+test('experience previews prominently identify themselves as design concepts', () => {
+  const mapping = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'tamagui-html-mapping.md'),
+    'utf8',
+  );
+  const renderer = fs.readFileSync(
+    path.join(pluginRoot, 'scripts', 'render-mobile-plan.js'),
+    'utf8',
+  );
+
+  assert.match(mapping, /DESIGN CONCEPT — NOT THE GENERATED APP/);
+  assert.match(mapping, /border: 3px solid/);
+  assert.match(renderer, /class="concept-banner"/);
+  assert.match(renderer, /Generated TSX and the live device are authoritative/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

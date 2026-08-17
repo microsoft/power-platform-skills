@@ -190,7 +190,14 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
 
   /* Page header */
   .page-title { color: #fff; text-align: center; font-size: 24px; font-weight: 700; margin-bottom: 6px; }
-  .page-sub { color: #aaa; text-align: center; font-size: 13px; margin-bottom: 32px; }
+  .page-sub { color: #aaa; text-align: center; font-size: 13px; margin-bottom: 18px; }
+  .concept-warning {
+    max-width: 760px; margin: 0 auto 28px; padding: 16px 20px;
+    border: 3px solid #fb923c; border-radius: 12px; background: #431407;
+    color: #ffedd5; text-align: center;
+  }
+  .concept-warning strong { display: block; font-size: 24px; line-height: 1.1; letter-spacing: .04em; }
+  .concept-warning span { display: block; margin-top: 7px; font-size: 13px; font-weight: 600; }
 
   /* Tabs */
   .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 28px; flex-wrap: wrap; }
@@ -238,6 +245,10 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
 <body>
   <div class="page-title">{{APP_NAME}}</div>
   <p class="page-sub">Power Platform · Expo + Tamagui · Screen Preview</p>
+  <div class="concept-warning">
+    <strong>DESIGN CONCEPT — NOT THE GENERATED APP</strong>
+    <span>Placeholder data and planned visual direction only. Generated TSX and the live device are authoritative.</span>
+  </div>
   <button class="dark-toggle" onclick="document.documentElement.classList.toggle('dark'); this.textContent = document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'">Dark</button>
 
   <div class="tabs">
