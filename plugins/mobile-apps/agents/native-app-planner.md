@@ -254,8 +254,9 @@ when the orchestrator explicitly requested the minimal `--no-design` direction.
 
 Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/references/connector-planning.md) exactly. The three steps are:
 
-1. **Infer** — scan requirements and Gate 1 answers for connector keywords.
-2. **Validate** — reconcile candidates against available connector discovery
+1. **Read** — consume the Gate 1 capability interpretation and scan the
+   requirements only to preserve its evidence.
+2. **Validate** — reconcile approved candidates against available connector discovery
    without asking the user.
 3. **Record** — build the `## Connectors` section. The user confirms or edits
    it only inside Gate 2.
@@ -328,7 +329,7 @@ before this agent returns so the foreground can review a complete draft.
 <!-- populated after Gate 3 approval -->
 
 ## Approvals
-- [x] Gate 1 requirements and authentication approved
+- [x] Gate 1 requirements, capability/connector interpretation, and authentication approved
 - [ ] Gate 2 complete architecture — foreground approval pending
 - [ ] Gate 3 experience — foreground approval pending
 - [ ] Gate 4 implementation confirmation — foreground approval pending

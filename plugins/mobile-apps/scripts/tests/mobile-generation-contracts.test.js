@@ -21,6 +21,37 @@ function runHook(name, projectRoot, filePath, content) {
   });
 }
 
+test('create flow keeps native and connector interpretation visible in Gate 1', () => {
+  const skill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+  const discovery = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'requirements-discovery.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /Capability and integration interpretation \(approved here\):/);
+  assert.match(skill, /Native outcomes\s+<comma-separated explicit\/inferred outcomes/);
+  assert.match(skill, /External connectors\s+<comma-separated API\/service names/);
+  assert.match(skill, /exact bindings confirmed at Gate 2/);
+  assert.match(skill, /Gate 1 capability interpretation: <capability_summary verbatim>/);
+  assert.match(skill, /informational only; outside Gate 1 and Gate 2 approval/);
+  assert.doesNotMatch(skill, /Connectors\s+<N> inferred[^\n]+confirm at Gate 3/);
+  assert.match(discovery, /every prompt-richness tier/);
+  assert.match(discovery, /scan barcode/);
+  assert.match(discovery, /low-stock alerts.*Dataverse records/);
+  assert.match(discovery, /do not add a separate `Look right\?` prompt/);
+
+  const connectorPlanning = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'connector-planning.md'),
+    'utf8',
+  );
+  assert.match(connectorPlanning, /Do not ask a separate\s+connector question/);
+  assert.match(connectorPlanning, /exact connector architecture only inside\s+Gate 2/);
+  assert.doesNotMatch(connectorPlanning, /native-app-planner` \(Gate 3\)/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

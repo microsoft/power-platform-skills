@@ -234,6 +234,11 @@ Don't enter plan mode here — that's the planner agent's job in Step 3.
 > operating-mode approval. The same interaction includes the rough cost preview;
 > do not ask a separate brief-confirmation or proceed question.
 
+Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md)
+before scoring the prompt. Its signal inference applies to **every** richness
+tier. Only its interactive feature-picker shape is limited to the
+`walk-through` path.
+
 #### Step 2b.0 — Prompt richness scoring (decides which path to take)
 
 Before asking anything, score the description on four signals. The score decides whether we ask a multi-select feature picker, a single confirmation, or skip the discovery question entirely.
@@ -265,7 +270,6 @@ Print the chosen tier so the user knows which path is running:
 
 #### Step 2b.1 — Walk-through path (only when tier = `walk-through`)
 
-Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md).
 Infer context-aware feature and operating-mode choices and place them into the
 Step 2c Gate 1 question. Do not call `AskUserQuestion` here. The Gate 1
 response is both discovery and approval; summarize it into
@@ -295,6 +299,33 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 Step 2c renders the Gate 1 summary. It is not a separate prompt after a brief
 confirmation; it is the single requirements approval for every richness tier.
 
+Before rendering it, derive `<capability_summary>` from the original prompt and
+confirmed brief:
+
+- **Data platform:** `Dataverse required` when Dataverse tables, entities, or
+  record workflows are named; otherwise `not yet inferred`.
+- **Native outcomes:** every explicit or strongly inferred device outcome, such
+  as barcode scanning, camera/photo capture, foreground/background location,
+  file picking, PDF generation/viewing, pen input, or sharing. Do not select
+  packages yet.
+- **External connectors:** every explicitly named or strongly inferred external
+  service. Dataverse is the data platform, not an external connector. Generic
+  words such as `alert`, `notify`, `document`, or `share` are insufficient
+  without a delivery system such as Outlook, Teams, or SharePoint.
+- **Not inferred:** high-impact native or integration categories that a user
+  could reasonably mistake as included, kept to a short contextual list.
+
+Explicit prompt requirements are selected automatically and must not be asked
+again. Strong inferences are shown inside Gate 1 for approval. Ambiguous or
+missing high-impact requirements use the same Gate 1 `edit` path or the
+walk-through's one grouped question; never create separate native-capability or
+connector approval gates.
+
+Track an offline phrase separately as `<offline_signal>`:
+`requested — separate profile decision after live Dataverse metadata`,
+`not requested`, or `not applicable`. It is visible for transparency but is
+not approved at Gate 1 or Gate 2.
+
 Design direction is inferred during planning and approved visually inside Gate
 3. `/design-system` later materializes those approved tokens with
 `--skip-planning`; it must not ask for brand/style input after Gate 4.
@@ -321,6 +352,7 @@ implementation. The user may supply/change the client ID through Gate 1
 |---|---|---|---|
 | Tables | Distinct nouns in confirmed brief | `count(unique_nouns) × [0.7, 1.3]` rounded | low — architect may merge or split |
 | Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
+| Native outcomes | Step 2b capability summary | `len(explicit + strongly inferred)` | high for explicit, medium for inferred |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
 | Planning min | Tables + screens | `tables × 0.3 + screens × 0.4 + 2` | low |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
@@ -332,11 +364,20 @@ Print the block once, exactly in this format (substitute computed values; ranges
 ─── Plan preview (rough) ─────────────────────────────────
 Based on your confirmed brief, before any agent runs:
 
+Capability and integration interpretation (approved here):
+  Data platform       <Dataverse required | not yet inferred>
+  Native outcomes     <comma-separated explicit/inferred outcomes | none inferred>
+  External connectors <comma-separated API/service names | none inferred>
+  Authentication      <existing client ID: GUID | configure later>
+  Not inferred        <short contextual list, e.g. location, notifications, contacts | none>
+  Offline signal      <requested — separate decision after live metadata | not requested | not applicable>
+                      ← informational only; outside Gate 1 and Gate 2 approval
+
 Scope (proxy estimates — actual numbers come from architects):
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
+  Connectors    <N> inferred      ← external services only; exact bindings confirmed at Gate 2
+  Native        <N> inferred      ← outcomes only; packages and permissions confirmed at Gate 2
   Screens     ~<low>-<high>       ← from <N> features × ~2-3 screens each
-  Authentication <existing client ID: GUID | configure later>
   Approval gates  4               ← fixed (requirements, architecture, experience, build confirmation)
 
 Time (rough — agent time only, excludes your approval latency at gates):
@@ -359,7 +400,7 @@ Approve requirements, edit, or abort? [approve/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `approve` (or empty / Enter) | Mark Gate 1, including its authentication decision, approved and continue to Step 3. Default. |
+| `approve` (or empty / Enter) | Mark Gate 1, including its capability/connector interpretation and authentication decision, approved and continue to Step 3. Default. |
 | `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
 
@@ -372,7 +413,8 @@ Approve requirements, edit, or abort? [approve/edit/abort]
 **Set expectations before handing off to the planner:**
 > "Gate 1 approved. Planning now performs autonomous architecture and
 > experience work, then surfaces:
->  • Gate 2 — complete architecture
+>  • Gate 2 — complete architecture, including exact native capabilities,
+>    permissions, connectors, and data bindings
 >  • Gate 3 — screens and design experience
 >  • Gate 4 — final implementation confirmation
 >
@@ -503,6 +545,7 @@ Prompt:
 
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
+  Gate 1 capability interpretation: <capability_summary verbatim>
   Gate 1 authentication: <existing-client-id: GUID | configure-later>
   Working directory: <absolute path of <working_dir>>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../

@@ -1,6 +1,9 @@
 # Connector Planning Reference
 
-Shared logic for inferring and confirming Power Platform connectors from app requirements. Used by `native-app-planner` (Gate 3) and `setup-datamodel` (Phase 2).
+Shared logic for inferring and confirming Power Platform connectors from app
+requirements. `/create-mobile-app` shows the inferred connector interpretation
+inside Gate 1 and approves the exact connector architecture at Gate 2.
+`setup-datamodel` uses the same logic in its own planning phase.
 
 ---
 
@@ -11,13 +14,13 @@ Scan the requirements text and wizard answers for keywords. Map matches to conne
 | If requirements mention… | Infer this connector | API name | Skill |
 |---|---|---|---|
 | email, inbox, send email, outlook, calendar, meeting, appointment | Office 365 Outlook | `office365` | `/add-connector office365` |
-| SharePoint, SP list, document library, site, .sharepoint.com | SharePoint Online | `sharepointonline` | `/add-sharepoint` |
+| SharePoint, SP list, document library, .sharepoint.com | SharePoint Online | `sharepointonline` | `/add-sharepoint` |
 | Teams, channel, post message, Teams chat, @mention | Microsoft Teams | `teams` | `/add-connector teams` |
 | Excel, spreadsheet, workbook, .xlsx | Excel Online (Business) | `excelonlinebusiness` | `/add-connector excelonlinebusiness` |
-| OneDrive, file upload, file download, file storage | OneDrive for Business | `onedriveforbusiness` | `/add-connector onedriveforbusiness` |
+| OneDrive, OneDrive file, onedrive.com | OneDrive for Business | `onedriveforbusiness` | `/add-connector onedriveforbusiness` |
 | Azure DevOps, work item, bug, sprint, pipeline, ADO | Azure DevOps | `azuredevops` | `/add-connector azuredevops` |
 | Copilot Studio, copilot agent, chatbot, bot, MCS | Copilot Studio | `mcscopilot` | `/add-connector mcscopilot` |
-| SQL, database, Azure SQL, SQL Server | SQL Server | `sql` | `/add-connector sql` |
+| Azure SQL, SQL Server, explicit SQL database | SQL Server | `sql` | `/add-connector sql` |
 
 If a requirement is vague (e.g., "external data", "third-party API") but no keyword matches, do not infer a connector — flag it as "unknown, will need /add-connector at runtime."
 
@@ -25,35 +28,40 @@ If a requirement is vague (e.g., "external data", "third-party API") but no keyw
 
 ---
 
-## Step 2 — Present to User for Confirmation
+## Step 2 — Reconcile with the owning approval
 
-After inferring, present using `AskUserQuestion`:
+### Inside `/create-mobile-app`
 
-> "Based on your requirements, I think your app needs these external connectors:
->
-> | Connector | Why |
-> |---|---|
-> | Office 365 Outlook | [specific requirement that triggered this] |
-> | SharePoint Online | [specific requirement] |
->
-> Does this look right? Select all that apply, or tell me if I missed any."
+Gate 1 already contains the connector interpretation. Do not ask a separate
+connector question. Treat explicitly named connectors as locked requirements
+and strongly inferred connectors as approved interpretations unless the user
+used Gate 1 `Edit` to remove them.
 
-Provide a multi-select with:
-- Each inferred connector as a pre-selected option
-- "Add another connector" as a free-text option
-- "No connectors needed" to opt out entirely
+During architecture planning:
 
-If no connectors were inferred from requirements, still ask:
+1. Read `Gate 1 capability interpretation` from the orchestrator prompt.
+2. Reconcile the approved candidates against available connector discovery.
+3. Record exact API names, authentication/readiness state, and screen/data
+   consumers in `## Connectors`.
+4. Surface unavailable or ambiguous approved connectors as Gate 2 concerns or
+   blockers; never silently drop them.
+5. Let the user confirm or revise the exact connector architecture only inside
+   Gate 2.
 
-> "Does your app need to connect to any external services? For example: SharePoint, Teams, email, Excel, OneDrive, Azure DevOps."
+If Gate 1 says `none inferred`, keep `## Connectors` explicit:
+`None — this app uses only Dataverse and/or device-native capabilities.`
+Do not ask a speculative connector question.
 
-Give the user a multi-select of the full connector list (none pre-selected).
+### Inside standalone `setup-datamodel`
+
+Present inferred connectors as part of that skill's existing grouped planning
+approval. Do not create an extra connector-only approval.
 
 ---
 
 ## Step 3 — Build the Connector Plan Section
 
-For each confirmed connector, record:
+For each approved and validated connector, record:
 
 ```markdown
 ## Connectors
@@ -70,7 +78,8 @@ If no connectors: write "None — this app uses only Dataverse and/or device-nat
 
 ## Step 4 — Pass to Screen Planner
 
-When spawning the screen-planner agent, include the confirmed connector list in the prompt:
+When spawning the screen-planner agent, include the Gate 2 connector list in
+the prompt:
 
 ```
 Connectors confirmed:

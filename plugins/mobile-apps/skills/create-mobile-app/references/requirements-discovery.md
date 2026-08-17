@@ -1,6 +1,8 @@
 # Requirements Discovery Reference
 
-Use this only for Step 2b.1 of `/create-mobile-app` when prompt richness selects the `walk-through` path.
+Use **Infer Options From The Brief** for every prompt-richness tier in
+`/create-mobile-app`. Use **Ask Shape** only when prompt richness selects the
+`walk-through` path.
 
 ## Infer Options From The Brief
 
@@ -9,6 +11,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | Signal in description | Infer |
 |---|---|
 | "log", "record", "submit", "fill out" | Data entry / form screens |
+| "scan barcode", "scan product", "barcode scanner", "scan QR", "QR scanner" | Barcode-scanner outcome using the approved camera wrapper |
 | "photo", "attach", "image", "camera" | Camera capability + image column |
 | "pick file", "upload PDF", "import document", "attach file" | Document-picker capability + optional Dataverse File column |
 | "generate PDF", "export report", "print report", "evidence packet", "certificate PDF" | PDF-report capability + optional Dataverse File column when retained |
@@ -19,10 +22,18 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "share", "send to", "export" | Sharing capability |
 | "secure", "credentials", "token", "PIN" | Secure-store capability |
 | "assign", "technician", "manager" | Multiple user types |
-| "notify", "email", "alert" | Office 365 connector |
+| "email", "send email", "mail manager", "Outlook" | Office 365 Outlook connector |
 | "SharePoint", "list", "document" | SharePoint connector |
 | "Teams", "chat", "message" | Teams connector |
+| "Dataverse", "Dataverse table", "entity", "record in Dataverse" | Dataverse data platform; do not count it as an external connector |
+| "offline", "work without connection", "disconnected", "sync later" | Offline requested; defer profile scope until the live Dataverse manifest exists |
 | "report", "dashboard", "history", "view all" | Read/list screens |
+
+Do not infer an external connector from a generic business noun or outcome.
+For example, `low-stock alerts` can be Dataverse records shown in-app;
+`documents` can be Dataverse File columns; and `share` can be native sharing.
+Infer Outlook, Teams, SharePoint, or another connector only when the delivery
+system or external service is explicit or unambiguous.
 
 Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
 
@@ -61,4 +72,7 @@ Rules:
 - Never include `[x]` or `[ ]` checkbox markdown in the `question` field; it produces invalid tool parameters.
 - Ask no unrelated questions in this call.
 
-After the answer, summarize the confirmed requirements brief in 4-8 bullets covering what users can do, tracked data, and integrations. Confirm once with `Look right? (yes / adjust)`, then store the result as `<requirements_brief>`.
+After the answer, summarize the confirmed requirements brief in 4-8 bullets
+covering what users can do, tracked data, native outcomes, and integrations.
+Store the result as `<requirements_brief>` and include the capability summary
+inside the single Gate 1 approval; do not add a separate `Look right?` prompt.
