@@ -90,7 +90,7 @@ test('mobile planning requires reviewable ER columns and bounded screen progress
   assert.match(architect, /Every entity named in a relationship MUST also have an `\{ \.\.\. \}` attribute/);
   assert.match(architect, /primary key marked `PK`/);
   assert.match(architect, /marked `FK`/);
-  assert.match(screenPlanner, /Default to \*\*12–16\s+total screens\*\*/);
+  assert.match(screenPlanner, /Default to \*\*12–16\s+generated\/modified screens\*\*/);
   assert.match(screenPlanner, /batches of at most 4 screens/);
   assert.match(screenPlanner, /Expanding screen specs <END>\/<N>/);
   assert.match(planner, /Expanding <N> screens in <B> visible batches/);
@@ -111,6 +111,23 @@ test('screen navigation keeps forward intent separate from back behavior', () =>
   assert.match(screenPlanner, /`Intent` means \*\*how a caller enters the/);
   assert.match(screenBuilder, /return behavior `back`/);
   assert.match(screenBuilder, /never generate `router\.push\(\.\.\.\)` merely because a stale spec says “push back/);
+});
+
+test('untouched template screens receive preservation contracts instead of full specs', () => {
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+
+  assert.match(screenPlanner, /Source is\s+`template \(keep\)` does not receive a `####` per-screen specification/);
+  assert.match(screenPlanner, /### Template Screens \(preserve\)/);
+  assert.match(screenPlanner, /mark its Source\s+`template \(modify\)`/);
+  assert.match(screenPlanner, /not `template \(keep\)`/);
+  assert.match(planner, /Do not expand Source `template \(keep\)` rows/);
 });
 
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {

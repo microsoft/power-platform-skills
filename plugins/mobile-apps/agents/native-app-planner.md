@@ -442,7 +442,8 @@ actions, then proceed directly to specs.
 #### 5b.2 — Spawn planner with `phase: specs`
 
 **Print before spawning:**
-Count the locked Screen Map rows as `<N>` and compute
+Count the locked Screen Map rows excluding Source `template (keep)` as `<N>`
+generated/modified screens and compute
 `<B> = ceil(<N> / 4)`, then print:
 > "→ [4/4] Expanding <N> screens in <B> visible batches of up to 4. The status file updates after every batch…"
 
@@ -471,6 +472,11 @@ Expand each screen in the locked graph into a compact delta spec. Do NOT repeat 
 Process screens in visible batches of at most 4. Emit the required batch line
 and update mobile-app-status.json after every batch; do not leave one long
 silent agent interval.
+
+Do not expand Source `template (keep)` rows into per-screen specs. Emit the
+single compact `### Template Screens (preserve)` table required by the
+screen-planner contract. Only `template (modify)`, `replace template`, and
+`new` rows receive full specs.
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 

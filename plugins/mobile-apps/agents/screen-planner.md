@@ -50,10 +50,12 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 ### Screen-count budget
 
-Rich operational prompts do not imply one route per verb. Default to **12–16
-total screens** and keep the graph at **18 or fewer** unless the requirements
-explicitly demand separate routes. Before locking any graph above 18 screens,
-consolidate:
+Rich operational prompts do not imply one route per verb. Count only screens
+that are new, replace template content, or explicitly modify template behavior;
+report untouched `template (keep)` screens separately. Default to **12–16
+generated/modified screens** and keep that count at **18 or fewer** unless the
+requirements explicitly demand separate routes. Before locking any generated
+graph above 18 screens, consolidate:
 
 - create/edit into one parameterized form route;
 - role variants into one queue/dashboard with approved role filters;
@@ -380,6 +382,26 @@ The full descriptions for row styles, hero types, and operational patterns live 
 
 For each screen the user adds, provide this compact shape:
 
+**Template preservation rule (HARD):** a Screen Map row whose Source is
+`template (keep)` does not receive a `####` per-screen specification and is not
+part of the spec-batch count. Instead, emit one compact subsection before
+`### Per-Screen Specs`:
+
+```markdown
+### Template Screens (preserve)
+
+| Screen | File | Preservation contract |
+|---|---|---|
+| Splash | `app/index.tsx` | Keep auth-aware redirect behavior and route names unchanged. |
+| Login | `app/login.tsx` | Keep template MSAL sign-in/loading/error behavior unchanged. |
+| OAuth callback | `app/oauth-callback.tsx` | Keep callback parsing and auth handoff unchanged. |
+```
+
+Each preservation contract is one sentence. Do not invent layout, data,
+state, navigation, or domain-design requirements for an untouched template
+screen. If requirements genuinely change a baseline screen, mark its Source
+`template (modify)` in the Screen Map and generate the normal full spec.
+
 - **Domain layout decisions:** (answer the 3 questions above — required)
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
@@ -482,8 +504,8 @@ For each screen the user adds, provide this compact shape:
 
 **Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the domain decisions or Shared Conventions overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. Do not fix this by adding repeated design boilerplate.
 
-**Visible progress for `phase: specs` (HARD):** count the locked Screen Map
-rows before drafting. Process specs in batches of at most 4 screens. Before
+**Visible progress for `phase: specs` (HARD):** count only Screen Map rows that
+are not `template (keep)`. Process those specs in batches of at most 4 screens. Before
 each batch, emit:
 
 > `→ Screen specs batch <B>/<TOTAL_BATCHES> — screens <START>-<END> of <N>: <names>…`
@@ -710,7 +732,7 @@ What you DO emit per screen: the `**Data**` field listing service+method calls (
 
 Before writing the section (to `plan_path` in `phase: specs`, or to `_screens_section.md` in `phase: graph` / legacy) and returning to the planner, verify the screen graph is complete. Build a coverage matrix in your head (or scratch buffer):
 
-1. **Features** — every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
+1. **Features** — every feature listed in the requirements brief MUST map to at least one generated/modified screen or an explicit preserved-template capability (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
 2. **Primary entities** — every entity from the data-model architect's `## Data Model` section MUST have at least a List + Detail pair (or a documented exception, e.g. lookup-only entities like `User`, `Status`, `Category`).
 3. **User actions** — every verb in the brief (create, edit, assign, approve, capture, export, …) MUST have a target screen or a Form/Sheet that hosts it. A verb with no host = a missing screen.
 
