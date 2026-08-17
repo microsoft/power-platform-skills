@@ -403,6 +403,46 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
   --awaiting-input false
 ```
 
+### Outcome-driven progress contract
+
+Planning percentages alone are not sufficient once implementation starts.
+Maintain durable user-visible outcomes in `mobile-app-status.json`; the Plan
+HTML renders them under **Implementation status → Delivery outcomes**.
+
+Use these canonical outcomes in order:
+
+| Outcome ID | Label | Complete when | Artifact |
+|---|---|---|---|
+| `architecture-approved` | Architecture and experience approved | Gate 4 is approved | `native-app-plan.md` |
+| `scaffold-ready` | App scaffold ready | Scaffold TypeScript gate passes | `power.config.json` |
+| `data-layer-ready` | Data layer ready | Dataverse services and sample fixtures pass validation | `.datamodel-manifest.json` |
+| `offline-ready` | Offline decision applied | Profile is published, deferred, or not applicable as approved | `offline-profile.json` when present |
+| `capabilities-ready` | Design, native capabilities, and connectors ready | Steps 9–10 pass their gates | `brand/design-system.html` when present |
+| `screens-ready` | Application screens ready | All screen waves pass TypeScript | generated screen routes |
+| `quality-ready` | Quality review complete | Step 11.4 and final TypeScript gate pass | `memory-bank.md` concerns/policies |
+| `app-running` | App ready to run | Metro starts and the QR is generated | `.expo/metro-qr.png` |
+
+Before starting an outcome, write it as `running`; after its gate succeeds,
+write it as `completed`. Use `blocked` when the flow stops. Example:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
+  --project-root "<working_dir>" \
+  --phase "data implementation" \
+  --message "Creating and validating the Dataverse data layer" \
+  --outcome-total 8 \
+  --outcome-id "data-layer-ready" \
+  --outcome-label "Data layer ready" \
+  --outcome-state "running" \
+  --outcome-detail "Reconciling tables, generated services, and sample fixtures" \
+  --outcome-artifact ".datamodel-manifest.json"
+```
+
+Re-render `mobile-app-plan.html` after every outcome state change. Do not mark
+an outcome complete because commands started; its measurable gate must pass.
+Existing gate approval progress remains visible until the first implementation
+outcome is recorded.
+
 **Capability preflight before dispatch:** resolve the environment and write the
 normalized metadata snapshot in the foreground. Verify the planner/leaf agent
 is registered, all input paths are readable, and each output path is writable.

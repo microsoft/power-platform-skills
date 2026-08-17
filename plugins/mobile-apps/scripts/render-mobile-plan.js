@@ -220,27 +220,59 @@ function countDataModelTables(body) {
   return countFirstTableRows(subsectionBody(body, /Target Reconciliation/i));
 }
 
+function outcomeSummary(status) {
+  const outcomes = Array.isArray(status.outcomes) ? status.outcomes : [];
+  const completed = outcomes.filter((outcome) => outcome.state === 'completed').length;
+  const total = Math.max(outcomes.length, Number(status.outcomeTotal || 0));
+  return {
+    outcomes,
+    completed,
+    total,
+    percent: total ? Math.round((completed / total) * 100) : null,
+  };
+}
+
+function renderOutcomes(status) {
+  const { outcomes } = outcomeSummary(status);
+  if (!outcomes.length) return '';
+  const items = outcomes.map((outcome) => {
+    const state = ['pending', 'running', 'completed', 'blocked'].includes(outcome.state)
+      ? outcome.state
+      : 'pending';
+    const detail = outcome.detail ? `<p>${escapeHtml(outcome.detail)}</p>` : '';
+    const artifact = outcome.artifact ? `<code>${escapeHtml(outcome.artifact)}</code>` : '';
+    return `<article class="outcome ${state}"><div><strong>${escapeHtml(outcome.label || outcome.id)}</strong><span>${escapeHtml(state)}</span></div>${detail}${artifact}</article>`;
+  }).join('');
+  return `<section id="delivery-outcomes" data-view="implementation"><h2>Delivery outcomes</h2><div class="outcome-list">${items}</div></section>`;
+}
+
 function renderPlan(markdown, status = {}) {
   const sections = splitSections(markdown);
   const connectorSection = sections.find((section) => /connectors/i.test(section.title));
   const screenSection = sections.find((section) => /screens/i.test(section.title));
   const dataSection = sections.find((section) => /data model/i.test(section.title));
+  const outcomes = outcomeSummary(status);
   const metrics = [
     ['Dataverse tables', dataSection ? countDataModelTables(dataSection.body) : 0],
     ['Planned connectors', connectorSection && !/\bnone\b/i.test(connectorSection.body) ? countFirstTableRows(connectorSection.body) : 0],
     ['Planned screens', screenSection ? countFirstTableRows(subsectionBody(screenSection.body, /Screen Map/i)) : 0],
-    ['Implementation', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
+    outcomes.total
+      ? ['Outcomes delivered', `${outcomes.completed}/${outcomes.total}`]
+      : ['Planning approvals', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
   ];
-  const nav = sections.map((section, index) =>
+  const outcomeNav = outcomes.total ? '<a data-view="implementation" href="#delivery-outcomes">Delivery outcomes</a>' : '';
+  const nav = outcomeNav + sections.map((section, index) =>
     `<a data-view="${sectionView(section.title)}" href="#section-${index}">${escapeHtml(section.title)}</a>`).join('');
-  const cards = sections.map((section, index) => `
+  const cards = renderOutcomes(status) + sections.map((section, index) => `
     <section id="section-${index}" data-view="${sectionView(section.title)}">
       <h2>${escapeHtml(section.title)}</h2>
       ${/connectors/i.test(section.title) ? '<div class="verification-note">Connector status is explicit: planned does not mean authenticated, verified, or bound.</div>' : ''}
       ${/screens|design/i.test(section.title) ? '<div class="concept-note"><strong>Concept review:</strong> planned structure and visual direction only. Generated TSX and the live device are authoritative.</div>' : ''}
       ${renderSectionBody(section.body)}
     </section>`).join('');
-  const progress = status.total ? Math.min(100, Math.round((Number(status.completed || 0) / Number(status.total)) * 100)) : 0;
+  const progress = outcomes.percent === null
+    ? (status.total ? Math.min(100, Math.round((Number(status.completed || 0) / Number(status.total)) * 100)) : 0)
+    : outcomes.percent;
   const banner = status.awaitingInput
     ? `<div class="input-banner">Input required — ${escapeHtml(status.inputPrompt || 'return to the terminal to continue.')}</div>`
     : '';
@@ -260,6 +292,7 @@ main{display:grid;gap:18px}section{background:white;border:1px solid #dbe2ef;bor
 h2{margin:0 0 14px;font-size:18px}h3{margin:22px 0 10px;font-size:16px}h4{margin:18px 0 8px;font-size:14px}p{line-height:1.55;color:#334155}ul{padding-left:22px;color:#334155}.code-block{white-space:pre-wrap;word-break:break-word;margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155}
 .table-wrap{overflow:auto;margin:12px 0}.plan-table{width:100%;border-collapse:collapse;font-size:13px}.plan-table th{background:#eff6ff;color:#1e3a8a;text-align:left}.plan-table th,.plan-table td{padding:9px 10px;border:1px solid #dbe2ef;vertical-align:top}.status{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.status.success{background:#dcfce7;color:#166534}.status.pending{background:#dbeafe;color:#1e40af}.status.warning{background:#fef3c7;color:#92400e}.status.danger{background:#fee2e2;color:#991b1b}
 .concern{border-left:4px solid #dc2626;background:#fef2f2;color:#7f1d1d;padding:10px 12px;border-radius:6px}.verification-note,.concept-note{padding:10px 12px;border-radius:8px;margin-bottom:14px}.verification-note{background:#eff6ff;color:#1e3a8a}.concept-note{background:#fff7ed;color:#9a3412}
+.outcome-list{display:grid;gap:10px}.outcome{border:1px solid #cbd5e1;border-left:5px solid #94a3b8;border-radius:9px;padding:12px}.outcome>div{display:flex;justify-content:space-between;gap:12px}.outcome span{text-transform:capitalize;font-size:12px;font-weight:700}.outcome p{margin:7px 0}.outcome.completed{border-left-color:#16a34a}.outcome.running{border-left-color:#2563eb}.outcome.blocked{border-left-color:#dc2626}.outcome.pending{border-left-color:#94a3b8}
 .diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.entity-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.entity-card{background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.entity-card h3,.relationships h3{margin:0;padding:10px 12px;background:#dbeafe;color:#1e3a8a;font-size:14px}.entity-card table{width:100%;border-collapse:collapse;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.entity-card td,.entity-card th{padding:7px 9px;border-top:1px solid #e2e8f0;text-align:left}.entity-card td:first-child{color:#475569}.entity-empty{padding:10px;color:#64748b}.relationships{margin-top:14px;background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.relationships div{padding:8px 12px;border-top:1px solid #e2e8f0}.relationships code{color:#7c3aed}
 .notice{font-size:12px;color:#cbd5e1;margin-top:8px}@media(max-width:800px){.summary{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}nav{position:static;display:flex;overflow:auto}}
 @media(prefers-color-scheme:dark){:root{background:#0f172a;color:#e2e8f0}section,.summary article{background:#111827;border-color:#334155}p,ul{color:#cbd5e1}nav a{color:#7dd3fc}.diagram{background:#f8fafc}.view-tabs button{background:#111827;color:#e2e8f0}}

@@ -196,6 +196,33 @@ Build a table:
 | Required managed asset | Defer | — | 404 for required-existing dependency | Defer: all dependent fields | Install/import the owning solution; never recreate it. Left out of this run, not a blocker |
 ```
 
+Then build a decision-rationale table. This is required for every entity; do
+not repeat the selected decision without explaining the alternatives and
+consequences:
+
+```markdown
+### Decision Rationale
+
+| Required entity | Selected approach | Alternatives considered | Trade-off | Assumptions and scope boundary |
+|---|---|---|---|---|
+| Customer profile | Reuse `contact` | New app-owned customer table | Reuse preserves shared identity and integrations but inherits standard-table security and schema constraints | The app needs organizational contacts, not a separate consumer identity store |
+| Job site | Create `cr123_jobsite` | Extend a similarly named location table | Creation adds metadata and ownership overhead but avoids coupling an unrelated shared table to app-specific fields | No verified existing table is authoritative for job sites |
+| Inspection report | Extend `cr123_inspection` | New versioned inspection table | Extension minimizes migration and duplicate records but depends on the existing table remaining customizable | Existing records and integrations must remain authoritative |
+```
+
+Rules:
+
+- **Alternatives considered** names the strongest credible alternative, not
+  `None`. For `Reuse`, compare against creating an app-owned table. For
+  `Extend`, compare against reuse-as-is and create. For `Create`, compare
+  against the closest verified reuse/extend candidate.
+- **Trade-off** states both the benefit and the accepted cost or constraint.
+- **Assumptions and scope boundary** records the target fact or product
+  boundary that would change the decision if proven false.
+- Keep each cell concise. Do not hide blockers, uncertainty, migration cost,
+  shared ownership, security inheritance, or integration coupling in prose
+  outside this table.
+
 ## Step 6 — Build Dependency Tiers
 
 Order new tables so foreign keys can resolve. See [dataverse-reference.md § Pre-flight ordering](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#pre-flight-ordering):
@@ -303,6 +330,12 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 | Required entity | Decision | Existing match | Target evidence | Column decisions | Why |
 |---|---|---|---|---|---|
 | ... | ... | ... | ... | ... | ... |
+
+### Decision Rationale
+
+| Required entity | Selected approach | Alternatives considered | Trade-off | Assumptions and scope boundary |
+|---|---|---|---|---|
+| ... | ... | ... | ... | ... |
 
 ### ER Diagram
 

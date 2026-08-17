@@ -21,6 +21,29 @@ test('status updates preserve start time and set prompt awareness', () => {
   assert.strictEqual(second.awaitingInput, true);
 });
 
+test('status updates merge durable delivery outcomes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-outcomes-'));
+  const file = path.join(dir, 'mobile-app-status.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 1, phase: 'planning' }));
+  updateStatus(file, {
+    outcomeTotal: 8,
+    outcome: { id: 'data-ready', label: 'Data layer ready', state: 'running' },
+  });
+  const result = updateStatus(file, {
+    outcome: {
+      id: 'data-ready',
+      label: 'Data layer ready',
+      state: 'completed',
+      artifact: '.datamodel-manifest.json',
+    },
+  });
+  assert.strictEqual(result.version, 2);
+  assert.strictEqual(result.outcomeTotal, 8);
+  assert.strictEqual(result.outcomes.length, 1);
+  assert.strictEqual(result.outcomes[0].state, 'completed');
+  assert.ok(result.outcomes[0].completedAt);
+});
+
 test('plan renderer creates navigation, progress, and input banner safely', () => {
   const markdown = '## Data Model\n<script>alert(1)</script>\n\n## Screens\nHome';
   const html = renderPlan(markdown, {
@@ -93,6 +116,23 @@ test('plan renderer separates review views and renders plan tables with statuses
   assert.match(html, /Connector status is explicit/);
   assert.match(html, /Concept review:/);
   assert.match(html, /class="concern"/);
+});
+
+test('plan renderer shows outcome-driven implementation progress', () => {
+  const html = renderPlan('## Data Model\nNo tables.', {
+    outcomeTotal: 3,
+    outcomes: [
+      { id: 'plan', label: 'Architecture approved', state: 'completed', artifact: 'native-app-plan.md' },
+      { id: 'data', label: 'Data layer ready', state: 'running', detail: 'Creating Dataverse services' },
+      { id: 'screens', label: 'Screens ready', state: 'pending' },
+    ],
+  });
+  assert.match(html, /33% complete/);
+  assert.match(html, /<strong>1\/3<\/strong><span>Outcomes delivered<\/span>/);
+  assert.match(html, /Delivery outcomes/);
+  assert.match(html, /class="outcome completed"/);
+  assert.match(html, /Creating Dataverse services/);
+  assert.match(html, /native-app-plan\.md/);
 });
 
 test('agent preflight selects fallback before dispatch when snapshot is missing', () => {

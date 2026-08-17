@@ -38,7 +38,8 @@ Do not approve an incomplete data model and reopen it after screen planning.
 
 One approval covers:
 
-- reuse/extend/create decisions and ER diagram;
+- reuse/extend/create decisions, credible alternatives, trade-offs,
+  assumptions/scope boundaries, and ER diagram;
 - relationships, keys, and dependency tiers;
 - formatted lookup, bounded chained-fetch, and external-projection-required
   decisions;

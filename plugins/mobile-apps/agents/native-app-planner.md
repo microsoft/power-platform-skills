@@ -353,6 +353,7 @@ Keep the following content in the Gate 2 architecture view:
 ## Architecture — Data Model
 
 [reuse/extend/create table]
+[decision rationale: alternatives, trade-offs, assumptions, and scope boundaries]
 [Mermaid ER diagram]
 [creation order tiers]
 
