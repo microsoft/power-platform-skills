@@ -455,7 +455,13 @@ For each screen the user adds, provide this compact shape:
 - **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
-- **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
+- **Navigation intent** — for each forward outgoing action, explicitly name
+  `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`).
+  This field describes entering another route; it never describes returning.
+- **Return behavior** — emit when the screen closes, cancels, or completes back
+  to its caller. Use `back` for `router.back()`. If back history may be absent,
+  add the exact fallback parent route and `navigate`. Never write `push back`,
+  `push via router.back()`, or label `router.back()` as `push`.
 - **State delta** — loading/error are inherited; specify only domain-specific empty copy/icon/CTA or non-standard state behavior. Empty state copy must be domain-specific (not "No items yet"). If the screen has filters, include filter-empty copy that names the active filter and recovery action. If the data source can fail independently, name the error action (`retry inspections`, `refresh assignments`) rather than treating failures as empty. For PDF/pen screens, include the specific native/artifact states: `invalidUrl` for malformed or unsupported PDF viewer input, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled` (non-error), `signatureCaptureFailed`, and `nativeModuleMissing` where applicable. Examples: `empty: calendar-outline, "No inspections scheduled", CTA "Schedule inspection"`; `filterEmpty: "No critical defects", recovery "Clear severity filter"`.
 - **Artifact persistence** (REQUIRED for generated PDFs, signatures, drawings, and uploaded PDFs/docs; omit otherwise) — one line naming the target: `on-device/share-only`, `Dataverse Image column <logicalName>`, `Dataverse File column <logicalName>`, `child Evidence/Attachment table <logicalName>`, `HTTPS URL from <source>`, or `local file URI from <source>`. For PDF viewer screens, never plan `content://`, `blob:`, or `http://` input.
 - **Input ergonomics override** (Form screens only, omit if Shared Conventions field controls cover it) — list only fields that differ from the entity default or require special native input behavior.
@@ -593,16 +599,20 @@ Section format (same in all phases):
 > - Detail drill-down destinations (`/[id]`, child detail pages) => `push`
 > - Auth/guard redirects and post-auth handoffs => `replace`
 >
-> Add an `Intent` column to the Navigation Contracts table and set it to one of: `navigate`, `push`, `replace`.
+> Add an `Intent` column to the Navigation Contracts table and set it to one
+> of: `navigate`, `push`, `replace`. `Intent` means **how a caller enters the
+> destination route**. The separate `Returns to caller` column uses `back`
+> whenever the implementation calls `router.back()`; `back` is never a route
+> entry intent.
 
 | Route | Path params | Query params (UNION across all senders) | Intent | Returns to caller |
 |---|---|---|---|---|
 | `/(app)/home` | — | — | `navigate` | (tab root) |
 | `/(app)/inspections` | — | — | `navigate` | (tab root) |
-| `/(app)/inspections/[id]` | `id: string` | — | `push` | `router.back()`; parent re-fetches via useFocusEffect |
-| `/(app)/inspections/form` | — | `editId?: string` (omit for create, set for edit) | `navigate` | `router.back()`; parent re-fetches via useFocusEffect |
-| `/(app)/inspections/[id]/photo` | `id: string` | — | `push` | `router.back()` after photo saved |
-| `/(app)/inspections/[id]/defect` | `id: string` | `zone?: string` (from walkaround), `editId?: string` (edit existing), `defectId?: string` (alt edit form) | `push` | `router.back()`; walkaround re-fetches via useFocusEffect |
+| `/(app)/inspections/[id]` | `id: string` | — | `push` | `back`; parent re-fetches via useFocusEffect |
+| `/(app)/inspections/form` | — | `editId?: string` (omit for create, set for edit) | `navigate` | `back`; parent re-fetches via useFocusEffect |
+| `/(app)/inspections/[id]/photo` | `id: string` | — | `push` | `back` after photo saved |
+| `/(app)/inspections/[id]/defect` | `id: string` | `zone?: string` (from walkaround), `editId?: string` (edit existing), `defectId?: string` (alt edit form) | `push` | `back`; walkaround re-fetches via useFocusEffect |
 | `/(app)/profile` | — | — | `navigate` | (tab root) |
 
 ### Shared Conventions

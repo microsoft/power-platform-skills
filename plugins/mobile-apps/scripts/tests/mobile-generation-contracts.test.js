@@ -96,6 +96,23 @@ test('mobile planning requires reviewable ER columns and bounded screen progress
   assert.match(planner, /Expanding <N> screens in <B> visible batches/);
 });
 
+test('screen navigation keeps forward intent separate from back behavior', () => {
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+  const screenBuilder = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-builder.md'),
+    'utf8',
+  );
+
+  assert.match(screenPlanner, /Use `back` for `router\.back\(\)`/);
+  assert.match(screenPlanner, /Never write `push back`/);
+  assert.match(screenPlanner, /`Intent` means \*\*how a caller enters the/);
+  assert.match(screenBuilder, /return behavior `back`/);
+  assert.match(screenBuilder, /never generate `router\.push\(\.\.\.\)` merely because a stale spec says “push back/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');
