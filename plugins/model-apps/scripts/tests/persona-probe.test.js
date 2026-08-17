@@ -322,3 +322,44 @@ test('principal resolver returns null when the persona declares no test user', a
   assert.strictEqual(resolve('Tech'), null);
   assert.strictEqual(resolve('Nobody'), null);
 });
+
+test('a mutating probe is NEVER executed as a read', async () => {
+  // Regression guard for a real review finding: executeProbes called readOne for every planned
+  // probe, so with --allow-mutations a `write` probe was exercised as a GET and a 200 was reported
+  // as PASS — a false pass on the privilege the maker specifically opted in to test.
+  const calls = [];
+  const probes = [
+    { persona: 'P', entity: 'co_workorder', access: 'write', expect: 'allow', mutating: true },
+    { persona: 'P', entity: 'co_workorder', access: 'read', expect: 'allow', mutating: false },
+  ];
+  const f = await executeProbes(probes, io({ readOne: async (set) => { calls.push(set); return { status: 200, rowCount: 1 }; } }));
+
+  assert.strictEqual(calls.length, 1, 'only the read probe may reach the wire');
+  assert.strictEqual(f[0].result, 'inconclusive', 'the write probe must not be a pass');
+  assert.match(f[0].detail, /cannot be proven by a read/);
+  assert.strictEqual(f[1].result, 'pass');
+});
+
+test('a mutating probe does not even resolve a principal or entity set', async () => {
+  // It short-circuits before any IO, so --allow-mutations cannot add round trips either.
+  let touched = 0;
+  const probes = [{ persona: 'P', entity: 'e', access: 'delete', expect: 'allow', mutating: true }];
+  const f = await executeProbes(probes, io({
+    principalFor: () => { touched++; return { header: 'MSCRMCallerID', value: 'u' }; },
+    entitySetName: async () => { touched++; return 'es'; },
+    readOne: async () => { touched++; return { status: 200, rowCount: 1 }; },
+  }));
+  assert.strictEqual(touched, 0, 'no IO for a probe that will not be executed');
+  assert.strictEqual(f[0].result, 'inconclusive');
+});
+
+test('summarize: an all-mutating run reports zero passes, not success', async () => {
+  const probes = [
+    { persona: 'P', entity: 'a', access: 'create', expect: 'allow', mutating: true },
+    { persona: 'P', entity: 'b', access: 'delete', expect: 'allow', mutating: true },
+  ];
+  const s = summarize(await executeProbes(probes, io()));
+  assert.strictEqual(s.counts.pass, 0);
+  assert.strictEqual(s.counts.inconclusive, 2);
+  assert.strictEqual(s.ok, true, 'still not a failure — but the caller can see nothing was proven');
+});

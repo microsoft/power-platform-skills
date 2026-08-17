@@ -212,6 +212,21 @@ async function executeProbes(probes, io) {
   const principalCache = new Map();
 
   for (const probe of probes) {
+    // A mutating privilege cannot be proven by a read, and `readOne` is the only operation this
+    // executor performs. Running one anyway would report `write`/`create`/`delete` as PASS on the
+    // strength of a successful GET — a false pass on the privilege that matters most, and on the
+    // exact path a maker opts into with --allow-mutations. `planProbes` includes them so the report
+    // shows what WOULD be exercised; executing them needs fixture creation and cleanup, which is a
+    // separate design. Until then they are reported as proved-nothing, never as passes.
+    if (probe.mutating) {
+      findings.push({
+        probe,
+        result: 'inconclusive',
+        detail: `planned only — a ${probe.access} privilege cannot be proven by a read, and mutating probes are not executed`,
+      });
+      continue;
+    }
+
     if (!principalCache.has(probe.persona)) {
       principalCache.set(probe.persona, io.principalFor(probe.persona));
     }
