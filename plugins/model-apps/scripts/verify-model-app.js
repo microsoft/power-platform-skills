@@ -133,12 +133,19 @@ function readerFor(sdk, appUnique, opts) {
   // ({logicalName, displayName, entitySetName, attributes, relationships}) which drops `Privileges`
   // entirely, so routing through it would silently report every privilege as unreadable.
   //
-  // This is a CONTRACT, not a gap waiting to be closed: the projection's `$select` is explicit and
-  // never asks for `Privileges`, and the SDK pins that with a guardrail test asserting the
-  // projection must not surface them even when the server returns them. Reading `EntityDefinitions`
-  // directly is what the SDK prescribes for this — its own role-writing path resolves privileges the
-  // same way. Verified against the vendored bundle: feeding it a response that DOES carry
-  // `Privileges` still yields a projection without them.
+  // The projection's omission is PERMANENT by design — its `$select` never asks for `Privileges`,
+  // and the SDK pins that with a guardrail test asserting the projection must not surface them even
+  // when the server returns them. That projection is disk-cached and documents its enrichments as
+  // best-effort, which is the wrong contract for a security read. Verified against the vendored
+  // bundle: feeding it a response that DOES carry `Privileges` still yields a projection without them.
+  //
+  // TODO: the SDK is gaining a dedicated `getEntityPrivileges(logicalName)` — the privilege READ it
+  // previously lacked (it could create/delete roles but never read what a table exposes). Switch to
+  // it once the vendored bundle carries it, and drop this raw read. Note the SDK returns camelCased
+  // `{ name, privilegeId, privilegeType }` and throws when a table exposes none, where this returns
+  // PascalCase rows and `null`; `compareRolePrivileges` reads the PascalCase shape today, and
+  // verify-spec already treats a throw as a per-entity finding, so the swap is a mapping change plus
+  // a bundle bump — not a behaviour change.
   //
   // The URL must be ABSOLUTE and carry the `/api/data/v9.2` prefix. `createAzHttpClient` is the raw
   // transport the SDK drives, so it receives full request URLs and enforces a same-origin check by
