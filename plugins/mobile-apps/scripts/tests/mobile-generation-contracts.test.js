@@ -134,6 +134,45 @@ test('screen planning consolidates workflows before expanding specifications', (
   );
 });
 
+test('external projections produce explicit non-blocking server recommendations', () => {
+  const architect = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+  const screenBuilder = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-builder.md'),
+    'utf8',
+  );
+  const gateContract = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'four-gate-planning.md'),
+    'utf8',
+  );
+  const createSkill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(architect, /Dataverse rollup column/);
+  assert.match(architect, /Power Automate-maintained summary field/);
+  assert.match(architect, /Dataverse plug-in or custom API/);
+  assert.match(architect, /Default to `deferred-nonblocking`/);
+  assert.match(architect, /Use `blocking` only when an explicit requirement/);
+  assert.match(screenPlanner, /projection_criticality: deferred-nonblocking \| blocking/);
+  assert.match(screenPlanner, /safe_fallback:/);
+  assert.match(planner, /`deferred-nonblocking` rows continue\s+to Gate 3/);
+  assert.match(screenBuilder, /build the named safe\s+fallback and continue/);
+  assert.match(gateContract, /non-blocking server-side projection recommendations/);
+  assert.match(createSkill, /server-side projection recommendations, why each is needed/);
+});
+
 test('screen navigation keeps forward intent separate from back behavior', () => {
   const screenPlanner = fs.readFileSync(
     path.join(pluginRoot, 'agents', 'screen-planner.md'),

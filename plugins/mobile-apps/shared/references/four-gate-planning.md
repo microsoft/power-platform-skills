@@ -52,7 +52,8 @@ One approval covers:
   assumptions/scope boundaries, and ER diagram;
 - relationships, keys, and dependency tiers;
 - formatted lookup, bounded chained-fetch, and external-projection-required
-  decisions;
+  decisions, including the recommended server implementation, why it is
+  needed, delivery status, and safe UI fallback;
 - validation of any maker-created computed dependency before reuse;
 - native capabilities and connectors;
 - risks, deferred requirements, and readiness blockers.
@@ -102,6 +103,7 @@ wasted work, but graph and specs are presented together as one user approval.
 Immediately before mutation, present:
 
 - included and deferred scope;
+- non-blocking server-side projection recommendations and their UI fallbacks;
 - selected environment and solution;
 - expected duration;
 - sample-data plan;

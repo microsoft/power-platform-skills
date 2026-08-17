@@ -860,6 +860,8 @@ Open/print `mobile-app-plan.html`, then present exactly one confirmation
 containing:
 
 - included and deferred scope;
+- server-side projection recommendations, why each is needed, whether it is
+  `deferred-nonblocking` or `blocking`, and the approved UI fallback;
 - target environment and solution;
 - expected duration;
 - sample-data fixture count;

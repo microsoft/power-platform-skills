@@ -129,11 +129,11 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
      - `formatted-lookup`: select the real lookup value and render with
        `lookupName`; create no shadow field.
      - `chained-fetch`: follow the table below.
-     - `external-projection-required`: return `BLOCKED`; omit the field until a
-       maker-created/server-owned projection exists and reconciliation verifies
-       it. This is an invariant failure: approved screen specs should already
-       move these fields into `Deferred fields` and remove them from the
-       implementable UI contract.
+     - `external-projection-required`: when the field remains in the
+       implementable UI contract, return `BLOCKED`. When it appears only under
+       `Deferred fields` with `deferred-nonblocking`, build the named safe
+       fallback and continue; do not query, display, count, filter, or sort by
+       the deferred field. A `blocking` projection cannot reach implementation.
   2. **For chained fetches, branch on archetype × cardinality:**
 
      | Archetype | Cardinality | Action |

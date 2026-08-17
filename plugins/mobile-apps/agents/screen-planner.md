@@ -497,6 +497,8 @@ screen. If requirements genuinely change a baseline screen, mark its Source
       cardinality: "1:1" | "1:many" | "M:N"
       archetype_class: list | detail | tab-root | dashboard
       resolution: formatted-lookup | chained-fetch | external-projection-required
+      projection_criticality: deferred-nonblocking | blocking
+      safe_fallback: <required only for external-projection-required>
   ```
 
   **Mechanical derivation of `resolution`:**
@@ -536,7 +538,12 @@ screen. If requirements genuinely change a baseline screen, mark its Source
 
   **Hard rule:** if the screen displays a related-entity field but you do not
   emit this block, the builder has no supported-path contract and must return
-  `BLOCKED`. Never infer or synthesize a calculated column.
+  `BLOCKED`. For `external-projection-required`, default to
+  `deferred-nonblocking` and name a safe fallback such as omitting the KPI,
+  opening the related list, or showing a direct record status. Use `blocking`
+  only when the authoritative real-time value is explicitly required for the
+  primary workflow and no safe fallback exists. Never infer or synthesize a
+  calculated column.
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
 - **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly list each lookup field with its `@odata.bind` name + entity set, e.g. `'cr3e9_Project@odata.bind': '/cr3e9_projects(<guid>)'`. Without this the screen-builder will guess and silently lose the relationship. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.

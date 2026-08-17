@@ -666,7 +666,11 @@ For every `external-projection-required` row, verify the screen plan marks the
 field under `Deferred fields` and removes it from visible fields, data selects,
 filters, KPIs, counts, and layout requirements. If any deferred field remains
 implementable, return `BLOCKED: unresolved external projection remained in the
-screen contract` before foreground approval.
+screen contract` before foreground approval. Also require Recommendation, Why,
+Delivery status, and UI fallback values. `deferred-nonblocking` rows continue
+to Gate 3 and must appear in Gate 4's server-side recommendations.
+`blocking` rows stop readiness until Gate 2 is revised or the user explicitly
+defers the underlying requirement.
 Render the visual plan with Gate 2 still recorded as approved.
 
 #### 5c.3 — Gate 3 draft readiness

@@ -275,14 +275,24 @@ code, so this audit never proposes generated formula metadata.
      `lookupName` / `formattedValue`; create no column.
    - **`chained-fetch`** — create no column; the screen-builder performs the
      separate service read.
-   - **`external-projection-required`** — record a blocker for a hot
-     list/dashboard field that cannot use the direct lookup annotation. Omit
-     the field until the user supplies a maker-created formula column or other
-     server-owned projection. Mark the field `deferred` in the addendum and
-     remove it from the implementable screen contract before approval: delete
-     it from visible fields, `$select`, search/filter, counts, KPIs, and layout
-     requirements. Preserve it only under a `Deferred fields` note naming the
-     required projection and affected screens.
+   - **`external-projection-required`** — omit the field until a server-owned
+     projection exists. Choose and record one recommendation:
+     - `Dataverse rollup column` for a supported direct child aggregate where
+       eventual consistency is acceptable;
+     - `Power Automate-maintained summary field` for event-driven or multi-step
+       summaries where minute-level latency is acceptable;
+     - `Dataverse plug-in or custom API` for authoritative real-time,
+       transactional, high-volume, security-sensitive, or complex multi-table
+       logic.
+
+     Default to `deferred-nonblocking` when the screen can omit the metric or
+     use a safe drill-through/list fallback without breaking the approved user
+     outcome. Use `blocking` only when an explicit requirement needs the
+     authoritative value for a primary workflow decision and no safe fallback
+     exists. Remove deferred fields from visible fields, `$select`,
+     search/filter, counts, KPIs, and layout requirements before approval.
+     Preserve them under `Deferred fields` with the recommendation, why it is
+     needed, expected consistency, affected screens, and safe UI fallback.
 
 3. **De-duplicate.** Collapse identical source/resolution pairs and track all
    consuming screens.
@@ -292,17 +302,20 @@ code, so this audit never proposes generated formula metadata.
    ```markdown
    ### Cross-entity Reads (auto-derived from screen plan)
 
-   | Field | Resolution | Implementation | Source | Driven by |
-   |---|---|---|---|---|
-   | Flight | formatted-lookup | include | cr3e9_flightid primary display | inspections list |
-   | Inspector email | chained-fetch | include | _ownerid_value → systemuser.internalemailaddress | inspection detail |
-   | Gate code | external-projection-required | defer and omit | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home |
+   | Field | Resolution | Implementation | Source | Driven by | Recommendation | Why | Delivery status | UI fallback |
+   |---|---|---|---|---|---|---|---|---|
+   | Flight | formatted-lookup | include | cr3e9_flightid primary display | inspections list | — | — | included | — |
+   | Inspector email | chained-fetch | include | _ownerid_value → systemuser.internalemailaddress | inspection detail | — | — | included | — |
+   | Gate code | external-projection-required | defer and omit | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home | Power Automate-maintained summary field | hot multi-hop dashboard value | deferred-nonblocking | open Flight detail |
    ```
 
-   For every `defer and omit` row, edit `_screens_section.md` (or the `##
-   Screens` section when no split artifact exists) in the same turn so the
+   For every `defer and omit` row, require non-empty Recommendation, Why,
+   Delivery status, and UI fallback cells. Edit `_screens_section.md` (or the
+   `## Screens` section when no split artifact exists) in the same turn so the
    field cannot reach a screen-builder as an approved implementation
-   requirement.
+   requirement. A `blocking` row remains a Gate 2 readiness blocker; a
+   `deferred-nonblocking` row is included in final recommendations but does not
+   prevent app generation.
 
    In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.
 
