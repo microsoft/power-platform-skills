@@ -133,6 +133,13 @@ function readerFor(sdk, appUnique, opts) {
   // ({logicalName, displayName, entitySetName, attributes, relationships}) which drops `Privileges`
   // entirely, so routing through it would silently report every privilege as unreadable.
   //
+  // This is a CONTRACT, not a gap waiting to be closed: the projection's `$select` is explicit and
+  // never asks for `Privileges`, and the SDK pins that with a guardrail test asserting the
+  // projection must not surface them even when the server returns them. Reading `EntityDefinitions`
+  // directly is what the SDK prescribes for this — its own role-writing path resolves privileges the
+  // same way. Verified against the vendored bundle: feeding it a response that DOES carry
+  // `Privileges` still yields a projection without them.
+  //
   // The URL must be ABSOLUTE and carry the `/api/data/v9.2` prefix. `createAzHttpClient` is the raw
   // transport the SDK drives, so it receives full request URLs and enforces a same-origin check by
   // parsing the argument with `new URL(url)` — a relative path throws there ("Refusing to send the

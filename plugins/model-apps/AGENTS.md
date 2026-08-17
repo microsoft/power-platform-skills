@@ -698,7 +698,7 @@ Dataverse simply are not in it.
 | Hatch | Use for | Examples in tree |
 |---|---|---|
 | `dataverseRequest()` in `lib/dataverse-auth.js` (and the `dataverse-request.js` CLI) | Dataverse surfaces the SDK does not model at all | `WhoAmI` (`check-auth.js`), `customapis` (`list-custom-apis.js`), `connectionreferences` (`create-connection-reference.js`), solution-component adds (`add-page-to-solution.js`) |
-| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely |
+| The raw `httpClient` from `createAzHttpClient` | A surface the SDK *does* touch but whose response it **projects away** | `entityPrivileges` in `verify-model-app.js` — `fetchEntityMetadata` returns `{logicalName, displayName, entitySetName, attributes, relationships}` and drops `Privileges` entirely. That is a **contract**, not a gap: the projection's `$select` never asks for `Privileges` and the SDK pins that with a guardrail test, so reading `EntityDefinitions(…)?$select=Privileges` directly is what it prescribes |
 
 **Prefer `dataverseRequest()` over the raw client.** It already handles the API path, auth, headers
 and timeouts. Reach for `httpClient` only when you must share the exact client instance the SDK is
