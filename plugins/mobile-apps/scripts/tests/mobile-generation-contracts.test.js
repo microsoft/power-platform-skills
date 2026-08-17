@@ -52,6 +52,23 @@ test('create flow keeps native and connector interpretation visible in Gate 1', 
   assert.doesNotMatch(connectorPlanning, /native-app-planner` \(Gate 3\)/);
 });
 
+test('Gate 1 explains native authentication and the configure-later path', () => {
+  const createSkill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+  const gateContract = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'four-gate-planning.md'),
+    'utf8',
+  );
+
+  assert.match(createSkill, /Authentication use\s+Entra app registration used for native sign-in and access tokens/);
+  assert.match(createSkill, /Authentication next\s+<existing client ID will be wired into auth\.config\.json \| run \/set-app-registration-native/);
+  assert.match(createSkill, /the client ID is not a\s+secret/);
+  assert.match(gateContract, /why the Entra client ID is required/);
+  assert.match(gateContract, /`\/set-app-registration-native` configure-later path/);
+});
+
 test('Dataverse planning expands summary-only candidates before Gate 2', () => {
   const skill = fs.readFileSync(
     path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),

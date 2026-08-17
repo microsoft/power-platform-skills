@@ -346,7 +346,12 @@ Resolve authentication as part of this same gate. If `$ARGUMENTS` contains an
 Entra application/client ID, validate and stage it as `existing-client-id`.
 Otherwise stage `configure-later`; do not add a fifth interaction during
 implementation. The user may supply/change the client ID through Gate 1
-`edit`.
+`edit`. Explain that the client ID identifies the Entra app registration used
+by the native app to sign users in and request access tokens; it is not a
+secret. When authentication is deferred, state that app generation can
+continue but sign-in will not work until the user runs
+`/set-app-registration-native` or supplies the client ID in
+`auth.config.json`.
 
 | Output | Input proxy | Computation | Confidence |
 |---|---|---|---|
@@ -369,6 +374,8 @@ Capability and integration interpretation (approved here):
   Native outcomes     <comma-separated explicit/inferred outcomes | none inferred>
   External connectors <comma-separated API/service names | none inferred>
   Authentication      <existing client ID: GUID | configure later>
+  Authentication use  Entra app registration used for native sign-in and access tokens; the client ID is not a secret
+  Authentication next <existing client ID will be wired into auth.config.json | run /set-app-registration-native after generation; sign-in remains unavailable until configured>
   Not inferred        <short contextual list, e.g. location, notifications, contacts | none>
   Offline signal      <requested — separate decision after live metadata | not requested | not applicable>
                       ← informational only; outside Gate 1 and Gate 2 approval

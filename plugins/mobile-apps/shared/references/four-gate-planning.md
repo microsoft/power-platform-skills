@@ -11,6 +11,8 @@ Present one grouped view containing:
 - confirmed requirements brief;
 - target users and platforms;
 - environment;
+- authentication state, why the Entra client ID is required, and the
+  `/set-app-registration-native` configure-later path;
 - native capability and connector implications;
 - rough table/screen/time estimates.
 
