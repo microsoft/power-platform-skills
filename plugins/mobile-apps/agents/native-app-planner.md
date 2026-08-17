@@ -343,7 +343,9 @@ before this agent returns so the foreground can review a complete draft.
 
 Do not enter plan mode or ask the user. Complete the data model,
 capability/connector plan, shared operational context, screen field-read
-contract, cross-entity resolution audit, and offline scope before returning.
+contract, and cross-entity resolution audit before returning. Offline profile
+planning is a separate post-Dataverse workflow and must not be added to Gate 1,
+Gate 2, or the data-model section.
 
 ### Internal data-model assembly — no prompt
 
@@ -550,8 +552,8 @@ Wait for return; apply the Step 3.0 status switch:
 
 Mirror the finalized cross-entity table and updated screen section into
 `native-app-plan.md` and verify the architecture draft includes data model,
-projections, offline scope, shared operational context, native capabilities,
-connectors, risks, and blockers.
+projections, shared operational context, native capabilities, connectors,
+risks, and blockers.
 For every `external-projection-required` row, verify the screen plan marks the
 field under `Deferred fields` and removes it from visible fields, data selects,
 filters, KPIs, counts, and layout requirements. If any deferred field remains

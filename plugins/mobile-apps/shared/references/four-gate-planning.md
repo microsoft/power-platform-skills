@@ -11,7 +11,6 @@ Present one grouped view containing:
 - confirmed requirements brief;
 - target users and platforms;
 - environment;
-- online/offline intent;
 - native capability and connector implications;
 - rough table/screen/time estimates.
 
@@ -25,8 +24,8 @@ Before Gate 2:
 
 1. discover Dataverse in the foreground;
 2. write a normalized read-only metadata snapshot;
-3. infer the data model, native capabilities, connectors, offline scope, and
-   preliminary screen field-read contract;
+3. infer the data model, native capabilities, connectors, and preliminary
+   screen field-read contract;
 4. classify every cross-entity field using the resolution ladder in
    `data-performance.md`;
 5. produce complete architecture and screen-plan sections;
@@ -44,7 +43,6 @@ One approval covers:
 - formatted lookup, bounded chained-fetch, and external-projection-required
   decisions;
 - validation of any maker-created computed dependency before reuse;
-- offline scope;
 - native capabilities and connectors;
 - risks, deferred requirements, and readiness blockers.
 
@@ -59,7 +57,7 @@ One approval covers:
 - screen graph and navigation;
 - per-screen specifications;
 - design direction and visual preview;
-- loading, empty, error, and offline states;
+- loading, empty, and error states;
 - accessibility and role-specific actions.
 
 The planner may internally build the graph before detailed specs to avoid
@@ -78,6 +76,11 @@ Immediately before mutation, present:
 
 Approval starts implementation. No downstream skill may re-ask a decision
 already approved in the plan.
+
+Offline profile setup is intentionally outside these four planning approvals.
+For Dataverse-backed apps, `/create-mobile-app` asks separately after the data
+layer exists whether to invoke `/setup-offline-profile`. The offline skill owns
+its own scope review and approval because live table metadata is authoritative.
 
 ## Agent capability preflight
 

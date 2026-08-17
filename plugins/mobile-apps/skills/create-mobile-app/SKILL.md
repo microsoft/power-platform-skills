@@ -21,7 +21,7 @@ passes must not create extra prompts.
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gate 1 requirements + cost preview → 3. Internal planning + Gate 2 architecture + Gate 3 experience → 3.8 Gate 4 implementation confirmation → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → 6.85 Apply approved offline decision → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gate 1 requirements + cost preview → 3. Internal planning + Gate 2 architecture + Gate 3 experience → 3.8 Gate 4 implementation confirmation → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → 6.75 design system → 7. Auth config → 8. Apply data model → 8.5 seed sample data → 8.6 separate offline decision → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system integration → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 11.5 Trust Report → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -416,7 +416,7 @@ Use these canonical outcomes in order:
 | `architecture-approved` | Architecture and experience approved | Gate 4 is approved | `native-app-plan.md` |
 | `scaffold-ready` | App scaffold ready | Scaffold TypeScript gate passes | `power.config.json` |
 | `data-layer-ready` | Data layer ready | Dataverse services and sample fixtures pass validation | `.datamodel-manifest.json` |
-| `offline-ready` | Offline decision applied | Profile is published, deferred, or not applicable as approved | `offline-profile.json` when present |
+| `offline-ready` | Separate offline decision complete | The post-Dataverse offline prompt is answered and any selected profile workflow completes | `offline-profile.json` when present |
 | `capabilities-ready` | Design, native capabilities, and connectors ready | Steps 9–10 pass their gates | `brand/design-system.html` when present |
 | `screens-ready` | Application screens ready | All screen waves pass TypeScript | generated screen routes |
 | `quality-ready` | Quality review complete | Step 11.4 and final TypeScript gate pass | `memory-bank.md` concerns/policies |
@@ -534,8 +534,9 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
 1. **If a draft `native-app-plan.md` exists:** read populated sections as an
    internal baseline. Do not present them separately. Complete missing
-   projections, offline scope, screen bindings, and risks, then show the single
-   combined Gate 2.
+   projections, screen bindings, and risks, then show the single combined
+   Gate 2. Remove any stale offline-profile section from older drafts; offline
+   setup is handled separately after Dataverse implementation.
 2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
 
    **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
@@ -574,8 +575,8 @@ Gate 4.
 After either the planner draft or inline-draft fallback completes, the
 foreground orchestrator owns both approvals:
 
-1. Verify the draft contains the data model, cross-entity projections, offline
-   scope, native capabilities, connectors, and a **Shared Operational Context**
+1. Verify the draft contains the data model, cross-entity projections, native
+   capabilities, connectors, and a **Shared Operational Context**
    contract naming the authoritative role source and active-scope source. If a
    screen depends on role or store/site scope and no authoritative source is
    available, mark it as a Gate 2 blocker; do not let builders invent local
@@ -585,8 +586,8 @@ foreground orchestrator owns both approvals:
 
    ```text
    Gate 2 of 4 — Complete Architecture
-   Approve the data model, projections, offline scope, shared operational
-   context, native capabilities, connectors, risks, and blockers?
+   Approve the data model, projections, shared operational context, native
+   capabilities, connectors, risks, and blockers?
    ```
 
    On rejection, send the feedback to the existing idle planner when possible,
@@ -1105,27 +1106,6 @@ Handle the return per the status protocol (AGENTS.md rule #10):
 - `NEEDS_CONTEXT` → return `BLOCKED` because the approved Gate 3 contract is incomplete.
 - `BLOCKED` → surface error, STOP.
 
-### Step 6.85 — Apply the approved offline decision
-
-**Print before starting:**
-> "→ [Step 6.85/13] Applying the offline scope approved at Gates 1 and 2…"
-
-Do not ask another question here. Gate 1 records whether offline operation is
-required, and Gate 2 approves the exact tables, relationships, columns, row
-scope, and sync interval.
-
-| Approved plan state | Action |
-|---|---|
-| No Dataverse tables or offline marked `not-applicable` | Record `status: not-applicable`; continue |
-| Offline deferred | Record the explicit deferral and readiness impact; continue |
-| Offline approved | Invoke `/setup-offline-profile --skip-planning --plan native-app-plan.md`; its writes must match the Gate 2 contract exactly |
-
-**State transfer:** `/setup-offline-profile` updates `memory-bank.md` `## Offline profile` and writes `offline-profile.json` to the project root. Step 13 (final summary) reads these for the wrap-up summary.
-
-On `BLOCKED`, propagate up. No offline sub-skill approval gate is permitted in
-this orchestrated path because the user already approved the complete offline
-architecture at Gate 2.
-
 ### Step 7 — Auth config
 
 **Print before starting:**
@@ -1268,6 +1248,40 @@ If seeding returns `BLOCKED`, stop before Step 9 and preserve the journal. The
 user can fix the reported metadata, dependency, permission, or row error and
 re-run the same command; successful fixtures are reused by business key. A
 partial fixture must not be presented as a completed generated app.
+
+### Step 8.6 — Separate offline profile decision
+
+Offline is not a Gate 1 requirement, a Gate 2 architecture item, or part of the
+data-model plan. Ask only after the Dataverse manifest and live table metadata
+exist.
+
+| Project state | Action |
+|---|---|
+| No `.datamodel-manifest.json` / no Dataverse tables | Skip and mark `offline-ready` completed with `not applicable` |
+| `memory-bank.md` says offline `done` or `not-applicable` | Reuse the recorded answer and mark the outcome completed |
+| Dataverse-backed app without a recorded decision | Ask the separate question below |
+
+Ask:
+
+> **Offline support**
+>
+> Mobile Offline Profiles let users continue working when disconnected and
+> synchronize queued Dataverse changes later. Set one up separately now?
+
+Options:
+
+1. `Create offline profile now` — invoke `/setup-offline-profile --working-dir <working_dir>` with its normal planning and approval flow. Do not pass `--skip-planning`; the offline skill must derive scope from live metadata.
+2. `Skip for now` — continue without writing `not-applicable`, so the user can run `/setup-offline-profile` later.
+3. `This app does not need offline` — record `status: not-applicable` in `memory-bank.md`.
+
+This prompt is outside the four planning gates. Do not copy its answer into
+`native-app-plan.md` or reopen Gate 2. `/setup-offline-profile` owns
+`offline-profile.json`, live eligibility checks, row scope, selected columns,
+relationships, and sync intervals.
+
+After the answer and any selected sub-skill complete, update the
+`offline-ready` outcome and re-render `mobile-app-plan.html`. On `BLOCKED`,
+propagate the block and preserve the offline skill's resume state.
 
 ### Step 9 — Apply native capabilities
 
@@ -1950,6 +1964,38 @@ DONE_WITH_CONCERNS: Step 11.4 left <N> stylistic issue(s) for review: <file:line
 
 Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it may not leave the app in a broken TypeScript state.
 
+### Step 11.5 — Generate the Trust Report
+
+**Print before starting:**
+> "→ [Step 11.5/13] Generating a static trust report from the approved plan and project evidence…"
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-mobile-trust-report.js" \
+  --project-root "<working_dir>" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "<working_dir>/mobile-app-trust-report.html"
+```
+
+The report must cover:
+
+- device capabilities used, planned, and intentionally not enabled;
+- contextual permission behavior;
+- authentication and Dataverse data boundaries without exposing identifiers,
+  tokens, secrets, record values, or user data;
+- direct network calls outside generated services;
+- background tasks and continuous sensor registrations;
+- offline profile presence and table count;
+- battery, network, and storage considerations;
+- evidence file paths supporting each finding.
+
+This is a static evidence report and does not require a simulator or device.
+Device testing is optional release assurance for operating-system permission
+wording, enforcement, and measured battery/network usage.
+
+If generation fails, stop before Metro and surface the exact error. On success,
+record `mobile-app-trust-report.html` as the `quality-ready` outcome artifact
+and re-render `mobile-app-plan.html`.
+
 #### Optional static preview
 
 After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
@@ -2063,6 +2109,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+Trust report  : <working_dir>/mobile-app-trust-report.html
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────
