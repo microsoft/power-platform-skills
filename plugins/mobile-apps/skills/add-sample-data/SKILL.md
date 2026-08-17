@@ -227,14 +227,20 @@ For each selected table, generate N rows. Match values to column names + types:
 
 #### Step 4b — Discover Choice options
 
-For every choice column in the selected tables, query its option set before generating rows:
+For every choice column in the selected tables, build one `BATCH-READS`
+operations array and query the option sets concurrently:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet"
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-READS \
+  "Sample choice metadata" \
+  --operations '<ordered-read-operations-json>' \
+  --concurrency 5
 ```
 
-Use the actual `Value` integers from the response. Don't hardcode `100000000`-style values — they vary per environment.
+`BATCH-READS` is not OData `$batch`; it reuses one Node process and token while
+issuing normal GET requests with bounded concurrency. Correlate results by
+`index` and use the actual `Value` integers. Any failed or missing required
+result blocks fixture generation.
 
 #### Step 4c — Preview to user
 
@@ -322,10 +328,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/seed-sample-data.js" \
   --tenant-id "<tenantId>"
 ```
 
-It validates dependencies, re-queries every business key, verifies live choice
-values, resolves current GUIDs, inserts one dependency tier at a time, and
-atomically persists the journal after every tier. It exits nonzero when any row
-is `failed` or `blocked`.
+It validates dependencies, batch-queries choice metadata, batch-reconciles all
+business keys in each dependency tier, resolves current GUIDs, inserts one tier
+at a time, and atomically persists the journal after every tier. Read batches
+use normal concurrent GETs with a cap of 5; writes retain the existing
+dependency and throttling controls. It exits nonzero when any row is `failed`
+or `blocked`.
 
 Use `--allow-partial` only after explicit user approval. That mode returns
 `DONE_WITH_CONCERNS`; it never reports `DONE`.
@@ -337,14 +345,20 @@ media is handled. Do not bypass the helper with hand-written POST loops.
 
 #### Step 5a — Get entity set names
 
-For each table, get its `EntitySetName` (the URL-path name, usually plural — e.g. `cr3e9_jobsites`). Read from `.datamodel-manifest.json` if it carries this; otherwise:
+For each table, get its `EntitySetName` (the URL-path name, usually plural —
+e.g. `cr3e9_jobsites`). Read from `.datamodel-manifest.json` if it carries this.
+If any required table or lookup target is missing it, resolve all missing names
+through one `BATCH-READS` call:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName"
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> BATCH-READS \
+  "Sample entity-set metadata" \
+  --operations '<ordered-read-operations-json>' \
+  --concurrency 5
 ```
 
-Cache the result.
+Cache the ordered results. Stop before insertion if any required name cannot be
+resolved.
 
 > **⚠️ Resolve EntitySetName for BOTH sides of every lookup.** You need the entity set name not only for the table you're inserting into (the `entitySet` field in BATCH-RECORDS), but also for every **lookup target** referenced in `@odata.bind` values (Step 5c). Entity set names are independent of logical names — Dataverse pluralises irregularly and version suffixes pass through verbatim. Examples that bite: `cr3e9_inspectionv3` → `cr3e9_inspectionv3s` (NOT `cr3e9_inspections`); `cr3e9_inquiry` → `cr3e9_inquiries`; `cr3e9_status` → `cr3e9_statuses`. **Never construct the path as `<logicalName>s` — always read it from EntityDefinitions.**
 
@@ -511,6 +525,10 @@ and exact error from the journal. The default process result must be nonzero.
 - **State / status distribution for transactional, issue, override, log tables** — mix at least 2 distinct values; never all-`Open`, never all-`InProgress`, never all-`Pending`. See Step 4a for per-class targets.
 - **Date distribution for transactional / log tables** — spread across today + last 14 days, not bunched on a single day. ~30% recent / 50% last week / 20% older.
 - **Use `BATCH-RECORDS` mode for the actual inserts** — single Node process, parallel within a tier, ordered results, adaptive concurrency on 429. Don't fire per-row `node dataverse-request.js POST ...` invocations: each cold-start is ~150-300ms and the whole point of the batch mode is to amortize that.
+- **Use `BATCH-READS` for independent discovery and reconciliation GETs** —
+  one Node process/token, ordered results, concurrency cap 5, retry on 401/429
+  and transient 5xx. This is not OData `$batch`. Missing required metadata or
+  business-key results fail closed.
 - **Across-tier always sequential, within-tier always parallel.** Children need parent GUIDs; rows in the same tier are independent. Mixing this up either creates orphan lookups (going too parallel) or wastes time (going too sequential).
 - **Concurrency cap is 5** (default in BATCH-RECORDS). The script auto-downgrades to 3 on the first 429. Don't set `--concurrency` higher unless you've measured and verified the env's service-protection ceiling.
 - **Parallelism applies ONLY to record inserts.** Schema operations (`EntityDefinitions`, `Attributes`, `RelationshipDefinitions` POSTs) MUST stay sequential — Dataverse metadata lock. The existing `/add-dataverse` Step 5 concurrency rule is unchanged.

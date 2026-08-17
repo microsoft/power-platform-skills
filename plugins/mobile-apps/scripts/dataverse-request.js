@@ -5,9 +5,9 @@
 //
 // Arguments:
 //   envUrl   - Dataverse environment URL (e.g., https://org123.crm.dynamics.com)
-//   method   - HTTP method: GET, POST, PUT, PATCH, DELETE, BATCH-RECORDS, or BATCH-METADATA
+//   method   - HTTP method: GET, POST, PUT, PATCH, DELETE, BATCH-READS, BATCH-RECORDS, or BATCH-METADATA
 //   apiPath  - API path after /api/data/v9.2/ (e.g., "EntityDefinitions?$filter=...")
-//              For BATCH-RECORDS mode, this is treated as a label (e.g. "Tier 0") for logging only.
+//              For batch modes, this is treated as a label for logging only.
 //
 // Options:
 //   --body <json>      Request body as JSON string
@@ -28,6 +28,15 @@
 //   USE FOR: record inserts via /add-sample-data (no Dataverse metadata lock)
 //   DO NOT USE FOR: EntityDefinitions / Attributes / RelationshipDefinitions POSTs — those serialize via the
 //   metadata lock server-side; parallel calls return 429 / MetadataLockHeldException.
+//
+// BATCH-READS mode (read-only GET requests; this is NOT OData $batch):
+//   node dataverse-request.js <envUrl> BATCH-READS <label> --operations '<json>' [--concurrency 5] [--tenant-id <id>]
+//
+//   Operations:
+//   [{ "index": 0, "apiPath": "new_jobsites?$top=5&$select=new_jobsiteid" }, ...]
+//
+//   Reuses one token and Node process, runs independent GETs concurrently, and
+//   preserves input order. Intended for sample-data discovery and reconciliation.
 //
 // BATCH-METADATA mode (strictly sequential metadata operations in one process):
 //   node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations '<json>' --tenant-id <id> [--continue-on-error]
@@ -54,6 +63,7 @@ function parseArgs() {
   if (args.length < 3) {
     process.stderr.write(
       'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>] [--tenant-id <id>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-READS <label> --operations <json> [--concurrency 5] [--tenant-id <id>]\n' +
       '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>] [--tenant-id <id>]\n' +
       '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>] [--continue-on-error]\n'
     );
@@ -147,6 +157,29 @@ async function main() {
   if (!token) {
     process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
     process.exit(1);
+  }
+
+  if (method === 'BATCH-READS') {
+    if (!operations) {
+      process.stderr.write('BATCH-READS requires --operations <json-array>\n');
+      process.exit(1);
+    }
+    let ops;
+    try {
+      ops = JSON.parse(operations);
+    } catch (e) {
+      process.stderr.write(`--operations is not valid JSON: ${e.message}\n`);
+      process.exit(1);
+    }
+    if (!Array.isArray(ops)) {
+      process.stderr.write('--operations must be a JSON array\n');
+      process.exit(1);
+    }
+
+    const results = await runReadBatch(envUrl, ops, token, concurrency, tenantId);
+    const failed = results.some((result) => result.status < 200 || result.status >= 300);
+    console.log(JSON.stringify({ status: failed ? 207 : 200, data: results }));
+    return;
   }
 
   // BATCH-RECORDS mode: parallel record inserts with concurrency cap. Single Node process,
@@ -316,6 +349,18 @@ function looksLikeDuplicate(data) {
 // USE FOR: record inserts (no metadata lock). DO NOT USE FOR: metadata writes — they serialize via
 // the Dataverse metadata lock server-side and parallel calls return 429 / MetadataLockHeldException.
 async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
+  return runConcurrentBatch(ops, initialCap, (op) =>
+    runOneOperation(envUrl, op, token, solution, tenantId),
+  );
+}
+
+async function runReadBatch(envUrl, ops, token, initialCap, tenantId) {
+  return runConcurrentBatch(ops, initialCap, (op) =>
+    runOneReadOperation(envUrl, op, token, tenantId),
+  );
+}
+
+async function runConcurrentBatch(ops, initialCap, worker) {
   // Normalize input: every op gets a deterministic slot. Honour caller-supplied `index` if present
   // (so caller can correlate results to its own row identity), otherwise use position-in-array.
   const normalized = ops.map((op, i) => ({
@@ -334,7 +379,7 @@ async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
       while (inflight < cap && nextIndex < normalized.length) {
         const op = normalized[nextIndex++];
         inflight++;
-        runOneOperation(envUrl, op, token, solution, tenantId)
+        worker(op)
           .then((result) => {
             results[op._slot] = { ...result, index: op.index };
             // Adaptive cap: drop to 3 on first 429 we see, to ease pressure
@@ -362,6 +407,65 @@ async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
     }
     tryDispatch();
   });
+}
+
+async function runOneReadOperation(envUrl, op, initialToken, tenantId) {
+  const { index, apiPath } = op;
+  if (!apiPath || typeof apiPath !== 'string') {
+    return { index, status: 0, error: 'Read operation missing apiPath' };
+  }
+
+  let token = initialToken;
+  const maxRetries = 4;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await doRequest(envUrl, 'GET', apiPath, null, token, true, null);
+
+    if (res.error) {
+      if (attempt < maxRetries) continue;
+      return { index, status: 0, error: res.error };
+    }
+
+    if (res.statusCode === 401 && attempt < maxRetries) {
+      const refreshed = await getAuthToken(envUrl, tenantId);
+      if (refreshed) {
+        token = refreshed;
+        continue;
+      }
+      return { index, status: 401, error: 'Token refresh failed' };
+    }
+
+    if (res.statusCode === 429 && attempt < maxRetries) {
+      const retryAfter = res.headers?.['retry-after'];
+      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 5000;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      continue;
+    }
+
+    let data = null;
+    if (res.body) {
+      try {
+        data = JSON.parse(res.body);
+      } catch {
+        data = res.body;
+      }
+    }
+
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return { index, status: res.statusCode, data };
+    }
+
+    const error =
+      (data && (data.error?.message || data.Message || data.error?.Message)) ||
+      `HTTP ${res.statusCode}`;
+    return { index, status: res.statusCode, error };
+  }
+
+  return { index, status: 0, error: 'Exhausted retries' };
 }
 
 // Runs a single record-create POST with full retry semantics (matches the single-op main() loop).
