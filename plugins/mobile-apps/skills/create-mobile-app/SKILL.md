@@ -420,7 +420,7 @@ Use these canonical outcomes in order:
 | `capabilities-ready` | Design, native capabilities, and connectors ready | Steps 9–10 pass their gates | `brand/design-system.html` when present |
 | `screens-ready` | Application screens ready | All screen waves pass TypeScript | generated screen routes |
 | `quality-ready` | Quality review complete | Step 11.4 and final TypeScript gate pass | `memory-bank.md` concerns/policies |
-| `app-running` | App ready to run | Metro starts and the QR is generated | `.expo/metro-qr.png` |
+| `app-running` | App ready to run | Metro starts, the QR is generated, and the launch page is ready | `mobile-app-launch.html` |
 
 Before starting an outcome, write it as `running`; after its gate succeeds,
 write it as `completed`. Use `blocked` when the flow stops. Example:
@@ -2051,21 +2051,54 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 1. Read the terminal output once (`BashOutput` with the captured id).
 2. **Extract the native Metro URL** from the terminal output:
    - Locate the line beginning `› Metro:` — it has the form `exp+<scheme>://expo-development-client/?url=<encoded-http-url>`. Capture the full Metro URL.
-3. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
+3. **Generate the QR code PNG:**
   - Run `npx --yes qrcode -o <working_dir>/.expo/metro-qr.png "<metro-url>"` to generate the PNG. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
   - Verify the PNG was created: `test -f <working_dir>/.expo/metro-qr.png` (exit code 0 = success). If it fails, print the qrcode error and continue to step 4.
-  - **Chat-first render (best effort):** read and base64-encode the file (`base64 <working_dir>/.expo/metro-qr.png`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
-  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable in the host UI, open the PNG directly in the default system image viewer/browser (`open <working_dir>/.expo/metro-qr.png` on macOS, `xdg-open ...` on Linux, `start "" ...` on Windows). This fallback is required whenever chat image rendering is unavailable.
-  - Surface only the native Metro URL immediately after the image/fallback message.
-4. **Optional: ASCII terminal QR for power users.** Extract and print the terminal's ASCII QR banner as a secondary/backup option:
+4. **Generate and open the dedicated launch page:**
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/../../scripts/generate-mobile-launch-page.js" \
+     --project-root "<working_dir>" \
+     --metro-url "<metro-url>" \
+     --terminal-id "<id>" \
+     --qr "<working_dir>/.expo/metro-qr.png" \
+     --plan "<working_dir>/native-app-plan.md" \
+     --trust-report "<working_dir>/mobile-app-trust-report.html" \
+     --output "<working_dir>/mobile-app-launch.html"
+   ```
+
+   Verify the HTML exists, print its `file://` URL, and open it with the
+   OS-portable chain:
+
+   ```bash
+   open "<working_dir>/mobile-app-launch.html" 2>/dev/null \
+     || xdg-open "<working_dir>/mobile-app-launch.html" 2>/dev/null \
+     || powershell.exe -NoProfile -Command "Start-Process '<working-dir>\\mobile-app-launch.html'" 2>/dev/null \
+     || echo "Auto-open failed. Use the file:// link above."
+   ```
+
+   The launch page is the primary handoff. It embeds the QR and shows player
+   installation links, authentication readiness, environment/app identity,
+   network requirements, Plan HTML, Trust Report, direct launch action, and
+   troubleshooting. If launch-page generation fails, surface the exact error
+   and fall back to opening `.expo/metro-qr.png`; do not hide a running Metro
+   session.
+
+5. **Chat-first QR render (best effort):** read and base64-encode the PNG
+   (`base64 <working_dir>/.expo/metro-qr.png`) and embed it as a data URI so
+   hosts that support inline images also show the QR directly in chat. Surface
+   the native Metro URL and the launch-page path immediately after it.
+
+6. **Optional: ASCII terminal QR for power users.** Extract and print the terminal's ASCII QR banner as a secondary/backup option:
    - Locate the first line composed of unicode block glyphs (`▀ ▄ █`) — that is the top of the QR.
   - Print every line from that line through the `› Metro:` line.
    - Cap at 30 lines as a safety net. Print as-is inside a fenced code block so terminal renderers preserve glyph alignment.
   - If the ASCII QR banner is not yet in the output, re-read `BashOutput` once more after another 4s before giving up. If still absent, skip the ASCII QR — PNG delivery from step 3 is the primary path.
-5. Follow with:
+7. Follow with:
 
    > "✓ Metro is running in background terminal `<id>`.
-  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
+  > 📱 Launch guide: `<working_dir>/mobile-app-launch.html`
+  > Scan its QR code with your native dev client, or use the direct launch action. Metro URL: `<metro-url>`
   > 🔄 Edits hot-reload automatically."
 
 **Persist the terminal id to memory bank** so resumed sessions and downstream skills (`/preview-screens`, `/edit-app`, `/add-*`) can find it:
@@ -2075,6 +2108,7 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 ...
 - Metro terminal id: <id> (started <ISO date>)
 - Metro launch cmd: cd <working_dir> && npx expo start
+- Launch page: <working_dir>/mobile-app-launch.html
 ```
 
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
@@ -2110,6 +2144,7 @@ Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
 Trust report  : <working_dir>/mobile-app-trust-report.html
+Launch page   : <working_dir>/mobile-app-launch.html
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────

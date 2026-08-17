@@ -86,7 +86,7 @@ connector wiring.
     npm run dev
     ```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Open `mobile-app-launch.html` and scan its QR code with the Power Apps Developer app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
     - Play store: (coming soon)
@@ -125,7 +125,7 @@ What happens:
 4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server and launch page** — Metro starts, then `mobile-app-launch.html` opens with the QR, player installation, auth/environment readiness, Plan HTML, Trust Report, and troubleshooting
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
