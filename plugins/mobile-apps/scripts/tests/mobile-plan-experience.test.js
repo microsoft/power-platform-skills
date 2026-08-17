@@ -60,6 +60,33 @@ test('plan renderer creates navigation, progress, and input banner safely', () =
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 });
 
+test('plan renderer provides an auto-refreshing progress page before the plan exists', () => {
+  const html = renderPlan('', {
+    phase: 'architecture',
+    message: 'Analyzing Dataverse architecture and app capabilities',
+    state: 'running',
+    completed: 1,
+    total: 4,
+    awaitingInput: false,
+  });
+  assert.match(html, /http-equiv="refresh" content="5"/);
+  assert.match(html, /Planning progress/);
+  assert.match(html, /Requirements approved/);
+  assert.match(html, /Architecture draft/);
+  assert.match(html, /Analyzing Dataverse architecture and app capabilities/);
+  assert.match(html, /Planning stages/);
+
+  const waitingHtml = renderPlan('', {
+    state: 'running',
+    completed: 2,
+    total: 4,
+    awaitingInput: true,
+    inputPrompt: 'Approve architecture',
+  });
+  assert.doesNotMatch(waitingHtml, /http-equiv="refresh"/);
+  assert.match(waitingHtml, /Input required/);
+});
+
 test('plan renderer turns fenced Mermaid ER diagrams into local safe HTML', () => {
   const markdown = [
     '## Data Model',

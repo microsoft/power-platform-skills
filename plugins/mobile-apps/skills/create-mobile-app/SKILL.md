@@ -445,6 +445,32 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
   --awaiting-input false
 ```
 
+Immediately render and surface the current run's Plan HTML. The renderer
+supports a not-yet-created `native-app-plan.md`, so this first page is a useful
+planning-progress shell rather than a stale artifact from another run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-mobile-plan.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --status "<working_dir>/mobile-app-status.json" \
+  --output "<working_dir>/mobile-app-plan.html"
+```
+
+Print:
+> "Live planning page: file://<working_dir>/mobile-app-plan.html"
+
+When `<visual_companion> = yes`, open it now using the OS-portable `open` /
+`xdg-open` / PowerShell chain from Step 3b. Do not wait for Gate 2. While
+planning is running, the page refreshes every five seconds and progressively
+shows architecture and experience results. When `<visual_companion> = no`,
+print the link without opening it.
+
+**Planning render invariant:** every subsequent planning status update must be
+followed by `render-mobile-plan.js` targeting the same
+`mobile-app-plan.html`. This includes data-model completion, screen-graph
+completion, every screen-spec batch, audit completion, and each waiting gate.
+Never leave the browser showing an earlier run or an earlier phase.
+
 ### Outcome-driven progress contract
 
 Planning percentages alone are not sufficient once implementation starts.
@@ -565,7 +591,9 @@ Prompt:
   Follow native-app-planner.md. Draft the complete Gate 2 architecture and
   Gate 3 experience, including the HTML preview, but do not ask the user or
   enter plan mode. Gate 1 is already approved; the foreground orchestrator
-  owns Gates 2, 3, and 4. On terminal return, emit one of
+  owns Gates 2, 3, and 4. After every status update, re-render
+  <working_dir>/mobile-app-plan.html so the already-open planning page advances
+  during the long-running draft. On terminal return, emit one of
   `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal
   first line per AGENTS.md rule #10.
 ```

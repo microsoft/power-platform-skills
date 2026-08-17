@@ -40,7 +40,26 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
 - **MANDATORY progress reporting.** Update
   `mobile-app-status.json` with `scripts/mobile-plan-status.js` and emit the
-  matching concise terminal line at meaningful boundaries.
+  matching concise terminal line at meaningful boundaries. Immediately after
+  every status update, run `scripts/render-mobile-plan.js` with the current
+  `native-app-plan.md`, status file, and `mobile-app-plan.html`. The foreground
+  opens that page after Gate 1; your writes make it advance while this agent is
+  still running.
+
+Use these durable checkpoints:
+
+| Boundary | `completed/total` | Status message |
+|---|---:|---|
+| Planner inputs loaded | `1/4` | `Analyzing Dataverse architecture and app capabilities` |
+| Data model and architecture draft written | `2/4` | `Architecture draft ready — preparing screen graph` |
+| Screen graph written | `2/4` | `Screen graph ready — expanding <N> detailed screen specs` |
+| Each screen-spec batch | `2/4` | `Expanding screen specs <END>/<N> — <last screen> complete` |
+| Specs and data-contract audit complete | `3/4` | `Experience draft ready — preparing architecture review` |
+
+For every row, execute both helpers rather than merely narrating the update.
+Require exit code 0 and verify that `mobile-app-status.json.updatedAt` and
+`mobile-app-plan.html` modification time advanced. If either write fails,
+return `BLOCKED: progressive Plan HTML update failed at <boundary>`.
 
 Read
 [`shared/references/four-gate-planning.md`](../shared/references/four-gate-planning.md)

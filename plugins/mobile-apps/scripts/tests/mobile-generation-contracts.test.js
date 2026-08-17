@@ -179,6 +179,30 @@ test('experience previews prominently identify themselves as design concepts', (
   assert.match(renderer, /Generated TSX and the live device are authoritative/);
 });
 
+test('create flow opens and progressively refreshes Plan HTML immediately after Gate 1', () => {
+  const createSkill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+  const nativePlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+
+  assert.match(createSkill, /Immediately render and surface the current run's Plan HTML/);
+  assert.match(createSkill, /Do not wait for Gate 2/);
+  assert.match(createSkill, /Planning render invariant/);
+  assert.match(nativePlanner, /verify that `mobile-app-status\.json\.updatedAt`/);
+  assert.match(nativePlanner, /Screen graph ready — expanding <N> detailed screen specs/);
+  assert.match(screenPlanner, /Verify the helper changed the file's/);
+  assert.match(screenPlanner, /completed: 2` \/ `total: 4` while batches are running/);
+  assert.doesNotMatch(screenPlanner, /est ~\$\(\(N \* 60\)\)s/);
+});
+
 test('mobile visual quality contract is shared across planning, design, preview, and build', () => {
   const contract = fs.readFileSync(
     path.join(pluginRoot, 'shared', 'references', 'mobile-visual-quality-contract.md'),

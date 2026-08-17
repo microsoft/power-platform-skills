@@ -107,7 +107,7 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 | When | Emit |
 |---|---|
 | After Step 0 + 0b loaded | `echo "→ [screen-planner] loaded patterns + design direction"` |
-| Before Step 2 (graph) or before Step 4 (specs) | `echo "→ [screen-planner] phase=<phase>, N=<screen_count> screens, est ~$((N * 60))s"` |
+| Before Step 2 (graph) or before Step 4 (specs) | Compute the values first, then emit a literal line such as `echo "→ [screen-planner] phase=specs, 16 screens, estimated 16 min"`; never print `<N>` or shell-arithmetic placeholders |
 | Per screen during Step 4 (specs phase only) | `echo "→ [screen-planner] spec <i>/<N>: <screen_name>"` |
 | Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens append'}"` |
 | Before Step 6 preview (if not skipped) | `echo "→ [screen-planner] rendering _plan_preview.html"` |
@@ -530,9 +530,14 @@ each batch, emit:
 > `→ Screen specs batch <B>/<TOTAL_BATCHES> — screens <START>-<END> of <N>: <names>…`
 
 Then update `mobile-app-status.json` with `mobile-plan-status.js`, preserving
-`completed: 3` / `total: 4`, and set the message to
+`completed: 2` / `total: 4` while batches are running, and set the message to
 `Expanding screen specs <END>/<N> — <last screen name> complete`. Do not stay
-silent for the full screen set. After the final batch, set the message to
+silent for the full screen set. Verify the helper changed the file's
+`updatedAt`; a narrated "updating" line without a persisted write is a
+failure. Immediately re-render `<working_dir>/mobile-app-plan.html` with
+`render-mobile-plan.js` after every persisted batch update so the planning
+page opened after Gate 1 advances without manual regeneration. After the final
+batch, set `completed: 3` / `total: 4`, then persist and render the message
 `Screen specs complete — running data-contract audit`.
 
 ---

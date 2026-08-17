@@ -275,6 +275,25 @@ function renderOutcomes(status) {
   return `<section id="delivery-outcomes" data-view="implementation"><h2>Delivery outcomes</h2><div class="outcome-list">${items}</div></section>`;
 }
 
+function renderPlanningProgress(status) {
+  if (Array.isArray(status.outcomes) && status.outcomes.length) return '';
+  const completed = Math.max(0, Math.min(4, Number(status.completed || 0)));
+  const stages = [
+    ['Requirements approved', 'Scope, environment, authentication, and operating mode'],
+    ['Architecture draft', 'Dataverse model, capabilities, connectors, and design rationale'],
+    ['Experience draft', 'Navigation, screen graph, detailed specs, and visual direction'],
+    ['Implementation confirmation', 'Final scope, blockers, duration, and readiness'],
+  ];
+  const items = stages.map(([label, detail], index) => {
+    let state = index < completed ? 'completed' : 'pending';
+    if (index === completed && completed < stages.length && status.state !== 'blocked') state = 'running';
+    if (status.state === 'blocked' && index === completed) state = 'blocked';
+    const liveDetail = state === 'running' && status.message ? status.message : detail;
+    return `<article class="outcome ${state}"><div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(state)}</span></div><p>${escapeHtml(liveDetail)}</p></article>`;
+  }).join('');
+  return `<section id="planning-progress" data-view="implementation"><h2>Planning progress</h2><p>This page opens immediately after Gate 1 and refreshes while architecture and experience artifacts are produced.</p><div class="outcome-list">${items}</div></section>`;
+}
+
 function renderPlan(markdown, status = {}) {
   const sections = splitSections(markdown);
   const connectorSection = sections.find((section) => /connectors/i.test(section.title));
@@ -287,12 +306,14 @@ function renderPlan(markdown, status = {}) {
     ['Planned screens', screenSection ? countFirstTableRows(subsectionBody(screenSection.body, /Screen Map/i)) : 0],
     outcomes.total
       ? ['Outcomes delivered', `${outcomes.completed}/${outcomes.total}`]
-      : ['Planning approvals', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
+      : ['Planning stages', `${Math.min(100, Math.round(Number(status.completed || 0) / Math.max(1, Number(status.total || 1)) * 100))}%`],
   ];
-  const outcomeNav = outcomes.total ? '<a data-view="implementation" href="#delivery-outcomes">Delivery outcomes</a>' : '';
-  const nav = outcomeNav + sections.map((section, index) =>
+  const progressNav = outcomes.total
+    ? '<a data-view="implementation" href="#delivery-outcomes">Delivery outcomes</a>'
+    : '<a data-view="implementation" href="#planning-progress">Planning progress</a>';
+  const nav = progressNav + sections.map((section, index) =>
     `<a data-view="${sectionView(section.title)}" href="#section-${index}">${escapeHtml(section.title)}</a>`).join('');
-  const cards = renderOutcomes(status) + sections.map((section, index) => `
+  const cards = renderPlanningProgress(status) + renderOutcomes(status) + sections.map((section, index) => `
     <section id="section-${index}" data-view="${sectionView(section.title)}">
       <h2>${escapeHtml(section.title)}</h2>
       ${/connectors/i.test(section.title) ? '<div class="verification-note">Connector status is explicit: planned does not mean authenticated, verified, or bound.</div>' : ''}
@@ -305,8 +326,11 @@ function renderPlan(markdown, status = {}) {
   const banner = status.awaitingInput
     ? `<div class="input-banner">Input required — ${escapeHtml(status.inputPrompt || 'return to the terminal to continue.')}</div>`
     : '';
+  const refresh = status.state === 'running' && !status.awaitingInput
+    ? '<meta http-equiv="refresh" content="5">'
+    : '';
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${refresh}
 <title>Mobile app plan</title><style>
 :root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#f4f6fb;color:#172033}
 *{box-sizing:border-box}body{margin:0}.top{position:sticky;top:0;z-index:2;background:#172554;color:white;padding:18px 24px}
@@ -370,7 +394,8 @@ function main() {
     process.stderr.write('Usage: node render-mobile-plan.js --plan <native-app-plan.md> --output <mobile-app-plan.html> [--status <mobile-app-status.json>]\n');
     process.exit(1);
   }
-  const markdown = fs.readFileSync(path.resolve(args.plan), 'utf8');
+  const plan = path.resolve(args.plan);
+  const markdown = fs.existsSync(plan) ? fs.readFileSync(plan, 'utf8') : '';
   const status = args.status && fs.existsSync(path.resolve(args.status))
     ? JSON.parse(fs.readFileSync(path.resolve(args.status), 'utf8'))
     : {};
