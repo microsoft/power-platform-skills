@@ -117,15 +117,47 @@ function validatePlan(plan) {
   }
 }
 
-async function discoverChoiceValues(request, table) {
-  const discovered = {};
-  for (const column of table.choiceColumns || []) {
-    const response = await request('GET',
-      `EntityDefinitions(LogicalName='${table.logicalName}')/Attributes(LogicalName='${column}')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$expand=OptionSet`);
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Choice metadata unavailable for ${table.logicalName}.${column}: ${response.error || response.status}`);
+async function batchRead(request, label, descriptors) {
+  if (descriptors.length === 0) return [];
+  const operations = descriptors.map((descriptor, index) => ({
+    index,
+    apiPath: descriptor.apiPath,
+  }));
+  const response = await request('BATCH-READS', label, operations);
+  if (response.status < 200 || response.status >= 300 || !Array.isArray(response.data)) {
+    throw new Error(`${label} failed: ${response.error || response.status}`);
+  }
+  const byIndex = new Map(response.data.map((result) => [result.index, result]));
+  return descriptors.map((descriptor, index) => ({
+    descriptor,
+    result: byIndex.get(index) || {
+      index,
+      status: 0,
+      error: 'Batch read omitted an operation result',
+    },
+  }));
+}
+
+async function discoverChoiceValues(request, tables) {
+  const descriptors = [];
+  for (const table of tables) {
+    for (const column of table.choiceColumns || []) {
+      descriptors.push({
+        table,
+        column,
+        apiPath: `EntityDefinitions(LogicalName='${table.logicalName}')/Attributes(LogicalName='${column}')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$expand=OptionSet`,
+      });
     }
-    discovered[column] = new Set((response.data?.OptionSet?.Options || []).map((option) => option.Value));
+  }
+
+  const discovered = new Map(tables.map((table) => [table.logicalName, {}]));
+  const reads = await batchRead(request, 'Sample choice metadata', descriptors);
+  for (const { descriptor, result } of reads) {
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`Choice metadata unavailable for ${descriptor.table.logicalName}.${descriptor.column}: ${result.error || result.status}`);
+    }
+    discovered.get(descriptor.table.logicalName)[descriptor.column] =
+      new Set((result.data?.OptionSet?.Options || []).map((option) => option.Value));
   }
   return discovered;
 }
@@ -141,18 +173,32 @@ function validateChoiceValues(table, choiceValues) {
   }
 }
 
-async function findExisting(request, table, businessKey) {
+function existingReadDescriptor(table, businessKey) {
   const select = [table.primaryIdColumn, ...Object.keys(businessKey)].join(',');
   const filter = businessKeyFilter(businessKey);
-  const response = await request('GET', `${table.entitySetName}?$select=${select}&$filter=${encodeURIComponent(filter)}&$top=2`);
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`Business-key lookup failed for ${stableKey(table.logicalName, businessKey)}: ${response.error || response.status}`);
+  return {
+    key: stableKey(table.logicalName, businessKey),
+    table,
+    businessKey,
+    apiPath: `${table.entitySetName}?$select=${select}&$filter=${encodeURIComponent(filter)}&$top=2`,
+  };
+}
+
+async function findExistingBatch(request, label, descriptors) {
+  const unique = [...new Map(descriptors.map((descriptor) => [descriptor.key, descriptor])).values()];
+  const reads = await batchRead(request, label, unique);
+  const found = new Map();
+  for (const { descriptor, result } of reads) {
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`Business-key lookup failed for ${descriptor.key}: ${result.error || result.status}`);
+    }
+    const rows = result.data?.value || [];
+    if (rows.length > 1) {
+      throw new Error(`Business key is not unique for ${descriptor.key}`);
+    }
+    found.set(descriptor.key, rows[0] || null);
   }
-  const rows = response.data?.value || [];
-  if (rows.length > 1) {
-    throw new Error(`Business key is not unique for ${stableKey(table.logicalName, businessKey)}`);
-  }
-  return rows[0] || null;
+  return found;
 }
 
 function blockPending(journal, summary, persist, error) {
@@ -191,9 +237,9 @@ async function executeSeedPlan(plan, options) {
   options.persist(journal);
 
   try {
+    const choiceValues = await discoverChoiceValues(options.request, plan.tables);
     for (const table of plan.tables) {
-      const choiceValues = await discoverChoiceValues(options.request, table);
-      validateChoiceValues(table, choiceValues);
+      validateChoiceValues(table, choiceValues.get(table.logicalName));
     }
   } catch (error) {
     blockPending(journal, summary, options.persist, error);
@@ -205,17 +251,30 @@ async function executeSeedPlan(plan, options) {
     const operations = [];
     const operationRows = [];
     const tierTables = plan.tables.filter((table) => table.tier === tier);
+    const rowDescriptors = [];
+    for (const table of tierTables) {
+      for (const row of table.rows) {
+        rowDescriptors.push(existingReadDescriptor(table, row.businessKey));
+      }
+    }
 
+    let existingRows;
+    try {
+      existingRows = await findExistingBatch(
+        options.request,
+        `Sample data tier ${tier} business keys`,
+        rowDescriptors,
+      );
+    } catch (error) {
+      blockPending(journal, summary, options.persist, error);
+      throw error;
+    }
+
+    const pendingRows = [];
     for (const table of tierTables) {
       for (const row of table.rows) {
         const key = stableKey(table.logicalName, row.businessKey);
-        let existing;
-        try {
-          existing = await findExisting(options.request, table, row.businessKey);
-        } catch (error) {
-          blockPending(journal, summary, options.persist, error);
-          throw error;
-        }
+        const existing = existingRows.get(key);
         if (existing) {
           const recordId = existing[table.primaryIdColumn];
           resolved.set(key, { table, recordId });
@@ -230,54 +289,77 @@ async function executeSeedPlan(plan, options) {
           summary.reused += 1;
           continue;
         }
-
-        const body = { ...row.body };
-        let blockedReason = null;
-        for (const lookup of row.lookups || []) {
-          const target = byTable.get(lookup.targetTable) || {
-            logicalName: lookup.targetTable,
-            entitySetName: lookup.targetEntitySetName,
-            primaryIdColumn: lookup.targetPrimaryIdColumn,
-          };
-          const targetKey = stableKey(lookup.targetTable, lookup.businessKey);
-          let targetRecord = resolved.get(targetKey);
-          if (!targetRecord) {
-            let targetExisting;
-            try {
-              targetExisting = await findExisting(options.request, target, lookup.businessKey);
-            } catch (error) {
-              blockPending(journal, summary, options.persist, error);
-              throw error;
-            }
-            if (targetExisting) {
-              targetRecord = { table: target, recordId: targetExisting[target.primaryIdColumn] };
-              resolved.set(targetKey, targetRecord);
-            }
-          }
-          if (!targetRecord) {
-            blockedReason = `Required parent ${targetKey} was not created or found`;
-            break;
-          }
-          const entitySet = target.entitySetName;
-          body[`${lookup.property}@odata.bind`] = `/${entitySet}(${targetRecord.recordId})`;
-        }
-
-        if (blockedReason) {
-          journal.records[key] = {
-            table: table.logicalName,
-            businessKey: row.businessKey,
-            status: 'blocked',
-            error: blockedReason,
-            attempts: journal.records[key]?.attempts || 0,
-            updatedAt: new Date().toISOString(),
-          };
-          summary.blocked += 1;
-          continue;
-        }
-
-        operations.push({ index: operations.length, entitySet: table.entitySetName, body });
-        operationRows.push({ table, row, key });
+        pendingRows.push({ table, row, key });
       }
+    }
+
+    const lookupDescriptors = [];
+    for (const { row } of pendingRows) {
+      for (const lookup of row.lookups || []) {
+        const targetKey = stableKey(lookup.targetTable, lookup.businessKey);
+        if (resolved.has(targetKey)) continue;
+        const target = byTable.get(lookup.targetTable) || {
+          logicalName: lookup.targetTable,
+          entitySetName: lookup.targetEntitySetName,
+          primaryIdColumn: lookup.targetPrimaryIdColumn,
+        };
+        lookupDescriptors.push(existingReadDescriptor(target, lookup.businessKey));
+      }
+    }
+
+    let existingLookups;
+    try {
+      existingLookups = await findExistingBatch(
+        options.request,
+        `Sample data tier ${tier} lookup dependencies`,
+        lookupDescriptors,
+      );
+    } catch (error) {
+      blockPending(journal, summary, options.persist, error);
+      throw error;
+    }
+
+    for (const { table, row, key } of pendingRows) {
+      const body = { ...row.body };
+      let blockedReason = null;
+      for (const lookup of row.lookups || []) {
+        const target = byTable.get(lookup.targetTable) || {
+          logicalName: lookup.targetTable,
+          entitySetName: lookup.targetEntitySetName,
+          primaryIdColumn: lookup.targetPrimaryIdColumn,
+        };
+        const targetKey = stableKey(lookup.targetTable, lookup.businessKey);
+        let targetRecord = resolved.get(targetKey);
+        if (!targetRecord) {
+          const targetExisting = existingLookups.get(targetKey);
+          if (targetExisting) {
+            targetRecord = { table: target, recordId: targetExisting[target.primaryIdColumn] };
+            resolved.set(targetKey, targetRecord);
+          }
+        }
+        if (!targetRecord) {
+          blockedReason = `Required parent ${targetKey} was not created or found`;
+          break;
+        }
+        body[`${lookup.property}@odata.bind`] =
+          `/${target.entitySetName}(${targetRecord.recordId})`;
+      }
+
+      if (blockedReason) {
+        journal.records[key] = {
+          table: table.logicalName,
+          businessKey: row.businessKey,
+          status: 'blocked',
+          error: blockedReason,
+          attempts: journal.records[key]?.attempts || 0,
+          updatedAt: new Date().toISOString(),
+        };
+        summary.blocked += 1;
+        continue;
+      }
+
+      operations.push({ index: operations.length, entitySet: table.entitySetName, body });
+      operationRows.push({ table, row, key });
     }
 
     if (operations.length > 0) {
@@ -346,7 +428,7 @@ function createCliRequest(args) {
   const script = path.join(__dirname, 'dataverse-request.js');
   return async (method, apiPath, operations) => {
     const command = [script, args['env-url'], method, apiPath];
-    if (method === 'BATCH-RECORDS') {
+    if (method === 'BATCH-READS' || method === 'BATCH-RECORDS') {
       command.push('--operations', JSON.stringify(operations), '--concurrency', args.concurrency || '5');
     }
     if (args.solution) command.push('--solution', args.solution);

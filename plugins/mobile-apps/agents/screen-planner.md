@@ -44,29 +44,77 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 | `phase` | What you do | What you write | What you skip | Gate that follows |
 |---|---|---|---|---|
-| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
+| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Consolidation Decisions + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
 | `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 4a. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
-### Screen-count budget
+### Workflow-first graph consolidation
 
-Rich operational prompts do not imply one route per verb. Count only screens
-that are new, replace template content, or explicitly modify template behavior;
-report untouched `template (keep)` screens separately. Default to **12–16
-generated/modified screens** and keep that count at **18 or fewer** unless the
-requirements explicitly demand separate routes. Before locking any generated
-graph above 18 screens, consolidate:
+Rich operational prompts do not imply one route per table or verb. Count only
+screens that are new, replace template content, or explicitly modify template
+behavior; report untouched `template (keep)` screens separately.
 
-- create/edit into one parameterized form route;
-- role variants into one queue/dashboard with approved role filters;
-- related read-only child views into detail tabs/sections;
-- repeated scan/camera entry points into contextual actions that return to the
-  caller;
-- short confirmations and pickers into `formSheet` routes.
+The budget is adaptive, not a forced cap:
 
-Never remove a required workflow merely to hit the budget. If the graph still
-needs more than 18 screens, record the reason beside the Screen Map and return
-`DONE_WITH_CONCERNS: screen graph exceeds 18 routes; <reason>`.
+| App shape | Typical generated/modified range |
+|---|---:|
+| Focused single-workflow app | 6–10 |
+| Multi-entity operational app | 10–16 |
+| Complex multi-role app | 16–18 |
+
+More than 18 is a mandatory consolidation review threshold. It is allowed only
+when separate navigation, materially different access, a full-screen native
+capability, an independently deep-linkable workflow, or complex state makes a
+merge unsafe.
+
+Run this algorithm before locking the Screen Map:
+
+1. **Build traceability inventory** — list every requirement, user action,
+   entity, role/access boundary, native capability, and required deep link.
+2. **Classify each entity's representation** — choose exactly one primary
+   strategy: top-level destination, nested detail section, segmented list,
+   parent-owned child rows, lookup/picker only, join managed through its parent,
+   or evidence/audit timeline. A Dataverse table does not automatically earn a
+   List + Detail + Form route family.
+3. **Draft journeys before routes** — group requirements into user outcomes
+   such as "run my shift", "review incidents", or "manage event operations".
+   Create the smallest initial graph that supports those journeys.
+4. **Compare merge candidates** — screens are candidates when they share the
+   same parent route, entity family, access context, data-loading context, or
+   archetype.
+5. **Apply merge patterns**:
+   - related lists → one segmented or filtered hub;
+   - create + edit → one parameterized form;
+   - role variants → one role-aware dashboard, queue, or detail surface;
+   - manager review/approval → actions or a section on the existing detail
+     screen when the underlying record and lifecycle are the same;
+   - short completion, assignment, confirmation, and picker tasks → bottom
+     sheet, dialog, or `formSheet`;
+   - child records → parent detail tabs/sections when they are not independently
+     discoverable;
+   - repeated scan/camera entry points → contextual actions that return to the
+     caller.
+6. **Run separation tests** — keep a separate route when the workflow needs an
+   independent deep link, long or multi-step state, full-screen camera/scanner,
+   materially different authorization or record lifecycle, unrelated user
+   outcome, or state that cannot safely survive a sheet/modal dismissal.
+7. **Run coverage after merging** — prove every requirement and action still
+   has a destination. Consolidation may change the host surface; it may not
+   delete behavior.
+
+Emit `### Consolidation Decisions` immediately after the Screen Map:
+
+| Candidate screens | Decision | Final host | Reason |
+|---|---|---|---|
+| Duty completion + Shift detail | Merge | Shift detail action sheet | Same assignment, role, and lifecycle |
+| QR check-in + Shift detail | Keep separate | QR check-in | Full-screen scanner state |
+
+For a graph above 18 generated/modified screens, run the algorithm a second
+time before returning. If it still exceeds 18, add an `Exception reason` beside
+the Screen Map with the specific separation tests that require each excess
+route and return `DONE_WITH_CONCERNS: screen graph exceeds 18 routes; <reason>`.
+Never overload unrelated workflows or remove required behavior merely to hit a
+number.
 
 **`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
 
@@ -232,12 +280,10 @@ Always include these baseline screens (already in template — keep them):
 
 **Hard constraint — home screen route is always `/(app)/home`:** `app/index.tsx` in the template redirects signed-in users to `/(app)/home`. This is fixed and never changes. The home screen MUST be at file `app/(app)/home.tsx` with route `/(app)/home`. Never use `/(app)` (index route) for the home screen — that would cause an "Unmatched route" error on launch. If you are tempted to name the home screen `index.tsx`, name it `home.tsx` instead.
 
-Then design the user's screens. For a typical CRUD app:
-
-- **List screen** per primary entity (e.g., `accounts/index.tsx`)
-- **Detail screen** per primary entity (e.g., `accounts/[id].tsx`)
-- **Create/edit form screen** per primary entity (e.g., `accounts/new.tsx`, `accounts/[id]/edit.tsx`)
-- Plus any workflow-specific screens (e.g., `capture-receipt.tsx`)
+Then design the user's screens around journeys and the entity-representation
+strategies selected above. A primary workflow entity may justify a list/detail
+family; lookup, child, join, evidence, and audit entities usually belong inside
+their owning workflow. Create and edit default to one parameterized form.
 
 **Folder rule (HARD — prevents phantom tabs):** any entity that has children (`[id]`, `new`, `edit`, sub-screens) becomes a **folder** with `<entity>/index.tsx` for the list/root view and the children inside. Never use a flat `accounts.tsx` AND a sibling `accounts/[id].tsx` — expo-router auto-registers every top-level `.tsx` under `app/(app)/` as a tab/drawer entry, so a flat `accounts.tsx` next to an `accounts/` folder produces both a phantom "accounts" tab AND the real "accounts" tab. Folders collapse the whole stack into one navigable entry.
 
@@ -253,7 +299,8 @@ Examples:
 - `profile.tsx` (no children) → flat file `app/(app)/profile.tsx`
 - `inspections` (list + detail + form) → folder `app/(app)/inspections/` with `index.tsx`, `[id].tsx`, `new.tsx`
 
-Keep total screen count tight — under 8 for v0 unless the requirements explicitly demand more. The user can iterate later.
+Apply the adaptive screen budget and consolidation algorithm before finalizing
+folder structure. Do not use a second, contradictory fixed screen limit.
 
 ### Sign-out placement rule
 
@@ -766,7 +813,12 @@ What you DO emit per screen: the `**Data**` field listing service+method calls (
 Before writing the section (to `plan_path` in `phase: specs`, or to `_screens_section.md` in `phase: graph` / legacy) and returning to the planner, verify the screen graph is complete. Build a coverage matrix in your head (or scratch buffer):
 
 1. **Features** — every feature listed in the requirements brief MUST map to at least one generated/modified screen or an explicit preserved-template capability (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
-2. **Primary entities** — every entity from the data-model architect's `## Data Model` section MUST have at least a List + Detail pair (or a documented exception, e.g. lookup-only entities like `User`, `Status`, `Category`).
+2. **Entity representation** — every entity from the data-model architect's
+   `## Data Model` section MUST name where it is represented using one of the
+   approved strategies: top-level destination, nested detail section,
+   segmented list, parent-owned child rows, lookup/picker only, join managed
+   through its parent, or evidence/audit timeline. Only entities that are
+   independently discoverable user destinations require a List + Detail pair.
 3. **User actions** — every verb in the brief (create, edit, assign, approve, capture, export, …) MUST have a target screen or a Form/Sheet that hosts it. A verb with no host = a missing screen.
 
 If the matrix has gaps, add the missing screens NOW — do not return a partial plan and let Gate 4 catch it (the iteration loop after Gate 4 rejection is the most expensive in the whole flow). Only after the matrix is fully covered (or every gap is justified under Open Questions) may you proceed to Step 6.

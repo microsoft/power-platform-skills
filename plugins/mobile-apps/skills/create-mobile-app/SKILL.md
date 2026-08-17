@@ -728,8 +728,17 @@ completes, the foreground orchestrator owns both approvals:
    companion after the graph and every batch. Return draft-only.
    ```
 
-   Only now run the two-phase screen planner. Open the generated preview per
-   Step 3b, then enter plan mode with exactly
+   Only now run the two-phase screen planner. Before Gate 3, verify `## Screens`
+   contains `### Consolidation Decisions`
+   and names one representation strategy for every data-model entity. Count
+   only generated/modified Screen Map rows. If the count exceeds 18, require
+   explicit per-screen separation reasons tied to deep linking, multi-step
+   state, full-screen native capability, materially different access/lifecycle,
+   or an unrelated workflow. If those reasons are missing or generic,
+   re-dispatch screen planning once to rerun the workflow-first consolidation
+   algorithm and regenerate the affected specs. Fail closed rather than asking
+   the user to approve an avoidably oversized graph.
+4. Open the generated preview per Step 3b, then enter plan mode with exactly
    one experience approval:
 
    ```text
@@ -739,7 +748,7 @@ completes, the foreground orchestrator owns both approvals:
 
    On rejection, revise the draft through the planner without giving it
    approval ownership, then re-render and present Gate 3 again.
-4. Clear `awaitingInput` and append the approved Gate 2 and Gate 3 entries to
+5. Clear `awaitingInput` and append the approved Gate 2 and Gate 3 entries to
    `## Approvals`.
 
 #### 3.0 — Sub-agent return-status switch (canonical)

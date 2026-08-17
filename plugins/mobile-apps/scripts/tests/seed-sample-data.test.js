@@ -32,6 +32,18 @@ function journal() {
   return { records: {}, environmentUrl: 'https://example.crm.dynamics.com', solution: 'sample' };
 }
 
+function withBatchReads(handler) {
+  return async (method, apiPath, operations) => {
+    if (method !== 'BATCH-READS') return handler(method, apiPath, operations);
+    const data = await Promise.all(operations.map(async (operation) => ({
+      index: operation.index,
+      ...await handler('GET', operation.apiPath),
+    })));
+    const failed = data.some((result) => result.status < 200 || result.status >= 300);
+    return { status: failed ? 207 : 200, data };
+  };
+}
+
 test('escapes string business keys for OData filters', () => {
   assert.strictEqual(businessKeyFilter({ cr1_code: "A'1", cr1_active: true }), "cr1_code eq 'A''1' and cr1_active eq true");
 });
@@ -54,17 +66,78 @@ test('reuses a live business-key match instead of inserting by row count', async
     journal: journal(),
     allowPartial: false,
     persist: () => {},
-    request: async (method, apiPath) => {
+    request: withBatchReads(async (method, apiPath) => {
       calls.push([method, apiPath]);
       if (apiPath.includes('PicklistAttributeMetadata')) {
         return { status: 200, data: { OptionSet: { Options: [{ Value: 7 }] } } };
       }
       return { status: 200, data: { value: [{ cr1_productid: 'existing-id', cr1_sku: 'SKU-001' }] } };
-    },
+    }),
   });
   assert.strictEqual(result.status, 'DONE');
   assert.deepStrictEqual(result.summary, { requested: 1, created: 0, reused: 1, failed: 0, blocked: 0, skipped: 0 });
   assert.ok(calls.some(([, apiPath]) => apiPath.includes('$filter=cr1_sku%20eq%20')));
+});
+
+test('batches choice and business-key discovery instead of issuing per-row GETs', async () => {
+  const plan = basePlan();
+  plan.tables[0].rows.push(
+    {
+      businessKey: { cr1_sku: 'SKU-002' },
+      body: { cr1_sku: 'SKU-002', cr1_name: 'Water', cr1_status: 7 },
+    },
+    {
+      businessKey: { cr1_sku: 'SKU-003' },
+      body: { cr1_sku: 'SKU-003', cr1_name: 'Juice', cr1_status: 7 },
+    },
+  );
+  const calls = [];
+  const result = await executeSeedPlan(plan, {
+    journal: journal(),
+    allowPartial: false,
+    persist: () => {},
+    request: async (method, label, operations) => {
+      calls.push({ method, label, count: operations?.length || 0 });
+      if (method === 'BATCH-READS' && label === 'Sample choice metadata') {
+        return {
+          status: 200,
+          data: operations.map((operation) => ({
+            index: operation.index,
+            status: 200,
+            data: { OptionSet: { Options: [{ Value: 7 }] } },
+          })),
+        };
+      }
+      if (method === 'BATCH-READS') {
+        return {
+          status: 200,
+          data: operations.map((operation) => ({
+            index: operation.index,
+            status: 200,
+            data: { value: [] },
+          })),
+        };
+      }
+      return {
+        status: 200,
+        data: operations.map((operation) => ({
+          index: operation.index,
+          status: 204,
+          recordId: `created-${operation.index}`,
+        })),
+      };
+    },
+  });
+
+  assert.strictEqual(result.status, 'DONE');
+  assert.deepStrictEqual(
+    calls.map(({ method, count }) => ({ method, count })),
+    [
+      { method: 'BATCH-READS', count: 1 },
+      { method: 'BATCH-READS', count: 3 },
+      { method: 'BATCH-RECORDS', count: 3 },
+    ],
+  );
 });
 
 test('fails when a body contains a choice value absent from live metadata', async () => {
@@ -73,7 +146,7 @@ test('fails when a body contains a choice value absent from live metadata', asyn
     journal: journal(),
     allowPartial: false,
     persist: (value) => { persisted = JSON.parse(JSON.stringify(value)); },
-    request: async () => ({ status: 200, data: { OptionSet: { Options: [{ Value: 8 }] } } }),
+    request: withBatchReads(async () => ({ status: 200, data: { OptionSet: { Options: [{ Value: 8 }] } } })),
   }), /not present in live metadata/);
   const record = persisted.records[stableKey('cr1_product', { cr1_sku: 'SKU-001' })];
   assert.strictEqual(record.status, 'blocked');
@@ -86,12 +159,12 @@ test('persists business-key query errors as blocked before throwing', async () =
     journal: journal(),
     allowPartial: false,
     persist: (value) => { persisted = JSON.parse(JSON.stringify(value)); },
-    request: async (method, apiPath) => {
+    request: withBatchReads(async (method, apiPath) => {
       if (apiPath.includes('PicklistAttributeMetadata')) {
         return { status: 200, data: { OptionSet: { Options: [{ Value: 7 }] } } };
       }
       return { status: 503, error: 'metadata service unavailable' };
-    },
+    }),
   }), /Business-key lookup failed/);
   const record = persisted.records[stableKey('cr1_product', { cr1_sku: 'SKU-001' })];
   assert.strictEqual(record.status, 'blocked');
@@ -104,13 +177,13 @@ test('persists partial insert failures and returns BLOCKED by default', async ()
     journal: journal(),
     allowPartial: false,
     persist: (value) => saved.push(JSON.parse(JSON.stringify(value))),
-    request: async (method, apiPath) => {
+    request: withBatchReads(async (method, apiPath) => {
       if (apiPath.includes('PicklistAttributeMetadata')) {
         return { status: 200, data: { OptionSet: { Options: [{ Value: 7 }] } } };
       }
       if (method === 'GET') return { status: 200, data: { value: [] } };
       return { status: 200, data: [{ index: 0, status: 400, error: 'invalid row' }] };
-    },
+    }),
   });
   assert.strictEqual(result.status, 'BLOCKED');
   assert.strictEqual(result.summary.failed, 1);
@@ -123,13 +196,13 @@ test('persists batch-level failures as blocked before throwing', async () => {
     journal: journal(),
     allowPartial: false,
     persist: (value) => { persisted = JSON.parse(JSON.stringify(value)); },
-    request: async (method, apiPath) => {
+    request: withBatchReads(async (method, apiPath) => {
       if (apiPath.includes('PicklistAttributeMetadata')) {
         return { status: 200, data: { OptionSet: { Options: [{ Value: 7 }] } } };
       }
       if (method === 'GET') return { status: 200, data: { value: [] } };
       return { status: 503, error: 'batch service unavailable' };
-    },
+    }),
   }), /batch service unavailable/);
   const record = persisted.records[stableKey('cr1_product', { cr1_sku: 'SKU-001' })];
   assert.strictEqual(record.status, 'blocked');
@@ -157,11 +230,11 @@ test('resolves lookup dependencies before inserting a child tier', async () => {
     journal: journal(),
     allowPartial: false,
     persist: () => {},
-    request: async (method, apiPath, operations) => {
+    request: withBatchReads(async (method, apiPath, operations) => {
       if (method === 'GET') return { status: 200, data: { value: [] } };
       batches.push(operations);
       return { status: 200, data: operations.map((operation) => ({ index: operation.index, status: 204, recordId: `id-${batches.length}` })) };
-    },
+    }),
   });
   assert.strictEqual(result.status, 'DONE');
   assert.strictEqual(batches[1][0].body['cr1_Product@odata.bind'], '/cr1_products(id-1)');
@@ -182,14 +255,14 @@ test('resolves an external lookup target by business key', async () => {
     journal: journal(),
     allowPartial: false,
     persist: () => {},
-    request: async (method, apiPath, operations) => {
+    request: withBatchReads(async (method, apiPath, operations) => {
       if (method === 'GET' && apiPath.startsWith('contacts?')) {
         return { status: 200, data: { value: [{ contactid: 'contact-id' }] } };
       }
       if (method === 'GET') return { status: 200, data: { value: [] } };
       batches.push(operations);
       return { status: 200, data: [{ index: 0, status: 204, recordId: 'product-id' }] };
-    },
+    }),
   });
   assert.strictEqual(result.status, 'DONE');
   assert.strictEqual(batches[0][0].body['cr1_OwnerContact@odata.bind'], '/contacts(contact-id)');
@@ -211,10 +284,10 @@ test('journal records later tiers as blocked after a fail-closed stop', async ()
     journal: journal(),
     allowPartial: false,
     persist: (value) => { persisted = JSON.parse(JSON.stringify(value)); },
-    request: async (method) => {
+    request: withBatchReads(async (method) => {
       if (method === 'GET') return { status: 200, data: { value: [] } };
       return { status: 200, data: [{ index: 0, status: 400, error: 'bad parent' }] };
-    },
+    }),
   });
   assert.strictEqual(result.summary.requested, 2);
   assert.strictEqual(result.summary.failed, 1);
