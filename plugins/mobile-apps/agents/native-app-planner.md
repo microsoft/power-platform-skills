@@ -40,11 +40,11 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
 - **MANDATORY progress reporting.** Update
   `mobile-app-status.json` with `scripts/mobile-plan-status.js` and emit the
-  matching concise terminal line at meaningful boundaries. Immediately after
-  every status update, run `scripts/render-mobile-plan.js` with the current
-  `native-app-plan.md`, status file, and `mobile-app-plan.html`. The foreground
-  opens that page after Gate 1; your writes make it advance while this agent is
-  still running.
+  matching concise terminal line at meaningful boundaries. The localhost
+  planning companion streams status-file changes in place. Run
+  `scripts/render-mobile-plan.js` only when a reviewable artifact changes
+  (architecture, screen graph, screen-spec batch, preview, or audit), then the
+  companion advances the already-open page.
 
 Use these durable checkpoints:
 
@@ -54,17 +54,46 @@ Use these durable checkpoints:
 | Data model and architecture draft written | `2/4` | `Architecture draft ready — preparing screen graph` |
 | Screen graph written | `2/4` | `Screen graph ready — expanding <N> detailed screen specs` |
 | Each screen-spec batch | `2/4` | `Expanding screen specs <END>/<N> — <last screen> complete` |
-| Specs and data-contract audit complete | `3/4` | `Experience draft ready — preparing architecture review` |
+| Specs and data-contract audit complete | `3/4` | `Experience draft ready — preparing experience review` |
 
-For every row, execute both helpers rather than merely narrating the update.
-Require exit code 0 and verify that `mobile-app-status.json.updatedAt` and
-`mobile-app-plan.html` modification time advanced. If either write fails,
-return `BLOCKED: progressive Plan HTML update failed at <boundary>`.
+During the architecture phase, also publish factual sub-milestones without
+changing `completed: 1 / total: 4` until the draft is ready:
+
+- `Environment and Dataverse snapshot resolved`
+- `Required entities matched <verified>/<total>`
+- `Inspecting columns and relationships <verified>/<total>`
+- `Classifying reuse, extend, and create decisions`
+- `Building ER diagram with reviewable columns`
+- `Finalizing capabilities, connectors, role source, and active scope`
+- `Validating architecture blockers and rationale`
+
+Use actual counts from completed work. Do not emit simulated percentages.
+
+For every row, execute the status helper rather than merely narrating the
+update. At artifact boundaries, execute the renderer too. Require exit code 0
+and verify that `mobile-app-status.json.updatedAt` advanced and, when rendered,
+that `mobile-app-plan.html` modification time advanced. If either required
+write fails, return
+`BLOCKED: progressive Plan HTML update failed at <boundary>`.
 
 Read
 [`shared/references/four-gate-planning.md`](../shared/references/four-gate-planning.md)
 before planning. It is authoritative when older terminology elsewhere refers
 to per-section or Gate 4a/4b approvals.
+
+## Invocation phase contract
+
+The foreground prompt must provide one phase:
+
+| Phase | Work | Return boundary |
+|---|---|---|
+| `architecture` | Data model, ER columns/relationships, rationale, capabilities, shared operational context, design direction, connectors, risks | Render the architecture draft and return before spawning `screen-planner` |
+| `architecture-revision` | Apply a validated Gate 2 revision payload and regenerate every affected architecture contract | Render the revised architecture and return |
+| `experience` | Read the Gate 2-approved architecture, then generate screen graph, detailed specs, visual preview, and screen-driven cross-entity audit | Render the experience draft and return for Gate 3 |
+
+If the phase is missing, return `BLOCKED: planner phase missing`. Never perform
+`architecture` and `experience` in one invocation. Gate 2 must become
+reviewable before the long screen-spec expansion begins.
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
 
@@ -314,8 +343,9 @@ independent role/scope source.
 ## Step 4 — Assemble `native-app-plan.md`
 
 Write `<working_dir>/native-app-plan.md` with this structure. Use the
-architects' output verbatim for their sections. `## Screens` is populated
-before this agent returns so the foreground can review a complete draft.
+architects' output verbatim for their sections. During `phase: architecture`, `## Screens` contains only
+`Experience planning begins after Gate 2 approval.` During
+`phase: experience`, replace that line with the complete screen section.
 
 **HARD RULES — plan structure (read before writing):**
 1. **Top-level headings are EXACTLY the eight below.** Do NOT invent a `## Brief` super-section that nests the data model, discovery notes, or sample notes under it. Each section is its own `## ` heading.
@@ -365,7 +395,23 @@ before this agent returns so the foreground can review a complete draft.
 - Date: <today>
 ```
 
-## Step 5 — Assemble complete Gate 2 and Gate 3 drafts
+## Step 5 — Respect the architecture return boundary
+
+For `phase: architecture` or `phase: architecture-revision`, validate:
+
+- every ER entity has at least one column;
+- entity and field names are non-empty and unique;
+- relationships reference declared entities;
+- rationale covers reuse/extend/create alternatives and trade-offs;
+- shared role and active-scope sources are proven or marked as blockers;
+- capabilities and connectors have explicit inclusion decisions.
+
+Set status to `Architecture draft ready — return to the terminal for Gate 2`,
+render `mobile-app-plan.html`, and return. Do not spawn `screen-planner`.
+
+The remaining steps run only for `phase: experience` after Gate 2 approval.
+
+## Step 5a — Assemble the Gate 3 experience draft
 
 Do not enter plan mode or ask the user. Complete the data model,
 capability/connector plan, shared operational context, screen field-read
@@ -387,8 +433,10 @@ Keep the following content in the Gate 2 architecture view:
 
 ```
 
-Do not approve the data model yet. Continue through screen field-read planning
-and the cross-entity audit so Gate 2 is complete the first time.
+The data model is already Gate 2 approved in `phase: experience`. Treat it as
+immutable unless the screen-driven audit proves a concrete contradiction; in
+that case return `BLOCKED: Gate 2 architecture must be revised: <reason>`
+instead of silently changing it.
 
 ### Internal native-capability and connector assembly — no prompt
 
@@ -410,9 +458,9 @@ Include the following in Gate 2 even when both sections are `None`:
 **Print before spawning:**
 > "→ [4/4] Spawning screen-planner (phase 1/2: screen graph + shared conventions)…"
 
-Run after the architecture sections are drafted, before Gate 2. Keep graph and
-spec generation as two internal phases so a regeneration can remain cheap, but
-do not ask the user between them.
+Run only after Gate 2 approval. Keep graph and spec generation as two internal
+phases so a regeneration can remain cheap, but do not ask the user between
+them.
 
 #### 5b.1 — Spawn planner with `phase: graph`
 
@@ -548,18 +596,18 @@ The foreground Gate 3 approves the screen plan and design together. If the
 orchestrator later sends revision feedback, revise only the affected draft
 sections and their dependents, re-render, and return without asking the user.
 
-### Step 5c — Cross-entity Read Audit before Gate 2
+### Step 5c — Cross-entity Read Audit before Gate 3
 
 **Print before spawning:**
 > "→ Auditing the locked screen plan for supported cross-entity read paths…"
 
 **Run condition:** always execute this orchestration step after internal screen
 spec generation. Run the architect audit only when `related_entity_fields`
-exists; Gate 2 and Gate 3 still run when it does not.
+exists; Gate 3 still runs when it does not.
 
 **Detection (cheap):** before spawning, `Grep` the locked plan for
 `related_entity_fields:`. Zero matches skips only 5c.1 and continues directly
-to Gate 2.
+to Gate 3 readiness.
 
 This step exists because the SDK has no `$expand`. It classifies each related
 field as a formatted lookup, bounded chained fetch, or
@@ -575,7 +623,7 @@ mode: cross-entity-audit
 
 The data-model draft is at <working_dir>/_dm_section.md and the internally
 generated screen plan is at <working_dir>/native-app-plan.md → ## Screens. Read
-both before Gate 2. Run only Step 6a and append its resolution table.
+both before Gate 3. Run only Step 6a and append its resolution table.
 
 Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
@@ -590,24 +638,27 @@ Wait for return; apply the Step 3.0 status switch:
 - `DONE` (no cross-entity reads) → mark Step 5c done, proceed to Step 6.
 - `DONE` with addendum written → re-mirror both the updated `## Data Model`
   section and the edited `_screens_section.md` `## Screens` section into
-  `native-app-plan.md`, then continue to Gate 2. The authoritative plan must
+  `native-app-plan.md`, then continue to Gate 3. The authoritative plan must
   contain the deferred-field removals before any approval or implementation
   step reads it.
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
 
-#### 5c.2 — Gate 2 draft readiness
+#### 5c.2 — Gate 2 consistency check
 
 Mirror the finalized cross-entity table and updated screen section into
 `native-app-plan.md` and verify the architecture draft includes data model,
 projections, shared operational context, native capabilities, connectors,
-risks, and blockers.
+risks, and blockers. The architecture was already approved. If the screen
+audit proves any Gate 2 decision invalid, return
+`BLOCKED: Gate 2 architecture must be revised: <reason>` so the foreground
+reopens Gate 2; do not silently rewrite approved architecture.
 For every `external-projection-required` row, verify the screen plan marks the
 field under `Deferred fields` and removes it from visible fields, data selects,
 filters, KPIs, counts, and layout requirements. If any deferred field remains
 implementable, return `BLOCKED: unresolved external projection remained in the
 screen contract` before foreground approval.
-Render the visual plan, but leave Gate 2 unchecked for foreground approval.
+Render the visual plan with Gate 2 still recorded as approved.
 
 #### 5c.3 — Gate 3 draft readiness
 
@@ -631,7 +682,7 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | Gate 2 and Gate 3 drafts are complete, plan written, no caveats | `DONE` |
+| `DONE` | The requested invocation phase is complete and rendered with no caveats | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Draft written, but a sub-architect returned `DONE_WITH_CONCERNS` or authoritative metadata remains uncertain | `DONE_WITH_CONCERNS: data-model-architect could not verify contact reuse, screen-planner used Tamagui default tokens` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more factual context from the orchestrator; low-confidence industry or design choices are drafted and resolved inside Gate 3, not returned separately | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
 | `BLOCKED: <reason>` | Hit a hard wall — sub-architect returned `BLOCKED`, plan artifacts cannot be written, or any pre-condition (working dir, plugin root) is missing. The orchestrator MUST escalate, never silently retry | `BLOCKED: data-model-architect returned BLOCKED: cannot write _dm_section.md` |

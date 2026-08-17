@@ -18,20 +18,31 @@ For a thin prompt, the context-aware feature picker is the Gate 1 interaction;
 do not ask a second confirmation. For a rich prompt, show the extracted brief
 inside Gate 1. Options are `Approve requirements`, `Edit`, and `Abort`.
 
+## Live planning companion
+
+Immediately after Gate 1, render the current-run planning shell, start the
+loopback-only companion, and open its tokenized localhost URL when visual
+companions are enabled. Status updates stream in place through Server-Sent
+Events. Plan artifacts refresh only when architecture, screen graph, screen
+spec batches, previews, audits, or gate states change. Never use periodic
+polling or timed full-page refreshes.
+
 ## Internal architecture work — no prompt
 
 Before Gate 2:
 
 1. discover Dataverse in the foreground;
 2. write a normalized read-only metadata snapshot;
-3. infer the data model, native capabilities, connectors, and preliminary
-   screen field-read contract;
-4. classify every cross-entity field using the resolution ladder in
+3. infer the data model, native capabilities, connectors, design direction,
+   authoritative role source, and active operational scope;
+4. define the architecture-level cross-entity resolution rules from
    `data-performance.md`;
-5. produce complete architecture and screen-plan sections;
+5. produce the complete architecture section with reviewable ER columns;
 6. render `mobile-app-plan.html`.
 
-Do not approve an incomplete data model and reopen it after screen planning.
+Publish factual sub-milestones and real entity/column counts throughout this
+work. Present Gate 2 as soon as architecture is ready; detailed screen
+expansion must not delay it.
 
 ## Gate 2 — Complete architecture
 
@@ -52,10 +63,26 @@ addendum prompt.
 
 The Plan HTML ER review editor may be used before approval to add, remove, or
 revise draft entities, fields, and relationships. Browser edits never mutate
-`native-app-plan.md` or Dataverse. The user must copy or download
-`mobile-er-revision.json` and submit it through Gate 2 `Revise`; regenerate the
-data model, rationale, cross-entity audit, and dependent screen bindings from
-that payload before presenting Gate 2 again.
+`native-app-plan.md` or Dataverse. In the live companion, Submit revision
+writes a run-bound, plan-hash-bound `.tmp/mobile-er-revision.json`; Gate 2
+`Apply browser revision` validates and routes it through the foreground
+orchestrator to the current planner. Copy/download remains the static fallback.
+Regenerate the data model, rationale, architecture contracts, and blockers
+from that payload before presenting Gate 2 again.
+
+## Internal experience work — no prompt
+
+Only after Gate 2 approval:
+
+1. generate the navigation and screen graph;
+2. update the companion with the reviewable graph;
+3. expand detailed screen specs in visible batches of at most four;
+4. apply the visual-quality and imagery contracts;
+5. render the visual concept preview;
+6. run the screen-driven cross-entity audit.
+
+If the audit proves approved architecture invalid, return to Gate 2 with the
+specific contradiction. Do not silently rewrite Gate 2.
 
 ## Gate 3 — Experience
 

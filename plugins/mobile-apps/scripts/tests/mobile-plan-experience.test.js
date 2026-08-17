@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const { updateStatus } = require('../mobile-plan-status');
 const { renderPlan, splitSections } = require('../render-mobile-plan');
+const { createCompanion } = require('../serve-mobile-plan');
 const { checkAgentPreflight } = require('../agent-preflight');
 const { createSnapshot, selectDetailedEntities } = require('../create-dataverse-snapshot');
 
@@ -54,13 +55,13 @@ test('plan renderer creates navigation, progress, and input banner safely', () =
     inputPrompt: 'return to terminal',
   });
   assert.strictEqual(splitSections(markdown).length, 2);
-  assert.match(html, /50% complete/);
+  assert.match(html, /data-live-percent>50%<\/b> complete/);
   assert.match(html, /Input required/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 });
 
-test('plan renderer provides an auto-refreshing progress page before the plan exists', () => {
+test('plan renderer provides an event-driven progress page before the plan exists', () => {
   const html = renderPlan('', {
     phase: 'architecture',
     message: 'Analyzing Dataverse architecture and app capabilities',
@@ -69,7 +70,10 @@ test('plan renderer provides an auto-refreshing progress page before the plan ex
     total: 4,
     awaitingInput: false,
   });
-  assert.match(html, /http-equiv="refresh" content="5"/);
+  assert.doesNotMatch(html, /http-equiv="refresh"/);
+  assert.match(html, /new EventSource/);
+  assert.match(html, /addEventListener\('status'/);
+  assert.match(html, /addEventListener\('plan'/);
   assert.match(html, /Planning progress/);
   assert.match(html, /Requirements approved/);
   assert.match(html, /Architecture draft/);
@@ -83,8 +87,47 @@ test('plan renderer provides an auto-refreshing progress page before the plan ex
     awaitingInput: true,
     inputPrompt: 'Approve architecture',
   });
-  assert.doesNotMatch(waitingHtml, /http-equiv="refresh"/);
   assert.match(waitingHtml, /Input required/);
+});
+
+test('planning companion is token-protected and accepts validated Gate 2 revisions', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-companion-'));
+  fs.mkdirSync(path.join(dir, '.tmp'));
+  fs.writeFileSync(path.join(dir, 'mobile-app-plan.html'), '<!doctype html><title>Plan</title>');
+  fs.writeFileSync(path.join(dir, 'native-app-plan.md'), '# Plan\n');
+  fs.writeFileSync(path.join(dir, 'mobile-app-status.json'), JSON.stringify({
+    startedAt: '2026-08-17T12:00:00.000Z',
+    phase: 'architecture review',
+  }));
+  const companion = await createCompanion({ projectRoot: dir });
+  t.after(() => companion.close());
+
+  const page = await fetch(companion.url);
+  assert.strictEqual(page.status, 200);
+  assert.strictEqual((await fetch(companion.url.split('?')[0])).status, 403);
+
+  const url = new URL(companion.url);
+  const revisionResponse = await fetch(
+    `${url.origin}/api/gate-2/revision?token=${url.searchParams.get('token')}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: 1,
+        kind: 'mobile-er-revision',
+        entities: [{
+          name: 'new_product',
+          fields: [{ type: 'guid', name: 'new_productid', notes: 'PK' }],
+        }],
+        relationships: [],
+      }),
+    },
+  );
+  assert.strictEqual(revisionResponse.status, 200);
+  const saved = JSON.parse(fs.readFileSync(companion.revisionFile, 'utf8'));
+  assert.strictEqual(saved.gate, 2);
+  assert.strictEqual(saved.runId, '2026-08-17T12:00:00.000Z');
+  assert.match(saved.basePlanSha256, /^[a-f0-9]{64}$/);
 });
 
 test('plan renderer turns fenced Mermaid ER diagrams into local safe HTML', () => {
@@ -172,7 +215,7 @@ test('plan renderer shows outcome-driven implementation progress', () => {
       { id: 'screens', label: 'Screens ready', state: 'pending' },
     ],
   });
-  assert.match(html, /33% complete/);
+  assert.match(html, /data-live-percent>33%<\/b> complete/);
   assert.match(html, /<strong>1\/3<\/strong><span>Outcomes delivered<\/span>/);
   assert.match(html, /Delivery outcomes/);
   assert.match(html, /class="outcome completed"/);

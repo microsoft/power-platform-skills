@@ -86,6 +86,10 @@ test('mobile planning requires reviewable ER columns and bounded screen progress
     path.join(pluginRoot, 'agents', 'screen-planner.md'),
     'utf8',
   );
+  const gateContract = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'four-gate-planning.md'),
+    'utf8',
+  );
 
   assert.match(architect, /Every entity named in a relationship MUST also have an `\{ \.\.\. \}` attribute/);
   assert.match(architect, /primary key marked `PK`/);
@@ -179,7 +183,7 @@ test('experience previews prominently identify themselves as design concepts', (
   assert.match(renderer, /Generated TSX and the live device are authoritative/);
 });
 
-test('create flow opens and progressively refreshes Plan HTML immediately after Gate 1', () => {
+test('create flow opens an event-driven planning companion immediately after Gate 1', () => {
   const createSkill = fs.readFileSync(
     path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
     'utf8',
@@ -193,11 +197,18 @@ test('create flow opens and progressively refreshes Plan HTML immediately after 
     'utf8',
   );
 
-  assert.match(createSkill, /Immediately render and surface the current run's Plan HTML/);
+  assert.match(createSkill, /Start the loopback-only planning companion/);
   assert.match(createSkill, /Do not wait for Gate 2/);
-  assert.match(createSkill, /Planning render invariant/);
+  assert.match(createSkill, /Server-Sent Events—no interval polling and no periodic/);
+  assert.match(createSkill, /Apply browser revision/);
+  assert.match(createSkill, /phase: architecture/);
+  assert.match(createSkill, /phase: experience/);
   assert.match(nativePlanner, /verify that `mobile-app-status\.json\.updatedAt`/);
+  assert.match(nativePlanner, /Never perform\s+`architecture` and `experience` in one invocation/);
   assert.match(nativePlanner, /Screen graph ready — expanding <N> detailed screen specs/);
+  assert.match(gateContract, /Present Gate 2 as soon as architecture is ready/);
+  assert.match(gateContract, /Only after Gate 2 approval/);
+  assert.match(gateContract, /Server-Sent Events/);
   assert.match(screenPlanner, /Verify the helper changed the file's/);
   assert.match(screenPlanner, /completed: 2` \/ `total: 4` while batches are running/);
   assert.doesNotMatch(screenPlanner, /est ~\$\(\(N \* 60\)\)s/);

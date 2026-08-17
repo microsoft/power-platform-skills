@@ -445,8 +445,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
   --awaiting-input false
 ```
 
-Immediately render and surface the current run's Plan HTML. The renderer
-supports a not-yet-created `native-app-plan.md`, so this first page is a useful
+Immediately render the current run's Plan HTML. The renderer supports a
+not-yet-created `native-app-plan.md`, so this first page is a useful
 planning-progress shell rather than a stale artifact from another run:
 
 ```bash
@@ -456,20 +456,38 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/render-mobile-plan.js" \
   --output "<working_dir>/mobile-app-plan.html"
 ```
 
-Print:
-> "Live planning page: file://<working_dir>/mobile-app-plan.html"
+Start the loopback-only planning companion as a background process:
 
-When `<visual_companion> = yes`, open it now using the OS-portable `open` /
-`xdg-open` / PowerShell chain from Step 3b. Do not wait for Gate 2. While
-planning is running, the page refreshes every five seconds and progressively
-shows architecture and experience results. When `<visual_companion> = no`,
-print the link without opening it.
+```bash
+rm -f "<working_dir>/.tmp/mobile-plan-companion.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/serve-mobile-plan.js" \
+  --project-root "<working_dir>"
+```
 
-**Planning render invariant:** every subsequent planning status update must be
-followed by `render-mobile-plan.js` targeting the same
-`mobile-app-plan.html`. This includes data-model completion, screen-graph
-completion, every screen-spec batch, audit completion, and each waiting gate.
-Never leave the browser showing an earlier run or an earlier phase.
+Use an async/background Bash invocation and retain the terminal ID. Wait at
+most five seconds for `.tmp/mobile-plan-companion.json`, then read its `url`.
+The URL contains an ephemeral token and the server binds only to
+`127.0.0.1`. Print:
+
+> "Live planning companion: <url>"
+
+When `<visual_companion> = yes`, open that URL now using the OS-portable
+`open` / `xdg-open` / PowerShell chain from Step 3b. Do not wait for Gate 2.
+When `<visual_companion> = no`, print the URL without opening it.
+
+The companion uses Server-Sent Events—no interval polling and no periodic
+page reload. Status-file changes update the progress header and terminal-input
+banner in place. Re-render `mobile-app-plan.html` only when a meaningful
+artifact changes: architecture draft, screen graph, screen-spec batch,
+experience preview, audit result, or gate state. The companion emits one plan
+event for that artifact update and preserves the selected tab, expanded
+sections, and scroll position across the milestone refresh. It never refreshes
+while the ER editor is active.
+
+If the companion fails to start, print and open
+`file://<working_dir>/mobile-app-plan.html` as a static fallback and continue
+with terminal progress. Record the companion terminal ID and URL for cleanup
+and resume handling.
 
 ### Outcome-driven progress contract
 
@@ -588,19 +606,22 @@ Prompt:
   Agent preflight result: <paste JSON from scripts/agent-preflight.js>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Draft the complete Gate 2 architecture and
-  Gate 3 experience, including the HTML preview, but do not ask the user or
-  enter plan mode. Gate 1 is already approved; the foreground orchestrator
-  owns Gates 2, 3, and 4. After every status update, re-render
-  <working_dir>/mobile-app-plan.html so the already-open planning page advances
-  during the long-running draft. On terminal return, emit one of
+  phase: architecture
+
+  Follow native-app-planner.md. Draft Gate 2 architecture only: data model,
+  ER columns and relationships, rationale, shared operational context, native
+  capabilities, connectors, risks, and blockers. Do not generate the screen
+  graph, detailed screen specs, or experience preview yet. Do not ask the user
+  or enter plan mode. Gate 1 is already approved; the foreground orchestrator
+  owns Gates 2, 3, and 4. Update the live planning companion at every
+  architecture milestone. On terminal return, emit one of
   `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal
   first line per AGENTS.md rule #10.
 ```
 
-The planner writes the complete draft and renders `mobile-app-plan.html`.
-After it returns, the foreground orchestrator always presents Gate 2 and Gate
-3. This avoids delayed failure when nested agent contexts lack approval tools.
+The planner writes the architecture draft and renders `mobile-app-plan.html`.
+After it returns, the foreground orchestrator presents Gate 2 immediately.
+Detailed experience planning must not delay the first architecture review.
 
 #### 3.0a — Inline-draft fallback (planner unavailable OR capability preflight failed)
 
@@ -617,18 +638,24 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    projections, screen bindings, and risks, then show the single combined
    Gate 2. Remove any stale offline-profile section from older drafts; offline
    setup is handled separately after Dataverse implementation.
-2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
-
-   **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ Preparing the Gate 3 screen graph internally (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ Expanding Gate 3 screen specs internally (~1 min/screen, ~${N} min for ${N} screens)…"`
+2. **If no draft exists:** spawn `mobile-app:data-model-architect`
+   directly via `Task` (single architect, not the orchestrator agent) to draft
+   `## Data Model`; then build `## Native Capabilities`, `## Design Direction`,
+   and `## Connectors` inline from the brief. Render and present Gate 2 now.
+   Do not spawn `screen-planner` until Gate 2 is approved.
 
   **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. Finish the screen field-read contract, shared operational-context contract,
-   and cross-entity resolution audit before the common foreground gates.
+3. Finish the architecture-level shared operational-context contract and
+   cross-entity resolution rules before Gate 2. After Gate 2 approval, spawn
+   `mobile-app:screen-planner` with `phase: graph` and `phase: specs`.
+
+   **Before each `screen-planner` spawn, print a one-line ETA so the user knows
+   the agent is live and roughly how long to wait**:
+   - Before `phase: graph`: `> "→ Preparing the Gate 3 screen graph internally (~2 min)…"`
+   - Before `phase: specs`: `> "→ Expanding Gate 3 screen specs in visible batches (~1 min/screen, ~${N} min for ${N} screens)…"`
 4. Write the draft `native-app-plan.md` with only Gate 1 recorded in
    `## Approvals`. The common foreground flow records Gates 2 and 3; Step 3.8
    records Gate 4 immediately before mutation.
@@ -650,13 +677,13 @@ already approved; the foreground flow still owns Gates 2–4.
 them because drafting fell back. No mutation begins until Step 3.8 records
 Gate 4.
 
-#### 3.0b — Foreground Gates 2 and 3 (always)
+#### 3.0b — Foreground Gate 2, then progressive Gate 3 (always)
 
-After either the planner draft or inline-draft fallback completes, the
-foreground orchestrator owns both approvals:
+After either the architecture planner draft or inline-draft fallback
+completes, the foreground orchestrator owns both approvals:
 
-1. Verify the draft contains the data model, cross-entity projections, native
-   capabilities, connectors, and a **Shared Operational Context**
+1. Verify the architecture draft contains the data model, cross-entity
+   projections, native capabilities, connectors, and a **Shared Operational Context**
    contract naming the authoritative role source and active-scope source. If a
    screen depends on role or store/site scope and no authoritative source is
    available, mark it as a Gate 2 blocker; do not let builders invent local
@@ -670,18 +697,39 @@ foreground orchestrator owns both approvals:
    capabilities, connectors, risks, and blockers?
    ```
 
-   The ER diagram in Plan HTML is editable. If the user chooses `Revise` and
-   supplies copied JSON from the editor or a downloaded
-   `mobile-er-revision.json`, validate `kind: mobile-er-revision`, require
-   non-empty unique entity names and field names, and pass the complete payload
-   to the planner. Regenerate the data model, decision rationale, cross-entity
-   audit, and dependent screen bindings before re-rendering. Do not translate
-   browser edits directly into Dataverse mutations.
+   The ER diagram in the planning companion is editable. Gate 2 options are
+   `Approve architecture`, `Apply browser revision`, `Revise architecture`,
+   and `Abort`.
+
+   `Apply browser revision` reads
+   `<working_dir>/.tmp/mobile-er-revision.json`. Require
+   `kind: mobile-er-revision`, `gate: 2`, the current status `startedAt` as
+   `runId`, a `basePlanSha256` matching the current `native-app-plan.md`, and
+   non-empty unique entity and field names. Pass the complete payload to the
+   existing planner in `phase: architecture-revision`. Regenerate the data
+   model, rationale, cross-entity contracts, capabilities affected by schema,
+   and blockers before re-rendering. Archive the consumed payload under
+   `.tmp/` with `.applied.json`; never mutate Dataverse from browser edits.
 
    On rejection, send the feedback to the existing idle planner when possible,
    otherwise re-spawn it in draft-only revision mode. Re-render and present
    Gate 2 again from the foreground.
-3. Open the generated preview per Step 3b, then enter plan mode with exactly
+3. After Gate 2 approval, update status to
+   `Designing navigation and screen experience`, preserving `completed: 2 /
+   total: 4`. Resume the existing planner when possible, otherwise re-spawn it
+   with:
+
+   ```text
+   phase: experience
+   Architecture in native-app-plan.md is Gate 2 approved and immutable unless
+   an experience dependency proves it invalid. Generate navigation, screen
+   graph, shared conventions, detailed specs in visible batches, design
+   direction preview, and the cross-entity screen audit. Update the planning
+   companion after the graph and every batch. Return draft-only.
+   ```
+
+   Only now run the two-phase screen planner. Open the generated preview per
+   Step 3b, then enter plan mode with exactly
    one experience approval:
 
    ```text
@@ -1168,9 +1216,15 @@ Immediately after creating `memory-bank.md`, flush any queued planner concerns f
 
 ```
 visual_companion: <yes|no>   # set in Step 2b — controls whether browser previews open automatically
+planning_companion_url: <localhost URL from .tmp/mobile-plan-companion.json>
+planning_companion_terminal_id: <background Bash terminal ID>
 ```
 
 `/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
+The planning companion remains active through implementation so the same page
+can display durable delivery outcomes. A resumed run checks the stored URL; if
+it is unavailable, restart `serve-mobile-plan.js`, update these facts, and
+continue from the saved status and Plan HTML.
 
 ### Step 6.75 — Design system
 
