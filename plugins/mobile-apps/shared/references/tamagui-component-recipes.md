@@ -9,12 +9,25 @@ Copy-paste snippets for mobile-app screens.
 > - `src/tokens/` — `gradients`, `shadows`
 >
 > Import via path aliases: `@/components`, `@/hooks`, `@/utils`, `@/tokens`. Recipes below are the reference implementations.
+>
+> Visual sizing and hierarchy come from
+> [`mobile-visual-quality-contract.md`](mobile-visual-quality-contract.md).
+> Prefer the shared action-button primitives below instead of styling primary
+> actions independently in each screen.
 
 ---
 
 ## Primitives (import from `@/components`)
 
 These are defined once in the scaffold and imported by every screen. Never re-roll them inline.
+
+### Action buttons
+
+Use `PrimaryActionButton`, `SecondaryActionButton`, and
+`DestructiveActionButton` for the app's action hierarchy. They share a 48px
+baseline height, medium radius, and 600-weight labels. Field/gloved apps may
+raise the shared primitive to 52–56px once in `src/components/`; do not resize
+individual screen buttons independently.
 
 ### `<Gradient>`
 

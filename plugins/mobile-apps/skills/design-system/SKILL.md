@@ -78,7 +78,8 @@ For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
 
 **Approved-plan fast path:** when `--skip-planning --plan <path>` is present,
 read the approved `## Design Direction` and `## Screens` sections. Validate that
-palette, typography, density, surface, motion, and negatives are complete.
+palette, typography, density, surface, composition recipes, imagery policy,
+motion, and negatives are complete.
 Skip every `AskUserQuestion`, cost picker, brand-input picker, and style picker;
 generate the three brand artifacts directly. Missing required fields are
 `BLOCKED`, not permission to reopen planning after Gate 4.
@@ -290,6 +291,18 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 ## Spacing
 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
 
+## Composition
+- Default recipe family: <operational | commerce | content-led>
+- Primary action rule: one dominant primary action per screen
+- Screen recipes: copy the approved screen → composition-recipe mappings
+
+## Imagery
+- Eligibility: <none | scenario-gated>
+- Approved sources: <Dataverse image/file fields, camera evidence, user-supplied assets>
+- Default crop: <aspect ratio + cover/contain>
+- Fallback: <tokenized placeholder | initials | icon | content-led layout>
+- Accessibility: <meaningful label | decorative-hidden>
+
 ## Components
 ### Button — primary, secondary, tertiary, destructive
 ### Card — surface, border, radius, padding, shadow policy
@@ -364,6 +377,11 @@ export const tokens = {
     bodySm: { family: '{{font}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
     caption: { family: '{{font}}', size: 12, weight: '500', lineHeight: 1.3, tracking: {{0.02|0}} },
     mono: { family: '{{monoFont}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
+  },
+  component: {
+    primaryActionHeight: {{48|52|56}},
+    secondaryActionHeight: {{48|52|56}},
+    actionRadius: '{{sm|md|lg|full}}',
   },
 } as const;
 

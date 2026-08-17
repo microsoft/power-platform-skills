@@ -21,6 +21,8 @@ typography: sans-only
 heading_font: Inter
 body_font: Inter
 body_size: 15pt
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: row-with-chevron
 density: comfortable
 motion: subtle
@@ -28,6 +30,10 @@ status_saturation: hi-vis
 empty_state: icon-explanation-action
 primary_action_shape: rectangular
 primary_action_position: bottom-pinned-or-in-flow
+primary_action_min_height: 48pt
+radius_policy: medium
+composition_recipe_family: commerce
+imagery_policy: scenario-gated
 accent_color: deep-aviation-blue (#0A4F8F)
 tone: branded-operational
 ```

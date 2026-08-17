@@ -23,6 +23,8 @@ typography: sans-only
 heading_font: Inter
 body_font: Inter
 body_size_min: 16pt
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: card-with-status-stripe
 density: comfortable
 motion: functional-only (skeleton + press + screen-enter)
@@ -31,6 +33,9 @@ status_pill_style: soft-tint-bg-with-full-hue-text
 empty_state: icon-sentence-bigbutton
 primary_action_shape: bottom-right-FAB-OR-rectangular-bottom-pinned
 primary_action_min_height: 56pt
+radius_policy: medium
+composition_recipe_family: operational
+imagery_policy: scenario-gated
 accent_color: power-platform-green (#007d48)
 secondary_accents: none — no decorative colors
 status_palette:

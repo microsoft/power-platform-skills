@@ -408,6 +408,8 @@ direction: <Inspection|SaaS|Product|Hybrid>
 surface: <value>
 palette: <value>
 typography: <value>
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: <value>
 density: <value>
 motion: <value>
@@ -415,6 +417,10 @@ status_saturation: <value>
 empty_state: <value>
 tone: <value>
 primary_action_shape: <value>
+primary_action_min_height: <48pt|52pt|56pt>
+radius_policy: <tight|medium|loose|pill>
+composition_recipe_family: <operational|commerce|content-led>
+imagery_policy: <none|scenario-gated>
 accent_color: <name (#hex)>
 heading_font: <font>
 body_font: <font>

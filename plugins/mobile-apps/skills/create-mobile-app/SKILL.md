@@ -1992,7 +1992,7 @@ This sticky policy controls **how to handle a failed gate**, not whether the gat
 Run one controlled stylistic debt sweep after all screen-builder waves and TypeScript gates are clean, before preview or dev-server launch. This keeps screen-builder retries focused on critical compile/data/route issues, then fixes visual and accessibility quality across the full screen set in batches.
 
 **Print before starting:**
-> "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / token issues across all screens (~2-3 min)"
+> "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / typography / action consistency across all screens (~2-3 min)"
 
 **Scope:** generated screen files only: every file from the Screen Map plus any `app/(app)/**/*.tsx` screen written by Step 10.8/Step 11. Exclude layout files unless the reported issue is clearly inside generated screen chrome for that route group. Do not scan `src/generated/`, `brand/`, `node_modules/`, `.expo/`, or sample files.
 
@@ -2004,13 +2004,16 @@ node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <scre
 ```
 
 `validate-screen-quality` includes accessibility-label/role, safe-area, touch-target, raw-hex, token, empty-state, shadow, and status-visual checks. If future stylistic hooks exist (for example `validate-accessibility-labels.js`), include them here only if they support `--report` and emit the same JSON issue shape.
+It also enforces the mobile visual contract: semantic typography tokens and
+explicit size/radius on any direct primary Button. Shared action primitives are
+the preferred fix.
 
 For each available stylistic validator:
 
 1. Run in `--report` mode against all generated screens. Report mode is non-blocking; it emits JSON issues with `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`.
 2. Merge issues by file and rule. Keep exact line numbers for user/debug output, but do not rely on stale line numbers after the first edit in a file.
 3. Split findings into deterministic auto-fixes and judgement calls:
-  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
+  - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, raw numeric Tamagui text sizes, undersized/unshaped direct primary buttons, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.

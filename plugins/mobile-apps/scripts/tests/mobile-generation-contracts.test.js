@@ -179,6 +179,87 @@ test('experience previews prominently identify themselves as design concepts', (
   assert.match(renderer, /Generated TSX and the live device are authoritative/);
 });
 
+test('mobile visual quality contract is shared across planning, design, preview, and build', () => {
+  const contract = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'mobile-visual-quality-contract.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+  const builder = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-builder.md'),
+    'utf8',
+  );
+  const designSystem = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'design-system', 'SKILL.md'),
+    'utf8',
+  );
+  const mapping = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'references', 'tamagui-html-mapping.md'),
+    'utf8',
+  );
+  const components = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'samples', 'src', 'components', 'index.tsx'),
+    'utf8',
+  );
+
+  assert.match(contract, /## 1\. Typography roles/);
+  assert.match(contract, /## 5\. Screen composition recipes/);
+  assert.match(contract, /## 6\. Domain imagery eligibility/);
+  assert.match(planner, /\*\*Composition recipe\*\* — REQUIRED/);
+  assert.match(planner, /\*\*Imagery contract\*\* — REQUIRED only when imagery is eligible/);
+  assert.match(builder, /mobile-visual-quality-contract\.md/);
+  assert.match(builder, /Prefer `PrimaryActionButton`/);
+  assert.match(designSystem, /## Composition/);
+  assert.match(designSystem, /## Imagery/);
+  assert.match(mapping, /same named composition recipe/);
+  assert.match(components, /export function PrimaryActionButton/);
+  assert.match(components, /export function SecondaryActionButton/);
+  assert.match(components, /export function DestructiveActionButton/);
+});
+
+test('screen validator enforces semantic typography and primary action geometry', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-visual-contract-'));
+  const file = path.join(root, 'app', 'checkout.tsx');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const invalid = [
+    "import { Button, Text, YStack } from 'tamagui';",
+    'export default function Checkout() {',
+    '  return <YStack>',
+    '    <Text fontSize={18}>Order total</Text>',
+    '    <Button bg="$accentBase"><Button.Text color="$accentOnAccent">Place order</Button.Text></Button>',
+    '  </YStack>;',
+    '}',
+  ].join('\n');
+  const result = runHook('validate-screen-quality.js', root, file, invalid);
+
+  assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /Raw numeric typography/);
+  assert.match(result.stderr, /Primary button missing approved mobile height/);
+  assert.match(result.stderr, /Primary button missing the app radius policy/);
+});
+
+test('screen validator accepts semantic typography and approved primary action geometry', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-visual-valid-'));
+  const file = path.join(root, 'app', 'checkout.tsx');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const valid = [
+    "import { Button, Text, YStack } from 'tamagui';",
+    "import { SafeAreaView } from 'react-native-safe-area-context';",
+    'export default function Checkout() {',
+    '  return <SafeAreaView><YStack>',
+    '    <Text fontSize="$6">Order total</Text>',
+    '    <Button bg="$accentBase" minH={48} rounded="$3"><Button.Text color="$accentOnAccent">Place order</Button.Text></Button>',
+    '  </YStack></SafeAreaView>;',
+    '}',
+  ].join('\n');
+  const result = runHook('validate-screen-quality.js', root, file, valid);
+
+  assert.strictEqual(result.status, 0, result.stderr);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

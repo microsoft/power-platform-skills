@@ -22,6 +22,8 @@ heading_font: Fraunces   # or Lora, Söhne, Inter Display
 body_font: Inter
 body_size: 16pt
 heading_letter_spacing: -0.02em
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: sentence
 density: sparse
 motion: liberal-tasteful
@@ -29,6 +31,10 @@ status_saturation: monochrome-plus-accent
 empty_state: type-led
 primary_action_shape: pill
 primary_action_position: in-flow-or-bottom-center
+primary_action_min_height: 48pt
+radius_policy: pill
+composition_recipe_family: commerce
+imagery_policy: scenario-gated
 accent_color: sage (#7d9b76)   # or rust #b85c38, coral #e87a64, electric blue #5b6bff
 tone: conversational
 ```

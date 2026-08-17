@@ -35,6 +35,8 @@ heading_font: <font name>
 body_font: <font name>
 body_size: <pt>
 heading_letter_spacing: <em or 0>
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: <card-with-status-stripe | row-with-chevron | sentence>
 density: <sparse | comfortable | comfortable-to-dense>
 motion: <none | subtle | liberal-tasteful>
@@ -42,12 +44,18 @@ status_saturation: <full | desaturated | monochrome-plus-accent>
 empty_state: <icon-sentence-bigbutton | icon-explanation-ghostbutton | type-led>
 primary_action_shape: <rectangular | rectangular-bottom-pinned | pill>
 primary_action_position: <bottom-pinned | top-right-or-in-flow | in-flow-or-bottom-center>
+primary_action_min_height: <48pt | 52pt | 56pt>
+radius_policy: <tight | medium | loose | pill>
+composition_recipe_family: <operational | commerce | content-led>
+imagery_policy: <none | scenario-gated>
 accent_color: <human-readable name (#hex)>
 tone: <direct | professional | conversational>
 
 > Downstream agents (`screen-planner`, `screen-builder`) MUST use these values
 > as defaults for their own per-screen Surface / Density / List style / Motion
-> fields unless a per-screen spec explicitly overrides.
+> fields unless a per-screen spec explicitly overrides. Typography, spacing,
+> action, composition, and imagery fields also inherit the canonical
+> mobile-visual-quality-contract.md rules.
 ```
 
 ## Hybrid bundles
@@ -98,6 +106,10 @@ The builder reads the block once at Step 1 (after reading its assigned screen sp
 - `primary_action_shape` + `primary_action_position` → button placement and shape
 - `empty_state` → which empty-state template to use
 - `accent_color` → resolved into `$accentBase`
+- `typography_scale` + `spacing_scale` → semantic roles and spacing rhythm
+- `primary_action_min_height` + `radius_policy` → shared action primitives
+- `composition_recipe_family` → default recipe family for screen hierarchy
+- `imagery_policy` → whether screen imagery is eligible at all
 
 If `## Design Direction` is absent, the builder uses today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`.
 

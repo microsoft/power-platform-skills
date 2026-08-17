@@ -2,6 +2,13 @@
 
 Reference for converting React Native / Tamagui screens to static HTML previews. Used by the `/preview-screens` skill.
 
+The preview must also apply
+[`mobile-visual-quality-contract.md`](mobile-visual-quality-contract.md).
+Component mapping is an implementation aid, not permission to use a different
+type scale, spacing rhythm, button hierarchy, radius policy, surface strategy,
+or composition recipe from the generated screen. The preview and generated
+screen use the same named composition recipe.
+
 ---
 
 ## 1. Component Mapping
@@ -21,7 +28,7 @@ Reference for converting React Native / Tamagui screens to static HTML previews.
 | `Text` | `<span>` | `color:var(--color);` |
 | `SizableText` | `<span>` | `color:var(--color);` + font-size from `size` prop |
 | `Paragraph` | `<p>` | `color:var(--color); line-height:1.5;` |
-| `Button` | `<button>` | `padding:10px 18px; border-radius:8px; border:1px solid var(--border-color); background:var(--color2); color:var(--color); cursor:pointer; font-weight:500; font-family:inherit;` |
+| `Button` | `<button>` | `min-height:48px; padding:10px 18px; border-radius:var(--action-radius, 8px); border:1px solid var(--border-color); background:var(--color2); color:var(--color); cursor:pointer; font-weight:600; font-family:inherit;` |
 | `Button bg="$blue10"` + `Button.Text color="$color1"` | `<button>` | `background:var(--blue10); color:var(--color1); border:none;` |
 | `Button theme="red"` | `<button>` | `background:var(--red10); color:#fff; border:none;` |
 | `Button circular` | `<button>` | Add `border-radius:50%; width:40px; height:40px; padding:0; display:flex; align-items:center; justify-content:center;` |
@@ -147,7 +154,10 @@ Reference for converting React Native / Tamagui screens to static HTML previews.
 
 6. **Theme cascading.** When `<Theme name="red">` wraps a subtree, apply `color:var(--red10)` to text and `background:var(--red10)` to buttons within that subtree's HTML.
 
-7. **Images.** Use a placeholder rectangle: `background:var(--color4); border-radius:8px;` with the same dimensions. Add a centered "📷" if the image is a user avatar or photo.
+7. **Images.** Render an image/placeholder only when the screen spec has an
+   `Imagery contract`. Match its aspect ratio and crop. Use its specified
+   fallback rather than arbitrary stock art; otherwise use a content-led
+   composition with no image hero.
 
 8. **Custom brand tokens.** If `tamagui.config.ts` exists in the project and defines custom brand colors (look for `tokens: { color: { ... } }`), extract hex values and add them as additional CSS custom properties (e.g., `--brand-primary: #hex`).
 
@@ -176,6 +186,7 @@ Use this as the outer shell for the generated `preview.html`. Replace `{{APP_NAM
     --border-color: #e0e0e0;
     --red8: #e25050; --red10: #d13438; --blue10: #0078d4;
     --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --action-height: 48px; --action-radius: 8px;
   }
   html.dark {
     --background: #1a1a1a; --bg-strong: #000;

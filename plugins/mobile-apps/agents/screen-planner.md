@@ -120,6 +120,11 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
 
+Also read `${PLUGIN_ROOT}/shared/references/mobile-visual-quality-contract.md`.
+Its typography roles, spacing rhythm, action hierarchy, surface discipline,
+composition recipes, and imagery eligibility rules are mandatory for every
+generated/modified screen.
+
 ### Step 0b — Load Design Direction (if present)
 
 Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
@@ -306,6 +311,13 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 
 **Density / motion / surface**
 - Inherits from `## Design Direction` block. Per-screen specs may NOT silently deviate.
+
+**Visual system**
+- Typography roles: inherited from `mobile-visual-quality-contract.md` and `brand/design-system.md`; no screen-local type scale
+- Spacing rhythm: inherited 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 scale
+- Actions: one dominant primary action per screen; paired actions share height and radius
+- Surface strategy: one dominant app-level strategy; ordinary cards use one separation mechanism
+- Imagery: scenario-gated; every imagery-enabled screen must prove source, purpose, crop, fallback, and accessibility treatment
 ```
 
 The screen-builders read this block alongside their own per-screen spec. If two builders write a List for different entities, they emit the same row style unless this block explicitly overrides one. This is what makes the per-screen spec generation safe to parallelize later, and — more importantly — keeps the app feeling like one app instead of N stitched-together screens.
@@ -373,6 +385,7 @@ The full descriptions for row styles, hero types, and operational patterns live 
 - **Hero type keys** (Detail screens): `status-header-band` · `stat-grid` · `image-hero` · `identity-block` · `summary-card` · `timeline-header` · `minimal-header`
 - **Operational pattern keys** (Home + workflow screens): `home-dashboard` · `assignment-dashboard` · `walkaround-stepper` · `wizard-progress-stepper` · `floating-action-menu` · `scan-geofence-gate` · `severity-filtered-queue` · `dispatch-signoff-queue` · `audit-timeline`
 - **Control pattern keys** (fields/rows): `checkbox-field` · `numeric-stepper` · `line-item-stepper-row` · `searchable-lookup-sheet` · `segmented-control` · `recurrence-rule-editor`
+- **Composition recipe keys**: `operational-dashboard` · `workflow-queue` · `record-detail` · `form-capture` · `media-detail` · `commerce-discovery` · `cart-summary` · `checkout-sections` · `confirmation-receipt` · `content-led`
 
 **Hard rule:** if you find yourself writing more than the key + a one-clause reason, stop — that means the description belongs in `screen-templates.md` instead. Add new keys to the reference; never inline a one-off description into a per-screen spec.
 
@@ -403,6 +416,12 @@ screen. If requirements genuinely change a baseline screen, mark its Source
 `template (modify)` in the Screen Map and generate the normal full spec.
 
 - **Domain layout decisions:** (answer the 3 questions above — required)
+- **Composition recipe** — REQUIRED for every generated/modified screen. Use
+  exactly one key from `mobile-visual-quality-contract.md`; this controls the
+  hierarchy that the preview and builder must share.
+- **Imagery contract** — REQUIRED only when imagery is eligible. State
+  `source`, `purpose`, `aspect/crop`, `fallback`, and `accessibility`. Omit when
+  the screen is intentionally content-led. Never invent stock/product imagery.
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
 - **Operational pattern** (Home or workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Omit only for normal CRUD/business screens without a dashboard or workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
@@ -670,6 +689,13 @@ Section format (same in all phases):
 **Density / motion / surface**
 - Inherits from `## Design Direction`; per-screen specs emit overrides only.
 
+**Visual system**
+- Typography roles: semantic mobile scale; no screen-local numeric sizes
+- Spacing rhythm: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
+- Actions: one dominant primary action; paired actions share height and radius
+- Surface strategy: one dominant strategy; one separation mechanism per ordinary card
+- Imagery: scenario-gated with source, purpose, crop, fallback, and accessibility proof
+
 ### JavaScript Dependencies
 
 None.
@@ -681,6 +707,7 @@ None.
   1. Key fields: open inspection count, overdue count, upcoming scheduled date
   2. Visual emphasis: the two stat tiles — open + overdue counts — are the first thing a field tech checks each morning
   3. Different from generic: domain-specific stat tiles with color (overdue = red), not a generic list of recent items
+- **Composition recipe:** `operational-dashboard`
 - **Archetype:** Tab-root
 - **Operational pattern:** `home-dashboard`
 - **Purpose:** Today dashboard showing current inspection work, progress, open/overdue counts, and quick "new inspection" CTA
@@ -693,6 +720,7 @@ None.
   1. Key fields: status (colored badge), site name, scheduled date
   2. Visual emphasis: the status badge — Pending/In Progress/Complete are the primary scan signal in a list
   3. Different from generic: `status-stripe-card` rows with a left border in the status color, not plain title+date cards
+- **Composition recipe:** `workflow-queue`
 - **Archetype:** List
 - **Purpose:** Filterable inspection queue
 - **Data:** `cr123_inspectionService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status', '_cr123_siteid_value'] })` plus generated-service `skipToken` continuation support
@@ -813,6 +841,13 @@ merging the section into `native-app-plan.md`.
 Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
 
 - **Layout:** translate the `YStack`/`XStack`/`Card`/`Button` structure described in the spec to HTML/CSS using the component mapping (Section 1) and token tables (Section 2).
+- **Visual contract:** use the same named composition recipe, typography roles,
+  spacing rhythm, action hierarchy, radius policy, and surface strategy that
+  the generated screen will use. Placeholder data may differ; the visual system
+  may not.
+- **Imagery:** render only imagery proven by an `Imagery contract`. Match its
+  aspect/crop and fallback. Otherwise render a content-led composition rather
+  than an empty decorative hero.
 - **Data:** for list screens, generate 3–4 plausible placeholder items based on the entity name (e.g. "Inspection #1042", "Inspection #1043"). For detail screens, populate fields with one representative placeholder record.
 - **State:** show the happy-path populated state only and label it `Representative populated state`. No loading spinners or error states.
 - **Actions:** render buttons with their labels. No click behavior needed.

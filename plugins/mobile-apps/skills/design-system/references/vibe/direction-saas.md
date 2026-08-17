@@ -21,6 +21,8 @@ typography: sans-only
 heading_font: Inter
 body_font: Inter
 body_size: 15pt
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: row-with-chevron
 density: comfortable
 motion: subtle
@@ -28,6 +30,10 @@ status_saturation: desaturated
 empty_state: icon-explanation-ghostbutton
 primary_action_shape: rectangular
 primary_action_position: top-right-or-in-flow
+primary_action_min_height: 48pt
+radius_policy: medium
+composition_recipe_family: operational
+imagery_policy: none
 accent_color: indigo (#4f46e5)
 tone: professional
 ```

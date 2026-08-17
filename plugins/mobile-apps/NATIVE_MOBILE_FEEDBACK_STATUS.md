@@ -12,8 +12,8 @@ the table groups them by product outcome.
 | Provide a visual data model | Implemented | Mermaid ER definitions are rendered locally as entity, field, and relationship views without a CDN dependency. |
 | Make the ER model editable | Implemented | The Plan HTML editor supports editing, adding, removing, and resetting entities, fields, and relationships. It exports a structured `mobile-er-revision.json` for Gate 2 validation. |
 | Explain why architecture and data-model choices were made | Implemented | Reuse, extend, and create decisions require rationale, alternatives, trade-offs, assumptions, and scope boundaries. |
-| Improve generated mobile UI quality | Mostly implemented | Screen planning requires domain-specific layout decisions, operational patterns, mobile-native controls, progressive disclosure, sticky workflow actions, accessibility, and differentiated screen designs. |
-| Use real imagery and richer domain context | Pending | Evidence-photo workflows and identity avatars exist, but V2 does not yet define a consistent image-source contract for every applicable entity and screen. |
+| Improve generated mobile UI quality | Implemented | The canonical mobile visual-quality contract now locks semantic typography, spacing rhythm, button hierarchy, surface discipline, composition recipes, preview fidelity, shared action primitives, and deterministic validation. |
+| Use real imagery and richer domain context | Implemented | Imagery is scenario-gated. Every imagery-enabled screen must prove an approved Dataverse/camera/user-asset source, purpose, crop, fallback, and accessibility treatment; builders may not invent stock imagery. |
 | Generate a privacy and device-impact Trust Report | Implemented | `mobile-app-trust-report.html` reports capabilities, permissions, privacy boundaries, authentication readiness, background behavior, network paths, offline state, storage considerations, and intentionally excluded capabilities. |
 | Show outcome-driven implementation progress | Implemented | `mobile-app-status.json` stores durable delivery outcomes and the Plan HTML renders an implementation timeline. |
 | Improve the first app-launch experience | Implemented | `mobile-app-launch.html` includes player installation links, authentication and environment readiness, an embedded QR code, direct launch, troubleshooting, and links to the Plan and Trust Report. |
@@ -28,16 +28,14 @@ the table groups them by product outcome.
 | Guarantee that a static preview exactly matches native rendering | Cannot be guaranteed | Plan previews are conceptual and post-build HTML previews remain static. Metro and the native player are authoritative. |
 | Measure actual battery, network, storage, and operating-system permission behavior statically | Requires device testing | Static analysis can document expected behavior, but measured resource use and OS permission wording/enforcement require an iOS or Android device run. |
 
-## Remaining Priority
+## Visual Quality Contract
 
-The primary remaining product improvement is a **domain-imagery contract**:
-
-1. Discover usable Dataverse Image, File, and approved URL fields during planning.
-2. Record the intended image source or explicit no-image decision for each
-   applicable entity and screen.
-3. Show representative, clearly labelled imagery in the Gate 3 concept preview.
-4. Generate caching, loading, error, initials, and missing-image fallback states.
-5. Validate that planned imagery is implemented by the screen builder.
+`shared/references/mobile-visual-quality-contract.md` is now the single
+cross-phase contract. Planning records one composition recipe per
+generated/modified screen, `/design-system` materializes typography, spacing,
+action, radius, surface, and imagery decisions, previews use the same recipes,
+and the screen validator blocks screen-local numeric typography plus
+undersized or unshaped direct primary actions.
 
 For the Contoso Store Operations reference app, damage evidence already uses
 real Dataverse images. Inventory remains quantity-focused because the reused

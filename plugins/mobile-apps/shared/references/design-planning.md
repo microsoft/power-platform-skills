@@ -4,6 +4,11 @@ Shared logic for inferring and planning the visual design system for a Power App
 
 Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
 
+Read and apply [`mobile-visual-quality-contract.md`](mobile-visual-quality-contract.md)
+for every design path. Aesthetic direction changes the expression, but the
+semantic typography roles, spacing rhythm, action hierarchy, composition
+recipes, and imagery eligibility contract are mandatory.
+
 ---
 
 ## Default Stack
@@ -166,6 +171,11 @@ Default stack — no customization needed.
 - Aesthetic direction: Refined Minimal
 - Font: Inter (template default)
 - Typography: single-family, weight differentiation only
+- Typography roles: Display 28/34, Heading 23/30, Title 18–20/24–28, Body 16/24, Body-sm 14/20, Caption 12/16
+- Spacing rhythm: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
+- Action contract: 48px primary/secondary height, medium radius, one dominant primary action per screen
+- Composition recipes: required per generated/modified screen
+- Imagery policy: scenario-gated; require approved source, purpose, crop, fallback, and accessibility treatment
 - Headline tracking: default (no override)
 - Body line-height: 1.5x default
 - Theme: System light/dark auto
@@ -200,6 +210,11 @@ Default stack — no customization needed.
 - Mood: <choice>
 - Font: <font name> via <@tamagui/font-* or expo-font>
 - Typography: <single-family | paired: heading=X, body=Y>
+- Typography roles: <Display / Heading / Title / Body / Body-sm / Caption / Data sizes and line heights>
+- Spacing rhythm: <4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 unless an approved source system differs>
+- Action contract: <48 | 52 | 56>px primary/secondary height; <tight | medium | loose | pill> radius; one dominant primary action per screen
+- Composition recipes: required per generated/modified screen
+- Imagery policy: <none | scenario-gated with approved source, purpose, crop, fallback, and accessibility treatment>
 - Headline tracking: <letterSpacing overrides, e.g., "-0.5 at $7+">
 - Body line-height: <ratio, e.g., "1.6x for prose screens">
 - Brand color token: $brand → <hex or Tamagui token>
@@ -246,9 +261,13 @@ Approved design:
 - Copy tone: Utilitarian
 - Emotional design: celebrate inspection completion with summary card
 - Layout: edge-to-edge rows for inspection lists, cards for summary stats
+- Visual quality contract: mobile-visual-quality-contract.md
 
 Per-screen specs MUST use Tamagui primitives (XStack, YStack, Text, Button) with
 token-based styling ($color, $background, $space.*) — never hardcoded hex or px values.
+Every generated/modified screen MUST name one composition recipe from
+mobile-visual-quality-contract.md. Imagery is allowed only when its source,
+purpose, crop, fallback, and accessibility treatment are proven in the spec.
 Animation: only add if design section specifies a style.
 Color: follow the 60/30/10 rule (see mobile-design-philosophy.md Section 5).
 Industry patterns: apply visual language from mobile-design-philosophy.md Section 12.

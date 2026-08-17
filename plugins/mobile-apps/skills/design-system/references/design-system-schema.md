@@ -58,6 +58,18 @@ Generated: {{ISO 8601 timestamp}} | Direction: {{inspection | saas | product | h
 ## Spacing
 {{scale: e.g. 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64}}
 
+## Composition
+- Default recipe family: {{operational | commerce | content-led}}
+- Primary action rule: one dominant action per screen
+- Screen recipes: {{screen name → recipe key mappings from the approved plan}}
+
+## Imagery
+- Eligibility: {{none | scenario-gated}}
+- Approved sources: {{Dataverse image/file columns, camera evidence, or user-supplied assets}}
+- Default crop: {{aspect ratio + cover/contain}}
+- Fallback: {{tokenized placeholder, initials, icon, or content-led layout}}
+- Accessibility: {{meaningful alt/label; decorative images hidden}}
+
 ## Components
 
 ### Button
@@ -223,8 +235,10 @@ A valid `brand/design-system.md` MUST have:
 2. `## Palette` with at least 7 tokens (bg, surface, primary, accent, text, text-muted, border)
 3. `## Status palette` with 4 tokens
 4. `## Typography` with at least 5 roles
-5. `## Negatives` with at least 3 rules
-6. `## Provenance` with direction and timestamp
+5. `## Composition` with a default recipe family and primary-action rule
+6. `## Imagery` with eligibility and fallback
+7. `## Negatives` with at least 3 rules
+8. `## Provenance` with direction and timestamp
 
 Missing sections → skill surfaces error, asks user to re-run.
 
@@ -235,6 +249,8 @@ Missing sections → skill surfaces error, asks user to re-run.
 3. **Negatives are HARD RULES** — any pattern listed in `## Negatives` is forbidden. Violations are build failures.
 4. **Typography mapping** — `## Typography` role table maps to Tamagui font tokens ($heading, $body, $mono)
 5. **Component shapes** — `## Components` defines the exact shape for buttons, cards, inputs, list rows
+6. **Composition recipes** — `## Composition` keeps screen hierarchy consistent across parallel builders
+7. **Imagery** — `## Imagery` forbids decorative or unowned image substitution
 
 ## How Tamagui Integration Uses tokens.ts
 

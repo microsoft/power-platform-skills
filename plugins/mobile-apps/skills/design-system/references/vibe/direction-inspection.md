@@ -21,6 +21,8 @@ typography: sans-only
 heading_font: Inter
 body_font: Inter
 body_size_min: 16pt
+typography_scale: mobile-semantic-v1
+spacing_scale: 4-8-12-16-24-32-48-64
 list_style: card-with-status-stripe
 density: comfortable-to-dense
 motion: none
@@ -28,6 +30,9 @@ status_saturation: full
 empty_state: icon-sentence-bigbutton
 primary_action_shape: rectangular-bottom-pinned
 primary_action_min_height: 56pt
+radius_policy: medium
+composition_recipe_family: operational
+imagery_policy: scenario-gated
 accent_color: safety-orange (#FF6A00)
 secondary_accents: signal-green (#16A34A), warning-amber (#F59E0B), error-red (#DC2626)
 tone: direct

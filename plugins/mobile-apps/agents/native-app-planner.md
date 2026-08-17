@@ -503,6 +503,13 @@ screen graph, detailed specs, and `_plan_preview.html`. When `--no-design` is
 set, use the minimal industry-inferred direction; the gate still previews the
 layout so approval remains informed.
 
+Gate 3 must also apply
+`${PLUGIN_ROOT}/shared/references/mobile-visual-quality-contract.md`. The
+screen section is incomplete unless Shared Conventions lock typography,
+spacing, action hierarchy, surface discipline, and imagery eligibility, and
+every generated/modified screen names one composition recipe. The visual
+preview must use those same decisions rather than a separate mockup style.
+
 The foreground orchestrator owns the browser open and approval. In the final
 response, after the required status line, emit:
 

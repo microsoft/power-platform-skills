@@ -5,6 +5,7 @@
  * Usage:
  *   import { LoadingState, ErrorState, EmptyState, ScreenHeader,
  *            ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick,
+ *            PrimaryActionButton, SecondaryActionButton, DestructiveActionButton,
  *            StatusPill, StatTile, Hero, SectionHeader,
  *            AvatarInitials, InfoRow, ActionRow, Gradient } from '@/components';
  */
@@ -18,6 +19,42 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gradients, shadows, type GradientName } from '@/tokens';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+type ActionButtonProps = Omit<React.ComponentProps<typeof Button>, 'children'> & {
+  label: string;
+};
+
+// ─── Action buttons ──────────────────────────────────────────────────────────
+
+export function PrimaryActionButton({ label, ...props }: ActionButtonProps) {
+  return (
+    <Button {...props} minH={48} rounded="$3" bg="$accentBase">
+      <Button.Text color="$accentOnAccent" fontWeight="600">{label}</Button.Text>
+    </Button>
+  );
+}
+
+export function SecondaryActionButton({ label, ...props }: ActionButtonProps) {
+  return (
+    <Button
+      {...props}
+      minH={48}
+      rounded="$3"
+      bg="transparent"
+      borderWidth={1}
+      borderColor="$borderColor"
+    >
+      <Button.Text color="$accentBase" fontWeight="600">{label}</Button.Text>
+    </Button>
+  );
+}
+
+export function DestructiveActionButton({ label, ...props }: ActionButtonProps) {
+  return (
+    <Button {...props} minH={48} rounded="$3" bg="$red10">
+      <Button.Text color="$color1" fontWeight="600">{label}</Button.Text>
+    </Button>
+  );
+}
 
 // ─── Gradient ────────────────────────────────────────────────────────────────
 
@@ -167,7 +204,7 @@ export function SectionHeader({
     <XStack items="center" justify="space-between" mb="$2">
       <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
-        <Button size="$2" chromeless onPress={action.onPress}>
+        <Button size="$3" chromeless onPress={action.onPress}>
           <Text fontSize="$3" color="$blue10">{action.label}</Text>
         </Button>
       )}
@@ -358,7 +395,7 @@ export function EmptyState({
       <Text fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
       <Text color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
-        <Button bg="$blue10" onPress={onAction}>
+        <Button bg="$blue10" minH={48} rounded="$3" onPress={onAction}>
           <Button.Text color="$color1">{actionLabel}</Button.Text>
         </Button>
       )}
@@ -493,11 +530,11 @@ export function ScreenHeader({
       <XStack items="center" justify="space-between" gap="$3">
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            <Text fontSize="$9" fontWeight="700" letterSpacing={0}>{title}</Text>
             {status}
           </XStack>
           {subtitle && (
-            <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
+            <Text fontSize="$3" color="$color10" fontWeight="500">{subtitle}</Text>
           )}
         </YStack>
         {rightAction}
@@ -526,7 +563,7 @@ export function ModalHeader({
   return (
     <XStack px="$4" pt="$5" pb="$3" items="center" justify="space-between">
       <Button chromeless onPress={onCancel}>Cancel</Button>
-      <Text fontSize={17} fontWeight="700">{title}</Text>
+      <Text fontSize="$6" fontWeight="700">{title}</Text>
       {onSave ? (
         <Button chromeless onPress={onSave} disabled={saving}>
           <Text fontWeight="600">{saveLabel}</Text>
@@ -549,7 +586,7 @@ export function FormField({
 }) {
   return (
     <YStack gap="$2">
-      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0.6}>
+      <Text fontSize="$1" fontWeight="700" color="$color10" letterSpacing={0.6}>
         {label.toUpperCase()}
       </Text>
       {children}
@@ -577,12 +614,15 @@ export function RowPick({
       borderColor={selected ? '$color12' : '$borderColor'}
       bg={selected ? '$color12' : '$background'}
       onPress={onPress}
+      role="button"
+      aria-label={label}
+      aria-pressed={selected}
       pressStyle={{ opacity: 0.7 }}
     >
       <YStack>
-        <Text fontSize={15} fontWeight="600" color={selected ? 'white' : '$color12'}>{label}</Text>
+        <Text fontSize="$5" fontWeight="600" color={selected ? 'white' : '$color12'}>{label}</Text>
         {subtitle ? (
-          <Text fontSize={12} color={selected ? 'white' : '$color10'} mt="$1">
+          <Text fontSize="$2" color={selected ? 'white' : '$color10'} mt="$1">
             {subtitle}
           </Text>
         ) : null}

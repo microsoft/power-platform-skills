@@ -12,6 +12,8 @@
  *   - Mobile chrome/a11y guardrails observed from preview QA: safe-area clipping,
  *     bottom-anchored controls under the tab/home area, icon-only controls without
  *     labels, tappable custom stacks without roles, and too-small icon buttons.
+ *   - Mobile visual contract: semantic text-size tokens and explicit
+ *     height/radius on direct primary buttons.
  *
  * Fires after Write / Edit / MultiEdit on .tsx files inside `app/` or
  * `src/components/` of a generated project. Reads the tool_input from stdin,
@@ -285,6 +287,60 @@ function findUnsupportedButtonThemes(content) {
       fix: 'Do not use theme="active" or theme="primary" unless that exact theme is defined in tamagui.config.ts. Use a confirmed Config v5 theme such as theme="blue", or compose explicit frame and label styles with <Button bg="$blue10"><Button.Text color="$color1">...</Button.Text></Button>.',
     });
   }
+  return violations;
+}
+
+// ─── Rule 1c: Visual-system consistency ─────────────────────────────────────
+
+function findRawTypographySizes(content) {
+  const violations = [];
+  const textComponents = new Set([
+    'Text', 'SizableText', 'Paragraph', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  ]);
+  const imported = new Set(
+    [...textComponents].filter((name) => importsFrom(content, 'tamagui', name)),
+  );
+  if (imported.size === 0) return violations;
+
+  for (const { tag } of findJsxOpeningTags(content, imported)) {
+    const match = tag.match(/\bfontSize\s*=\s*(?:\{\s*(\d+(?:\.\d+)?)\s*\}|["'](\d+(?:\.\d+)?)["'])/);
+    if (!match) continue;
+    violations.push({
+      rule: 'raw-typography-size',
+      match: match[0],
+      fix: 'Use the semantic Tamagui typography scale from mobile-visual-quality-contract.md (`$9` Display, `$8` Heading, `$6`–`$7` Title, `$5` Body, `$4` Body-sm, `$2` Caption). Do not invent screen-local numeric font sizes.',
+    });
+  }
+  return violations;
+}
+
+function findPrimaryButtonVisualProblems(content) {
+  if (!importsFrom(content, 'tamagui', 'Button')) return [];
+  const violations = [];
+
+  for (const { tag } of findJsxOpeningTags(content, new Set(['Button']))) {
+    const primary = /\b(?:bg|background)\s*=\s*["']\$(?:accentBase|blue10)["']/.test(tag)
+      || /\btheme\s*=\s*["']blue["']/.test(tag);
+    if (!primary) continue;
+
+    const hasApprovedHeight = /\b(?:minH|minHeight|height|h)\s*=\s*\{\s*(?:48|52|56)\s*\}/.test(tag);
+    if (!hasApprovedHeight) {
+      violations.push({
+        rule: 'primary-button-missing-mobile-height',
+        match: tag.slice(0, 180),
+        fix: 'Prefer PrimaryActionButton from @/components. A direct primary Button must set the approved mobile action height explicitly with minH={48}, minH={52}, or minH={56}.',
+      });
+    }
+
+    if (!/\b(?:rounded|borderRadius)\s*=/.test(tag)) {
+      violations.push({
+        rule: 'primary-button-missing-radius',
+        match: tag.slice(0, 180),
+        fix: 'Prefer PrimaryActionButton from @/components, or set the app radius token explicitly (for example rounded="$3"). Primary actions must not inherit an accidental shape.',
+      });
+    }
+  }
+
   return violations;
 }
 
@@ -583,6 +639,8 @@ function findAllViolations(content, filePath) {
     ...findUnsafeODataInterpolation(content),
     ...findTamaguiPropProblems(content),
     ...findUnsupportedButtonThemes(content),
+    ...findRawTypographySizes(content),
+    ...findPrimaryButtonVisualProblems(content),
     ...findRawHex(content),
     ...findInlineShadows(content),
     ...findEmptyStateAntiPattern(content),
@@ -618,6 +676,9 @@ function buildBlockMessage(filePath, violations) {
     'tamagui-longhand-prop': 'Unsupported longhand prop on a Config v5 Tamagui primitive',
     'tamagui-content-container-style': 'React Native container prop used on a Tamagui primitive',
     'unsupported-button-theme': 'Unsupported semantic button theme (primary CTA can look disabled)',
+    'raw-typography-size': 'Raw numeric typography outside the semantic mobile type scale',
+    'primary-button-missing-mobile-height': 'Primary button missing approved mobile height',
+    'primary-button-missing-radius': 'Primary button missing the app radius policy',
     'raw-hex': 'Raw hex colors in screen TSX (breaks dark-mode + brand tokens)',
     'inline-shadow': 'Inline shadow props (skip dark-mode elevation fallback)',
     'empty-state-branched-above-flatlist': 'EmptyState branched above FlatList (breaks pull-to-refresh on empty list)',
@@ -689,6 +750,9 @@ function isAutoFixable(violation) {
     'web-text-input-handler',
     'tamagui-longhand-prop',
     'tamagui-content-container-style',
+    'raw-typography-size',
+    'primary-button-missing-mobile-height',
+    'primary-button-missing-radius',
     'raw-hex',
     'icon-only-control-missing-label',
     'small-touch-target-without-hitslop',
