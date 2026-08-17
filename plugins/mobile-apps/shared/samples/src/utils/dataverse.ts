@@ -63,10 +63,14 @@ export function escapeODataString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+export function odataString(value: string): string {
+  return `'${escapeODataString(value)}'`;
+}
+
 export function containsFilter(columnLogicalName: string, searchText: string): string | undefined {
   const trimmed = searchText.trim();
   if (!trimmed) return undefined;
-  return `contains(${columnLogicalName}, '${escapeODataString(trimmed)}')`;
+  return `contains(${columnLogicalName}, ${odataString(trimmed)})`;
 }
 
 /**

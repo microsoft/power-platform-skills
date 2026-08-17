@@ -130,6 +130,39 @@ test('untouched template screens receive preservation contracts instead of full 
   assert.match(planner, /Do not expand Source `template \(keep\)` rows/);
 });
 
+test('screen contracts require escaped user-entered OData values', () => {
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+  const screenBuilder = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-builder.md'),
+    'utf8',
+  );
+  const dataverseUtils = fs.readFileSync(
+    path.join(pluginRoot, 'shared', 'samples', 'src', 'utils', 'dataverse.ts'),
+    'utf8',
+  );
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-odata-contract-'));
+  const file = path.join(root, 'app', 'inventory.tsx');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const unsafe = [
+    'export default function Inventory() {',
+    "  const query = \"O'Brien\";",
+    "  const filter = `contains(new_name, '${query}')`;",
+    '  return null;',
+    '}',
+  ].join('\n');
+  const result = runHook('validate-screen-quality.js', root, file, unsafe);
+
+  assert.match(screenPlanner, /MUST use `containsFilter/);
+  assert.match(screenBuilder, /User-entered OData values must be escaped/);
+  assert.match(dataverseUtils, /export function odataString/);
+  assert.match(dataverseUtils, /odataString\(trimmed\)/);
+  assert.strictEqual(result.status, 2);
+  assert.match(result.stderr, /unsafe-odata-interpolation/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

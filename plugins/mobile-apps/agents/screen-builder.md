@@ -115,6 +115,13 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   const status = formattedValue(record, 'cr3e9_status') ?? '—';
   ```
 
+- **User-entered OData values must be escaped.** Import `containsFilter` and
+  `odataString` from `@/utils`. Use `containsFilter('<logical column>', query)`
+  for text search and `column eq ${odataString(value)}` for exact string
+  comparisons. Never place `query`, `search`, `searchText`, `term`, or another
+  user-controlled string directly inside an OData filter template. A value
+  such as `O'Brien` otherwise breaks the filter and can alter its meaning.
+
   For lookup labels, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
 - **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. Follow [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) mechanically.
 

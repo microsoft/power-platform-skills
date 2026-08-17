@@ -221,6 +221,26 @@ function importsFrom(content, moduleName, importedName) {
   return re.test(content);
 }
 
+function findUnsafeODataInterpolation(content) {
+  const violations = [];
+  const userValue = '(?:query|search|searchText|term|filterText|q)';
+  const patterns = [
+    new RegExp(`contains\\([^)]*['"]\\$\\{${userValue}\\}['"][^)]*\\)`, 'g'),
+    new RegExp(`\\b(?:eq|ne|startswith|endswith)\\s+['"]\\$\\{${userValue}\\}['"]`, 'g'),
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(content)) !== null) {
+      violations.push({
+        rule: 'unsafe-odata-interpolation',
+        match: match[0],
+        fix: 'Use containsFilter(column, query) or odataString(value) from @/utils. Never interpolate user-entered text directly into an OData filter.',
+      });
+    }
+  }
+  return violations;
+}
+
 function findTamaguiPropProblems(content) {
   const violations = [];
   const tamaguiPrimitives = new Set([
@@ -560,6 +580,7 @@ function findAllViolations(content, filePath) {
     ...findVagueTokens(content),
     ...findInvalidMonoTokens(content, filePath),
     ...findWebTextInputHandlers(content),
+    ...findUnsafeODataInterpolation(content),
     ...findTamaguiPropProblems(content),
     ...findUnsupportedButtonThemes(content),
     ...findRawHex(content),
