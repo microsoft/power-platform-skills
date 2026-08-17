@@ -442,7 +442,12 @@ actions, then proceed directly to specs.
 #### 5b.2 — Spawn planner with `phase: specs`
 
 **Print before spawning:**
-> "→ [4/4] Spawning screen-planner (phase 2/2: per-screen specs)…"
+Count the locked Screen Map rows as `<N>` and compute
+`<B> = ceil(<N> / 4)`, then print:
+> "→ [4/4] Expanding <N> screens in <B> visible batches of up to 4. The status file updates after every batch…"
+
+If `<N> > 18`, first apply the screen-planner consolidation contract. Do not
+start serial spec expansion for an avoidably oversized graph.
 
 Re-spawn the planner. The locked graph is already in `_screens_section.md`; the planner reads it as input and only appends:
 
@@ -462,6 +467,10 @@ Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 
 Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
+
+Process screens in visible batches of at most 4. Emit the required batch line
+and update mobile-app-status.json after every batch; do not leave one long
+silent agent interval.
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 

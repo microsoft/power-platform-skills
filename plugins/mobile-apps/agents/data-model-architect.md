@@ -353,19 +353,27 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 
 ```mermaid
 erDiagram
-    contact ||--o{ cr123_inspection : "has"
-    cr123_jobsite ||--o{ cr123_inspection : "located at"
+    contact {
+        guid contactid PK
+        string fullname
+    }
     cr123_inspection {
-        string title
-        datetime scheduledDate
+        guid cr123_inspectionid PK
+        string cr123_title
+        datetime cr123_scheduleddate
+        guid cr123_contactid FK
+        guid cr123_jobsiteid FK
         string photourl "image"
     }
     cr123_jobsite {
-        string sitename
-        string address
+        guid cr123_jobsiteid PK
+        string cr123_sitename
+        string cr123_address
         decimal latitude
         decimal longitude
     }
+    contact ||--o{ cr123_inspection : "has"
+    cr123_jobsite ||--o{ cr123_inspection : "located at"
 ```
 
 ### Creation Order (for `/add-dataverse`)
@@ -380,6 +388,20 @@ erDiagram
 - Generated PDFs retained in Dataverse use File columns and are uploaded only after the parent row exists.
 - Signature images from pen input normalize `data:image/png;base64,...` before Image column writes.
 ```
+
+**ER attribute-block contract (HARD):**
+- Every entity named in a relationship MUST also have an `{ ... }` attribute
+  block. Relationship-only Mermaid is incomplete and must not be returned.
+- Every attribute block includes the table primary key marked `PK`, every
+  lookup participating in the shown relationships marked `FK`, the primary
+  name column, and the key business/status columns approved for this app.
+- Use exact logical column names for verified existing tables and planned
+  logical names for Create/Extend columns. Do not substitute display labels.
+- Keep blocks reviewable: include the columns needed to understand identity,
+  relationships, list/detail rendering, and writes; omit standard audit noise
+  unless the app explicitly uses it.
+- Before writing `_dm_section.md`, mechanically verify that no Mermaid entity
+  has zero fields and every relationship endpoint's PK/FK path is visible.
 
 If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 

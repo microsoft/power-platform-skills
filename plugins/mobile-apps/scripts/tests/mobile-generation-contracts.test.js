@@ -73,6 +73,29 @@ test('Dataverse planning expands summary-only candidates before Gate 2', () => {
   assert.match(planner, /bounded exact-name\s+expansion/);
 });
 
+test('mobile planning requires reviewable ER columns and bounded screen progress', () => {
+  const architect = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+
+  assert.match(architect, /Every entity named in a relationship MUST also have an `\{ \.\.\. \}` attribute/);
+  assert.match(architect, /primary key marked `PK`/);
+  assert.match(architect, /marked `FK`/);
+  assert.match(screenPlanner, /Default to \*\*12–16\s+total screens\*\*/);
+  assert.match(screenPlanner, /batches of at most 4 screens/);
+  assert.match(screenPlanner, /Expanding screen specs <END>\/<N>/);
+  assert.match(planner, /Expanding <N> screens in <B> visible batches/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

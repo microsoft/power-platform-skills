@@ -48,6 +48,24 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 | `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 4a. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
+### Screen-count budget
+
+Rich operational prompts do not imply one route per verb. Default to **12–16
+total screens** and keep the graph at **18 or fewer** unless the requirements
+explicitly demand separate routes. Before locking any graph above 18 screens,
+consolidate:
+
+- create/edit into one parameterized form route;
+- role variants into one queue/dashboard with approved role filters;
+- related read-only child views into detail tabs/sections;
+- repeated scan/camera entry points into contextual actions that return to the
+  caller;
+- short confirmations and pickers into `formSheet` routes.
+
+Never remove a required workflow merely to hit the budget. If the graph still
+needs more than 18 screens, record the reason beside the Screen Map and return
+`DONE_WITH_CONCERNS: screen graph exceeds 18 routes; <reason>`.
+
 **`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
 
 **Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time on Gate 4b (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
@@ -457,6 +475,18 @@ For each screen the user adds, provide this compact shape:
 - **Refresh trigger** (override only) — List screens default to `useFocusEffect` (hard rule in screen-builder). Omit unless the screen needs a different refresh strategy (timer, websocket, manual-only).
 
 **Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the domain decisions or Shared Conventions overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. Do not fix this by adding repeated design boilerplate.
+
+**Visible progress for `phase: specs` (HARD):** count the locked Screen Map
+rows before drafting. Process specs in batches of at most 4 screens. Before
+each batch, emit:
+
+> `→ Screen specs batch <B>/<TOTAL_BATCHES> — screens <START>-<END> of <N>: <names>…`
+
+Then update `mobile-app-status.json` with `mobile-plan-status.js`, preserving
+`completed: 3` / `total: 4`, and set the message to
+`Expanding screen specs <END>/<N> — <last screen name> complete`. Do not stay
+silent for the full screen set. After the final batch, set the message to
+`Screen specs complete — running data-contract audit`.
 
 ---
 

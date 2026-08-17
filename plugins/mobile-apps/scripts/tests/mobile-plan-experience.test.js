@@ -107,6 +107,11 @@ test('plan renderer separates review views and renders plan tables with statuses
     '| Dataverse | Planned |',
     '| SharePoint | Authentication required |',
     '## Screens',
+    '### Per-Screen Specs',
+    '#### Home (`/(app)/home`)',
+    '- Purpose: dashboard',
+    '#### Inventory (`/(app)/inventory`)',
+    '- Purpose: inventory queue',
     '| Screen | Archetype |',
     '|---|---|',
     '| Home | Tab-root |',
@@ -125,6 +130,9 @@ test('plan renderer separates review views and renders plan tables with statuses
   assert.match(html, /Connector status is explicit/);
   assert.match(html, /Concept review:/);
   assert.match(html, /class="concern"/);
+  assert.match(html, /Expand all screen specs/);
+  assert.match(html, /class="plan-subsection"/);
+  assert.match(html, /data-details-action="close"/);
 });
 
 test('plan renderer shows outcome-driven implementation progress', () => {

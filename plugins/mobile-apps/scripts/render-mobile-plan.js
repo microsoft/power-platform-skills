@@ -144,6 +144,12 @@ function renderSectionBody(body) {
   const lines = body.split(/\r?\n/);
   const parts = [];
   let index = 0;
+  let detailOpen = false;
+  const closeDetail = () => {
+    if (!detailOpen) return;
+    parts.push('</div></details>');
+    detailOpen = false;
+  };
   while (index < lines.length) {
     const line = lines[index];
     if (!line.trim()) {
@@ -165,7 +171,13 @@ function renderSectionBody(body) {
     const heading = /^(#{3,4})\s+(.+)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
-      parts.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      closeDetail();
+      if (level === 4) {
+        parts.push(`<details class="plan-subsection"><summary>${inlineMarkdown(heading[2])}</summary><div class="plan-subsection-body">`);
+        detailOpen = true;
+      } else {
+        parts.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      }
       index += 1;
       continue;
     }
@@ -197,6 +209,7 @@ function renderSectionBody(body) {
     const concern = /\b(blocked|deferred|risk|unverified)\b/i.test(text);
     parts.push(`<p${concern ? ' class="concern"' : ''}>${statusBadge(text)}</p>`);
   }
+  closeDetail();
   return parts.join('');
 }
 
@@ -284,6 +297,7 @@ function renderPlan(markdown, status = {}) {
       <h2>${escapeHtml(section.title)}</h2>
       ${/connectors/i.test(section.title) ? '<div class="verification-note">Connector status is explicit: planned does not mean authenticated, verified, or bound.</div>' : ''}
       ${/screens|design/i.test(section.title) ? '<div class="concept-note"><strong>Concept review:</strong> planned structure and visual direction only. Generated TSX and the live device are authoritative.</div>' : ''}
+      ${/screens/i.test(section.title) ? '<div class="section-tools"><button type="button" data-details-action="open">Expand all screen specs</button><button type="button" data-details-action="close">Collapse all</button></div>' : ''}
       ${renderSectionBody(section.body)}
     </section>`).join('');
   const progress = outcomes.percent === null
@@ -304,10 +318,12 @@ function renderPlan(markdown, status = {}) {
 .summary{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;max-width:1400px;margin:14px auto 0;padding:0 22px}.summary article{background:white;border:1px solid #dbe2ef;border-radius:12px;padding:14px}.summary strong{display:block;font-size:24px;color:#1d4ed8}.summary span{font-size:12px;color:#64748b}
 .layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:22px;max-width:1400px;margin:auto;padding:22px}
 nav{position:sticky;top:130px;align-self:start;display:grid;gap:7px}nav a{color:#1d4ed8;text-decoration:none;padding:8px;border-radius:8px}nav a:hover{background:#dbeafe}
-main{display:grid;gap:18px}section{background:white;border:1px solid #dbe2ef;border-radius:14px;padding:20px;box-shadow:0 4px 18px #0f172a12}
+main{display:grid;gap:18px;min-width:0}section{background:white;border:1px solid #dbe2ef;border-radius:14px;padding:20px;box-shadow:0 4px 18px #0f172a12;scroll-margin-top:110px}
 h2{margin:0 0 14px;font-size:18px}h3{margin:22px 0 10px;font-size:16px}h4{margin:18px 0 8px;font-size:14px}p{line-height:1.55;color:#334155}ul{padding-left:22px;color:#334155}.code-block{white-space:pre-wrap;word-break:break-word;margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px;font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155}
 .table-wrap{overflow:auto;margin:12px 0}.plan-table{width:100%;border-collapse:collapse;font-size:13px}.plan-table th{background:#eff6ff;color:#1e3a8a;text-align:left}.plan-table th,.plan-table td{padding:9px 10px;border:1px solid #dbe2ef;vertical-align:top}.status{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.status.success{background:#dcfce7;color:#166534}.status.pending{background:#dbeafe;color:#1e40af}.status.warning{background:#fef3c7;color:#92400e}.status.danger{background:#fee2e2;color:#991b1b}
 .concern{border-left:4px solid #dc2626;background:#fef2f2;color:#7f1d1d;padding:10px 12px;border-radius:6px}.verification-note,.concept-note{padding:10px 12px;border-radius:8px;margin-bottom:14px}.verification-note{background:#eff6ff;color:#1e3a8a}.concept-note{background:#fff7ed;color:#9a3412}
+.section-tools{position:sticky;top:96px;z-index:1;display:flex;gap:8px;justify-content:flex-end;margin:0 0 12px;padding:8px;background:#ffffffed;border-bottom:1px solid #e2e8f0}.section-tools button{border:1px solid #94a3b8;background:white;color:#1e3a8a;border-radius:7px;padding:7px 10px;font-weight:700;cursor:pointer}
+.plan-subsection{border:1px solid #dbe2ef;border-radius:9px;margin:9px 0;overflow:hidden}.plan-subsection summary{cursor:pointer;padding:11px 13px;background:#f8fafc;color:#1e3a8a;font-weight:750}.plan-subsection[open] summary{border-bottom:1px solid #dbe2ef;background:#eff6ff}.plan-subsection-body{padding:2px 14px 12px}
 .outcome-list{display:grid;gap:10px}.outcome{border:1px solid #cbd5e1;border-left:5px solid #94a3b8;border-radius:9px;padding:12px}.outcome>div{display:flex;justify-content:space-between;gap:12px}.outcome span{text-transform:capitalize;font-size:12px;font-weight:700}.outcome p{margin:7px 0}.outcome.completed{border-left-color:#16a34a}.outcome.running{border-left-color:#2563eb}.outcome.blocked{border-left-color:#dc2626}.outcome.pending{border-left-color:#94a3b8}
 .diagram{overflow:auto;margin:14px 0;padding:16px;background:#f8fafc;border:1px solid #dbe2ef;border-radius:10px}.entity-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.entity-card{background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.entity-card h3,.relationships h3{margin:0;padding:10px 12px;background:#dbeafe;color:#1e3a8a;font-size:14px}.entity-card table{width:100%;border-collapse:collapse;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.entity-card td,.entity-card th{padding:7px 9px;border-top:1px solid #e2e8f0;text-align:left}.entity-card td:first-child{color:#475569}.entity-empty{padding:10px;color:#64748b}.relationships{margin-top:14px;background:white;border:1px solid #cbd5e1;border-radius:9px;overflow:hidden}.relationships div{padding:8px 12px;border-top:1px solid #e2e8f0}.relationships code{color:#7c3aed}
 .er-toolbar{display:grid;gap:7px;margin:-16px -16px 16px;padding:13px 16px;background:#e0f2fe;color:#0c4a6e}.er-toolbar>span{font-size:12px}.er-toolbar>div{display:flex;gap:7px;flex-wrap:wrap}.er-toolbar output{min-height:16px;font-size:12px;font-weight:700}.er-small,.er-icon{border:1px solid #94a3b8;background:white;color:#1e3a8a;border-radius:7px;cursor:pointer;font-weight:700}.er-small{padding:6px 9px}.er-icon{width:25px;height:25px;margin-left:auto}.entity-card h3{display:flex;align-items:center;gap:8px}.er-edit-controls{display:none}.er-diagram.editing .er-edit-controls{display:inline-block}.er-diagram.editing [data-er-editable]{background:#fff7ed;outline:1px dashed #f59e0b;border-radius:3px;padding:2px}.er-diagram.editing .entity-card,.er-diagram.editing .relationships{border-color:#f59e0b}.relationship-empty{color:#64748b}.relationships [data-er-relationship]{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -321,6 +337,7 @@ ${banner}<div class="view-tabs"><button class="active" data-filter="architecture
 <div class="layout"><nav>${nav}</nav><main>${cards}</main></div>
 <script>
 document.querySelectorAll('[data-filter]').forEach(function(button){button.addEventListener('click',function(){var filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(function(item){item.classList.toggle('active',item===button)});document.querySelectorAll('section[data-view],nav a[data-view]').forEach(function(item){item.hidden=filter!=='all'&&item.dataset.view!==filter});});});
+document.querySelectorAll('[data-details-action]').forEach(function(button){button.addEventListener('click',function(){var section=button.closest('section');var open=button.dataset.detailsAction==='open';section.querySelectorAll('details.plan-subsection').forEach(function(item){item.open=open});});});
 document.querySelectorAll('.er-diagram').forEach(function(diagram){
   var content=diagram.querySelector('.er-content');var original=content.innerHTML;var status=diagram.querySelector('[data-er-status]');
   function text(node,selector){var item=node.querySelector(selector);return item?item.textContent.trim():''}
