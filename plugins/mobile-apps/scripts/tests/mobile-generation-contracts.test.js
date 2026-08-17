@@ -90,10 +90,50 @@ test('mobile planning requires reviewable ER columns and bounded screen progress
   assert.match(architect, /Every entity named in a relationship MUST also have an `\{ \.\.\. \}` attribute/);
   assert.match(architect, /primary key marked `PK`/);
   assert.match(architect, /marked `FK`/);
-  assert.match(screenPlanner, /Default to \*\*12–16\s+generated\/modified screens\*\*/);
+  assert.match(screenPlanner, /Focused single-workflow app \| 6–10/);
+  assert.match(screenPlanner, /More than 18 is a mandatory consolidation review threshold/);
   assert.match(screenPlanner, /batches of at most 4 screens/);
   assert.match(screenPlanner, /Expanding screen specs <END>\/<N>/);
   assert.match(planner, /Expanding <N> screens in <B> visible batches/);
+});
+
+test('screen planning consolidates workflows before expanding specifications', () => {
+  const skill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+  const screenPlanner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'screen-planner.md'),
+    'utf8',
+  );
+
+  assert.match(screenPlanner, /Build traceability inventory/);
+  assert.match(screenPlanner, /Classify each entity's representation/);
+  assert.match(screenPlanner, /lookup\/picker only/);
+  assert.match(screenPlanner, /join managed through its parent/);
+  assert.match(screenPlanner, /evidence\/audit timeline/);
+  assert.match(screenPlanner, /related lists → one segmented or filtered hub/);
+  assert.match(screenPlanner, /create \+ edit → one parameterized form/);
+  assert.match(screenPlanner, /manager review\/approval → actions or a section/);
+  assert.match(screenPlanner, /Run separation tests/);
+  assert.match(screenPlanner, /independent deep link/);
+  assert.match(screenPlanner, /### Consolidation Decisions/);
+  assert.doesNotMatch(screenPlanner, /For a typical CRUD app/);
+  assert.doesNotMatch(screenPlanner, /every entity.*MUST have at least a List \+ Detail pair/i);
+  assert.doesNotMatch(screenPlanner, /under 8 for v0/);
+
+  assert.match(
+    planner,
+    /If `<N> > 18`,[\s\S]*re-dispatch `phase: graph` once[\s\S]*Do not\s+start `phase: specs`/,
+  );
+  assert.match(
+    skill,
+    /Before Gate 3,[\s\S]*generated\/modified Screen Map rows[\s\S]*Fail closed/,
+  );
 });
 
 test('screen navigation keeps forward intent separate from back behavior', () => {

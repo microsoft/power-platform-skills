@@ -424,6 +424,7 @@ Shared operational context:
 Follow your agent file. In `phase: graph`, you write ONLY:
   - Navigation Pattern
   - Screen Map (table)
+  - Consolidation Decisions (table)
   - Navigation Contracts (table)
   - Shared Conventions (Step 3.5)
 Do NOT write per-screen specs, Open Questions, Standard Imports, or any preview. Stop after Step 3.5 and return.
@@ -438,6 +439,14 @@ Wait for return; apply the Step 3.0 status switch. Embed the partial output verb
 **Print before entering plan mode:**
 Validate graph coverage mechanically against requirements, entities, and user
 actions, then proceed directly to specs.
+
+Require `### Consolidation Decisions` and an entity-representation strategy for
+every data-model entity. Count only generated/modified rows. If `<N> > 18`,
+re-dispatch `phase: graph` once with the initial graph and require the
+screen-planner to rerun its workflow-first consolidation algorithm. Do not
+start `phase: specs` merely because the oversized graph has coverage. If the
+second graph still exceeds 18, require the explicit exception reasons and
+`DONE_WITH_CONCERNS`; otherwise treat the graph as malformed.
 
 #### 5b.2 — Spawn planner with `phase: specs`
 
