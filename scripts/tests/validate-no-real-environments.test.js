@@ -105,3 +105,43 @@ test('CRLF content is scanned with correct line numbers', () => {
   assert.equal(violations.length, 1);
   assert.equal(violations[0].line, 2);
 });
+
+test('a real environment whose name STARTS with a generic word is rejected', () => {
+  // Review finding: PLACEHOLDER_ROOTS is matched as a prefix, so generic English words like
+  // `test`/`demo`/`sample` waved through an unbounded family of names — and environments genuinely
+  // called `TestEnv01` or `demo-prod-01` are common. A false negative here is a leak, which is the
+  // failure direction that matters, so those roots were removed.
+  for (const value of [
+    'testenv12345',
+    'TestEnv01',
+    'demo-prod-01',
+    'demoorg9931',
+    'sampleorg99',
+    'my-real-tenant',
+    'samplecorp-prod',
+  ]) {
+    assert.equal(isPlaceholder(value), false, `${value} must NOT be treated as a placeholder`);
+  }
+});
+
+test('bare generic stand-ins still pass, via the length rule rather than a prefix', () => {
+  // These are what the in-tree fixtures actually use; they are short enough that the length ceiling
+  // covers them without needing a prefix entry that would also cover `testenv12345`.
+  for (const value of ['test', 'demo', 'dev', 'stg', 'uat', 'x']) {
+    assert.equal(isPlaceholder(value), true, `${value} should still be accepted`);
+  }
+});
+
+test('the fictional brands still match as prefixes', () => {
+  // Contoso/Fabrikam are Microsoft's documented sample organizations, so a name built on them reads
+  // as obviously fake even when long.
+  for (const value of ['contosobapenv0001', 'fabrikamtenant01', 'exampleorg', 'your-env']) {
+    assert.equal(isPlaceholder(value), true, `${value} should be accepted`);
+  }
+});
+
+test('a real-looking tenant beginning with a generic word is reported', () => {
+  const violations = scanText('user: someone@testtenant0042.onmicrosoft.com');
+  assert.equal(violations.length, 1, JSON.stringify(violations));
+  assert.match(violations[0].detail, /non-placeholder tenant/);
+});

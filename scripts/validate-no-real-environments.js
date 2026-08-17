@@ -41,15 +41,20 @@ const SCAN_PATHS = ['plugins/model-apps', 'evals/model-apps'];
 // Contoso/Fabrikam as its standard sample organizations, so they read as obviously
 // fake to any external reader.
 // https://learn.microsoft.com/en-us/style-guide/a-z-word-list-term-collections/term-collections/fictitious-names
+//
+// Kept deliberately SHORT. These are matched as PREFIXES, so every entry here waves through an
+// unbounded family of names — and a generic English word is exactly the kind of prefix a real
+// environment carries. `test`, `demo`, `sample` and `my-` were removed for that reason:
+// environments genuinely named `TestEnv01`, `demo-prod-01` or `sampleorg99` are common, and a prefix
+// rule would have declared each of them a placeholder and let a live URL through. That is the
+// failure direction that matters here — a false negative is a leak, while a false positive is a
+// one-line fix by whoever hits it. Bare `test`/`demo` still pass via the length rule below, which is
+// what the in-tree fixtures actually use.
 const PLACEHOLDER_ROOTS = [
   'contoso',
   'fabrikam',
   'example',
-  'sample',
-  'test',
-  'demo',
   'your-',
-  'my-',
 ];
 
 // Short generic stand-ins used throughout the unit tests (`org`, `x`, `a`, `b`,
