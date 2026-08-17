@@ -52,6 +52,27 @@ test('create flow keeps native and connector interpretation visible in Gate 1', 
   assert.doesNotMatch(connectorPlanning, /native-app-planner` \(Gate 3\)/);
 });
 
+test('Dataverse planning expands summary-only candidates before Gate 2', () => {
+  const skill = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
+    'utf8',
+  );
+  const architect = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(
+    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    'utf8',
+  );
+
+  assert.match(skill, /every named data noun and workflow family/);
+  assert.match(skill, /detailed-dataverse-metadata:<logical names>/);
+  assert.match(architect, /must also have a full entry in `snapshot\.tables`/);
+  assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:/);
+  assert.match(planner, /bounded exact-name\s+expansion/);
+});
+
 test('screen validator blocks invalid mobile and Tamagui generation patterns', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-screen-contract-'));
   const file = path.join(root, 'app', 'home.tsx');

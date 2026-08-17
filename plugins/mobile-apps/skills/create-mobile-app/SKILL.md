@@ -510,6 +510,15 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/agent-preflight.js" \
 `status: fallback` routes directly to the returned fallback strategy. Run the
 same helper before every direct leaf-agent dispatch in inline mode.
 
+The concepts list must include every named data noun and workflow family from
+the approved brief, not a representative subset. Preserve header/child
+families such as `stock transfers`, `cycle counts`, `damage reports`, and
+`evidence photos`; do not omit a workflow because another related noun appears.
+The snapshot selector normalizes plural concepts, prefers the shortest
+unversioned schema in the best matching publisher family, and expands matching
+header/line/photo families. This prevents similarly named versioned test
+schemas from crowding out the exact tables required for Gate 2.
+
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
 - `<working_dir>/native-app-plan.md`
@@ -660,6 +669,13 @@ foreground orchestrator owns both approvals:
 #### 3.0 — Sub-agent return-status switch (canonical)
 
 Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+
+Special case for a direct or inline `data-model-architect` dispatch:
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` means the table
+exists in snapshot inventory but lacks detailed columns/relationships. Rerun
+`create-dataverse-snapshot.js` to the same output path with the original
+concepts plus those exact `--tables` names, then re-dispatch once. Do not let
+Gate 2 defer exact validation to Step 8.
 
 Legacy planner-only early-return signals are handled before the status switch:
 convert their options into a least-assumptive draft, re-spawn without asking,

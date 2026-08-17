@@ -120,6 +120,12 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
 
 - `DONE` → embed section, continue.
 - `DONE_WITH_CONCERNS: <list>` → embed section, propagate concerns.
+- `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → read the
+  snapshot's `environmentUrl` and `concepts`, rerun
+  `scripts/create-dataverse-snapshot.js` against the same output path with the
+  existing concepts plus `--tables "<logical names>"`, then re-spawn the
+  architect once with the refreshed snapshot. This is a bounded exact-name
+  expansion, not another broad discovery pass.
 - `NEEDS_CONTEXT: <missing>` → re-spawn once with missing context. If second return is also `NEEDS_CONTEXT`, return `BLOCKED`.
 - `BLOCKED: <reason>` → return `BLOCKED: data-model-architect returned BLOCKED: <reason>` to orchestrator.
 

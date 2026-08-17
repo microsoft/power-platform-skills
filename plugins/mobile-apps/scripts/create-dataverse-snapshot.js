@@ -40,6 +40,29 @@ const FORMULA_TYPE_BY_ATTRIBUTE = {
   String: 'StringAttributeMetadata',
 };
 
+const CONCEPT_ALIASES = {
+  associate: ['systemuser'],
+  associates: ['systemuser'],
+  manager: ['systemuser'],
+  managers: ['systemuser'],
+  store: ['stocklocation'],
+  stores: ['stocklocation'],
+};
+
+const GENERIC_CONCEPT_TOKENS = new Set([
+  'and',
+  'data',
+  'record',
+  'records',
+  'report',
+  'reports',
+  'stock',
+  'table',
+  'tables',
+]);
+
+const MAX_TABLES_PER_CONCEPT = 12;
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 2; i < argv.length; i++) {
@@ -87,24 +110,115 @@ function labelText(label) {
     '';
 }
 
-function normalizedSearchText(entity) {
+function singularizeToken(token) {
+  if (token.length > 4 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
+  if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) return token.slice(0, -1);
+  return token;
+}
+
+function normalizedTokens(value) {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map(singularizeToken);
+}
+
+function compact(value) {
+  return normalizedTokens(value).join('');
+}
+
+function entitySearchParts(entity) {
   return [
     entity.LogicalName,
     entity.SchemaName,
     entity.EntitySetName,
     labelText(entity.DisplayName),
     labelText(entity.DisplayCollectionName),
-  ].filter(Boolean).join(' ').toLowerCase();
+  ].filter(Boolean);
+}
+
+function publisherPrefix(logicalName) {
+  const match = String(logicalName || '').toLowerCase().match(/^([a-z][a-z0-9]*)_/);
+  return match?.[1] || '';
+}
+
+function versionPenalty(logicalName) {
+  const value = String(logicalName || '').toLowerCase().replace(/^[a-z][a-z0-9]*_/, '');
+  return /^(?:v[0-9a-z]+|m[0-9a-z]+|old[0-9a-z]*|main[0-9a-z]*)_/.test(value) ? 300 : 0;
+}
+
+function conceptDescriptor(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  const tokens = normalizedTokens(raw);
+  const aliases = (CONCEPT_ALIASES[raw] || [])
+    .flatMap((alias) => normalizedTokens(alias));
+  const matchTokens = [...new Set([...tokens, ...aliases])]
+    .filter((token) => token.length >= 3 && !GENERIC_CONCEPT_TOKENS.has(token));
+  return {
+    compactValues: [...new Set([
+      compact(raw),
+      ...(CONCEPT_ALIASES[raw] || []).map(compact),
+    ].filter((item) => item.length >= 3))],
+    matchTokens,
+  };
+}
+
+function scoreEntityForConcept(entity, descriptor) {
+  const logicalName = String(entity.LogicalName || '').toLowerCase();
+  const parts = entitySearchParts(entity);
+  const compactParts = parts.map(compact);
+  const tokenSet = new Set(parts.flatMap(normalizedTokens));
+  let score = 0;
+
+  for (const value of descriptor.compactValues) {
+    if (compactParts.some((part) => part === value)) score = Math.max(score, 1000);
+    else if (compactParts.some((part) => part.endsWith(value))) score = Math.max(score, 900);
+    else if (compactParts.some((part) => part.includes(value))) score = Math.max(score, 750);
+  }
+  if (descriptor.matchTokens.some((token) => tokenSet.has(token))) score = Math.max(score, 500);
+  if (descriptor.matchTokens.some((token) => compactParts.some((part) => part.includes(token)))) {
+    score = Math.max(score, 400);
+  }
+
+  return score - versionPenalty(logicalName) - Math.min(logicalName.length, 100) / 100;
 }
 
 function selectDetailedEntities(entities, tableNames, concepts) {
   const exactNames = new Set(tableNames.map((value) => value.toLowerCase()));
-  const terms = concepts.map((value) => value.toLowerCase()).filter((value) => value.length >= 3);
-  return entities.filter((entity) => {
-    if (exactNames.has(String(entity.LogicalName).toLowerCase())) return true;
-    const searchText = normalizedSearchText(entity);
-    return terms.some((term) => searchText.includes(term));
-  });
+  const selected = new Set(
+    entities
+      .filter((entity) => exactNames.has(String(entity.LogicalName).toLowerCase()))
+      .map((entity) => entity.LogicalName),
+  );
+
+  for (const concept of concepts) {
+    const descriptor = conceptDescriptor(concept);
+    if (descriptor.compactValues.length === 0 && descriptor.matchTokens.length === 0) continue;
+    const candidates = entities
+      .map((entity) => ({ entity, score: scoreEntityForConcept(entity, descriptor) }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((left, right) => right.score - left.score);
+    if (candidates.length === 0) continue;
+
+    const bestPrefix = publisherPrefix(candidates[0].entity.LogicalName);
+    const familyToken = descriptor.matchTokens[0];
+    const familyThreshold = candidates[0].score - 300;
+    const preferred = candidates.filter((candidate) => (
+      publisherPrefix(candidate.entity.LogicalName) === bestPrefix
+      && versionPenalty(candidate.entity.LogicalName) === 0
+      && (
+        candidate.score >= familyThreshold
+        || (familyToken && entitySearchParts(candidate.entity).flatMap(normalizedTokens).includes(familyToken))
+      )
+    ));
+    for (const candidate of (preferred.length ? preferred : candidates).slice(0, MAX_TABLES_PER_CONCEPT)) {
+      selected.add(candidate.entity.LogicalName);
+    }
+  }
+
+  return entities.filter((entity) => selected.has(entity.LogicalName));
 }
 
 function normalizeChoiceOptions(metadata) {
@@ -315,4 +429,5 @@ module.exports = {
   odataString,
   requestCollection,
   selectDetailedEntities,
+  singularizeToken,
 };

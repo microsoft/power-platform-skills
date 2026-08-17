@@ -96,6 +96,18 @@ URL/tenant and use it for Steps 3 and 5. Do not repeat live discovery inside
 the nested agent. If the snapshot is missing or mismatched, return
 `NEEDS_CONTEXT` so the foreground can regenerate it.
 
+The inventory is discovery-only; it is not enough evidence for a Gate 2
+reuse/extend decision. Every selected reuse, extend, relationship target, or
+required existing dependency must also have a full entry in `snapshot.tables`.
+If a candidate exists only in `snapshot.inventory`, return:
+
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated logical names>`
+
+Do not classify that candidate as `Unverified`, defer exact validation to
+`/add-dataverse`, or keep searching the snapshot. The planner/orchestrator
+expands those exact names into the same snapshot and retries this architect
+once.
+
 Query custom tables to discover conceptual reuse candidates. This broad query is advisory only; Step 5 still queries every selected custom, standard, and managed table by exact logical name before classifying it:
 
 ```bash

@@ -9,7 +9,7 @@ const path = require('node:path');
 const { updateStatus } = require('../mobile-plan-status');
 const { renderPlan, splitSections } = require('../render-mobile-plan');
 const { checkAgentPreflight } = require('../agent-preflight');
-const { createSnapshot } = require('../create-dataverse-snapshot');
+const { createSnapshot, selectDetailedEntities } = require('../create-dataverse-snapshot');
 
 test('status updates preserve start time and set prompt awareness', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-status-'));
@@ -276,6 +276,7 @@ test('snapshot generator normalizes foreground Dataverse metadata', async () => 
       return { status: 404, error: 'not found' };
     },
   });
+
   assert.strictEqual(snapshot.tables[0].entitySetName, 'cr1_products');
   assert.strictEqual(snapshot.tables[0].columns[0].primaryName, true);
   assert.strictEqual(snapshot.tables[0].columns[0].typeName, 'StringType');
@@ -295,6 +296,58 @@ test('snapshot generator normalizes foreground Dataverse metadata', async () => 
   assert.deepStrictEqual(snapshot.concepts, ['product']);
   assert.deepStrictEqual(snapshot.missingProposedTables, ['cr1_newtable']);
   assert.ok(calls.every((apiPath) => !apiPath.includes('$expand=Attributes')));
+});
+
+test('snapshot selection expands business concepts without loading versioned duplicate schemas', () => {
+  const entity = (logicalName, displayName) => ({
+    LogicalName: logicalName,
+    SchemaName: logicalName,
+    EntitySetName: `${logicalName}s`,
+    DisplayName: { UserLocalizedLabel: { Label: displayName } },
+    DisplayCollectionName: { UserLocalizedLabel: { Label: `${displayName}s` } },
+  });
+  const entities = [
+    entity('new_product', 'Product'),
+    entity('new_v24a1_product', 'Product'),
+    entity('twd_product', 'Product'),
+    entity('new_stocklocation', 'Stock Location'),
+    entity('new_stocktransfer', 'Stock Transfer'),
+    entity('new_stocktransferline', 'Stock Transfer Line'),
+    entity('new_cyclecount', 'Cycle Count'),
+    entity('new_cyclecountline', 'Cycle Count Line'),
+    entity('new_damagereport', 'Damage Report'),
+    entity('new_damagephoto', 'Damage Photo'),
+    entity('task', 'Task'),
+    entity('systemuser', 'User'),
+  ];
+
+  const selected = selectDetailedEntities(entities, [], [
+    'products',
+    'stores',
+    'stock transfers',
+    'cycle counts',
+    'damage reports',
+    'tasks',
+    'associates',
+    'managers',
+  ]).map((item) => item.LogicalName);
+
+  for (const logicalName of [
+    'new_product',
+    'new_stocklocation',
+    'new_stocktransfer',
+    'new_stocktransferline',
+    'new_cyclecount',
+    'new_cyclecountline',
+    'new_damagereport',
+    'new_damagephoto',
+    'task',
+    'systemuser',
+  ]) {
+    assert.ok(selected.includes(logicalName), `${logicalName} should receive detailed metadata`);
+  }
+  assert.ok(!selected.includes('new_v24a1_product'));
+  assert.ok(!selected.includes('twd_product'));
 });
 
 test('snapshot generator surfaces formula metadata request failures', async () => {
