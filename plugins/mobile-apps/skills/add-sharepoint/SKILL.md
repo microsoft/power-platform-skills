@@ -97,12 +97,12 @@ Get explicit confirmation before creating. Use safe functions from [list-managem
 Get the SharePoint Online connection ID (see [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)):
 
 ```bash
-npx power-apps create-connection --api-id shared_sharepointonline --json
+npx pa connection create --connector shared_sharepointonline --json --non-interactive
 ```
 
 Use **`shared_sharepointonline`** as the `apiId` and capture **`connectionId`** from the output. Use these exact values in the commands below.
 
-If `create-connection` cannot complete because browser-based connection creation is disabled or the connector needs interactive auth, direct the user to create one:
+If `connection create` cannot complete because browser-based connection creation is disabled or the connector needs interactive auth, direct the user to create one:
 
 > Open `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search "SharePoint" → Create. Then provide the connection ID or rerun `/list-connections shared_sharepointonline`.
 
@@ -112,12 +112,12 @@ If `create-connection` cannot complete because browser-based connection creation
 > "→ Discovering SharePoint sites accessible to this connection…"
 
 ```bash
-npx power-apps list-datasets --api-id <apiId-from-list> --connection-id <connection-id> --json
+npx pa connection list-datasets --connector <apiId-from-list> --connection-id <connection-id> --non-interactive
 ```
 
 Present the sites to the user and ask which one(s) they want to connect to. If the user already specified a site URL, confirm it appears in the list.
 
-**If `npx power-apps list-datasets` fails or returns no results:**
+**If `npx pa connection list-datasets --non-interactive` fails or returns no results:**
 - Auth, wrong user, or multiple accounts: follow shared-instructions command-failure handling and retry once.
 - Empty list: Confirm the connection ID is for a SharePoint Online connection and the user has access to at least one site. STOP if the list is empty after confirming.
 
@@ -129,7 +129,7 @@ Present the sites to the user and ask which one(s) they want to connect to. If t
 For each selected site:
 
 ```bash
-npx power-apps list-tables --api-id <apiId-from-list> --connection-id <connection-id> --dataset '<site-url>' --json
+npx pa connection list-tables --connector <apiId-from-list> --connection-id <connection-id> --dataset '<site-url>' --non-interactive
 ```
 
 Present the tables to the user and ask which ones they want to add. Suggest tables that look relevant to their use case. If lists were created in Step 5, they should appear here.
@@ -137,12 +137,12 @@ Present the tables to the user and ask which ones they want to add. Suggest tabl
 ### Step 9: Add Connector
 
 **Print before starting:**
-> "→ Running `npx power-apps add-data-source` per list (sequential, ~10–20 seconds each)."
+> "→ Running `npx pa app add data-source --non-interactive` per list (sequential, ~10–20 seconds each)."
 
-SharePoint is a tabular datasource — requires `--connection-id`, `--dataset`, and `--resource-name`:
+SharePoint is a tabular datasource — requires `--connection-id`, `--dataset`, and `--table`:
 
 ```bash
-npx power-apps add-data-source --api-id <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --resource-name '<table-name>'
+npx pa app add data-source --connector <apiId-from-list> --connection-id <connectionId-from-list> --dataset '<site-url>' --table '<table-name>' --non-interactive
 ```
 
 Run once per list or document library.
@@ -188,7 +188,7 @@ await SharePointOnlineService.PatchItem({
 
 > **Native diff:** `npx tsc --noEmit` instead of `npm run build`. Do NOT run platform-specific native build commands here.
 
-`npx power-apps add-data-source` wrote new files into `.power/schemas/sharepointonline/`. Regenerate `connectorSchemas.ts` before type-checking so the new list is wired into the runtime schema map:
+`npx pa app add data-source --non-interactive` wrote new files into `.power/schemas/sharepointonline/`. Regenerate `connectorSchemas.ts` before type-checking so the new list is wired into the runtime schema map:
 
 ```bash
 npm run generate-schemas

@@ -216,7 +216,7 @@ Use the `[TRACE` lines to walk the chain:
    - Confirm field names match what the screen references. `item.title` vs `cr3e9_title` produces blank rows.
 
 5. **`power.config.json`**
-   - Confirm the `datasources` array contains the suspected entity / connector. If absent, `npx power-apps add-data-source` was never run for it.
+   - Confirm the `datasources` array contains the suspected entity / connector. If absent, `npx pa app add data-source --non-interactive` was never run for it.
 
 6. **Auth state** (`src/playerConfig.ts`, `app.config.js`, `auth.config.json`, `useAuth()` hook)
    - 401 from the service wrapped as `{ error }` — the `[TRACE service-response]` log surfaces the error string.
@@ -228,7 +228,7 @@ Use the `[TRACE` lines to walk the chain:
 |---|---|---|
 | `[TRACE items] 0` or `[]` — no error field | Service returned empty — check filter/query or data not seeded | Fix the query; if no records exist, seed sample data |
 | `[TRACE items] undefined` | Hook never received a response — likely service stub or missing datasource | Route to `/add-connector` or `/add-dataverse` |
-| `[TRACE service-response]` shows error string | Service threw — read the error; 401/403 = auth; 404 = wrong resource | Fix auth config or re-run `add-data-source` |
+| `[TRACE service-response]` shows error string | Service threw — read the error; 401/403 = auth; 404 = wrong resource | Fix auth config or re-run `app add data-source` |
 | `[TRACE render]` N > 0 but list looks empty | Field name mismatch between model and screen | Fix screen field references to match the model |
 | `[TRACE handler-called]` never appears | `onPress` not wired or component not mounted | Read TSX, fix the event binding |
 | No `[TRACE` lines at all | Metro may have cached the old bundle | Ask user: stop Metro, run `npx expo start --clear`, reload |

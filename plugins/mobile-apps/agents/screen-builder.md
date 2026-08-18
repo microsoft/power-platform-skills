@@ -46,7 +46,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 - **HARD RULE — Route Intent Matrix + tap idempotency.** Navigation APIs are NOT interchangeable. Apply this matrix exactly: (1) **singleton destinations** (`/(app)/workout/form`, `/(app)/recovery/form`, `/login`, and any route the plan marks singleton) use `router.navigate(...)`, never `router.push(...)`; (2) **entity detail drill-down** routes use `router.push(...)`; (3) **auth/guard redirects** use `router.replace(...)`. Any primary navigation CTA (`Start`, `Continue`, `Open`, `Next`) must be double-tap safe: lock with `isNavigating`, early-return when true, set lock before calling router, and unlock in `finally` (or after transition callback). On iOS this prevents duplicate transitions and accidental double stack entries.
 
-- **HARD RULE — Profile owns sign-out, but is not sign-out-only.** Every generated app has a Profile screen at `/(app)/profile`. If your assigned screen is Profile, render the planned app-specific profile sections first, then a visible text button labeled `Sign out` exactly where the spec places it. Use `signOut` from `useAuth()`; do not call `npx power-apps logout`, clear storage manually, or invent a custom auth service. Confirm before signing out, then call `signOut()` and `router.replace('/login')`. Non-Profile screens must not add sign-out actions.
+- **HARD RULE — Profile owns sign-out, but is not sign-out-only.** Every generated app has a Profile screen at `/(app)/profile`. If your assigned screen is Profile, render the planned app-specific profile sections first, then a visible text button labeled `Sign out` exactly where the spec places it. Use `signOut` from `useAuth()`; do not call `npx pa auth logout --non-interactive`, clear storage manually, or invent a custom auth service. Confirm before signing out, then call `signOut()` and `router.replace('/login')`. Non-Profile screens must not add sign-out actions.
 
 - **HARD RULE — `useLocalSearchParams<{}>` type for THIS screen MUST be the EXACT union from the Navigation Contracts row, not a synthesized "what this screen needs" type.** The planner enforces param-union: every param ANY sender pushes to your route is listed in the contracts table for your route. Your `useLocalSearchParams<{}>` declaration MUST include every one of those params (path params required, query params optional with `?`). Even if your screen's content only uses some of them, the OTHERS are still received from senders and must be declared so they're typed correctly — undeclared params are silently dropped at runtime, breaking the senders.
 
@@ -891,7 +891,7 @@ export default function <ScreenName>Screen() {
   - **Fallback — const missing or model file absent:** emit a plain `<Input>` storing the raw int as a string, with a TODO comment:
     ```tsx
     {/* TODO(choice-missing): No option const found for cr123_status in Cr123_ProjectModel.ts.
-      Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
+      Re-run `npx pa app add data-source --non-interactive` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
       onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}

@@ -28,8 +28,8 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
+- **Read-only.** You MUST NOT create Dataverse tables, run `npx pa app add data-source --non-interactive`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx pa *` command; retry the original command once after auth is corrected.
 - **Single plan document.** Everything goes into `<working_dir>/native-app-plan.md`. No HTML, no separate per-domain files. Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
@@ -597,7 +597,7 @@ Sections approved:
 Next steps for the orchestrator:
   1. Auth + environment selection
   2. Use the user-prepared fresh template folder materialized from `pa-wrap-tools/templates/expo-app-standalone` with `degit`
-  3. npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
+  3. npx pa app init --display-name <name> --environment-id <environment-id> --non-interactive
   4. Apply data model via /add-dataverse using the plan
   5. Apply native capabilities via /add-native using the plan
   6. Apply connectors via /add-connector per connector using the plan
@@ -606,6 +606,6 @@ Next steps for the orchestrator:
 
 ## Tool Permissions
 
-You have `Bash` only to run read-only file/HTTP/helper checks such as `node scripts/resolve-environment.js <environment-id-or-url>` when needed for context. You MUST NOT run mutating Power Apps CLI commands such as `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, `npx power-apps add-data-source ...`, `npx power-apps add-flow --flow-id <flow-guid> --non-interactive`, `npx power-apps push --non-interactive`, `npm install`, or any other mutation command.
+You have `Bash` only to run read-only file/HTTP/helper checks such as `node scripts/resolve-environment.js <environment-id-or-url>` when needed for context. You MUST NOT run mutating Power Apps CLI commands such as `npx pa app init --display-name <name> --environment-id <environment-id> --non-interactive`, `npx pa app add data-source ... --non-interactive`, `npx pa app add flow --flow-id <flow-guid> --non-interactive`, `npx pa app push --non-interactive`, `npm install`, or any other mutation command.
 
 You have `Write` only to create `native-app-plan.md`. You MUST NOT write any other file in the project.

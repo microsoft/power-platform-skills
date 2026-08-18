@@ -33,15 +33,15 @@ Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../.
 | Store and manage structured business data (custom tables, forms, CRUD) | Dataverse is the platform's native database | `/add-dataverse` |
 | Invoke an existing Dataverse action/function/API | Discover with Power Apps CLI `find-dataverse-api`; this plugin only adds Dataverse table CRUD | `/add-connector` |
 | Read lists, manage documents, integrate with SharePoint sites | SharePoint Online — dedicated skill with list creation support | `/add-sharepoint` |
-| Invoke an existing Power Automate cloud flow | Use Power Apps CLI `list-flows` / `add-flow` support through the generic connector workflow | `/add-connector` |
+| Invoke an existing Power Automate cloud flow | Use Power Apps CLI `app list-flows` / `app add flow` support through the generic connector workflow | `/add-connector` |
 | Anything else — Teams messages, Excel data, OneDrive files, Office 365 email/calendar, Azure DevOps, Copilot Studio, custom connectors | Generic connector (we'll figure out the right one) | `/add-connector` |
 
 **Note:** Dedicated skills for Teams, Excel, OneDrive, Office 365, and Azure DevOps are planned for v1. Until then, `/add-connector` handles all of them — it covers every connector the platform supports and generates the same `src/generated/` service layer.
 
 **Important routing rules:**
 - When the user wants to **perform actions** (send an email, post a Teams message, create a file), route to `/add-connector` with the connector name as the argument (e.g., `/add-connector office365`, `/add-connector teams`).
-- When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `npx power-apps list-flows --json` followed by `npx power-apps add-flow --flow-id <flow-guid> --non-interactive` from the app root.
-- When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `npx power-apps find-dataverse-api --search '<operation-name>' --json`; then stop and explain that this plugin only adds Dataverse table CRUD.
+- When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `npx pa app list-flows --non-interactive` followed by `npx pa app add flow --flow-id <flow-guid> --non-interactive` from the app root.
+- When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `npx pa app find-dataverse-api --search '<operation-name>' --json --non-interactive`; then stop and explain that this plugin only adds Dataverse table CRUD.
 - When the user wants to **store or query structured business data** with custom schema, route to `/add-dataverse`.
 
 4. If the user wants multiple capabilities, invoke each skill in sequence.

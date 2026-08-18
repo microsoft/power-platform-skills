@@ -43,7 +43,7 @@ Profile ID resolution (same priority as `/assign-offline-profile` Step 1):
 
 STOP if no profile found: "Run `/setup-offline-profile` first."
 
-> **`power.config.json` is intentionally NOT consulted here.** That file is owned by `npx power-apps init`. The profile ID lives in `offline-profile.json` only.
+> **`power.config.json` is intentionally NOT consulted here.** That file is owned by `npx pa app init --non-interactive`. The profile ID lives in `offline-profile.json` only.
 
 ### Step 2 — Resolve target (what to edit)
 

@@ -103,7 +103,7 @@ Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly o
 
 ### Step 3 — Deploy
 
-**Resolve and confirm the target environment FIRST.** `npx power-apps push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
+**Resolve and confirm the target environment FIRST.** `npx pa app push --non-interactive` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 
 Run:
 
@@ -119,7 +119,7 @@ From `resolve-environment.js` capture the **Environment URL** (e.g. `https://con
 - **Cannot resolve/authenticate** → STOP with `az login --tenant <env-tenant>` instructions, or ask the user to provide the environment URL directly.
 
 **Print before starting:**
-> "→ Pushing bundle to Power Platform via `npx power-apps push`. ~30–60 seconds."
+> "→ Pushing bundle to Power Platform via `npx pa app push --non-interactive`. ~30–60 seconds."
 
 Confirm with the user using the **resolved env URL, not just the friendly name**:
 
@@ -128,7 +128,7 @@ Confirm with the user using the **resolved env URL, not just the friendly name**
 Wait for the exact phrase `yes deploy to <env-name>` (case-insensitive, env-name matching). A bare `y` / `yes` is not enough — too easy to fire on autopilot when the wrong env is active. Then:
 
 ```bash
-npx power-apps push --non-interactive
+npx pa app push --non-interactive
 ```
 
 Capture the app URL from the output if printed.
@@ -137,9 +137,9 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 
 | Error | Fix |
 |---|---|
-| `npx power-apps push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
-| Environment mismatch | Re-run `npx power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
-| `npx power-apps push` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
+| `npx pa app push --non-interactive` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
+| Environment mismatch | Re-run `npx pa app init --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
+| `npx pa app push --non-interactive` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
 
 ### Step 4 — Update memory bank
 

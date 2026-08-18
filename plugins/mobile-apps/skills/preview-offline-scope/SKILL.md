@@ -25,7 +25,7 @@ Useful before:
 
 ### Step 1 — Verify project + locate profile
 
-Same as `/edit-offline-profile` Step 1. Read profileId from `offline-profile.json` or `$ARGUMENTS --profile-id`. Do not read profile metadata from `power.config.json`; it is owned by `npx power-apps init`.
+Same as `/edit-offline-profile` Step 1. Read profileId from `offline-profile.json` or `$ARGUMENTS --profile-id`. Do not read profile metadata from `power.config.json`; it is owned by `npx pa app init --non-interactive`.
 
 ```bash
 test -f power.config.json
