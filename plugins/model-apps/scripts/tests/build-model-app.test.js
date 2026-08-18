@@ -488,3 +488,26 @@ test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)
   assert.strictEqual(r.verify.ok, false);
   assert.strictEqual(r.verify.unableToRun, true, 'unableToRun propagated from verifySpec result');
 });
+
+// -- verify wiring -----------------------------------------------------------------------------
+// Asserted against SOURCE because the wiring lives inside main(), which is not exported, and the
+// failure mode is SILENT: verify-spec skips role-privileges unless BOTH readers are present, so
+// omitting httpClient/envUrl made --apply --verify report a clean PASS having never checked what
+// any persona role actually grants. Found live -- the standalone verifier ran 10 checks against the
+// same app where the build inline verify ran 8. A behavioural test would need a live SDK; this pins
+// the exact regression at zero cost.
+test('build --verify wires the role-privilege readers (httpClient + envUrl)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const call = src.split(/\r?\n/).find((l) => l.includes('verify: (s) => verifySpec'));
+  assert.ok(call, 'expected the deps.verify wiring line');
+  assert.match(call, /httpClient/, 'entityPrivileges needs the raw client');
+  assert.match(call, /envUrl: env/, 'entityPrivileges needs the org url to build an absolute request');
+});
+
+test('makeSdk returns the httpClient so the caller can wire verify', () => {
+  // Returning the SAME instance rather than constructing a second one keeps token acquisition and
+  // retry state shared; a second client would re-acquire a token per verify run.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  assert.match(src, /return \{ sdk, provisionSdk, httpClient, cleanup \}/, 'makeSdk must expose httpClient');
+  assert.match(src, /const \{ sdk, provisionSdk, httpClient, cleanup \} = makeSdk\(/, 'main must destructure it');
+});
