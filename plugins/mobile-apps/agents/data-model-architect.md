@@ -126,6 +126,8 @@ Standard table mappings to bias toward:
 | An activity event | `appointment`, `task`, `phonecall`, `email` |
 | A user / system identity | `systemuser` (read-only — never propose extending) |
 
+For every `Reuse` decision, add `Service required: yes|no`. Use `yes` whenever any screen, hook, role check, lookup picker, related-field fetch, or authenticated-identity flow reads the table. `systemuser` identity resolution is always `Service required: yes`; read-only means no schema mutation, not no generated data source.
+
 ## Step 5 — Reconcile Target and Score Reuse / Extend / Create / Block
 
 **Print before starting:**

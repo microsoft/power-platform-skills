@@ -153,12 +153,17 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   };
 
   export async function createTask(input: CreateTaskInput): Promise<void> {
-    const payload: Record<string, unknown> = {
+    type CreateFields = Pick<
+      Parameters<typeof Cr3e9_tasksService.create>[0],
+      'cr3e9_name' | 'cr3e9_status' | 'cr3e9_projectid@odata.bind'
+    >;
+    const payload: Omit<CreateFields, 'cr3e9_projectid@odata.bind'>
+      & Partial<Pick<CreateFields, 'cr3e9_projectid@odata.bind'>> = {
       cr3e9_name: input.title,
       cr3e9_status: input.status,
     };
     if (input.projectId) {
-      payload['cr3e9_Project@odata.bind'] = `/cr3e9_projects(${input.projectId})`;
+      payload['cr3e9_projectid@odata.bind'] = `/cr3e9_projects(${input.projectId})`;
     }
 
     const result = await Cr3e9_tasksService.create(payload as Parameters<typeof Cr3e9_tasksService.create>[0]);
@@ -174,11 +179,11 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   if (!validId) return <MissingRecordIdState />;
   ```
 - **Lookup writes use `@odata.bind`, NEVER raw GUIDs.** When a form creates or updates a record with a parent reference (Task → Project, Comment → Task, Inspection → Site, etc.), the foreign key field is set with the entity-bind syntax. Setting it any other way either silently saves `null` (data loss — form looks like it succeeded) or 400s with a cryptic Dataverse error.
-  - **Required pattern** — use the lookup's **schema name** (PascalCase navigation property), suffix with `@odata.bind`, value is `/<entitySetName>(<guid>)`:
+  - **Required pattern** — open the generated target model and copy the exact quoted property ending in `@odata.bind`; value is `/<entitySetName>(<guid>)`:
     ```ts
     await Cr3e9_tasksService.create({
       cr3e9_name: title,
-      'cr3e9_Project@odata.bind': `/cr3e9_projects(${projectId})`,
+      'cr3e9_projectid@odata.bind': `/cr3e9_projects(${projectId})`,
       cr3e9_status: TaskStatus.Open, // choice = number
     });
     ```
@@ -186,12 +191,15 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
     ```ts
     { _cr3e9_project_value: projectId }  // _value props are READ-ONLY; silently dropped on create
     { cr3e9_project: projectId }          // raw GUID on nav property; 400
-    { 'cr3e9_project@odata.bind': projectId }  // missing /entitySet(guid) wrapper; 400
+    { 'cr3e9_projectid@odata.bind': projectId }  // missing /entitySet(guid) wrapper; 400
     ```
   - **Finding the right names:**
-    - **Schema name** (left of `@odata.bind`): the lookup column's PascalCase logical name, usually exposed in the generated model file (`src/generated/models/<Entity>Model.ts`). Often differs from the `_value` read property by case + dropped underscore (read `_cr3e9_project_value`, write `cr3e9_Project@odata.bind`).
+    - **Write property** (left of `@odata.bind`): use the exact key declared in `src/generated/models/<Entity>Model.ts`. It is case-sensitive and may be lowercase even when raw Web API metadata exposes a PascalCase navigation property. Never guess or transform the read `_value` property.
     - **Entity set name** (inside `/(...)`): always the **plural** logical collection name — `cr3e9_projects`, not `cr3e9_project`. Use `pluralName` from the model file or check the generated service filename (`Cr3e9_projectsService.ts` ⇒ entity set is `cr3e9_projects`).
-    - When in doubt, grep `@odata.bind` in `src/generated/services/` for an existing example, or ask the `microsoft-learn` MCP server. Full reference: [`skills/add-dataverse/references/dataverse-reference.md` § Setting Lookups](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md#setting-lookups-creatingupdating-records).
+    - Grep `@odata.bind` in the generated **model**, not the generated service. If the key is absent, return `BLOCKED` rather than inventing it.
+  - **Typed payload rule:** do not start write payloads as `Record<string, unknown>`. Define a `Pick<Parameters<typeof Service.create|update>[N], ...>` containing the exact writable keys, then use a single boundary cast only when generated base types incorrectly require server-managed fields. This makes misspelled or wrongly-cased lookup keys fail TypeScript.
+  - **Lookup filter rule:** generated mobile services do not reliably support raw Web API relationship traversal such as `lookupNav/relatedColumn eq ...`. Query the related table service first, then filter the source table using its read lookup GUID property (`_lookuplogicalname_value eq <guid>`).
+- **Authenticated profile rule:** when the plan links a profile table to `systemuser`, import the generated `SystemusersService`. Resolve token `oid → systemuserid` by filtering `azureactivedirectoryobjectid`, reject disabled/missing/duplicate users, then filter the profile with `_systemuserlookup_value eq <systemuserid>`. If `SystemusersService` is absent from the Generated Services snapshot, return `BLOCKED`; do not replace it with email matching or relationship traversal.
 
   - **Form picker UI** — when the form's spec calls for a parent picker (e.g., "select Project"), the picker stores the selected record's `id` (GUID string), and the submit handler converts it to the bind string at write time. Never store the bind string in component state — only in the API payload.
 - **Pagination rule:** If your spec says `pagination: cursor`, do NOT use `useListData` or `useSearchFilter`. Use the skeleton's `useCursorListData` call, React Query's `useInfiniteQuery`, or an app-specific `use<Entity>CursorList` hook with FlatList `onEndReached` per the pattern in [`data-performance.md`](${PLUGIN_ROOT}/shared/references/data-performance.md). Never fetch all records at once, and never treat `top: 50` as pagination. Real generated Dataverse services use SDK `maxPageSize` for page size and return `IOperationResult.skipToken` for the next page; pass that value back as `skipToken`. Always include deterministic `orderBy` with a unique key and `select` in the service call. Push search/filter into Dataverse with `filter`. If the generated service in the app does not expose `maxPageSize`/`skipToken` for an unbounded table, return `BLOCKED [<screen_name>]: generated service does not expose cursor paging for <Service>; do not downgrade to useListData`.

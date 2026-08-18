@@ -44,6 +44,14 @@ test -f native-app-plan.md
 - The target reconciliation table (`reuse` / `extend` / `create` / `adapt` / `defer` decisions and evidence)
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
+- Every table referenced by `## Screens`, identity resolution, related-entity fields, forms, dashboards, or shared hooks, including standard reused tables such as `systemuser`, `contact`, and `account`
+
+Build `SERVICE_REQUIRED_TABLES` as the union of:
+1. every non-deferred row in Target Reconciliation (`reuse`, `extend`, `create`, or `adapt`);
+2. every table in Creation Order;
+3. every table named by screen/hook data requirements.
+
+**Hard rule:** `reuse` means "do not mutate schema"; it does **not** mean "skip generated service." If app code reads or writes a reused table, that table must be in `SERVICE_REQUIRED_TABLES`.
 
 Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) decisions with their recorded reasons, and apply the alias map to every name you use. A data-modelling conflict never halts this skill — it resolves to `adapt` or `defer` and is reported in Step 9.
 
@@ -792,13 +800,19 @@ Add alternate keys to `.datamodel-manifest.json` for the table:
 **Print before starting:**
 > "→ Generating TypeScript services for <N> tables via `npx power-apps add-data-source` (sequential). Print '✓ <table>Service.ts' after each."
 
-For each table the app will use (regardless of reuse/extend/create), generate the TS layer from the app root. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
+For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
 npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <table-logical-name>
 ```
 
 Run **one at a time — sequentially**, not in parallel. The Power Apps CLI writes `src/generated/connectorSchemas.ts` and other generated files non-atomically; concurrent invocations corrupt them.
+
+After generation, verify each required table appears in `power.config.json` `databaseReferences.default.cds.dataSources` and that a matching file exists in `src/generated/services/`. If any reused or custom table is missing, STOP before screen generation:
+
+```text
+BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<reuse|extend|create>; app usage=<screens/hooks that require it>.
+```
 
 ### Step 6b — Publish customizations
 

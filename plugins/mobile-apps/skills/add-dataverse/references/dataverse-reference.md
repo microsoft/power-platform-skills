@@ -239,16 +239,24 @@ The lookup POST will 404 unless **both** endpoint tables already exist. Ensure:
 Lookup properties (`_fieldname_value`) are **read-only**. To set a relationship, use the **single-valued navigation property** with `@odata.bind`:
 
 ```typescript
-// CORRECT - Use @odata.bind for lookup fields
-const newRecord: any = {
+// CORRECT for generated services: copy the exact key from the generated model.
+type CreateFields = Pick<
+  Parameters<typeof ExampleService.create>[0],
+  'prefix_name' | 'prefix_parentaccountid@odata.bind' | 'prefix_status'
+>;
+const newRecord: CreateFields = {
   'prefix_name': 'My Record',
-  'prefix_ParentAccount@odata.bind': `/accounts(${accountGuid})`,
+  'prefix_parentaccountid@odata.bind': `/accounts(${accountGuid})`,
   'prefix_status': 100000000
 };
 
 // WRONG - _value properties are read-only, cannot be set
 { '_prefix_parentaccountid_value': accountGuid }  // May fail on create
 ```
+
+Raw Dataverse Web API examples often use a case-sensitive navigation-property schema name. Generated Power Apps services instead expose their accepted write key in `src/generated/models/<Entity>Model.ts`. For generated services, that model declaration is authoritative; never convert it to PascalCase or hide an unverified key inside `Record<string, unknown>`.
+
+For filtering across lookups, avoid `lookupNavigation/relatedColumn eq ...` in generated mobile-service options. Resolve the related row through its generated service, then filter with the source record's `_lookuplogicalname_value` GUID property.
 
 The `@odata.bind` value must be an entity set path with the GUID: `/<entitysetname>(<guid>)`
 
