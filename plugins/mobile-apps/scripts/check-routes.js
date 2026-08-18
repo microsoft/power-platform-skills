@@ -67,7 +67,7 @@ function findTsxFiles(dir) {
 // app/(app)/inspections/index.tsx        → /inspections
 
 function fileToRoute(filePath, appRoot) {
-  const rel = path.relative(appRoot, filePath);
+  const rel = path.relative(appRoot, filePath).replace(/\\/g, '/');
   const noExt = rel.replace(/\.tsx$/, '');
   if (/(^|\/)_layout$/.test(noExt)) return null;          // layouts aren't screens
   if (/(^|\/)\+not-found$/.test(noExt)) return null;      // not-found boundary
