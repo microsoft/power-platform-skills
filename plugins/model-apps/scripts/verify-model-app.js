@@ -106,7 +106,14 @@ function readerFor(sdk, appUnique, opts) {
       const rows = await sdk.queryRecords('roleprivileges', {
         select: ['privilegeid', 'privilegedepthmask'],
         filter: `roleid eq ${roleId}`,
-        top: 5000,
+        // Follow @odata.nextLink to completion rather than capping with `top`. Verified live: a
+        // System Administrator role returned EXACTLY 5000 rows against the previous `top: 5000`,
+        // i.e. it was silently truncated at the cap. A truncated page is the worst shape for this
+        // check — a declared privilege that simply fell off the end reads as NOT HELD, so verify
+        // reports a correctly configured role as missing privileges. Not combined with `top`:
+        // Dataverse honors $top as a hard cap and omits @odata.nextLink, and the SDK rejects
+        // paginate+top for exactly that reason.
+        paginate: true,
       });
       return (rows || []).map((r) => ({
         privilegeId: String((r && r.privilegeid) || ''),

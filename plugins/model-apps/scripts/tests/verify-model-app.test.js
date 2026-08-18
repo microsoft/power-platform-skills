@@ -482,3 +482,23 @@ test('entityPrivileges is ABSENT (not broken) when the client or org url is miss
   assert.strictEqual(typeof readerFor(stubSdk(), 'app', { httpClient: { get: async () => ({}) } }).entityPrivileges, 'undefined');
   assert.strictEqual(typeof readerFor(stubSdk(), 'app', { envUrl: 'https://contoso.crm.dynamics.com' }).entityPrivileges, 'undefined');
 });
+
+test('rolePrivileges paginates and never caps with top', async () => {
+  // Found by a LIVE run: with the previous 	op: 5000 a System Administrator role returned
+  // EXACTLY 5000 rows -- silently truncated. Paginated it returns 7119, so 2119 privileges were
+  // being dropped. A truncated page is the worst shape for this check: a declared privilege that
+  // fell off the end reads as NOT HELD, so verify reports a correctly configured role as missing.
+  // Dataverse honors  as a hard cap and omits @odata.nextLink, and the SDK rejects
+  // paginate+top, so asserting the ABSENCE of top matters as much as the presence of paginate.
+  const calls = [];
+  const sdk = stubSdk();
+  sdk.queryRecords = async (set, options) => { calls.push({ set, options }); return []; };
+  const read = readerFor(sdk, 'app', { httpClient: { get: async () => ({ status: 200, body: {} }) }, envUrl: 'https://contoso.crm.dynamics.com' });
+
+  await read.rolePrivileges('00000000-0000-0000-0000-000000000001');
+
+  const q = calls.find((c) => c.set === 'roleprivileges');
+  assert.ok(q, 'expected a roleprivileges query');
+  assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
+  assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
+});
