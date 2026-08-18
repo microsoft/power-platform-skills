@@ -84,8 +84,8 @@ connector wiring.
 
 	### Required API permissions
 
-	The Microsoft Entra app registration requires these delegated permissions
-	from the **Power Platform API**:
+	The Microsoft Entra app registration requires these delegated permissions from the **Power Platform API**.
+	If you create the registration via Power Apps Wrap, it configures these automatically; the list is for reference only.
 
 	- `PowerApps.Apps.Play`
 	- `PowerApps.Apps.Read`
