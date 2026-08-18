@@ -18,8 +18,6 @@ web-build/
 .env
 .env*.local
 
-# ── Wrap build config (contains secrets — never commit) ──────────────────────
-wrap.config.json
 
 # ── Build output / vendor ────────────────────────────────────────────────────
 vendor/
