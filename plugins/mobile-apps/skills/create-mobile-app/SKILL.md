@@ -1802,6 +1802,14 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 
 **After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
 
+Then run the canonical route-contract gate from the app root:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+```
+
+This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
+
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 
 > "tsc found <N> error(s) in <files>. Patch + continue, or stop and let me investigate?"

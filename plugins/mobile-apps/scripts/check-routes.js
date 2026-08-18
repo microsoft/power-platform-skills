@@ -322,6 +322,7 @@ function main() {
     const d = dests[r];
     const r2 = received[r];
     if (r2.sources.length === 0) continue; // unreachable destination — different bug class
+    if (Object.keys(r2.params).length === 0) continue; // navigation without params needs no declaration
     if (!d.declaredKeys) {
       // Destination receives params but has NO useLocalSearchParams call.
       // That's a real issue if the screen uses any of those params.
