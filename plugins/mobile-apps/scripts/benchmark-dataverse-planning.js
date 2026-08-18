@@ -431,6 +431,12 @@ async function evaluateRequirementSet(requirementSet) {
     requiredConceptCount: requirementSet.concepts.length,
     selectedCandidateCount: selectedNames.length,
     selectedCandidates: selectedNames,
+    detailedCandidateBreakdown: {
+      required: snapshot.detailLoadSummary.requiredCandidates || 0,
+      advisory: snapshot.detailLoadSummary.advisoryCandidates || 0,
+      exactCoveredConcepts: snapshot.detailLoadSummary.exactCoveredConcepts || 0,
+      advisoryLimit: snapshot.detailLoadSummary.advisoryLimit || 40,
+    },
     metadataRequests: {
       snapshotForegroundRequests: calls.length,
       snapshotFirstAgentRequests: 0,
@@ -461,12 +467,14 @@ function renderBenchmarkMarkdown(result) {
     '',
     `> ${result.limitation}`,
     '',
-    '| Requirements set | Selected candidates | Foreground fixture requests | Snapshot-first agent requests | Completeness | Evidence output | Local processing |',
-    '|---|---:|---:|---:|---:|---:|---:|',
+    '| Requirements set | Selected candidates | Required / advisory | Exact-covered concepts | Foreground fixture requests | Snapshot-first agent requests | Completeness | Evidence output | Local processing |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
   ];
   for (const scenario of result.scenarios) {
     lines.push(
       `| ${scenario.name} | ${scenario.selectedCandidateCount} | `
+      + `${scenario.detailedCandidateBreakdown.required} / ${scenario.detailedCandidateBreakdown.advisory} | `
+      + `${scenario.detailedCandidateBreakdown.exactCoveredConcepts} | `
       + `${scenario.metadataRequests.snapshotForegroundRequests} | `
       + `${scenario.metadataRequests.snapshotFirstAgentRequests} | `
       + `${scenario.outputCompleteness.passedChecks}/${scenario.outputCompleteness.totalChecks} `

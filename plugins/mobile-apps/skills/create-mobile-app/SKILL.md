@@ -463,6 +463,22 @@ required-existing logical names to `<EXPLICIT_TABLES>`. Build
 proposed custom table so collisions and missing names are explicit; leave a
 name out rather than inventing it when the concept is not yet stable.
 
+Detailed advisory discovery is quality-bounded:
+
+- Keep the complete customizable-table inventory and ranking.
+- Required exact-name tables are always detailed and do not consume advisory
+  capacity.
+- A concept credibly covered by an exact table does not receive speculative
+  advisory alternatives.
+- Every unresolved concept receives its best advisory candidate first.
+- Only then allocate second/third candidates, with at most 3 per concept and a
+  target ceiling of 40 unique advisory tables.
+- When more than 40 unresolved concepts have distinct best candidates, exceed
+  40 only enough to preserve one candidate per concept. Quality coverage takes
+  priority over the target ceiling.
+- Inventory-only alternatives remain available for the existing one-time
+  bounded exact-name expansion.
+
 ```bash
 SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-metadata-snapshot.json"
 EVIDENCE_PATH="<working_dir>/.tmp/dataverse-planning-evidence.md"
@@ -484,7 +500,7 @@ node -e '
   const t=s.timings;
   const d=s.detailLoadSummary;
   console.log(`✓ Dataverse inventory: ${s.inventoryFacts.customizableTables} customizable + ${s.inventoryFacts.exactNameTables} bounded exact-name discoveries (${s.inventoryFacts.requiredExactNameTables} required, ${s.inventoryFacts.proposedCollisionTables} proposed collisions) (${t.inventoryRetrievalMs} ms)`);
-  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed candidates (${t.candidateSelectionMs} ms)`);
+  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed candidates (${d.requiredCandidates || 0} required, ${d.advisoryCandidates || 0} advisory, ${d.exactCoveredConcepts || 0} exact-covered concepts; ${t.candidateSelectionMs} ms)`);
   console.log(`✓ Detail loading: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
   console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; snapshot total ${t.totalDurationMs} ms`);

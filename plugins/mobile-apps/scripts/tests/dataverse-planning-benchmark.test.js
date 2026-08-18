@@ -19,6 +19,10 @@ test('fixture benchmark covers wildlife and an unrelated laboratory workflow', a
   for (const scenario of result.scenarios) {
     assert.equal(scenario.requiredConceptCount, 5);
     assert.ok(scenario.selectedCandidateCount >= 5);
+    assert.equal(scenario.detailedCandidateBreakdown.required, 0);
+    assert.equal(scenario.detailedCandidateBreakdown.advisory, 5);
+    assert.equal(scenario.detailedCandidateBreakdown.exactCoveredConcepts, 0);
+    assert.equal(scenario.detailedCandidateBreakdown.advisoryLimit, 40);
     assert.equal(scenario.metadataRequests.snapshotFirstAgentRequests, 0);
     assert.ok(scenario.metadataRequests.snapshotForegroundRequests > 0);
     assert.equal(scenario.outputCompleteness.percent, 100);
@@ -39,6 +43,8 @@ test('benchmark report is explicit about real fixture execution and A/B limitati
   assert.match(markdown, /Wildlife rehabilitation/);
   assert.match(markdown, /Laboratory sample chain-of-custody/);
   assert.match(markdown, /Foreground fixture requests/);
+  assert.match(markdown, /Required \/ advisory/);
+  assert.match(markdown, /Exact-covered concepts/);
   assert.match(markdown, /Snapshot-first agent requests/);
   assert.match(markdown, /real snapshot candidate selection/);
   assert.match(markdown, /Matched agent A\/B runs are still required/);

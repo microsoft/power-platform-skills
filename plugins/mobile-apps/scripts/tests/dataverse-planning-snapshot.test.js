@@ -15,6 +15,7 @@ const {
   normalizedTokens,
   parseArgs,
   rankCandidatesByConcept,
+  selectDetailedCandidates,
   selectDetailedEntities,
   singularizeToken,
   validateSnapshot,
@@ -159,6 +160,54 @@ test('explicit table names are always included when present', () => {
   assert.deepEqual(selected, ['new_product', 'new_unrelatedaudit']);
 });
 
+test('exact-covered concepts suppress unnecessary advisory alternatives', () => {
+  const selection = selectDetailedCandidates([
+    entity('new_product', 'Product'),
+    entity('other_product', 'Product'),
+  ], ['new_product'], ['products']);
+
+  assert.deepEqual(
+    selection.selectedEntities.map((item) => item.LogicalName),
+    ['new_product'],
+  );
+  assert.deepEqual(selection.detailSelectionSummary, {
+    requiredCandidates: 1,
+    advisoryCandidates: 0,
+    exactCoveredConcepts: 1,
+    unresolvedConcepts: 0,
+    advisoryLimit: 40,
+  });
+});
+
+test('advisory allocation covers every concept before adding alternatives', () => {
+  const concepts = Array.from({ length: 20 }, (_, index) => `domain${index}`);
+  const entities = concepts.flatMap((concept) => [
+    entity(`new_${concept}`, concept),
+    entity(`new_${concept}detail`, concept),
+    entity(`new_${concept}log`, concept),
+  ]);
+  const selection = selectDetailedCandidates(entities, [], concepts);
+  const selected = new Set(selection.selectedEntities.map((item) => item.LogicalName));
+
+  assert.equal(selection.detailSelectionSummary.advisoryCandidates, 40);
+  for (const concept of concepts) {
+    assert.ok(selected.has(`new_${concept}`), `${concept} should keep its best candidate`);
+  }
+});
+
+test('one-per-concept quality coverage may exceed the advisory target', () => {
+  const concepts = Array.from({ length: 45 }, (_, index) => `workflow${index}`);
+  const selection = selectDetailedCandidates(
+    concepts.map((concept) => entity(`new_${concept}`, concept)),
+    [],
+    concepts,
+  );
+
+  assert.equal(selection.detailSelectionSummary.advisoryCandidates, 45);
+  assert.equal(selection.detailSelectionSummary.advisoryLimit, 45);
+  assert.equal(selection.selectedEntities.length, 45);
+});
+
 test('proposed logical-name checks distinguish collisions and missing names', () => {
   const result = analyzeProposedNames(
     [entity('new_product', 'Product')],
@@ -203,6 +252,11 @@ test('proposed names are collision checks and stay out of required exact-name lo
     attemptedCandidates: 0,
     loadedCandidates: 0,
     failedCandidates: 0,
+    requiredCandidates: 0,
+    advisoryCandidates: 0,
+    exactCoveredConcepts: 0,
+    unresolvedConcepts: 0,
+    advisoryLimit: 40,
   });
   assert.equal(calls.some((apiPath) => apiPath.includes('/Attributes?$select=')), false);
 });
@@ -255,6 +309,11 @@ test('advisory candidate detail failure is recorded and does not abort the snaps
     attemptedCandidates: 2,
     loadedCandidates: 1,
     failedCandidates: 1,
+    requiredCandidates: 0,
+    advisoryCandidates: 2,
+    exactCoveredConcepts: 0,
+    unresolvedConcepts: 2,
+    advisoryLimit: 40,
   });
   assert.deepEqual(snapshot.detailLoadFailures, [{
     logicalName: 'activitypointer',

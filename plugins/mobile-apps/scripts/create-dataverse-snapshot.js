@@ -89,7 +89,8 @@ const GENERIC_CONCEPT_TOKENS = new Set([
   'workflows',
 ]);
 
-const MAX_TABLES_PER_CONCEPT = 12;
+const MAX_TABLES_PER_CONCEPT = 3;
+const MAX_ADVISORY_DETAIL_TABLES = 40;
 const MAX_EXACT_NAME_TABLES = 50;
 
 function parseArgs(argv) {
@@ -437,6 +438,8 @@ function selectDetailedCandidates(entities, tableNames, concepts) {
   const explicitNames = new Set(tableNames.map((value) => value.toLowerCase()));
   const rankings = rankCandidatesByConcept(entities, concepts);
   const selectedReasons = new Map();
+  const unresolvedConcepts = [];
+  let exactCoveredConcepts = 0;
 
   for (const entity of entities) {
     if (!explicitNames.has(String(entity.LogicalName).toLowerCase())) continue;
@@ -445,6 +448,23 @@ function selectDetailedCandidates(entities, tableNames, concepts) {
 
   for (const ranking of rankings) {
     if (ranking.candidates.length === 0) continue;
+    const exactCoverage = ranking.candidates.find((candidate) => (
+      explicitNames.has(candidate.logicalName.toLowerCase())
+      && (
+        candidate.rank === 1
+        || candidate.reasons.some((reason) => (
+          reason.startsWith('exact:')
+          || reason.startsWith('suffix:')
+        ))
+      )
+    ));
+    if (exactCoverage) {
+      selectedReasons.get(exactCoverage.logicalName)
+        .add(`concept:${ranking.concept}:exact-covered`);
+      exactCoveredConcepts += 1;
+      continue;
+    }
+
     const bestScore = ranking.candidates[0].score;
     const familyToken = ranking.normalizedTokens[0];
     let preferred = ranking.candidates.filter((candidate) => (
@@ -459,12 +479,55 @@ function selectDetailedCandidates(entities, tableNames, concepts) {
       preferred = ranking.candidates.filter((candidate) => !candidate.versioned);
     }
     if (preferred.length === 0) preferred = ranking.candidates;
+    unresolvedConcepts.push({
+      concept: ranking.concept,
+      candidates: preferred
+        .filter((candidate) => !explicitNames.has(candidate.logicalName.toLowerCase()))
+        .slice(0, MAX_TABLES_PER_CONCEPT),
+    });
+  }
 
-    for (const candidate of preferred.slice(0, MAX_TABLES_PER_CONCEPT)) {
-      const reasons = selectedReasons.get(candidate.logicalName) || new Set();
-      reasons.add(`concept:${ranking.concept}`);
-      selectedReasons.set(candidate.logicalName, reasons);
+  const advisoryCandidates = new Map();
+  function selectAdvisory(candidate, concept) {
+    const current = advisoryCandidates.get(candidate.logicalName) || {
+      ...candidate,
+      concepts: new Set(),
+    };
+    current.concepts.add(concept);
+    advisoryCandidates.set(candidate.logicalName, current);
+  }
+
+  // Quality floor: every unresolved concept gets its best available candidate,
+  // even when there are more than 40 distinct concepts.
+  for (const entry of unresolvedConcepts) {
+    if (entry.candidates[0]) selectAdvisory(entry.candidates[0], entry.concept);
+  }
+  const advisoryLimit = Math.max(
+    MAX_ADVISORY_DETAIL_TABLES,
+    advisoryCandidates.size,
+  );
+  const remainingCandidates = unresolvedConcepts
+    .flatMap((entry) => entry.candidates.slice(1).map((candidate) => ({
+      ...candidate,
+      concept: entry.concept,
+    })))
+    .sort((left, right) => (
+      right.score - left.score
+      || left.rank - right.rank
+      || left.concept.localeCompare(right.concept)
+      || left.logicalName.localeCompare(right.logicalName)
+    ));
+  for (const candidate of remainingCandidates) {
+    if (advisoryCandidates.has(candidate.logicalName)) {
+      selectAdvisory(candidate, candidate.concept);
+      continue;
     }
+    if (advisoryCandidates.size >= advisoryLimit) break;
+    selectAdvisory(candidate, candidate.concept);
+  }
+  for (const candidate of advisoryCandidates.values()) {
+    const reasons = new Set([...candidate.concepts].map((concept) => `concept:${concept}`));
+    selectedReasons.set(candidate.logicalName, reasons);
   }
 
   const entityByName = new Map(entities.map((entity) => [entity.LogicalName, entity]));
@@ -491,6 +554,15 @@ function selectDetailedCandidates(entities, tableNames, concepts) {
       logicalName: entity.LogicalName,
       reasons: [...selectedReasons.get(entity.LogicalName)].sort(),
     })),
+    detailSelectionSummary: {
+      requiredCandidates: selectedEntities.filter((entity) => (
+        selectedReasons.get(entity.LogicalName).has('explicit-table')
+      )).length,
+      advisoryCandidates: advisoryCandidates.size,
+      exactCoveredConcepts,
+      unresolvedConcepts: unresolvedConcepts.length,
+      advisoryLimit,
+    },
   };
 }
 
@@ -1165,6 +1237,11 @@ async function createSnapshot({
     concepts: concepts.length,
     attemptedDetailedCandidates: selection.selectedEntities.length,
     detailedCandidates: selection.selectedEntities.length,
+    requiredDetailedCandidates: selection.detailSelectionSummary.requiredCandidates,
+    advisoryDetailedCandidates: selection.detailSelectionSummary.advisoryCandidates,
+    exactCoveredConcepts: selection.detailSelectionSummary.exactCoveredConcepts,
+    unresolvedConcepts: selection.detailSelectionSummary.unresolvedConcepts,
+    advisoryLimit: selection.detailSelectionSummary.advisoryLimit,
     proposedCollisions: proposedNameChecks.collisions.length,
     proposedMissing: proposedNameChecks.missing.length,
     elapsedMs: selectionCompletedAt - totalStartedAt,
@@ -1239,6 +1316,7 @@ async function createSnapshot({
       attemptedCandidates: selection.selectedEntities.length,
       loadedCandidates: tables.length,
       failedCandidates: detailLoadFailures.length,
+      ...selection.detailSelectionSummary,
     },
     proposedNameChecks,
     missingProposedTables: proposedNameChecks.missing,
@@ -1458,6 +1536,12 @@ async function expandSnapshot({
         + remainingDetailLoadFailures.length,
       loadedCandidates: snapshot.tables.length + loadedTables.length,
       failedCandidates: remainingDetailLoadFailures.length,
+      requiredCandidates: allExactNames.length,
+      advisoryCandidates: snapshot.detailLoadSummary?.advisoryCandidates || 0,
+      exactCoveredConcepts: snapshot.detailLoadSummary?.exactCoveredConcepts || 0,
+      unresolvedConcepts: snapshot.detailLoadSummary?.unresolvedConcepts || 0,
+      advisoryLimit: snapshot.detailLoadSummary?.advisoryLimit
+        || MAX_ADVISORY_DETAIL_TABLES,
     },
     proposedNameChecks,
     missingProposedTables: proposedNameChecks.missing,
@@ -1554,6 +1638,11 @@ async function main() {
       attempted: snapshot.detailLoadSummary?.attemptedCandidates || 0,
       loaded: snapshot.detailLoadSummary?.loadedCandidates || 0,
       failed: snapshot.detailLoadSummary?.failedCandidates || 0,
+      required: snapshot.detailLoadSummary?.requiredCandidates || 0,
+      advisory: snapshot.detailLoadSummary?.advisoryCandidates || 0,
+      exactCoveredConcepts: snapshot.detailLoadSummary?.exactCoveredConcepts || 0,
+      advisoryLimit: snapshot.detailLoadSummary?.advisoryLimit
+        || MAX_ADVISORY_DETAIL_TABLES,
     },
     proposedCollisions: snapshot.proposedNameChecks.collisions.length,
     proposedMissing: snapshot.proposedNameChecks.missing.length,

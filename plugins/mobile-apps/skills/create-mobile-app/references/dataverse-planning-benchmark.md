@@ -22,3 +22,10 @@ decision and timing claims.
 - First factual progress milestone appears within 30 seconds.
 - Gate 2/data-model readiness targets 10–15 minutes, quality first.
 - Any inventory-only required candidate triggers one bounded exact-name snapshot expansion.
+- Every unresolved concept keeps at least its best detailed advisory candidate.
+- Exact-covered concepts do not receive unnecessary advisory alternatives.
+- Advisory detail loading uses at most 3 candidates per concept and targets 40
+  unique advisory tables globally; it may exceed 40 only to preserve one
+  candidate for each unresolved concept.
+- Required exact-name tables are reported separately and never consume the
+  advisory target.
