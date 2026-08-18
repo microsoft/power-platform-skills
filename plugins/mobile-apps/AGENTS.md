@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 23 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -73,6 +73,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+13. **Package versions come from manifests** — Skills and agents must parse the active project's `package.json` before making package-version claims. Before project creation, use `template/package.json`. Never hardcode an Expo SDK generation or package pin in skill prose; use `npx expo install --check` for compatibility.
 
 ## Decisions made
 
@@ -84,6 +85,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
 - ✅ Template is supplied as a fresh `pa-wrap-tools/templates/expo-app-standalone` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
+- ✅ Every top-level skill runs the fail-open `scripts/check-version.js` preflight through `shared/shared-instructions.md`. Remote checks are cached for seven days outside the app; CI verifies every skill retains the shared-instructions reference. `/version-check` uses the same release check, resolves the npm feed's `latest` native host version once, pins preview/apply commands to it, reads its safe ceiling from bundled `template/app.json`, and applies only approved sequential migrations within that ceiling. Straightforward `.rej` conflicts are merged with customization markers and pre-existing diffs preserved; ambiguous behavioral conflicts get one bounded retry before user escalation.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
 - ✅ Offline profile creation is **author-only in v0.1** — `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` to the project, but do NOT scaffold offline runtime code (SQLite store, sync engine, write queue) into the generated app. Runtime support is gated on upstream `@microsoft/power-apps-native-host` confirmation.
 - ✅ Custom filter mode (`recorddistributioncriteria=3`, `profileitemrule` → `savedquery`) is **deferred to v0.5**. v0.1 supports Related-rows-only / All-records / Organization-rows radio options only.

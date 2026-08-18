@@ -187,6 +187,5 @@ If they want to compile a native binary locally, they run the platform-specific 
 
 ## Reference
 
-- [`shared/version-check.md`](${CLAUDE_SKILL_DIR}/../../shared/version-check.md) — min versions (only Always-required tier matters here)
 - [`shared/memory-bank.md`](${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md) — Build history schema
 - [`shared/references/offline-profile-reconciliation.md`](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Step 2.5 offline coverage gate

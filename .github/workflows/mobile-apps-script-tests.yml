@@ -1,0 +1,27 @@
+name: mobile-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mobile-apps/**"
+            - ".github/workflows/mobile-apps-script-tests.yml"
+
+jobs:
+    test-mobile-apps-version-check:
+        name: test-mobile-apps-version-check
+        runs-on: ubuntu-latest
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 20
+
+            # Network behavior is mocked; CI validates release parsing and update
+            # guidance without depending on GitHub availability or current versions.
+            - name: test-version-check
+              run: node --test plugins/mobile-apps/scripts/tests/check-version.test.js

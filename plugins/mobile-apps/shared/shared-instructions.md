@@ -8,9 +8,17 @@ All skills reference this single file. When new shared instructions are added, u
 
 ## Version Check
 
-**📋 [version-check.md](./version-check.md)**
+At the start of every skill, run:
 
-Run at the start of every skill execution (at most once per day). Notifies the user if a tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
+```bash
+node "${PLUGIN_ROOT}/scripts/check-version.js"
+```
+
+Show any output, then continue the requested skill. The checker is fail-open and caches remote results (including failed attempts) for seven days in the user's cache directory, so invoking it every time does not repeatedly access the network or modify the app. A previously discovered newer plugin remains visible while offline until the user updates it.
+
+## Package Version Source of Truth
+
+Before stating, comparing, installing, or relying on any package version, parse the active project's `package.json` and read the package from `dependencies` + `devDependencies`. Do not infer versions from this plugin's prose, an SDK generation, or memory. If no project exists yet, read `${PLUGIN_ROOT}/template/package.json`. Use `npx expo install --check` for Expo compatibility instead of assuming all `expo-*` packages share a fixed SDK version.
 
 ---
 
