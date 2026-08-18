@@ -28,6 +28,13 @@
 // unrelated PRs or force a rushed cross-plugin edit. Widening is a separate change
 // that must scrub those plugins first. A guard that silently skipped them while
 // claiming repo-wide coverage would be worse than one that states its limits.
+//
+// `scripts/**` is outside the scan too, and cannot simply be added: this guard's own
+// tests must contain non-placeholder hosts and tenants BY CONSTRUCTION — they are the
+// negative cases proving rejection works — so scanning them would report the guard
+// against itself. Those fixtures are invented values, deliberately NOT the identifiers
+// this repo actually scrubbed; committing the real ones as test data (or as a denylist)
+// would make this file the durable public copy of exactly what the scrub removed.
 
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -61,29 +68,48 @@ const PLACEHOLDER_ROOTS = [
 // `stg`, `other`, ...). Real Dataverse environment names are never this short: the
 // service auto-generates `org<8 hex>` and human-named envs carry a team or product
 // word. A length ceiling is therefore a reliable discriminator, and it is
-// intentionally paired with the hex check below so `org1e98cc97` cannot slip
+// intentionally paired with the hex check below so `org1a2b3c4d` cannot slip
 // through merely because it starts with the allowed word "org".
 const MAX_GENERIC_LENGTH = 6;
 
 // Dataverse auto-generates organization hostnames as `org` + 8 hex characters, e.g.
-// `https://org1e98cc97.crm.dynamics.com`. That shape is always a real environment.
+// `https://org1a2b3c4d.crm.dynamics.com` (that example is invented — this file must not become a
+// durable copy of a real org id). That shape is always a real environment.
 // https://learn.microsoft.com/en-us/power-platform/admin/determine-org-id-name
 const REAL_ORG_SHAPE = /^org[0-9a-f]{8}$/i;
 
-// Identifiers that were committed to this repository and have been removed. They are
-// banned by exact token so the same environments cannot be reintroduced by pasting a
-// new transcript captured from them.
-const BANNED_TOKENS = [
-  'aurorabapenv',
-  'auroratstgeo',
-  'aurorauser',
-  'aurora365-user',
-  'tmsbapenv',
-  'capintegration',
-];
+// Previously-committed identifiers are deliberately NOT listed here as plaintext. A denylist of
+// private values republishes exactly what this guard exists to suppress — the file would become the
+// durable copy of every environment and tenant we scrubbed, in the same public repo. It is also
+// unnecessary: the shape rules below already reject every one of them, because a real environment
+// name is neither a documented fictitious brand nor short enough to be a generic stand-in.
+
+// Email domains that are obviously illustrative. Anything else in a scanned file is treated as a
+// real person's address. A work UPN in a captured transcript is the leak most likely to survive a
+// hostname-only scrub, precisely because it does not look like infrastructure — this guard missed
+// one until review caught it.
+const PLACEHOLDER_EMAIL_DOMAIN_ROOTS = ['contoso', 'fabrikam', 'example', 'company', 'your'];
+
+// OData annotations parse as e-mail addresses but are not: `_ownerid_value@OData.Community.Display.
+// V1.FormattedValue`, `publisherid@odata.bind`. Both begin their "domain" with `odata.`, which is
+// not a registrable domain, so skipping them costs no real coverage.
+const ODATA_ANNOTATION = /^odata\./i;
 
 const HOST_RE = /\b([a-z0-9][a-z0-9-]*)\.crm[a-z0-9]*\.dynamics\.com\b/gi;
 const TENANT_RE = /\b([a-z0-9][a-z0-9-]*)\.onmicrosoft\.com\b/gi;
+const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b/g;
+
+// `contosotest1.onmicrosoft.com` -> `contosotest1`; `contoso.com` -> `contoso`.
+function isPlaceholderEmailDomain(domain) {
+  const value = String(domain).toLowerCase();
+  if (ODATA_ANNOTATION.test(value)) return true;
+  // `*.onmicrosoft.com` is already judged by TENANT_RE with the same placeholder logic. Returning
+  // true here means "not the e-mail rule's business", not "safe" — reporting one identifier twice
+  // would make the operator's output noisier without adding coverage.
+  if (value.endsWith('.onmicrosoft.com')) return true;
+  const firstLabel = value.split('.')[0] || '';
+  return PLACEHOLDER_EMAIL_DOMAIN_ROOTS.some((root) => firstLabel.startsWith(root));
+}
 
 function isPlaceholder(subdomain) {
   const value = subdomain.toLowerCase();
@@ -111,13 +137,6 @@ function scanText(content) {
   const lines = content.split(/\r?\n/);
   lines.forEach((line, index) => {
     const lineNo = index + 1;
-    const lowerLine = line.toLowerCase();
-
-    for (const token of BANNED_TOKENS) {
-      if (lowerLine.includes(token)) {
-        violations.push({ line: lineNo, detail: `banned identifier "${token}"` });
-      }
-    }
 
     for (const [, subdomain] of line.matchAll(HOST_RE)) {
       if (!isPlaceholder(subdomain)) {
@@ -131,6 +150,12 @@ function scanText(content) {
     for (const [, tenant] of line.matchAll(TENANT_RE)) {
       if (!isPlaceholder(tenant)) {
         violations.push({ line: lineNo, detail: `non-placeholder tenant "${tenant}"` });
+      }
+    }
+
+    for (const [, domain] of line.matchAll(EMAIL_RE)) {
+      if (!isPlaceholderEmailDomain(domain)) {
+        violations.push({ line: lineNo, detail: `real-looking e-mail domain "${domain}"` });
       }
     }
   });
@@ -149,13 +174,14 @@ function main() {
       // Unreadable or binary content cannot carry a readable identifier.
       continue;
     }
-    // A cheap pre-filter: most files contain none of these markers, and skipping
-    // them avoids running three regexes over the whole plugin tree.
+    // A cheap pre-filter: most files contain none of these markers, and skipping them avoids running
+    // the regexes over the whole plugin tree. `@` covers the e-mail rule — broad, but the files that
+    // contain no `@` at all are exactly the ones with nothing to find.
     const lower = content.toLowerCase();
     if (
       !lower.includes('dynamics.com') &&
       !lower.includes('onmicrosoft.com') &&
-      !BANNED_TOKENS.some((token) => lower.includes(token))
+      !lower.includes('@')
     ) {
       continue;
     }
@@ -198,4 +224,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { isPlaceholder, scanText, BANNED_TOKENS, PLACEHOLDER_ROOTS };
+module.exports = { isPlaceholder, isPlaceholderEmailDomain, scanText, PLACEHOLDER_ROOTS };

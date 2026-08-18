@@ -122,7 +122,7 @@ genpage-plan.md written to D:/temp/support-tickets/genpage-plan.md
 
 ## Phase 2 — Entity creation pre-flight + builder
 - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/check-auth.js` (first run)
-  - Result: ok=false, blocker=whoami_403, az=akmaloo@microsoft.com, pac=Contoso-User001
+  - Result: ok=false, blocker=whoami_403, az=developer@contoso.com, pac=Contoso-User001
 - User instructed to run `az login --username Contoso-User001@contosotest1.onmicrosoft.com`
 - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/check-auth.js` (second run)
   - Result: ok=true, identitiesMatch=true, envUrl=https://contosobapenv0001.crmtest.dynamics.com

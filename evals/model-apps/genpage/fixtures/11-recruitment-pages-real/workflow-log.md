@@ -12,7 +12,7 @@ PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8)
 
 `pac auth list`
 Index Active Kind      Name User                                          Cloud  Type            Environment       Environment Url
-[1]          UNIVERSAL      akmaloo@microsoft.com                         Public OperatingSystem
+[1]          UNIVERSAL      developer@contoso.com                         Public OperatingSystem
 [2]          UNIVERSAL      fabrikamusr1@fabrikamtenant01.onmicrosoft.com Test   User            FabrikamEnv001    https://fabrikamenv001.crmtest.dynamics.com/
 [3]   *      UNIVERSAL      Contoso-User001@contosotest1.onmicrosoft.com  Test   User            ContosoBAPEnv0001 https://contosobapenv0001.crmtest.dynamics.com/
 
