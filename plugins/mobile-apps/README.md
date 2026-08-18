@@ -194,7 +194,11 @@ For other capabilities (only those actually shipped by the template):
 
 Native modules are allowlist-bound by the current template `package.json`. Push notifications use the dedicated `/add-push-notifications` workflow because they require `expo-notifications`, React Native Firebase Messaging, permission UX, auth/topic lifecycle, and Expo Router deep links.
 
-Notification delivery must be tested on matching wrapped physical-device builds. The sender flow uses Dataverse, premium HTTP actions, Google Workload Identity Federation, and Azure Key Vault for the Entra sender credential; tenant licensing and administrator permissions for those services are required.
+Notification delivery must be tested on matching wrapped physical-device
+builds. Native client setup, sender authentication, and Power Automate flow
+authoring are independent resumable stages. An already integrated client can
+run `/create-push-notification-flow` directly; a new or newly added native
+platform still runs `/setup-fcm` and, for iOS, `/setup-apns`.
 
 Run `/setup-fcm` to list accessible Firebase projects, select one, create a new
 project, or add Firebase to an existing Google Cloud project. The workflow keeps
@@ -202,7 +206,9 @@ Google credentials separated: `gcloud` verifies the active account and
 Application Default Credentials (ADC), while `npx firebase-tools` performs
 Firebase project and app operations without a global install. Android package
 names and iOS bundle identifiers are resolved from Expo config, so matching
-Firebase apps are reused and only missing registrations are created.
+Firebase apps are reused and only missing registrations are created. One exact
+match is reused automatically; multiple safe exact matches require an explicit
+Android/iOS app-ID choice, which is revalidated before client-config download.
 
 Validated client files are stored as
 `firebase/google-services.json` and
@@ -214,12 +220,40 @@ Console. The key stays outside the project and is never read or uploaded by the
 agent.
 
 Run `/setup-push-wif` before flow authoring when the Google trust is not already
-verified. It inspects a real Entra app-only token, configures the provider from
-the observed issuer and application claim, and proves the Google STS and
-service-account impersonation exchange without storing a Google private key.
-`/create-push-notification-flow` then uses FlowAgent to create the outbox sender
-and a producer flow. The producer defaults to a Dataverse row-created trigger
-and resolves the row owner to a lowercase Entra OID topic.
+verified. WIF is the preferred sender mode: it inspects a real Entra app-only
+token, configures the provider from the observed issuer and application claim,
+and proves the Google STS and service-account impersonation exchange without
+storing a Google private key.
+
+Organizations with an existing Firebase service-account integration may
+instead run `/setup-push-service-account`. It validates or deploys an
+Entra-protected Azure Function that uses managed identity to read the existing
+JSON from Azure Key Vault and mint short-lived Google tokens. The skill never
+creates or downloads a Firebase Admin key. `/create-push-notification-flow`
+then consumes the validated sender-auth handoff and uses FlowAgent to create
+the outbox sender and producer flow. The producer defaults to a Dataverse
+row-created trigger and resolves the row owner to a lowercase Entra OID topic.
+
+#### Push notification cloud prerequisites
+
+- **Common:** a Firebase project, matching wrapped physical-device runtime,
+  Dataverse environment, Power Automate access, and licensing for Dataverse
+  plus the premium connectors/actions selected by FlowAgent.
+- **Azure/Entra:** an Azure subscription; permission to create or validate the
+  dedicated Entra applications/service principals and connection identities;
+  and Azure Key Vault with data-plane RBAC. Contributor alone does not grant
+  secret read/write access.
+- **WIF (preferred):** Google Cloud IAM/WIF administration, a dedicated Google
+  sender service account, an Entra sender credential stored in Key Vault, and
+  Power Automate connections for Key Vault and the discovered premium HTTP
+  actions.
+- **Existing service-account compatibility:** an already provisioned Firebase
+  service-account JSON kept outside repositories; Azure Function hosting,
+  managed identity, Key Vault, App Service/Function Entra authentication, and
+  an Entra-authenticated premium connector/connection usable by Power
+  Automate. Azure hosting charges and Power Platform premium licensing may
+  apply.
+- **iOS:** Apple Developer access and manual APNs `.p8` upload to Firebase.
 
 ### 4. Add a connector
 
@@ -279,10 +313,11 @@ Example edit flows:
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
-| `/setup-fcm` | 🟡 preview | List/select/create Firebase projects with `npx firebase-tools` after `gcloud` ADC identity checks; idempotently reuse or register Android/iOS apps, then validate committed `firebase/` client configs that Expo auto-discovers. |
+| `/setup-fcm` | 🟡 preview | List/select/create Firebase projects with `npx firebase-tools` after `gcloud` ADC identity checks; idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. |
 | `/setup-apns` | 🟡 preview | Validate the existing Firebase iOS identity and guide manual APNs `.p8` upload in Firebase Console; the key is never read, copied, or uploaded by the agent. |
-| `/setup-push-wif` | 🟡 preview | Provision and verify keyless Entra-to-Google Workload Identity Federation with `gcloud`, using claims observed from a real app-only token rather than assuming an issuer or claim shape. |
-| `/create-push-notification-flow` | 🟡 preview | Create the Dataverse outbox sender and a Dataverse row-created producer through FlowAgent. User notifications resolve the record owner to a lowercase Entra OID topic; broadcasts use exact `allUsers`. |
+| `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation with `gcloud`, then prove the complete exchange and write the non-secret sender-auth handoff. |
+| `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: validate/reuse or deploy an Entra-protected Azure Function that reads the existing JSON from Key Vault through managed identity. Never creates or downloads a Firebase Admin key. |
+| `/create-push-notification-flow` | 🟡 preview | Resume directly from an already integrated Firebase client, validate one sender-auth mode, then create the Dataverse outbox sender and row-created producer through FlowAgent. User notifications use lowercase Entra OID topics; broadcasts use exact `allUsers`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |

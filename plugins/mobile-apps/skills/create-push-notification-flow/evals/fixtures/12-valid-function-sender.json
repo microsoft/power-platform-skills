@@ -1,0 +1,58 @@
+{
+  "name": "valid Function endpoint sender action tree",
+  "expected": {
+    "valid": true,
+    "reasons": []
+  },
+  "contract": {
+    "senderAuthMode": "function-endpoint",
+    "requiredSenderActions": [
+      "Invoke_FCM_Sender_Function"
+    ],
+    "forbiddenSenderActions": [
+      "Get_Entra_Client_Secret",
+      "Get_Entra_Token",
+      "Exchange_Google_STS",
+      "Impersonate_FCM_Sender",
+      "Send_FCM"
+    ],
+    "secureSenderActions": [
+      "Invoke_FCM_Sender_Function"
+    ],
+    "requiredConnectionReferences": [
+      "fcmSenderFunction"
+    ],
+    "forbiddenConnectionReferences": [
+      "shared_keyvault"
+    ],
+    "functionInvokeAction": "Invoke_FCM_Sender_Function",
+    "functionOperationId": "InvokeEntraProtectedFunction",
+    "functionConnectionReference": "fcmSenderFunction"
+  },
+  "requested": {
+    "state": "Stopped",
+    "connectionReferences": {
+      "fcmSenderFunction": "fcmSenderFunction"
+    },
+    "definition": {
+      "triggers": {},
+      "actions": {
+        "Invoke_FCM_Sender_Function": {
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "operationId": "InvokeEntraProtectedFunction",
+              "connectionName": "fcmSenderFunction"
+            }
+          },
+          "runtimeConfiguration": {
+            "secureData": {
+              "properties": ["inputs", "outputs"]
+            }
+          },
+          "runAfter": {}
+        }
+      }
+    }
+  }
+}

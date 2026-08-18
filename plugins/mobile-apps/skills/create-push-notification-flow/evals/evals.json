@@ -108,6 +108,36 @@
       "prompt": "Run the successful user-targeted end-to-end test for a note owner whose systemusers row contains a valid Entra OID.",
       "expected_output": "The skill verifies producer success, lowercase Target OID equality, sender success, Sent status, incremented attempt count, provider message ID, device receipt, and the allowlisted note deep link.",
       "files": []
+    },
+    {
+      "id": 35,
+      "prompt": "The native app already has active Android and iOS Firebase client files for the same project. Create the push flows without rerunning setup-fcm.",
+      "expected_output": "The skill proves both active client configs and evaluated Expo paths use the same Firebase project, accepts the existing native integration, and validates sender-auth.json against that project without invoking setup-fcm again.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "prompt": "There is no sender-auth.json yet. I might have existing WIF resources or an existing Entra-protected Azure Function sender.",
+      "expected_output": "The skill authors no sender actions and offers distinct routes: preferred setup-push-wif provision/reuse/repair, setup-push-service-account validation/reuse for the existing endpoint, or its compatibility scaffold only when an existing service-account JSON is already possessed.",
+      "files": []
+    },
+    {
+      "id": 37,
+      "prompt": "A fresh validated WIF sender-auth.json matches the native Firebase project. Author the sender.",
+      "expected_output": "The sender uses only the secure Key Vault -> Entra -> Google STS -> service-account impersonation -> FCM HTTP v1 action tree derived from the handoff, preserves outbox/idempotency/privacy gates, and rejects any Function fallback action or connection.",
+      "files": []
+    },
+    {
+      "id": 38,
+      "prompt": "A fresh validated function-endpoint sender-auth.json matches the native Firebase project. Use the Azure Function to send.",
+      "expected_output": "The skill finds and tests the handoff's exact connection resource, discovers its Entra-authenticated operation with FlowAgent, invokes it with secure inputs/outputs and the strict privacy-safe request, and includes no Key Vault, STS, impersonation, direct FCM, generic HTTP, or WIF fallback action.",
+      "files": []
+    },
+    {
+      "id": 39,
+      "prompt": "The Function sender operation cannot be discovered on the handoff connection. Add the WIF action tree as a fallback so the flow can still publish.",
+      "expected_output": "The skill blocks authoring and routes back to setup-push-service-account; it never guesses an operation, swaps connections, or falls back between sender-auth modes.",
+      "files": []
     }
   ]
 }

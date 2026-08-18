@@ -3,23 +3,34 @@
 Use Google Workload Identity Federation (WIF) so the cloud flow never stores a
 Firebase service-account private key and never has to implement RS256.
 
-## One-time identity setup
+This reference applies only when a freshly validated project-local
+`sender-auth.json` selects mode `wif` for the same Firebase project as the
+native client. A flow using mode `function-endpoint` must not include any action
+from this sequence, even as a fallback; the Entra-protected Function owns
+Google authentication and FCM in that mode.
+
+## Identity setup, reuse, and repair
 
 Run `/setup-push-wif`. It uses `az` for Entra/Key Vault and `gcloud` for Google
-Cloud, and must complete an end-to-end token proof before flow authoring.
+Cloud. It first inventories live resources, then explicitly selects
+validate/reuse, approved repair, or approved new provisioning. Every route must
+complete a fresh end-to-end token proof before writing `sender-auth.json` or
+before flow authoring. Resource existence and old handoff proof are not proof
+of current authorization.
 
-1. Create a dedicated Entra app registration/service principal for notification
-   sending, expose a dedicated application ID URI, and create a time-bounded
+1. Validate or create a dedicated Entra app registration/service principal for
+   notification sending, with a dedicated application ID URI and time-bounded
    client credential.
-2. Capture the credential directly into a shell variable, write it immediately
-   to Azure Key Vault, then unset it. Never print it or persist it in a file,
-   flow definition, environment file, or memory bank.
+2. For creation or approved rotation, capture the credential directly into a
+   shell variable, write it immediately to Azure Key Vault, then unset it. Never
+   print it or persist it in a file, flow definition, environment file, or
+   memory bank.
 3. Request an app-only access token and pipe it only on stdin to
    `${PLUGIN_ROOT}/scripts/inspect-entra-wif-jwt.js`. The local helper decodes
    without verifying/signing and emits only non-secret `iss`, `aud`, present
    `appid`/`azp`, `selectedAppClaim`, and `googleProviderIssuer`. Provider
    configuration is based on this output, not assumptions about the endpoint.
-4. In Google Cloud, create an OIDC workload identity provider with:
+4. In Google Cloud, validate or create an OIDC workload identity provider with:
    - issuer: the normalized, observed `iss`;
    - allowed audience: the exact, observed `aud`;
    - `google.subject=assertion.sub`;
@@ -49,7 +60,13 @@ Do not assume that a v2 token endpoint guarantees a v2-shaped token or an
 - If neither `appid` nor `azp` is present, stop and repair the token contract.
 
 Read the provider back with `gcloud` and verify issuer, audience, mapping, and
-condition before adding IAM bindings.
+condition before adding IAM bindings. For reuse, also read back the exact
+app-restricted `roles/iam.workloadIdentityUser` principal-set binding, sender
+service account, FCM project binding/custom-role permission set, Key Vault
+secret reference, and the Power Automate Key Vault connection principal's
+effective `Key Vault Secrets User` assignment. Missing or mismatched state
+requires an explicit repair choice; it must not silently fall through to
+provisioning.
 
 Keep tenant ID, client ID, audience, project identifiers, pool/provider IDs, and
 service-account email as non-secret environment variables. Keep the Entra
@@ -62,7 +79,7 @@ Azure Contributor does not grant secret data-plane access. Treat `Forbidden`,
 `ForbiddenByRbac`, and RBAC propagation failures as blockers; never work around
 them by copying the secret into the flow.
 
-## Required provisioning proof
+## Required authorization proof
 
 Before flow creation, use fresh values held only in shell variables to prove:
 
@@ -79,7 +96,18 @@ Provider creation alone is not proof. Report Entra `invalid_client`, STS
 claim-contract failures remain actionable. Never log token responses or
 authorization headers.
 
+After all four stages succeed, write the versioned, non-secret WIF handoff
+defined in `sender-auth-contract.md` from the live read-back values and latest
+observed claims, then validate it with
+`${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js`. A failed or partial
+proof must not create or overwrite the handoff.
+
 ## Flow HTTP sequence
+
+Populate the sequence from the validated handoff's exact WIF resource
+identifiers and observed claim shape. Do not rediscover a second sender,
+translate a Function handoff into WIF, or continue when the handoff proof is
+expired or project-mismatched.
 
 ### 1. Entra client-credentials token
 

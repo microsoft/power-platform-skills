@@ -1,0 +1,6 @@
+node_modules/
+local.settings.json
+.azure/
+*.log
+*service-account*.json
+*firebase-admin*.json

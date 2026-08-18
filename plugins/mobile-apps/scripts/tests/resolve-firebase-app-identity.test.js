@@ -228,8 +228,8 @@ test('accepts an apps platform-bucket envelope and reports no exact match', () =
   assert.strictEqual(result.app, null);
 });
 
-test('reports ambiguous when multiple app IDs have the exact Android package', () => {
-  const result = matchFirebaseApp({
+test('lists safe candidates when multiple app IDs have the exact Android package', () => {
+  const apps = {
     status: 'success',
     result: [
       {
@@ -243,14 +243,72 @@ test('reports ambiguous when multiple app IDs have the exact Android package', (
         packageName: 'com.contoso.fieldservice',
       },
     ],
-  }, 'android', 'com.contoso.fieldservice');
+  };
+  const result = matchFirebaseApp(apps, 'android', 'com.contoso.fieldservice');
 
-  assert.strictEqual(result.status, 'ambiguous');
-  assert.deepStrictEqual(result.matches.map((app) => app.appId), [
+  assert.strictEqual(result.status, 'selection-required');
+  assert.deepStrictEqual(result.candidates.map((app) => app.appId), [
     '1:123:android:first',
     '1:123:android:second',
   ]);
-  assert.strictEqual(result.conflicts[0].code, 'duplicate-identity');
+  assert.deepStrictEqual(result.conflicts, []);
+
+  const selected = matchFirebaseApp(
+    apps,
+    'android',
+    'com.contoso.fieldservice',
+    '1:123:android:second',
+  );
+  assert.strictEqual(selected.status, 'match');
+  assert.strictEqual(selected.app.appId, '1:123:android:second');
+  assert.strictEqual(selected.selectedExplicitly, true);
+});
+
+test('blocks an explicit selection that is absent or has a nonmatching identity', () => {
+  const apps = [
+    {
+      appId: '1:123:android:exact',
+      platform: 'ANDROID',
+      packageName: 'com.contoso.fieldservice',
+    },
+    {
+      appId: '1:123:android:other',
+      platform: 'ANDROID',
+      packageName: 'com.contoso.other',
+    },
+    {
+      appId: '1:123:ios:other-platform',
+      platform: 'IOS',
+      bundleId: 'com.contoso.fieldservice',
+    },
+  ];
+
+  const missing = matchFirebaseApp(
+    apps,
+    'android',
+    'com.contoso.fieldservice',
+    '1:123:android:missing',
+  );
+  assert.strictEqual(missing.status, 'ambiguous');
+  assert.strictEqual(missing.conflicts[0].code, 'selected-app-id-not-found');
+
+  const wrongIdentity = matchFirebaseApp(
+    apps,
+    'android',
+    'com.contoso.fieldservice',
+    '1:123:android:other',
+  );
+  assert.strictEqual(wrongIdentity.status, 'ambiguous');
+  assert.strictEqual(wrongIdentity.conflicts[0].code, 'selected-app-identity-mismatch');
+
+  const wrongPlatform = matchFirebaseApp(
+    apps,
+    'android',
+    'com.contoso.fieldservice',
+    '1:123:ios:other-platform',
+  );
+  assert.strictEqual(wrongPlatform.status, 'ambiguous');
+  assert.strictEqual(wrongPlatform.conflicts[0].code, 'selected-app-identity-mismatch');
 });
 
 test('reports conflicting duplicate app ID records as ambiguous', () => {
@@ -283,6 +341,23 @@ test('does not create around an exact identity record with missing platform meta
   assert.strictEqual(result.conflicts[0].code, 'platform-conflict');
 });
 
+test('does not offer selection when any exact identity record is unsafe', () => {
+  const result = matchFirebaseApp([
+    {
+      appId: '1:123:android:safe',
+      platform: 'ANDROID',
+      packageName: 'com.contoso.fieldservice',
+    },
+    {
+      platform: 'ANDROID',
+      packageName: 'com.contoso.fieldservice',
+    },
+  ], 'android', 'com.contoso.fieldservice');
+
+  assert.strictEqual(result.status, 'ambiguous');
+  assert.strictEqual(result.conflicts[0].code, 'matching-app-id-missing');
+});
+
 test('CLI matching mode emits structured status and rejects failed Firebase envelopes', () => {
   const matched = run(
     ['--project-root', '.', '--match-platform', 'ios', '--identifier', 'com.contoso.field-service'],
@@ -297,6 +372,40 @@ test('CLI matching mode emits structured status and rejects failed Firebase enve
   );
   assert.strictEqual(matched.status, 0);
   assert.strictEqual(JSON.parse(matched.stdout).status, 'match');
+
+  const duplicateApps = JSON.stringify({
+    status: 'success',
+    result: [
+      {
+        appId: '1:123:android:first',
+        platform: 'ANDROID',
+        packageName: 'com.contoso.fieldservice',
+      },
+      {
+        appId: '1:123:android:second',
+        platform: 'ANDROID',
+        packageName: 'com.contoso.fieldservice',
+      },
+    ],
+  });
+  const selectionRequired = run(
+    ['--project-root', '.', '--match-platform', 'android', '--identifier', 'com.contoso.fieldservice'],
+    duplicateApps,
+  );
+  assert.strictEqual(selectionRequired.status, 0);
+  assert.strictEqual(JSON.parse(selectionRequired.stdout).status, 'selection-required');
+
+  const selected = run(
+    [
+      '--project-root', '.',
+      '--match-platform', 'android',
+      '--identifier', 'com.contoso.fieldservice',
+      '--selected-app-id', '1:123:android:second',
+    ],
+    duplicateApps,
+  );
+  assert.strictEqual(selected.status, 0);
+  assert.strictEqual(JSON.parse(selected.stdout).app.appId, '1:123:android:second');
 
   const failed = run(
     ['--project-root', '.', '--match-platform', 'ios', '--identifier', 'com.contoso.field-service'],

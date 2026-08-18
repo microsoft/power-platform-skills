@@ -12,9 +12,12 @@
 //   node scripts/resolve-firebase-app-identity.js --project-root . --input expo-public.json
 //   firebase apps:list ANDROID --json | node scripts/resolve-firebase-app-identity.js \
 //     --match-platform android --identifier com.contoso.app
+//   firebase apps:list ANDROID --json | node scripts/resolve-firebase-app-identity.js \
+//     --match-platform android --identifier com.contoso.app \
+//     --selected-app-id 1:123:android:abc
 //
 // Exit codes:
-//   0 - selected platform identities are ready, or matching completed unambiguously
+//   0 - identities are ready, matching completed, or safe duplicate selection is required
 //   1 - invocation, path-safety, read, or JSON parsing error
 //   2 - config identity is invalid, or Firebase app records are ambiguous/conflicting
 
@@ -40,6 +43,7 @@ function parseArgs(argv, cwd = process.cwd()) {
     input: null,
     matchPlatform: null,
     identifier: null,
+    selectedAppId: null,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -49,6 +53,7 @@ function parseArgs(argv, cwd = process.cwd()) {
       || arg === '--input'
       || arg === '--match-platform'
       || arg === '--identifier'
+      || arg === '--selected-app-id'
     ) {
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) {
@@ -57,7 +62,8 @@ function parseArgs(argv, cwd = process.cwd()) {
       if (arg === '--project-root') parsed.projectRoot = value;
       else if (arg === '--input') parsed.input = value;
       else if (arg === '--match-platform') parsed.matchPlatform = value.toLowerCase();
-      else parsed.identifier = value;
+      else if (arg === '--identifier') parsed.identifier = value;
+      else parsed.selectedAppId = value;
       index += 1;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
@@ -69,6 +75,12 @@ function parseArgs(argv, cwd = process.cwd()) {
     throw new SafeError(
       'incomplete-match-arguments',
       '--match-platform and --identifier must be provided together.',
+    );
+  }
+  if (parsed.selectedAppId && !parsed.matchPlatform) {
+    throw new SafeError(
+      'selection-without-match',
+      '--selected-app-id requires --match-platform and --identifier.',
     );
   }
   if (parsed.matchPlatform && !['android', 'ios'].includes(parsed.matchPlatform)) {
@@ -257,7 +269,7 @@ function summarizeFirebaseApp(record) {
   };
 }
 
-function matchFirebaseApp(input, platform, identifier) {
+function matchFirebaseApp(input, platform, identifier, selectedAppId = null) {
   const expectedPlatform = platform.toUpperCase();
   const identityField = platform === 'android' ? 'packageName' : 'bundleId';
   if (validateIdentifier(identifier, platform) !== 'valid') {
@@ -311,21 +323,56 @@ function matchFirebaseApp(input, platform, identifier) {
     (app) => app.platform === expectedPlatform && app.appId,
   );
   const uniqueMatches = [...new Map(exactMatches.map((app) => [app.appId, app])).values()];
-  if (conflicts.length > 0 || uniqueMatches.length > 1) {
-    if (uniqueMatches.length > 1) {
-      conflicts.push({
-        code: 'duplicate-identity',
-        appId: null,
-        message: `Multiple Firebase ${expectedPlatform} apps have the exact requested identity.`,
-      });
-    }
+  if (conflicts.length > 0) {
     return {
       status: 'ambiguous',
       platform,
       identifier,
       identityField,
-      matches: uniqueMatches,
+      candidates: uniqueMatches,
       conflicts,
+    };
+  }
+  if (selectedAppId) {
+    const selected = uniqueMatches.find((app) => app.appId === selectedAppId);
+    if (!selected) {
+      const selectedRecords = apps.filter((app) => app.appId === selectedAppId);
+      const selectionCode = selectedRecords.length === 0
+        ? 'selected-app-id-not-found'
+        : 'selected-app-identity-mismatch';
+      return {
+        status: 'ambiguous',
+        platform,
+        identifier,
+        identityField,
+        candidates: uniqueMatches,
+        conflicts: [{
+          code: selectionCode,
+          appId: selectedAppId,
+          message: selectedRecords.length === 0
+            ? 'Selected Firebase app ID was not present in the latest app listing.'
+            : `Selected Firebase app ID does not have the exact requested ${expectedPlatform} identity.`,
+        }],
+      };
+    }
+    return {
+      status: 'match',
+      platform,
+      identifier,
+      identityField,
+      app: selected,
+      selectedExplicitly: true,
+      conflicts: [],
+    };
+  }
+  if (uniqueMatches.length > 1) {
+    return {
+      status: 'selection-required',
+      platform,
+      identifier,
+      identityField,
+      candidates: uniqueMatches,
+      conflicts: [],
     };
   }
   if (uniqueMatches.length === 1) {
@@ -335,6 +382,7 @@ function matchFirebaseApp(input, platform, identifier) {
       identifier,
       identityField,
       app: uniqueMatches[0],
+      selectedExplicitly: false,
       conflicts: [],
     };
   }
@@ -374,10 +422,12 @@ function usage() {
   return [
     'Usage: node resolve-firebase-app-identity.js [--project-root <path>] [--input <project-local-path>]',
     '       node resolve-firebase-app-identity.js --match-platform <android|ios> --identifier <id>',
+    '         [--selected-app-id <firebase-app-id>]',
     '         [--project-root <path>] [--input <project-local-path>]',
     '',
     'Without match arguments, input is evaluated Expo public-config JSON.',
     'With match arguments, input is Firebase apps:list --json output.',
+    'Safe duplicate exact matches require a second call with --selected-app-id.',
     'Without --input, JSON is read from stdin.',
   ].join('\n');
 }
@@ -411,11 +461,16 @@ async function main(argv = process.argv.slice(2), stdin = process.stdin, cwd = p
 
     const parsedInput = parseJson(raw);
     const result = args.matchPlatform
-      ? matchFirebaseApp(parsedInput, args.matchPlatform, args.identifier)
+      ? matchFirebaseApp(
+        parsedInput,
+        args.matchPlatform,
+        args.identifier,
+        args.selectedAppId,
+      )
       : resolveFirebaseAppIdentity(parsedInput);
     result.source = source;
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    return ['ready', 'match', 'no-match'].includes(result.status) ? 0 : 2;
+    return ['ready', 'match', 'no-match', 'selection-required'].includes(result.status) ? 0 : 2;
   } catch (error) {
     const safe = error instanceof SafeError
       ? error

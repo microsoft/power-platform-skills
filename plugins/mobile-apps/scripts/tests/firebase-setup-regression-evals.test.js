@@ -24,6 +24,7 @@ const EXPECTED_COVERAGE = [
   'add-firebase-existing-gcp',
   'placeholder-native-identifiers',
   'exact-app-reuse',
+  'duplicate-app-selection',
   'missing-app-creation',
   'ambiguous-app-conflicts',
   'downloaded-android-project-mismatch',
@@ -114,7 +115,24 @@ test('sanitized identity and app-list fixtures drive deterministic offline branc
   );
   assert.strictEqual(
     matchFirebaseApp(
-      readJsonFixture('firebase-apps-ambiguous.json'),
+      readJsonFixture('firebase-apps-duplicate-safe.json'),
+      'android',
+      EXPECTED.identifier,
+    ).status,
+    'selection-required',
+  );
+  assert.strictEqual(
+    matchFirebaseApp(
+      readJsonFixture('firebase-apps-duplicate-safe.json'),
+      'android',
+      EXPECTED.identifier,
+      '1:123456789:android:second',
+    ).status,
+    'match',
+  );
+  assert.strictEqual(
+    matchFirebaseApp(
+      readJsonFixture('firebase-apps-conflicting.json'),
       'android',
       EXPECTED.identifier,
     ).status,
@@ -195,7 +213,7 @@ test('sanitized SDK fixtures cover exact project, app, package, and bundle valid
 
 test('fixtures and workflow remain sanitized and require no network or Admin key', () => {
   const fixtureNames = fs.readdirSync(FIXTURE_ROOT).sort();
-  assert.strictEqual(fixtureNames.length, 17);
+  assert.strictEqual(fixtureNames.length, 18);
   for (const name of fixtureNames) {
     const content = readFixture(name).toString('utf8');
     assert.doesNotMatch(content, /-----BEGIN [A-Z ]*PRIVATE KEY-----/);
@@ -207,6 +225,8 @@ test('fixtures and workflow remain sanitized and require no network or Admin key
   assert.match(skill, /projects:addfirebase <PROJECT_ID>/);
   assert.match(skill, /apps:create ANDROID/);
   assert.match(skill, /apps:create IOS/);
+  assert.match(skill, /--selected-app-id "<ANDROID_APP_ID>"/);
+  assert.match(skill, /selection-required/);
   assert.match(skill, /\/setup-apns/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
   assert.doesNotMatch(skill, /firebase-tools\s+(?:login|login:add|logout)(?:\s|`)/);

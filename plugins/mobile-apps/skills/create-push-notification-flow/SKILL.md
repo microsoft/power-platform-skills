@@ -1,6 +1,6 @@
 ---
 name: create-push-notification-flow
-description: Use when creating, repairing, or extending the Power Automate producer and sender flows for Power Apps mobile push notifications, including Dataverse row-created triggers, outbox queuing, lowercase Entra OID topics, keyless Google WIF, FCM HTTP v1, FlowAgent setup, or push-flow smoke tests.
+description: Use when creating, repairing, or extending the Power Automate producer and sender flows for Power Apps mobile push notifications, including Dataverse row-created triggers, outbox queuing, lowercase Entra OID topics, validated WIF or Entra-protected Function sender authentication, FCM HTTP v1, FlowAgent setup, or push-flow smoke tests.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__preview_update, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_expression_help, mcp__flowagent__invoke_operation, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__list_backups, mcp__flowagent__get_backup, mcp__flowagent__restore_backup
 model: opus
@@ -12,6 +12,10 @@ model: opus
 
 **Keyless sender protocol: [push-flow-wif.md](${PLUGIN_ROOT}/shared/references/push-flow-wif.md)**.
 
+**Sender-auth handoff: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
+
+**Function sender protocol: [function-endpoint.md](${PLUGIN_ROOT}/skills/setup-push-service-account/references/function-endpoint.md)**.
+
 # Create Push Notification Flow
 
 Create two separate cloud flows through FlowAgent:
@@ -19,19 +23,25 @@ Create two separate cloud flows through FlowAgent:
 1. A **producer** that reacts to the app event, resolves the recipient, and
    writes a privacy-safe `Queued` row to the push outbox.
 2. A **sender** that owns delivery, idempotency, WIF token exchange, FCM HTTP
-   v1, and the outbox transition to `Sent` or `Failed`.
+   v1, and the outbox transition to `Sent` or `Failed`; or invokes one validated
+   Entra-protected Function that owns Google authentication and FCM.
 
 Do not put FCM authorization in each business-event flow. Do not hand-author
 connector schemas or use shell commands for flow operations when FlowAgent MCP
 tools are available.
+
+Select exactly one sender-auth mode from a fresh validated project-local
+`sender-auth.json`. Never add a second mode as a fallback, migration branch, or
+failure handler.
 
 FlowAgent tools are named below without a client prefix. Claude Code exposes
 them as `mcp__flowagent__<tool>` and Copilot CLI as `flowagent-<tool>`.
 
 ## Workflow
 
-1. Bootstrap FlowAgent -> 2. Prove one environment -> 3. Ensure the outbox ->
-4. Prove WIF -> 5. Configure the producer -> 6. Discover schemas/connections ->
+1. Bootstrap FlowAgent -> 2. Prove one environment -> 3. Prove Firebase/client
+and sender-auth consistency -> 4. Ensure the outbox -> 5. Configure the producer
+-> 6. Discover schemas/connections ->
 7. Author the stopped sender -> 8. Author the stopped producer ->
 9. Verify every mutation -> 10. Confirm publish -> 11. Gate smoke tests
 
@@ -88,7 +98,61 @@ Show a compact comparison for `power.config.json`, `npx power-apps`, `pac`,
 Stop before any Dataverse or flow mutation when a value conflicts or cannot be
 proved. Never repair a Power Apps CLI mismatch with `az account set`.
 
-## 3. Ensure and resolve the outbox
+## 3. Prove Firebase client and sender-auth consistency
+
+Read `memory-bank.md`, `sender-auth.json` when present, and the active native
+Firebase client configuration. Do not rerun `/setup-fcm` merely because this
+flow skill was invoked.
+
+Determine the expected Firebase project from the already-integrated client:
+
+1. Inspect only active project-local native client configuration:
+   `firebase/google-services.json` and/or
+   `firebase/GoogleService-Info.plist`, including evaluated
+   `npx expo config --type public --json` service-file paths.
+2. Require every active Android/iOS client configuration to name the same
+   Firebase project. Compare it with the Firebase project recorded in
+   `memory-bank.md` when present. A disagreement is a blocker; never choose one
+   platform as authoritative.
+3. If at least one selected native platform is already configured and the
+   evaluated Expo config activates it, accept that existing client integration.
+   Do not invoke `/setup-fcm` again.
+4. If no selected native platform has valid active Firebase client
+   configuration, route to `/setup-fcm` and return only after it completes.
+
+Next require a project-local regular `sender-auth.json` and validate it against
+that exact client project:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js" \
+  --project-root . \
+  --file sender-auth.json \
+  --expected-firebase-project "<client-firebase-project-id>"
+```
+
+Exit `0` is required before any sender discovery or authoring. Treat an expired
+proof, project mismatch, mode conflict, symlink, path escape, or forbidden
+credential field as invalid; do not salvage safe-looking IDs from an invalid
+handoff.
+
+If the handoff is absent or invalid, present these routes without silently
+choosing or falling through:
+
+1. **Preferred keyless WIF provision/reuse/repair:** invoke `/setup-push-wif`.
+2. **Existing Entra-protected sender endpoint:** invoke
+   `/setup-push-service-account` and select its validate/reuse path.
+3. **Service-account/Azure Function compatibility setup:** invoke
+   `/setup-push-service-account` scaffold/deploy only when the customer already
+   possesses the required Firebase service-account JSON. That skill must never
+   create or download the key.
+
+After the owner skill returns, rerun the validator with the same expected
+Firebase project. Do not translate one mode into another, construct a handoff
+inside this skill, or author until validation succeeds. Record the validated
+mode, Firebase project, safe connection/resource identifiers, verifier, and
+proof timestamp; never record credentials or proof response bodies.
+
+## 4. Ensure and resolve the outbox
 
 Read `native-app-plan.md`, `.datamodel-manifest.json`, and the outbox reference.
 If the table is absent, invoke `/add-dataverse --skip-planning`, then read the
@@ -108,20 +172,6 @@ Use `resolve_entity`, Dataverse connector dynamic resolvers, and the repository
 Dataverse metadata helper where needed. FlowAgent `list_tables` is for tabular
 connector datasets such as SharePoint/SQL/Excel, not Dataverse metadata. The
 display name `Push Notification` is not a connector parameter.
-
-## 4. Invoke the WIF owner skill
-
-Invoke `/setup-push-wif` before authoring the sender. It owns Entra, Key Vault,
-Google IAM/WIF, and the non-delivery `validateOnly` FCM proof.
-
-Continue only after it proves the complete chain:
-
-`Key Vault secret -> Entra JWT -> Google STS -> service-account impersonation -> FCM validateOnly`
-
-Use the observed JWT claims returned by that skill. Do not assume a v2 issuer or
-an `azp` claim: a verified working token may use the `sts.windows.net` issuer
-and `appid`. Never weaken the provider to tenant-only trust, embed a secret in
-the flow, create a Google service-account key, or substitute a fixed token.
 
 ## 5. Ask for producer configuration
 
@@ -154,17 +204,31 @@ by `get_operation_details`. Discover at minimum:
 
 - Microsoft Dataverse row-created/row-added-or-modified trigger;
 - Dataverse get-row, add-row, and update-row operations;
-- Azure Key Vault secret retrieval;
-- HTTP actions used by the four WIF/FCM requests.
+- for `wif`: Azure Key Vault secret retrieval and the HTTP actions used by the
+  four WIF/FCM requests;
+- for `function-endpoint`: the exact Entra-authenticated HTTP
+  operation/connector compatible with `functionEndpoint.endpointUrl` and
+  `functionEndpoint.entra.resourceAudience`.
 
 Use `resolve_params`, `resolve_refs`, and `invoke_operation` for dynamic values.
 Never infer an operation ID, parameter name, enum, action type, API ID,
 connection reference, or choice integer.
 
 Use `list_connections`, `pick_or_create_connection`, and `test_connection`.
-Require connected Embedded references for Dataverse, Key Vault, and any HTTP
-connector returned by discovery. The Key Vault connection principal—not the
-maker or sender app—must have secret read access.
+Require connected Embedded references for Dataverse and every mode-specific
+connector. For `wif`, require Key Vault and any HTTP connector returned by
+discovery; the Key Vault connection principal—not the maker or sender app—must
+have secret read access.
+
+For `function-endpoint`, start from the handoff's exact
+`functionEndpoint.connection.referenceName` and `.resourceId`. Find that live
+connection, test it, discover the operation through `search_operations`, and
+read its schema with `get_operation_details`. Require an operation that uses the
+handoff endpoint and Entra audience with that exact connection. Do not replace
+it with a generic unauthenticated HTTP action, another connection owned by the
+maker, a pasted bearer token, or a guessed operation ID. If FlowAgent cannot
+discover and prove the exact connection/operation, stop and return to
+`/setup-push-service-account`; do not fall back to WIF authoring.
 
 The following Dataverse contracts were verified and override tempting guesses:
 
@@ -193,19 +257,36 @@ Build a stopped, idempotent sender:
 3. For `User`, require a GUID Target OID and use
    `toLower(<validated-target-oid>)` as `message.topic`. For `AllUsers`, require
    an empty Target OID and use exact case-sensitive `allUsers`.
-4. Retrieve the Entra client credential with secure inputs/outputs.
-5. Perform the Entra token, Google STS, IAM Credentials impersonation, and FCM
-   calls exactly as specified by `push-flow-wif.md`.
-6. Send only string-valued `data.schemaVersion` and `data.deepLink`, plus the
-   approved generic notification title/body and discovered Android/APNs fields.
-7. On success, update the row to `Sent` with the bounded provider message ID and
+4. Execute exactly one mode-specific delivery branch:
+   - **`wif`:** retrieve the referenced Entra client credential from Key Vault,
+     then perform Entra client credentials -> Google STS -> sender
+     service-account impersonation -> FCM HTTP v1 exactly as specified by
+     `push-flow-wif.md`. Derive every resource from the validated handoff and
+     preserve the observed `appid`/`azp` claim contract.
+   - **`function-endpoint`:** invoke only the exact FlowAgent-discovered,
+     Entra-authenticated operation and connection proven in Step 6. Send the
+     Function's strict request contract (`topic`, approved generic
+     `title`/`body`, string `schemaVersion`, allowlisted `deepLink`, and
+     `validateOnly: false`). The Function owns Key Vault, Google credential
+     minting, and FCM; the flow must contain no Key Vault retrieval, Entra ->
+     Google STS exchange, service-account impersonation, direct FCM HTTP action,
+     service-account JSON, or alternate/fallback sender path.
+5. Preserve the privacy-safe payload contract in either mode. For `wif`, send
+   only string-valued `data.schemaVersion` and `data.deepLink`, the approved
+   generic notification title/body, and discovered Android/APNs fields. For
+   `function-endpoint`, send only the Function's strict allowlisted request
+   fields; do not append connector metadata or direct-FCM platform fields.
+6. On success, update the row to `Sent` with the bounded provider message ID and
    UTC Sent On.
-8. On terminal failure, update it to `Failed` with bounded sanitized error code
+7. On terminal failure, update it to `Failed` with bounded sanitized error code
    and message. Retry only transient `429`/`5xx` responses with bounded backoff.
 
-Mark secure inputs/outputs on secret retrieval, every token exchange, and every
-authorized HTTP action. Never copy token responses, headers, secret values, raw
-connector errors, or outbox payloads into diagnostics.
+For `wif`, mark secure inputs/outputs on secret retrieval, every token exchange,
+service-account impersonation, and authorized FCM action. For
+`function-endpoint`, mark secure inputs/outputs on the Function invocation and
+retain only the handoff's exact connection reference. In both modes, never copy
+token responses, headers, secret values, Function/connector response bodies,
+raw connector errors, or outbox payloads into diagnostics.
 
 Do not include explicit `null` fields merely to clear optional Dataverse
 columns. The service can reject explicit nulls even after local validation.
@@ -245,7 +326,21 @@ disable operation:
 4. Perform exactly one mutation.
 5. Immediately call `get_flow` and compare state, trigger type, singular/plural
    entity parameters, action tree/run-after structure, connection references,
-   secure settings, and all changed fields with the candidate.
+   secure settings, selected sender-auth mode, and all changed fields with the
+   candidate.
+
+Mode-specific read-back is a hard gate:
+
+- `wif` must contain the Key Vault -> Entra -> STS -> impersonation -> FCM
+  action tree, its secure settings, and only its required mode connections. It
+  must not contain a Function invocation/connection.
+- `function-endpoint` must contain the exact discovered secure Function
+  operation/connection and no Key Vault, Google token, impersonation, direct
+  FCM, generic HTTP, or WIF fallback actions/connections.
+
+A valid action from one mode does not compensate for a missing or insecure
+action in the other. Reject mixed trees even when the fallback is reachable
+only through `runAfter` failure handling.
 
 An acknowledged create/update/publish response is not proof of persistence.
 If read-back differs, wait once for propagation and read again. If it still
@@ -299,6 +394,8 @@ allowlisted test deep link. Read the row back, inspect `get_run_history`,
 and do not resubmit repeatedly. User-targeted smoke tests require separate
 explicit confirmation from the consenting target user.
 
-Finish with flow IDs/states, environment ID/URL, connections used, WIF proof
-timestamp, mutation read-back results, and whether delivery was skipped or
-verified. Never print secrets, tokens, raw JWTs, or confidential payload data.
+Finish with flow IDs/states, environment ID/URL, Firebase project, validated
+sender-auth mode/verifier/proof timestamp, mode-specific connections used,
+mutation read-back results, and whether delivery was skipped or verified. Never
+print secrets, tokens, raw JWTs, Function response bodies, or confidential
+payload data.

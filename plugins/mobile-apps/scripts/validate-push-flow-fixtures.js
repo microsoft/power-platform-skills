@@ -29,6 +29,20 @@ function equalJson(left, right) {
   return JSON.stringify(stableJson(left)) === JSON.stringify(stableJson(right));
 }
 
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasSecureInputsAndOutputs(action) {
+  const properties = action
+    && action.runtimeConfiguration
+    && action.runtimeConfiguration.secureData
+    && action.runtimeConfiguration.secureData.properties;
+  return Array.isArray(properties)
+    && properties.includes('inputs')
+    && properties.includes('outputs');
+}
+
 function validateFixture(fixture) {
   const reasons = new Set();
   const requested = fixture.requested || {};
@@ -55,6 +69,9 @@ function validateFixture(fixture) {
   }
 
   for (const [actionName, action] of Object.entries(actions)) {
+    if (!isObject(action)) {
+      continue;
+    }
     const parameters = (action.inputs && action.inputs.parameters) || {};
     const expectedEntityName = contract.actionEntityNames
       && contract.actionEntityNames[actionName];
@@ -67,6 +84,87 @@ function validateFixture(fixture) {
     for (const dependency of Object.keys(action.runAfter || {})) {
       if (!Object.hasOwn(actions, dependency)) {
         reasons.add('run-after-target-not-found');
+      }
+    }
+  }
+
+  if (contract.senderAuthMode) {
+    const requiredActions = contract.requiredSenderActions || [];
+    const forbiddenActions = contract.forbiddenSenderActions || [];
+    const secureActions = contract.secureSenderActions || [];
+    const connectionReferences = requested.connectionReferences || {};
+
+    for (const actionName of requiredActions) {
+      if (!Object.hasOwn(actions, actionName)) {
+        reasons.add('sender-mode-required-action-missing');
+      }
+    }
+    for (const actionName of forbiddenActions) {
+      if (Object.hasOwn(actions, actionName)) {
+        reasons.add('sender-mode-fallback-forbidden');
+      }
+    }
+    for (const actionName of secureActions) {
+      if (Object.hasOwn(actions, actionName) && !hasSecureInputsAndOutputs(actions[actionName])) {
+        reasons.add('sender-sensitive-action-must-be-secure');
+      }
+    }
+    for (const referenceName of contract.requiredConnectionReferences || []) {
+      if (!Object.hasOwn(connectionReferences, referenceName)) {
+        reasons.add('sender-mode-connection-required');
+      }
+    }
+    for (const referenceName of contract.forbiddenConnectionReferences || []) {
+      if (Object.hasOwn(connectionReferences, referenceName)) {
+        reasons.add('sender-mode-fallback-forbidden');
+      }
+    }
+
+    if (contract.senderAuthMode === 'function-endpoint') {
+      const invokeAction = actions[contract.functionInvokeAction];
+      if (!Object.hasOwn(actions, contract.functionInvokeAction)) {
+        // The required-action check above owns the missing-action finding.
+      } else if (!isObject(invokeAction)) {
+        reasons.add('function-invoke-action-must-be-object');
+      } else {
+        if (invokeAction.type !== 'OpenApiConnection') {
+          reasons.add('function-invoke-action-type-invalid');
+        }
+        if (!isObject(invokeAction.inputs)) {
+          reasons.add('function-invoke-inputs-must-be-object');
+        } else if (!isObject(invokeAction.inputs.host)) {
+          reasons.add('function-invoke-host-must-be-object');
+        } else {
+          const { operationId, connectionName } = invokeAction.inputs.host;
+          if (typeof operationId !== 'string' || operationId.trim() === '') {
+            reasons.add('function-operation-id-required');
+          }
+          if (typeof connectionName !== 'string' || connectionName.trim() === '') {
+            reasons.add('function-connection-reference-required');
+          }
+          if (
+            typeof operationId === 'string'
+            && operationId.trim() !== ''
+            && operationId !== contract.functionOperationId
+          ) {
+            reasons.add('function-operation-or-connection-mismatch');
+          }
+          if (
+            typeof connectionName === 'string'
+            && connectionName.trim() !== ''
+            && connectionName !== contract.functionConnectionReference
+          ) {
+            reasons.add('function-operation-or-connection-mismatch');
+          }
+        }
+      }
+      if (
+        isObject(invokeAction)
+        && isObject(invokeAction.inputs)
+        && isObject(invokeAction.inputs.host)
+        && !Object.hasOwn(connectionReferences, invokeAction.inputs.host.connectionName)
+      ) {
+        reasons.add('function-connection-reference-not-found');
       }
     }
   }

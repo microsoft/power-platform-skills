@@ -18,7 +18,24 @@
       "prompt": "Set up FCM topics in an older app whose package.json has expo-notifications but whose Power Apps Developer runtime does not include React Native Firebase Messaging.",
       "expected_output": "The skill stops with a native-runtime blocker and does not install packages or create a fake wrapper.",
       "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Resume push setup. Android and iOS already have active validated Firebase client files for the same project, but sender authentication and the Power Automate flows have not been created.",
+      "expected_output": "The skill reuses the proven client integration without rerunning setup-fcm or setup-apns, completes only missing app-side work, and reports sender authentication and flow creation as independent resumable next tracks.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "Android is already integrated, but iOS was newly added to Expo config and has no Firebase client file yet. Firebase contains duplicate exact iOS bundle-ID matches.",
+      "expected_output": "The skill invokes setup-fcm for the missing iOS integration, requires an independent immutable iOS Firebase app-ID selection and exact-identity read-back, preserves the Android selection, and then resumes setup-apns for the selected iOS app.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "The native Firebase client is already integrated. We use an existing Firebase service-account sender and want to create the Power Automate flows without WIF.",
+      "expected_output": "The skill allows direct create-push-notification-flow setup without redoing the native client, prefers WIF for new senders, and routes the existing service-account integration only through setup-push-service-account's Key Vault, managed-identity, Entra-protected Azure Function compatibility path.",
+      "files": []
     }
   ]
 }
-

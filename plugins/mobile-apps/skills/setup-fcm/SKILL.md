@@ -225,10 +225,29 @@ phase.
    success envelope and direct app-array shapes without making network calls.
    Branch only on its structured status:
    - `match`: reuse the exact app and record `.app.appId`.
+   - `selection-required`: multiple safe apps have the exact platform identity.
+     Show only `.candidates[]` (`appId`, display name, platform, and exact
+     package/bundle identity) and require the user to choose one immutable app
+     ID for that platform. Android and iOS choices are independent. Re-run the
+     same resolver against the latest unmodified `apps:list` JSON with the
+     chosen ID:
+
+     ```bash
+     # Android example; use the equivalent iOS platform and identifier separately.
+     node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
+       --project-root . --match-platform android \
+       --identifier "<ANDROID_PACKAGE>" \
+       --selected-app-id "<ANDROID_APP_ID>"
+     ```
+
+     Require `status == "match"` and `.app.appId == "<ANDROID_APP_ID>"`.
+     Never accept a typed app ID that is absent from the candidates or select
+     by display name.
    - `no-match`: the platform app is absent and may be created.
    - `ambiguous`: STOP and show the conflicts. Never guess, delete, rename, or
-     create around duplicate identities, reused app IDs, missing matching app
-     IDs, or platform conflicts.
+     create around conflicting app-ID records, missing matching app IDs,
+     platform conflicts, or a selected ID whose platform/identity does not
+     exactly match.
    - `error`: STOP and report the safe parser/input error.
 3. If either platform is absent, show one confirmation containing the intended
    account route, project ID, platform, exact package/bundle identity, and
@@ -252,8 +271,10 @@ phase.
    identity or project.
 4. After every creation, rerun that platform's `apps:list --json` and resolver
    command from Step 2. Require `status == "match"` and read the app ID from
-   `.app.appId`. STOP on `no-match`, `ambiguous`, `error`, or an empty app ID.
-   For pre-existing matches, use the app ID already returned by Step 2.
+   `.app.appId`; if safe duplicates now produce `selection-required`, follow
+   the explicit per-platform selection branch above. STOP on `no-match`,
+   `ambiguous`, `error`, or an empty app ID. For pre-existing matches, use the
+   app ID already returned or explicitly selected in Step 2.
 5. Summarize the project ID and reused/created Android and iOS app IDs. A rerun
    with unchanged Expo config must find both exact identities and perform no
    creation or confirmation.
@@ -273,7 +294,30 @@ may overwrite it before its project/app identity can be checked.
 1. Reuse the confirmed project ID, native app IDs, account route, Android
    package, and iOS bundle ID from Phases 1–5. Re-resolve evaluated Expo identity
    if any value is missing. Do not accept manually supplied identifiers that
-   conflict with evaluated Expo config.
+   conflict with evaluated Expo config. Immediately before `apps:sdkconfig`,
+   relist each selected platform and revalidate the recorded app ID against the
+   exact evaluated identity:
+
+   ```bash
+   npx firebase-tools apps:list ANDROID --project "<PROJECT_ID>" --json \
+     --account "<EMAIL>" |
+     node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
+       --project-root . --match-platform android \
+       --identifier "<ANDROID_PACKAGE>" \
+       --selected-app-id "<ANDROID_APP_ID>"
+
+   npx firebase-tools apps:list IOS --project "<PROJECT_ID>" --json \
+     --account "<EMAIL>" |
+     node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
+       --project-root . --match-platform ios \
+       --identifier "<IOS_BUNDLE_ID>" \
+       --selected-app-id "<IOS_APP_ID>"
+   ```
+
+   Omit `--account` only for the confirmed ADC route and run only selected
+   platforms. Require `status == "match"` with the same selected app ID. STOP
+   before SDK-config download on `selection-required`, `no-match`, `ambiguous`,
+   `error`, or any changed app ID/platform/package/bundle identity.
 2. Create only the project-local directory:
 
    ```bash

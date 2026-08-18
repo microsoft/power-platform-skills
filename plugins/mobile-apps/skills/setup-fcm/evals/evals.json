@@ -68,11 +68,11 @@
     },
     {
       "id": 9,
-      "coverage": "ambiguous-app-conflicts",
+      "coverage": "duplicate-app-selection",
       "prompt": "Two Android Firebase app records have package com.contoso.fieldops but different app IDs.",
-      "expected_output": "The skill stops on the resolver's ambiguous status, shows safe conflict details, and does not guess, delete, rename, or create around the duplicate identity.",
+      "expected_output": "The resolver returns only sanitized exact-match candidates with selection-required status. The skill asks for one immutable Android app ID, independently from iOS, reruns the resolver with --selected-app-id, and proceeds only when the latest listing proves the selected app still has the exact Android package.",
       "files": [
-        "skills/setup-fcm/evals/fixtures/firebase-apps-ambiguous.json"
+        "skills/setup-fcm/evals/fixtures/firebase-apps-duplicate-safe.json"
       ]
     },
     {
@@ -195,6 +195,15 @@
       "expected_output": "The skill reports ios-bundle-id-mismatch, does not install the plist, and leaves any canonical file unchanged.",
       "files": [
         "skills/setup-fcm/evals/fixtures/GoogleService-Info-wrong-bundle.plist"
+      ]
+    },
+    {
+      "id": 24,
+      "coverage": "ambiguous-app-conflicts",
+      "prompt": "Firebase apps:list reuses one Android app ID for conflicting package identity records.",
+      "expected_output": "The resolver returns ambiguous with safe app-id-conflict details. The skill stops and does not offer selection, guess, delete, rename, create, or continue to sdkconfig.",
+      "files": [
+        "skills/setup-fcm/evals/fixtures/firebase-apps-conflicting.json"
       ]
     }
   ]

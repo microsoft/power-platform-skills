@@ -18,6 +18,30 @@
       "prompt": "Configure the Google provider from documentation assumptions: use the v2 login.microsoftonline.com issuer and assertion.azp without inspecting the live token.",
       "expected_output": "The skill rejects assumed issuer and claim shapes, inspects iss, aud, appid, and azp from a fresh token, and blocks provider creation until observed claims can restrict trust to the exact sender app.",
       "files": []
+    },
+    {
+      "id": 26,
+      "prompt": "All named WIF, sender service-account, FCM role, and Key Vault resources already exist. Reuse them and write sender-auth.json without changing anything.",
+      "expected_output": "The skill takes the validate/reuse route only after reading back provider issuer, audiences, mapping and condition; the exact app-restricted workloadIdentityUser binding; the dedicated enabled sender account and exact FCM custom-role permission/binding; the Key Vault secret reference and actual runtime connection principal RBAC; and a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "prompt": "The existing provider was configured for assertion.azp, but a fresh sender token contains appid and its observed issuer/audience differ from the provider. The resources exist, so reuse them.",
+      "expected_output": "The skill rejects reuse, reports a field-level provider-versus-live-claim mismatch, refuses tenant-only or broadened trust, and offers an explicitly approved repair route without writing sender-auth.json or claiming proof.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "prompt": "The provider matches, but the sender account lacks the exact app-restricted workloadIdentityUser binding and the Power Automate Key Vault connection principal has Contributor rather than Key Vault Secrets User.",
+      "expected_output": "The skill treats both missing IAM and Key Vault data-plane RBAC as incompatible with reuse, identifies the exact principal-set member and runtime principal/scope required, requires explicit repair approval, and does not work around the failure with a broader pool binding or copied secret.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "prompt": "Some dedicated WIF resources exist with repairable drift, while provisioning isolated replacements is also possible. Go ahead with whichever route is easiest.",
+      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
+      "files": []
     }
   ]
 }

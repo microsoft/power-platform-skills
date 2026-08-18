@@ -1,0 +1,7 @@
+.git*
+.azure/
+local.settings.json
+tests/
+*.log
+*service-account*.json
+*firebase-admin*.json
