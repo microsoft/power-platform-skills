@@ -4,7 +4,7 @@
 // row landed — verified clean. This is a metadata read, not a runtime check.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { declaredPrivileges, compareRolePrivileges } = require('../lib/role-privileges.js');
+const { declaredPrivileges, compareRolePrivileges, depthFromMask } = require('../lib/role-privileges.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 
 // A realistic privilege set as EntityDefinitions returns it.
@@ -161,4 +161,48 @@ test('verifySpec fails CLOSED when the role privileges cannot be read', async ()
   const c = r.checks.find((x) => x.kind === 'role-privileges');
   assert.ok(c && !c.present);
   assert.match(c.detail, /could not read/);
+});
+
+// -- depthFromMask ----------------------------------------------------------------------------
+// Review finding: privilegedepthmask is a BITMASK, not an enum. It can carry several bits at once,
+// and an exact-match lookup mapped every combined value to '' -- which ranks 0, which made
+// compareRolePrivileges report a CORRECTLY configured role as missing or too shallow.
+
+test('depthFromMask: single bits map to their depth', () => {
+  assert.strictEqual(depthFromMask(1), 'Basic');
+  assert.strictEqual(depthFromMask(2), 'Local');
+  assert.strictEqual(depthFromMask(4), 'Deep');
+  assert.strictEqual(depthFromMask(8), 'Global');
+});
+
+test('depthFromMask: COMBINED masks resolve to the highest bit, not to empty', () => {
+  // Depth is cumulative -- a role granted Global can also do everything Basic allows -- so the
+  // effective depth is the deepest bit present.
+  assert.strictEqual(depthFromMask(3), 'Local');   // Basic|Local
+  assert.strictEqual(depthFromMask(7), 'Deep');    // Basic|Local|Deep
+  assert.strictEqual(depthFromMask(15), 'Global'); // all four
+  assert.strictEqual(depthFromMask(12), 'Global'); // Deep|Global
+  assert.strictEqual(depthFromMask(6), 'Deep');    // Local|Deep
+});
+
+test('depthFromMask: a combined mask satisfies a declared scope instead of false-failing', () => {
+  // The end-to-end point of the fix: a role holding mask 15 must satisfy a declared organization
+  // scope. Before, it decoded to '' and was reported as too shallow.
+  const declared = [{ entity: 'account', access: 'read', scope: 'organization' }];
+  const entityPrivileges = new Map([['account', [{ Name: 'prvReadAccount', PrivilegeId: 'p1', PrivilegeType: 'Read' }]]]);
+  const actual = new Map([['p1', depthFromMask(15)]]);
+  const cmp = compareRolePrivileges(declared, entityPrivileges, actual);
+  assert.strictEqual(cmp.ok, true, JSON.stringify(cmp.missing));
+});
+
+test('depthFromMask: fails closed on an undecodable mask', () => {
+  // An unreadable mask is not evidence of a grant.
+  for (const bad of [0, -1, null, undefined, '', 'abc', NaN, 16]) {
+    assert.strictEqual(depthFromMask(bad), '', String(bad) + ' should not decode');
+  }
+});
+
+test('depthFromMask: tolerates a numeric string', () => {
+  assert.strictEqual(depthFromMask('8'), 'Global');
+  assert.strictEqual(depthFromMask('7'), 'Deep');
 });

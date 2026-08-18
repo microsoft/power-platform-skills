@@ -279,6 +279,14 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         },
       };
     }
+    // Fallback for any require the intercepts above do not cover. Relative ids must resolve against
+    // the SCRIPT's directory, not this test file's — the sandbox runs verify-model-app.js source, so
+    // `./lib/x.js` means `scripts/lib/x.js`. Resolving it here (rather than adding an intercept per
+    // module) means a new `./lib/...` import in the script does not silently break every CLI test
+    // with "Cannot find module".
+    if (id.startsWith('./') || id.startsWith('../')) {
+      return require(path.resolve(path.dirname(scriptPath), id));
+    }
     return require(id);
   };
   customRequire.main = invokeAsMain ? mod : {};

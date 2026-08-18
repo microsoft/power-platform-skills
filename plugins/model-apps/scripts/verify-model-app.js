@@ -17,6 +17,7 @@ const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { depthFromMask } = require('./lib/role-privileges.js');
 
 function makeProvision(env, workspaceDir) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
@@ -102,7 +103,6 @@ function readerFor(sdk, appUnique, opts) {
     // like an empty grant.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/roleprivileges
     rolePrivileges: async (roleId) => {
-      const DEPTH_BY_MASK = { 1: 'Basic', 2: 'Local', 4: 'Deep', 8: 'Global' };
       const rows = await sdk.queryRecords('roleprivileges', {
         select: ['privilegeid', 'privilegedepthmask'],
         filter: `roleid eq ${roleId}`,
@@ -110,7 +110,10 @@ function readerFor(sdk, appUnique, opts) {
       });
       return (rows || []).map((r) => ({
         privilegeId: String((r && r.privilegeid) || ''),
-        depth: DEPTH_BY_MASK[Number(r && r.privilegedepthmask)] || '',
+        // `privilegedepthmask` is a BITMASK and can carry several bits at once (7, 15, …), so the
+        // depth is the HIGHEST bit set — see depthFromMask in lib/role-privileges.js for why an
+        // exact-match lookup made correctly configured roles report as too shallow.
+        depth: depthFromMask(r && r.privilegedepthmask),
       }));
     },
     // retrieveSetting(name, { appUniqueName }): the EFFECTIVE app-scoped value of a Dataverse setting,

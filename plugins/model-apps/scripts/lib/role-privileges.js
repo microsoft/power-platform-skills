@@ -29,6 +29,30 @@ const ACCESS_TYPE = { read: 'Read', create: 'Create', write: 'Write', delete: 'D
 
 const rankOf = (depth) => DEPTH_RANK[String(depth == null ? '' : depth).trim().toLowerCase()] || 0;
 
+// `roleprivileges.privilegedepthmask` -> the depth NAME the comparison speaks in.
+//
+// The column is a BITMASK, not an enum: 1 Basic, 2 Local, 4 Deep, 8 Global. A single value can
+// therefore carry SEVERAL bits — 3 (Basic|Local), 7 (Basic|Local|Deep), 15 (all four) are all legal
+// — because privilege depth is CUMULATIVE: a role granted Global can also do everything Basic
+// allows. The effective depth is therefore the HIGHEST bit set, never an exact match.
+//
+// An exact-match lookup (`{1:'Basic',2:'Local',4:'Deep',8:'Global'}[mask]`) mapped every combined
+// value to '', which ranks 0, which made `compareRolePrivileges` report a CORRECTLY configured role
+// as missing or too shallow — the cry-wolf failure this check exists to avoid.
+//
+// Fail closed on 0, a negative, a non-number, or a value carrying only bits we do not recognise:
+// an undecodable mask is not evidence of a grant.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/roleprivileges
+function depthFromMask(mask) {
+  const m = Number(mask);
+  if (!Number.isFinite(m) || m <= 0) return '';
+  if (m & 8) return 'Global';
+  if (m & 4) return 'Deep';
+  if (m & 2) return 'Local';
+  if (m & 1) return 'Basic';
+  return '';
+}
+
 // Flatten a persona to the (entity, access, scope) triples its role must satisfy, taking the MAX
 // scope per (entity, access) exactly as the builder's union does. `appAccess` is folded in here so
 // the expectation matches what the build actually writes rather than what the author typed.
@@ -92,4 +116,4 @@ function compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId) 
   return { ok: missing.length === 0, missing };
 }
 
-module.exports = { declaredPrivileges, compareRolePrivileges, SCOPE_DEPTH, ACCESS_TYPE, DEPTH_RANK };
+module.exports = { declaredPrivileges, compareRolePrivileges, depthFromMask, SCOPE_DEPTH, ACCESS_TYPE, DEPTH_RANK };
