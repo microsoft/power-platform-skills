@@ -43,7 +43,7 @@ Profile ID resolution (in order):
 
 STOP if no profile can be resolved. Print: `Run /setup-offline-profile first, or pass --profile-id`.
 
-> **`power.config.json` is intentionally NOT consulted here.** That file is owned by `npx power-apps init`. The profile ID lives in `offline-profile.json` only.
+> **`power.config.json` is intentionally NOT consulted here.** That file is owned by `npx pa app init --non-interactive`. The profile ID lives in `offline-profile.json` only.
 
 ### Step 2 — Pick users/teams
 

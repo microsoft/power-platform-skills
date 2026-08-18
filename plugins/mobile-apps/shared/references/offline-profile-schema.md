@@ -55,7 +55,7 @@ The Image 2 panel mixes profile fields with **app-level** settings. These are NO
 | "Data row limit" (2000 default) | App-level — `offline-profile.json` `appConfig.serverRowLimit` (canvas/non-Dataverse delegation rows) |
 | "Debug published app" | App-level — out of v0 scope |
 
-> **Why `offline-profile.json` and not `power.config.json`?** `power.config.json` is generated and owned by `npx power-apps init` — the upstream tool controls its schema, and adding custom fields there risks being overwritten on re-init or breaking when the upstream schema changes. `offline-profile.json` is fully owned by `/setup-offline-profile`, so app-level offline settings live there safely.
+> **Why `offline-profile.json` and not `power.config.json`?** `power.config.json` is generated and owned by `npx pa app init --non-interactive` — the upstream tool controls its schema, and adding custom fields there risks being overwritten on re-init or breaking when the upstream schema changes. `offline-profile.json` is fully owned by `/setup-offline-profile`, so app-level offline settings live there safely.
 
 ---
 
@@ -221,7 +221,7 @@ App-level offline config (previously written into `power.config.json` as an `off
 }
 ```
 
-`power.config.json` is intentionally NOT touched by the offline skill — it stays owned by `npx power-apps init`.
+`power.config.json` is intentionally NOT touched by the offline skill — it stays owned by `npx pa app init --non-interactive`.
 
 ---
 

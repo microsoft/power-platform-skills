@@ -27,8 +27,8 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
+- **Read-only.** You MUST NOT run `npx pa app add data-source --connector dataverse --table <table> --non-interactive`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx pa *` command; retry the original command once after auth is corrected.
 - **Reuse-first.** Always query existing tables and prefer reuse > extension > new. Don't propose a `cr123_customer` table if a standard `contact` table fits.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.

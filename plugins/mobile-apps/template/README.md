@@ -187,7 +187,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `distPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`.
+`npx pa app push --non-interactive`.
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

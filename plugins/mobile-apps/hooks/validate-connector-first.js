@@ -36,7 +36,7 @@ const VIOLATIONS = [
   },
   {
     rx: /fetch\(\s*['"`]https:\/\/graph\.microsoft\.com\b/i,
-    reason: 'Direct Microsoft Graph fetch is forbidden. Use the Office 365 / Graph connector via `npx power-apps add-data-source` and import from `src/generated/`.',
+    reason: 'Direct Microsoft Graph fetch is forbidden. Use the Office 365 / Graph connector via `npx pa app add data-source --non-interactive` and import from `src/generated/`.',
   },
   {
     rx: /fetch\(\s*['"`]https:\/\/management\.azure\.com\b/i,
@@ -48,7 +48,7 @@ const VIOLATIONS = [
   },
   {
     rx: /fetch\(\s*['"`]https:\/\/[^'"`]+\.crm(?:\d+)?\.dynamics\.com\b/i,
-    reason: 'Direct Dataverse REST fetch is forbidden. Use the Dataverse generated service via `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table-logical-name>` from the app root.',
+    reason: 'Direct Dataverse REST fetch is forbidden. Use the Dataverse generated service via `npx pa app add data-source --connector dataverse --table <table-logical-name> --non-interactive` from the app root.',
   },
 ];
 
@@ -116,7 +116,7 @@ process.stdin.on('end', () => {
   const lines = [`BLOCKED: connector-first rule violated in ${rel}`, ''];
   for (const h of hits) lines.push(`  - ${h}`);
   lines.push('');
-  lines.push('Power Platform data MUST go through generated connector services in `src/generated/`. Add the connector via `npx power-apps add-data-source`, then import the typed client.');
+  lines.push('Power Platform data MUST go through generated connector services in `src/generated/`. Add the connector via `npx pa app add data-source --non-interactive`, then import the typed client.');
   process.stderr.write(lines.join('\n') + '\n');
   process.exit(2);
 });
