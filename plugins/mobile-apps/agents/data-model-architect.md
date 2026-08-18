@@ -128,7 +128,7 @@ Standard table mappings to bias toward:
 
 For every `Reuse` decision, add `Service required: yes|no`. Use `yes` whenever any screen, hook, role check, lookup picker, related-field fetch, or authenticated-identity flow reads the table. `systemuser` identity resolution is always `Service required: yes`; read-only means no schema mutation, not no generated data source.
 
-## Step 5 — Reconcile Target and Score Reuse / Extend / Create / Block
+## Step 5 — Reconcile Target and Score Reuse / Extend / Create / Adapt / Defer / Unverified
 
 **Print before starting:**
 > "→ Reconciling every required table and column against live target metadata…"
@@ -149,33 +149,36 @@ For each required entity, classify it as one of:
 - **Reuse** — existing table fits as-is (no schema changes needed)
 - **Extend** — existing table is the right concept, all same-name columns are compatible, missing columns are custom additions, and both `IsCustomizable.Value` and `CanCreateAttributes.Value` permit extension
 - **Create** — the planned item is explicitly a new custom table, the exact logical name returns 404, the publisher prefix is verified, and all required-existing dependencies are present
-- **Block** — target metadata is unavailable; a standard/managed/required-existing dependency is missing; the table cannot accept attributes; or any same-name table/column is incompatible
+- **Adapt** — a same-name custom table/column is incompatible or the intended custom table cannot be safely extended, so create an app-owned alternative under a new verified logical name and record the alias
+- **Defer** — a standard, managed, solution-owned, or required-existing dependency is missing/incompatible, or no safe app-owned alternative can preserve the intended semantics; leave it out of this run and record the prerequisite
 - **Unverified** — discovery could not run for this entity (Step 1/2 failure or a non-200/404 response). Record the intended decision plus the reason; `/add-dataverse` re-checks it before any write
 
 Classify every planned column before finalizing its table decision:
 
 - **Reuse** — same logical name exists with a compatible `AttributeType` / `AttributeTypeName.Value`.
 - **Create** — column is absent, is explicitly a custom addition, and the target table permits attributes. The containing table becomes `Extend`, or the column is included inline when its table is `Create`.
-- **Block** — a required standard/managed column is absent, a same-name column has an incompatible type, or the target cannot be customized.
+- **Adapt** — a same-name custom column is incompatible and the table permits a new custom column under a verified logical name; record the old-to-new alias.
+- **Defer** — a required standard/managed column is absent or incompatible, the target cannot be customized, or a renamed custom column would change the intended semantics.
+- **Unverified** — the live column metadata could not be read reliably; preserve the intended decision for `/add-dataverse` to re-check.
 
 `Extend` is a table decision, not a column operation. Do not classify any item as `Replace`; Dataverse cannot change column types in place, and replacement needs an explicit migration outside this workflow.
 
 **Decision priority (HARD — apply in order, stop at first match):**
 
-1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept, but verify it by exact target GET. Reuse if it fits; Extend only when live managed properties permit the planned custom columns. If it is missing, Block — never create a custom imitation.
+1. **Standard table match** → always prefer a standard table (`contact`, `account`, `incident`, etc.) over creating a custom table for the same concept, but verify it by exact target GET. Reuse if it fits; Extend only when live managed properties permit the planned custom columns. If it is missing or incompatible, Defer — never create a custom imitation.
 2. **Existing custom table by name** → if the proposed logical name already exists in the Step 3 results, it MUST be Reuse or Extend. See collision check below.
 3. **Existing custom table by concept** → if a different-named existing table serves the same business purpose (e.g., an existing `cr8142a_site` table for a new "Inspection Site" entity), prefer Extend over Create.
 4. **Extension-cost guardrail** → reuse remains preferred when the existing record is authoritative/shared, but do not extend a merely similar custom table by default when the app would add more than 8 columns or more than 50% of the final required schema. Prefer a new app-owned table unless shared identity, integrations, security, or reporting make the existing table the true system of record. Record the metadata-write tradeoff and rationale in `Why`.
 5. **Create** → only when no existing table — standard or custom — serves the entity's purpose, the proposed custom logical name is absent in the target, and every required-existing dependency is verified.
-6. **Block** → apply before all mutations when any target fact is unavailable or incompatible. Do not downgrade Block to Create or Rename-and-Create.
+6. **Adapt / Defer / Unverified** → incompatible custom schema becomes Adapt when a safe app-owned alias preserves semantics; missing/incompatible standard, managed, or required-existing schema becomes Defer; unavailable target facts become Unverified. Never reinterpret any of these states as Create under the conflicting logical name.
 
 > **⚠️ Plan-time collision check (HARD).** Before classifying any entity as `Create`, look up its **proposed logical name** (e.g. `cr8142a_inspection`) in the Step 3 IsCustomEntity result. If a row with that exact `LogicalName` already exists, the entity **CANNOT** be classified as `Create`. Apply the following decision tree in order:
 >
 > 1. **Downgrade to Reuse** — the existing table's columns from Step 3 already cover what the plan needs (≥70% column overlap or all required columns present). No schema changes.
 > 2. **Downgrade to Extend** — the existing table is the right concept but missing some custom columns (any overlap, or same entity type), and live `IsCustomizable.Value` plus `CanCreateAttributes.Value` permit extension. Add only the missing columns; never remove or rename existing ones.
-> 3. **Rename and Create** — use ONLY when the existing table is a completely different entity concept (e.g., `cr8142a_inspection` exists but contains payroll or product catalog data — fundamentally incompatible). Bump the proposed name to `<prefix>_<entity>v2` and document the rename in the Notes column.
+> 3. **Adapt (rename and create)** — use ONLY when the existing custom table is a completely different entity concept (e.g., `cr8142a_inspection` exists but contains payroll or product catalog data — fundamentally incompatible). Bump the proposed name to `<prefix>_<entity>v2`, record the alias, and document the evidence in the Notes column.
 >
-> **Default is Reuse or Extend only when compatibility is proven.** Rename-and-Create is the exceptional path, not the fallback. If compatibility or customizability is uncertain, Block and gather evidence; never extend merely to keep the workflow moving.
+> **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. If live metadata could not be read, mark Unverified. If metadata is available but compatibility or customizability cannot be established safely, Defer and record what evidence or prerequisite is missing; never extend merely to keep the workflow moving.
 >
 > Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
 
@@ -280,7 +283,8 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 - Reuse: <N> existing tables
 - Extend: <N> tables (add columns only)
 - Create: <N> new tables across <T> tiers
-- Block: <N> unresolved/incompatible tables (must be 0 before approval can execute)
+- Adapt: <N> app-owned aliases created beside incompatible custom schema
+- Defer: <N> missing/incompatible dependencies left out of this run
 - Unverified: <N> tables discovery could not confirm (re-checked by `/add-dataverse`)
 
 ### Target Reconciliation
