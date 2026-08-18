@@ -340,11 +340,11 @@ Planning complete.
 
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| [Create / Modify] | [Screen] | [absolute file path] | [key] | [prefix] | [absolute brief path] |
+| [Create / Modify] | [Screen] | `[working directory]/[file].pa.yaml` | [key] | [prefix] | `[working directory]/[file-base].screen-plan.md` |
 
-Plan index: [absolute plan index path]
-Shared plan: [absolute shared plan path]
-App file: [[absolute App.pa.yaml path] for CREATE, "unchanged" for EDIT]
+Plan index: `[working directory]/canvas-app-plan.md`
+Shared plan: `[working directory]/canvas-app-shared.md`
+App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
 App compile: [Clean / diagnostics remaining, with detail]
 ```
 

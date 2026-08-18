@@ -102,8 +102,8 @@ layout scopes.
 
 GridLayout needs coordinated column, row and height math; a stale row count can produce a
 valid but visibly wrong screen. When planning a `GroupContainer` with
-`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact
-formulas in the screen brief. Builders do not read that conditional reference.
+`Variant: GridLayout`, use `${PLUGIN_ROOT}/references/GridLayoutGuide.md` and put its exact formulas in
+the screen brief. Builders do not read that conditional reference.
 
 ## Galleries are Classic — their rows do not reflow
 

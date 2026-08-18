@@ -39,8 +39,7 @@ to reinvent with primitives. Then run `describe_control` on every type you plan 
 
 Default to AutoLayout. Use ManualLayout only when the user explicitly requests
 pixel-perfect positioning or the app is a fixed-size desktop dashboard. Mobile and
-cross-device apps MUST use AutoLayout. See `${PLUGIN_ROOT}/references/LayoutGuide.md` for
-the patterns.
+cross-device apps MUST use AutoLayout. See `${PLUGIN_ROOT}/references/LayoutGuide.md` for the patterns.
 
 ⚠️ **`GroupContainer` has no `OnSelect` — it cannot be clicked.** This is a common dead
 end when building card UI: the container lays out perfectly but tapping it does nothing.

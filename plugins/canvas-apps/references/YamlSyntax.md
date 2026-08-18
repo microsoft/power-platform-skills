@@ -5,8 +5,8 @@ starting workspace every new app arrives with.
 
 **Who does what.** Discovery and compilation belong to the orchestrator and the
 `canvas-app-planner`: they run `list_controls`, `describe_control`, the data and API
-tools, and `compile_canvas`. A `canvas-screen-builder` has only `Read`, `Write` and
-`Edit` — it never discovers and never compiles, and relies entirely on the property names,
+tools, and `compile_canvas`. A `canvas-screen-builder` has only `view`, `create` and
+`edit` — it never discovers and never compiles, and relies entirely on the property names,
 enum names and variants recorded in its screen brief. Where these guides say "run
 `list_controls`" or "compile early", that instruction is addressed to the orchestrator and
 planner.
@@ -31,8 +31,7 @@ planner.
    expensive to reinvent from primitives.
 2. Run `describe_control` for every control type you intend to use, and record the exact
    property names, `Enum name:` lines and variants.
-3. Review this guide, `${PLUGIN_ROOT}/references/ControlGuide.md`,
-   `${PLUGIN_ROOT}/references/LayoutGuide.md` and
+3. Review this guide, `${PLUGIN_ROOT}/references/ControlGuide.md`, `${PLUGIN_ROOT}/references/LayoutGuide.md` and
    `${PLUGIN_ROOT}/references/DesignGuide.md` before designing a screen.
 4. Plan state: the variables each screen sets, and where they are initialized.
 5. Choose a layout strategy: AutoLayout for responsive, ManualLayout only for fixed
