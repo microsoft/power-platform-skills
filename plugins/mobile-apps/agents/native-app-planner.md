@@ -24,8 +24,10 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Wizard answers collected by the skill (target users + device, target platforms, aesthetic, features)
 - The working directory where `native-app-plan.md` should be written
 - The plugin root directory (`${PLUGIN_ROOT}`)
-- The foreground-generated normalized Dataverse metadata snapshot
-- The serialized agent-preflight result
+- The foreground-generated normalized Dataverse snapshot path, when available
+- The deterministic Dataverse planning evidence appendix path, when available
+- Dataverse planning mode: `required` or `connector-only`
+- The serialized agent-preflight result, when the foreground host provides one
 
 ## Hard Rules
 
@@ -95,6 +97,20 @@ If the phase is missing, return `BLOCKED: planner phase missing`. Never perform
 `architecture` and `experience` in one invocation. Gate 2 must become
 reviewable before the long screen-spec expansion begins.
 
+- **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
+  default-mode `data-model-architect` dispatch and revision. In `required`,
+  pass both snapshot/evidence absolute paths unchanged. In `connector-only`,
+  state that both paths are not supplied. Never invent placeholder artifact
+  paths. Do not
+  resolve the environment, verify Dataverse access, run broad discovery, or
+  issue any live Dataverse
+  query in this planner. The foreground orchestrator owns snapshot creation,
+  degradation, and exact-name expansion.
+- **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
+  rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
+  referenced artifact; do not paste candidate rankings, raw columns, or timing
+  tables into `native-app-plan.md`.
+
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
 
 Before reading anything or drafting plan content, verify the invocation context
@@ -106,7 +122,8 @@ fallback starts without wasting a long agent run.
 Required tool surface:
 - `Task` — spawn `data-model-architect` and `screen-planner`
 - `Read` / `Write` — read references, write `native-app-plan.md`
-- `Bash` / `Grep` / `Glob` — discovery (Dataverse probe, working-dir checks)
+- `Bash` / `Grep` / `Glob` — working-dir checks and legacy discovery only;
+  never use them for Dataverse discovery when snapshot/evidence paths are supplied
 
 **Detection:** consume the capability-preflight result supplied by the
 foreground orchestrator. Confirm the normalized metadata snapshot and declared
@@ -155,11 +172,16 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 >
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
-> Target environment: read from `power.config.json` if it exists in the working directory, otherwise use the environment URL or ID provided by the orchestrator and resolve it with `scripts/resolve-environment.js`.
+> Target environment: use the foreground-resolved environment URL and tenant.
+> When snapshot/evidence paths are supplied, do not read `power.config.json` or
+> call `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
-> Dataverse metadata snapshot: [absolute snapshot path supplied by orchestrator]
-> Agent preflight result: [serialized preflight JSON]
+> Dataverse planning mode: [required | connector-only]
+> Dataverse planning failure reason: none
+> Normalized Dataverse snapshot: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Dataverse planning evidence: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Agent preflight result: [serialized preflight JSON, or NOT SUPPLIED]
 >
 > Follow the instructions in your agent file. You are read-only — do NOT create tables. Return a markdown `## Data Model` section ready to embed in native-app-plan.md, including a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
@@ -168,13 +190,15 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
 
 - `DONE` → embed section, continue.
 - `DONE_WITH_CONCERNS: <list>` → embed section, propagate concerns.
-- `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → read the
-  snapshot's `environmentUrl` and `concepts`, rerun
-  `scripts/create-dataverse-snapshot.js` against the same output path with the
-  existing concepts plus `--tables "<logical names>"`, then re-spawn the
-  architect once with the refreshed snapshot. This is a bounded exact-name
-  expansion, not another broad discovery pass.
-- `NEEDS_CONTEXT: <missing>` → re-spawn once with missing context. If second return is also `NEEDS_CONTEXT`, return `BLOCKED`.
+- `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → return that
+  exact first line to the foreground orchestrator. Do not expand the snapshot
+  or re-run discovery here.
+- `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>` → return that exact
+  first line to the foreground orchestrator for collision-only expansion. Do
+  not infer absence or rewrite the proposed names here.
+- `NEEDS_CONTEXT: <missing>` → re-spawn once with missing non-Dataverse context,
+  forwarding the same snapshot/evidence paths unchanged. If the second return
+  is also `NEEDS_CONTEXT`, return `BLOCKED`.
 - `BLOCKED: <reason>` → return `BLOCKED: data-model-architect returned BLOCKED: <reason>` to orchestrator.
 
 ## Step 3 — Plan Native Capabilities Inline (Gate 2)

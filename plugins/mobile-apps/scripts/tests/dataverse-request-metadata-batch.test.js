@@ -10,6 +10,7 @@ const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
+const { createDataverseRequestExecutor } = require('../dataverse-request');
 
 function makeTempDir(t) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-fake-az-'));
@@ -25,6 +26,35 @@ function fakeAzEnv(overrides = {}) {
     ...overrides,
   };
 }
+
+test('in-process request executor reuses one token across sequential metadata reads', async () => {
+  let tokenCalls = 0;
+  const requests = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com/',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      return 'shared-token';
+    },
+    sendRequest: async (_envUrl, method, apiPath, _body, token) => {
+      requests.push({ method, apiPath, token });
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ value: [] }),
+        headers: {},
+      };
+    },
+  });
+
+  await request('GET', 'EntityDefinitions');
+  await request('GET', "EntityDefinitions(LogicalName='contact')/Attributes");
+  await request('GET', "EntityDefinitions(LogicalName='contact')/Keys");
+
+  assert.equal(tokenCalls, 1);
+  assert.equal(requests.length, 3);
+  assert.deepEqual(new Set(requests.map((item) => item.token)), new Set(['shared-token']));
+});
 
 test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {
   const tempDir = makeTempDir(t);
