@@ -129,6 +129,58 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
   return res;
 }
 
+function createDataverseRequestExecutor({
+  environmentUrl,
+  tenantId,
+  solution = null,
+  getToken = getAuthToken,
+  sendRequest = doRequest,
+}) {
+  const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
+  if (!envUrl) throw new Error('environmentUrl is required');
+
+  let token = null;
+  let tokenPromise = null;
+  async function ensureToken() {
+    if (token) return token;
+    if (!tokenPromise) tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
+    token = await tokenPromise;
+    tokenPromise = null;
+    if (!token) {
+      throw new Error('Failed to get Azure CLI token. Run `az login` first.');
+    }
+    return token;
+  }
+
+  return async (method, apiPath, body = null, includeHeaders = false) => {
+    const requestToken = await ensureToken();
+    let bodyString = null;
+    if (body !== null && body !== undefined) {
+      bodyString = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+    const executed = await runOneMetadataOperation(
+      envUrl,
+      String(method || '').toUpperCase(),
+      apiPath,
+      bodyString,
+      requestToken,
+      includeHeaders,
+      solution,
+      tenantId,
+      getToken,
+      sendRequest,
+    );
+    token = executed.token;
+    return {
+      status: executed.status,
+      data: executed.data,
+      headers: executed.headers,
+      error: executed.error,
+      rateLimited: executed.rateLimited,
+    };
+  };
+}
+
 async function main() {
   const {
     envUrl,
@@ -513,6 +565,8 @@ async function runOneMetadataOperation(
   includeHeaders,
   solution,
   tenantId,
+  getToken = getAuthToken,
+  sendRequest = doRequest,
 ) {
   let token = initialToken;
   let rateLimited = false;
@@ -521,14 +575,14 @@ async function runOneMetadataOperation(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     // Response headers are always needed internally for Retry-After handling.
     // The caller-facing result still honors includeHeaders below.
-    const res = await doRequest(envUrl, method, apiPath, body, token, true, solution);
+    const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution);
     if (res.error) {
       if (attempt < maxRetries) continue;
       return { status: 0, error: res.error, token, rateLimited };
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getAuthToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId);
       if (!refreshed) {
         return { status: 401, error: 'Token refresh failed', token, rateLimited };
       }
@@ -578,4 +632,13 @@ function extractGuid(headerValue) {
   return m ? m[1] : null;
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = {
+  createDataverseRequestExecutor,
+  doRequest,
+  extractGuid,
+  runBatch,
+  runMetadataBatch,
+  runOneMetadataOperation,
+};
