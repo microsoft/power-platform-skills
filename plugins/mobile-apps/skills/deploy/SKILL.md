@@ -22,7 +22,7 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 ## Workflow
 
-1. Check memory bank → 2. Build → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -63,6 +63,48 @@ If the build fails:
 - **Metro bundler errors** → surface the full stack and STOP.
 
 Verify `dist/` exists with `index.html` before continuing.
+
+### Step 2.4 — Native package (Hermes bundle + customer assets)
+
+**Print before starting:**
+> "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android via `npm run package:android` + `npm run package:ios`. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
+
+**Node version gate (required).** The native `expo export` crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
+
+```bash
+node -v
+```
+If it prints below **v20.19.4**, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the `package:*` commands on older Node.
+
+The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
+
+```bash
+npm run package:android
+npm run package:ios
+```
+
+Each command runs `expo export` for that platform and writes, next to `dist/index.html`:
+
+- `dist/index.android.bundle.hbc` / `dist/main.jsbundle.hbc` — the Hermes bytecode bundle.
+- `dist/powerapps-customer-assets-android/` and `dist/powerapps-customer-assets-ios/` — `manifest.json` plus `assets/<fileHash>.<type>` for every image/font.
+
+These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
+
+**Verify before continuing** — STOP on any failure (never push a web-only build for a native-wrapped app):
+
+```bash
+# Hermes magic bytes on both bundles (expect c61fbc03)
+for f in dist/index.android.bundle.hbc dist/main.jsbundle.hbc; do
+  test -f "$f" || { echo "MISSING $f"; exit 1; }
+  test "$(xxd -p -l4 "$f")" = "c61fbc03" || { echo "$f is not Hermes bytecode"; exit 1; }
+done
+# both asset manifests present
+test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
+test -f dist/powerapps-customer-assets-ios/manifest.json     || { echo "MISSING ios manifest"; exit 1; }
+echo "✓ native package + asset manifests present"
+```
+
+If a `package:*` step fails, surface the error and STOP. If the app renders bundled images/fonts, also confirm each `manifest.json` `assets` array is non-empty (an empty array means the app doesn't `require()` any static asset yet).
 
 ### Step 2.5 — Offline profile coverage gate
 
