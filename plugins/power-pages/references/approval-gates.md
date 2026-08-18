@@ -474,7 +474,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
-| `create-site:1.localization` | not-a-gate | — | 1 | *"Add localization support?"* — records creation scope before scaffolding; explains SPA-only scope and does not write by itself | — |
+| `create-site:5.7.localization` | not-a-gate | — | 5.7 | *"Would you like to add localization support to this site now?"* — selects whether to enter the child localization workflow after site implementation; the child workflow's Phase 3 gate approves every localization write | — |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
