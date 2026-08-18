@@ -173,11 +173,16 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **If a create flow needs the new record immediately, pre-generate its Dataverse ID.** Do not navigate, upload, create child rows, or build lookup binds from `result.data?.<primaryid>`. Use the create-then-navigate rule below: call `newId()` from `@/utils`, include the primary ID field in the create payload, check `result.success`, then navigate/bind/upload using the ID you generated before the POST. This is the only safe pattern for flows like scan → detail, create parent → child form, or create evidence row → upload image.
 - **Dynamic route IDs are untrusted.** Detail/edit/upload screens that read `useLocalSearchParams()` MUST normalize and validate the route ID before any Dataverse service call. Treat missing values and literal strings like `'undefined'` / `'null'` as invalid. Never pass `String(params.id ?? '')` directly into `Service.get(id)`, `Service.update(id, ...)`, or `Service.upload(id, ...)`; `enabled: !!id` is not enough because `'undefined'` is truthy. Required pattern:
   ```ts
-  const id = normalizeRouteId(params.id);
-  const validId = isDataverseId(id);
-  const query = useQuery({ enabled: validId, queryFn: () => Service.get(id) });
-  if (!validId) return <MissingRecordIdState />;
+  const params = useLocalSearchParams<{ id?: string | string[] }>();
+  const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const id = normalizeDataverseGuid(rawId);
+  const query = useQuery({
+    enabled: !!id,
+    queryFn: () => Service.get(id!),
+  });
+  if (!id) return <MissingRecordIdState />;
   ```
+  Import `normalizeDataverseGuid` from `@/utils`. Do not invent alternate ID helpers or an inline UUID regex.
 - **Lookup writes use `@odata.bind`, NEVER raw GUIDs.** When a form creates or updates a record with a parent reference (Task → Project, Comment → Task, Inspection → Site, etc.), the foreign key field is set with the entity-bind syntax. Setting it any other way either silently saves `null` (data loss — form looks like it succeeded) or 400s with a cryptic Dataverse error.
   - **Required pattern** — open the generated target model and copy the exact quoted property ending in `@odata.bind`; value is `/<entitySetName>(<guid>)`:
     ```ts
