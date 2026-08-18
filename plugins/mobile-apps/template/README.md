@@ -6,7 +6,7 @@ iOS, Android, or hosted web app that connects to Power Platform data through
 
 ## Requirements
 
-- Node.js 22 LTS.
+- Node.js 24 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
 
@@ -82,6 +82,19 @@ connector wiring.
 	environment-specific page and writes the pasted client ID to
 	`auth.config.json`.
 
+	### Required API permissions
+
+	The Microsoft Entra app registration requires these delegated permissions
+	from the **Power Platform API**:
+
+	- `PowerApps.Apps.Play`
+	- `PowerApps.Apps.Read`
+	- `Connectivity.Connectors.Read`
+	- `Connectivity.Connections.Read`
+	- `Connectivity.Connections.Write`
+	- `Connectivity.Connections.UserConsent`
+
+
 5. Start mobile app:
 
 	Run the below command in a new terminal from the app directory.
@@ -112,8 +125,8 @@ npx --package @microsoft/power-apps-native-host@latest upgrade-template
 
 Each run upgrades one template version, installs compatible dependencies, and
 runs Expo validation. If another version is available, run the command again.
-The current version is stored in `.powerapps-native/version.json`; do not edit
-this file.
+The current version is stored in `app.json` under
+`expo.extra.powerappsNative`; do not edit this object.
 
 Apps created before this version file existed must specify their source template
 version:
@@ -129,6 +142,33 @@ for manual resolution. Failed validation restores files managed by the upgrade.
 
 Supported package managers are npm, pnpm, and Bun. See
 [CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration files.
+
+### Manual migration to a new template
+
+To migrate without `upgrade-template`, create a new app from the latest template
+instead of modifying the old app in place. Commit or back up the old app first.
+
+1. Create the new app and install its dependencies.
+2. Copy the contents of `app/` and `src/` from the old app into the same
+	directories in the new app:
+
+	```bash
+	cp -R ../old-app/app/. app/
+	cp -R ../old-app/src/. src/
+	```
+
+3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
+	`power.config.json`, and `offline-profile.json` as needed. Review each file
+	before replacing the version supplied by the new template.
+4. Keep the new template's `package.json`, lock file, root configuration files,
+	`android/`, and `ios/`. Reapply old customizations selectively rather than
+	copying these files wholesale.
+5. Run `npm install`, `npm run type-check`, and the bundle command for each
+	target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
+6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
+	update the migrated `app/` and `src/` code for the new template APIs while
+	preserving the new template configuration. Review the changes and rerun the
+	failing command until the build succeeds.
 
 ## Web
 
