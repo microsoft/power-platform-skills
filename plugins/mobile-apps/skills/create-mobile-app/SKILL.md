@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx pa app init --non-interactive` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -42,7 +42,7 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 `tsc` is a **phase gate**, not a reflex after every tiny edit. The app may not advance past a gate until TypeScript is clean.
 
 **Required gates:**
-- **Scaffold gate:** Step 6.6 after existing-template preparation, `npx power-apps init`, and dependency verification.
+- **Scaffold gate:** Step 6.6 after existing-template preparation, `npx pa app init --non-interactive`, and dependency verification.
 - **Dataverse/generated-services gate:** immediately after Step 8 returns and generated services/models are refreshed.
 - **Navigation/skeleton gate:** after Step 10b layouts and Step 10.8 shared code/skeletons are written, before Step 11 builders launch.
 - **Screen-wave gate:** after each Step 11 screen-builder wave returns, before launching the next wave.
@@ -87,7 +87,7 @@ After the resume check, run the **fresh-template gate** from the section above. 
 - If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
 - If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx pa app init --non-interactive`.
 
 ### Step 1 — Prerequisites
 
@@ -95,14 +95,14 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
-**Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by `npx power-apps`:
+**Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by `npx pa`:
 
 | What | Uses | Typical account |
 |---|---|---|
 | `npm install` private feed access | npm/Azure Artifacts auth configured outside this skill | Account with feed Reader access |
-| `npx power-apps init`, Dataverse, deploy | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
+| `npx pa app init --non-interactive`, Dataverse, deploy | Pre-authenticated `npx pa` account cache + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
 
-Renewing npm feed auth does not sign the user into `npx power-apps`. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm/ADO feed token.
+Renewing npm feed auth does not sign the user into `npx pa`. If the Power Apps CLI account cache is missing or expired, the required `--non-interactive` invocation must fail fast; STOP and ask the user to authenticate outside the unattended workflow before retrying.
 
 Then run the checks:
 
@@ -113,7 +113,7 @@ az account show --query "user.name" -o tsv          # Azure CLI logged in (neede
 git --version                                       # optional
 ```
 
-**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
+**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx pa app push --non-interactive`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
 
 | Missing | Action |
 |---|---|
@@ -124,15 +124,15 @@ Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbac
 
 Capture target Power Platform environment for the remaining flow.
 
-**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx power-apps init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx power-apps init` because init needs `--environment-id`.
+**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx pa app init --non-interactive` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx pa app init --non-interactive` because init needs `--environment-id`.
 
 | Step | Source | When user is asked |
 |---|---|---|
-| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `npx power-apps init` |
+| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `npx pa app init --non-interactive` |
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `npx pa app init --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -152,11 +152,11 @@ echo "✓ Target env URL: $ACTIVE_ENV_URL"
 echo "✓ Target tenant: ${ACTIVE_TENANT_ID:-unknown}"
 ```
 
-**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `npx power-apps init` here; Step 6 owns initialization after the user confirms the target environment.
+**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `npx pa app init --non-interactive` here; Step 6 owns initialization after the user confirms the target environment.
 
-Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`npx power-apps init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
+Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`npx pa app init --non-interactive`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
 
-If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `npx power-apps init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
+If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `npx pa app init --non-interactive` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
 
 ### Step 1.7 — Detect publisher prefix
 
@@ -192,7 +192,7 @@ A second solution name can be passed as a second argument if the env uses a diff
 | `{"prefix": "cr8142a", ...}` | `$DETECTED_PUBLISHER_PREFIX = "cr8142a"` | Pass to planner prompt as a fact: *"Publisher prefix (detected from env): `cr8142a_`"* |
 | `{"prefix": null, ...}` | `$DETECTED_PUBLISHER_PREFIX = ""` (empty) | Pass to planner as: *"Publisher prefix: NOT DETECTED — use placeholder `cr_` and warn the user that Dataverse will normalize the actual prefix at create time."* |
 
-Do NOT block on null detection — the user can still proceed; the Power Apps CLI normalizes prefixes when `npx power-apps add-data-source` runs. The detection step is purely to make the plan output accurate.
+Do NOT block on null detection — the user can still proceed; the Power Apps CLI normalizes prefixes when `npx pa app add data-source --non-interactive` runs. The detection step is purely to make the plan output accurate.
 
 If the script exits non-zero (rare — should always exit 0 with `prefix: null`), treat it as the null case and continue.
 
@@ -222,7 +222,7 @@ Then collect with `AskUserQuestion` (batch where possible):
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
 ```bash
-npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
+npx pa app list --non-interactive 2>/dev/null | grep -F "<displayName>" >/dev/null && \
   echo "COLLISION" || echo "OK"
 ```
 
@@ -230,11 +230,11 @@ If `COLLISION`, ask the user via `AskUserQuestion`:
 > "An app named `<displayName>` already exists in `<ACTIVE_ENV_NAME>`. Choose:
 >  1. Pick a different name (recommended)
 >  2. Delete the existing app in Maker portal — DESTRUCTIVE, asks confirmation outside this skill
->  3. Continue anyway (bg `npx power-apps init` will fail; you'll have to rename later — NOT recommended)"
+>  3. Continue anyway (bg `npx pa app init --non-interactive` will fail; you'll have to rename later — NOT recommended)"
 
 Re-prompt for name if (1). If (2), send the user to Maker portal to delete the existing app, then re-run the collision check. Only proceed once collision is resolved.
 
-If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
+If `npx pa app list --non-interactive` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 
@@ -349,7 +349,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx pa app init --non-interactive`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -979,7 +979,7 @@ template or repair the precise stale import before continuing.
 
 `app/_layout.tsx` imports `schemaMap` from `src/generated/connectorSchemas.ts`, which is generated by `npm run generate-schemas` (the `generate-connector-schemas` binary from the `@microsoft/power-apps-cli` devDep). Do not generate an empty schema map during initial scaffold: the template's `@ts-ignore` boundary lets `tsc` validate the scaffold without that artifact, and schema generation is more useful after a data source exists or immediately before dev/build entry points.
 
-Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a specific shape that downstream code depends on; a placeholder will break `npx power-apps push`.
+Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a specific shape that downstream code depends on; a placeholder will break `npx pa app push --non-interactive`.
 
 **Why `tsc` already passes post-clone (current template, PR #30):** the template's `app/_layout.tsx` and `src/playerConfig.ts` carry `// @ts-ignore` comments above the `power.config.json` and `connectorSchemas` imports specifically so the project type-checks before `power.config.json` and `connectorSchemas.ts` exist. **Never strip these `@ts-ignore` lines** — Fix 8 below preserves them when patching `app/_layout.tsx` to thread the project's `tamaguiConfig` into `PowerAppsProvider`, and any future `Edit` to either file MUST keep them. Removing them resurfaces a `tsc` failure against missing generated files.
 
@@ -1008,7 +1008,7 @@ not wrap `<Slot />` with `SafeAreaView`; each rendered route owns its content
 edges to avoid double insets.
 
 Key points:
-- **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
+- **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx pa app init --non-interactive`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
@@ -1035,11 +1035,11 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 **Telemetry checkpoint: `initialize_power_apps_project`**
 
 **Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
+> "→ [Step 6/13] Running `npx pa app init --non-interactive` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
+npx pa app init --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
 ```
 
 Substitute the approved Step 2 display name and Step 4 environment ID using
@@ -1440,8 +1440,8 @@ The publish checkpoint is retained across schema/PublishXml failure and
 deleted only after successful publish, so a rerun retries pending publication
 even when schema writes are already idempotent.
 It creates Tier 0 → N tables, applies extensions, runs
-`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
---resource-name <name>` per service-required table from the app root,
+`npx pa app add data-source --connector dataverse --table <name> --non-interactive`
+per service-required table from the app root,
 type-checks, and returns. Real matched A/B runs are still required to quantify
 the end-to-end time saved; do not present local manifest timing as a guaranteed
 1–3 minute Dataverse result.
@@ -1601,7 +1601,7 @@ For each row in the table, route to the correct skill based on the API name:
 
 Run sequentially — each generates files under `src/generated/`. Parallel writes would race.
 
-**Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
+**Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx pa app add data-source --non-interactive` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
 ### Step 10b — Wire navigation layout
 
@@ -2291,7 +2291,7 @@ Only invoke `/debug-app` if the user asks for debugging or gives a concrete symp
 When the user is ready to deploy:
 
 ```
-/deploy            # runs npm run build + npx power-apps push
+/deploy            # runs npm run build + npx pa app push --non-interactive
 ```
 
 ### Step 13 — Summary

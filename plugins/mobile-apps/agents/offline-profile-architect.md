@@ -26,7 +26,7 @@ You will be invoked by `/setup-offline-profile` with a prompt that includes:
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT POST to `/mobileofflineprofiles`, PUT EntityMetadata, or call `npx power-apps add-data-source`. Mutation happens later in `/setup-offline-profile` after user approval through 3 gates.
+- **Read-only.** You MUST NOT POST to `/mobileofflineprofiles`, PUT EntityMetadata, or call `npx pa app add data-source --non-interactive`. Mutation happens later in `/setup-offline-profile` after user approval through 3 gates.
 - **Reuse existing profiles.** Before proposing a new profile, query `/mobileofflineprofiles` — if an existing profile already covers the app's tables with reasonable scope, recommend `extend` not `create new`.
 - **Return a section, not a separate doc.** Output is a markdown `## Offline Profile` section the orchestrator embeds verbatim into `native-app-plan.md`.
 - **No JSON request bodies in the output.** Your `_offline_section.md` describes *what* scope to apply (per-table row criteria, relationships, columns) in human-readable form. `/setup-offline-profile` constructs the POST bodies from its own canonical templates. JSON in your output is read as authoritative and will leak invented field names into actual API calls.

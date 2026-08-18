@@ -6,11 +6,11 @@ Single source of truth for minimum tool versions. Every skill should reference t
 
 This plugin uses scope-aware checks based on the mobile workflow:
 
-- **Deploy** = `npm run build` + `npx power-apps push`. No local Xcode / Android Studio involvement.
+- **Deploy** = `npm run build` + `npx pa app push --non-interactive`. No local Xcode / Android Studio involvement.
 - **Local dev** = the user runs `npm run dev` (= `expo start`) directly. Metro starts and prints a QR for native dev clients.
 - **Local native compile** (platform-specific native run commands) is the user's choice and lives **outside** this plugin's skills. Not a prerequisite, not validated, not driven.
 
-Result: the only required tooling is what Node/npm, `npx power-apps`, and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
+Result: the only required tooling is what Node/npm, `npx pa`, and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
 
 This is also a standard **Expo managed workflow** project. That means:
 

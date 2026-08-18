@@ -37,7 +37,7 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /npx power-apps init -t MobileApp/);
+  assert.match(initialize, /npx pa app init/);
   assert.match(initialize, /--display-name "<displayName>"/);
   assert.match(initialize, /--environment-id "<environment-id>"/);
   assert.match(initialize, /approved Step 2 display name and Step 4 environment ID/);
