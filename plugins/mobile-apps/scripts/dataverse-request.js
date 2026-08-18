@@ -538,9 +538,9 @@ async function runOneMetadataOperation(
 
     if (res.statusCode === 429 && attempt < maxRetries) {
       const retryAfter = res.headers?.['retry-after'];
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000;
+      const delaySeconds = retryAfter ? Number.parseInt(String(retryAfter), 10) : NaN;
+      const delayMs = Number.isFinite(delaySeconds) ? delaySeconds * 1000 : 30000;
       rateLimited = true;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
       continue;
     }
 
