@@ -49,6 +49,14 @@
 
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
+function retryAfterDelayMs(retryAfter, fallbackMs) {
+  if (retryAfter == null || retryAfter === '') return fallbackMs;
+  const delaySeconds = Number.parseInt(String(retryAfter), 10);
+  return Number.isFinite(delaySeconds) && delaySeconds >= 0
+    ? delaySeconds * 1000
+    : fallbackMs;
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   if (args.length < 3) {
@@ -277,8 +285,7 @@ async function main() {
 
     // Retry on 429 — honour Retry-After header if present, else 30s backoff
     if (res.statusCode === 429 && attempt < maxRetries) {
-      const retryAfter = res.headers?.['retry-after'];
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000;
+      const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
       process.stderr.write(`429 rate-limited — waiting ${delayMs / 1000}s before retry ${attempt + 1}/${maxRetries}\n`);
       wasRateLimited = true;
       await new Promise((r) => setTimeout(r, delayMs));
@@ -451,8 +458,7 @@ async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
     }
 
     if (res.statusCode === 429 && attempt < maxRetries) {
-      const retryAfter = res.headers?.['retry-after'];
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 5000;
+      const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 5000);
       await new Promise((r) => setTimeout(r, delayMs));
       continue;
     }
@@ -591,8 +597,7 @@ async function runOneMetadataOperation(
     }
 
     if (res.statusCode === 429 && attempt < maxRetries) {
-      const retryAfter = res.headers?.['retry-after'];
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000;
+      const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
       rateLimited = true;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       continue;
@@ -638,6 +643,7 @@ module.exports = {
   createDataverseRequestExecutor,
   doRequest,
   extractGuid,
+  retryAfterDelayMs,
   runBatch,
   runMetadataBatch,
   runOneMetadataOperation,

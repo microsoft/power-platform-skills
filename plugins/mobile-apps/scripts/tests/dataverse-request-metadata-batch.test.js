@@ -10,7 +10,16 @@ const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
-const { createDataverseRequestExecutor } = require('../dataverse-request');
+const {
+  createDataverseRequestExecutor,
+  retryAfterDelayMs,
+} = require('../dataverse-request');
+
+test('Retry-After parsing falls back without removing the retry delay', () => {
+  assert.equal(retryAfterDelayMs('7', 30000), 7000);
+  assert.equal(retryAfterDelayMs('invalid', 30000), 30000);
+  assert.equal(retryAfterDelayMs(undefined, 5000), 5000);
+});
 
 function makeTempDir(t) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dataverse-fake-az-'));
