@@ -28,7 +28,8 @@ Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation 
 shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
 
 **Requirements:**
-- **PAC CLI ≥ 2.7.0** — for app and generative-page deploy operations
+**Requirements:**
+- **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
 - **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
   same identity as the active `pac` profile
 
@@ -132,6 +133,33 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   snapshot (`.maker-workspace/apply-snapshot.json`); any non-page edit (or an edit to a pre-existing app)
   falls back to a full build. Teardown tombstones+deletes the snapshot. See
   [`docs/changed-only-design.md`](docs/changed-only-design.md) for the v1 scope + contract.
+  **App TABLE components are pinned by OData REFERENCE** (ADO 6612527). The SDK sends
+  `{ '@odata.id': '<EntitySetName>(<MetadataId>)' }` per sitemap table, NOT an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old instance
+  payload pinned the `entity` TABLE and every app exported as
+  `<AppModuleComponent type="1" schemaName="entity" />`. The **set segment** decides the resulting
+  `objectid`; an unknown set 400s, so a typo cannot silently pin the wrong table. The reference form is
+  also the ONLY one that can express an abstract EDM table (`activitypointer`, `principal`), which an
+  instance payload rejects outright. Three consequences the build depends on: ONE bad component fails
+  the WHOLE `AddAppComponents` call (zero rows), so an unresolvable table **HALTS** the build naming it
+  rather than shipping an app whose nav points at content it lacks; `AddAppComponents` does NOT
+  de-duplicate (N components → N rows); and because a 204 says only that the request was *accepted*,
+  the SDK **reads the components back** and asserts each declared table has a `componenttype: 1` row
+  carrying that table's MetadataId, failing closed on an inconclusive read. That last point is the
+  general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
+  component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
+  Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
+  The same rule binds **tests and evals**, with a distinction that is easy to get backwards:
+  an EXPECTATION must come from the CONTRACT, independent of the code under test, while the FIXTURE
+  that stands in for the environment should be generated from the builder's real output so it cannot
+  drift from what ships. `smoke-eval.js` got both wrong at once: it asserted a `VectorIcon` the
+  builder deliberately drops, and its unit test hand-wrote sitemap XML containing that value — so the
+  offline suite stayed green while every live run failed. Deriving the expectation from `appDef`
+  instead is the opposite failure and is just as bad: when the builder stops emitting a value, a
+  derived "must be present" check silently becomes "must be absent" and still passes, leaving the
+  eval unable to contradict the very code it exists to check. Assertions are therefore fixed by
+  contract, the offline fixture is rendered from `appDef`, and `vendor-sdk-smoke.test.js` checks the
+  bytes the real vendored SDK serializes.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
   exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
@@ -183,21 +211,21 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
   FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
   a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
-  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used:
-  LIVE-verified that every one carries the same `objectid` (the `entity` metadata table's own id), so
-  it identifies the component *kind*, not which table, and `RetrieveAppComponents` returned 0 rows on
-  the same app. **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
+  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used, but
+  the REASON changed: apps built before the entity-component fix carry junk rows that all share one
+  `objectid` (the `entity` metadata table's own id), so on those apps the row identifies the
+  component *kind*, not which table. Newly built apps now carry CORRECT per-table objectids (see the
+  build note below), so reading them is viable — it is not done yet because a legacy app's junk rows
+  would resolve to the table literally named `entity` and have to be filtered.
+  **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
   with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
   `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
   the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. **Closing ADO 6603388 from the BUILD side is blocked by the platform, not
-  merely unimplemented:** a table (`entity`) app component cannot be pinned via `AddAppComponents` at
-  all — the documented shape returns 204 but records a component pointing at the metadata table
-  literally named `entity` (the same finding as the `componenttype eq 1` note above), while
-  `metadataid` and a logical-name `entityid` are rejected and a `savedquery` in the SAME request pins
-  correctly as a control. Direct create is unsupported too, and `ValidateApp` reports success
-  regardless, which is why it went unnoticed. Tracked platform-side as **AB#39140211**. Do NOT claim
-  table components are applied. The component read is best-effort: a failure degrades
+  or edited in the maker. **ADO 6603388 (download) is still open**, and a live attempt to construct
+  the hidden component it describes did not succeed: pinning `task` via `AddAppComponents` with the
+  now-correct reference shape returned 204 but wrote no row, before or after publish. So the
+  download-side fix cannot currently be verified end to end — do not implement it speculatively.
+  The component read is best-effort: a failure degrades
   to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
@@ -342,8 +370,10 @@ agents/                        ← Agent definitions (invoked by skills via Task
   genpage-entity-builder.md    ← DV entity creation via plugin's Web API scripts (create flow)
   genpage-page-builder.md      ← Writes one .tsx file; runs in parallel for multi-page (create flow)
   genpage-edit-planner.md      ← Reads download artifacts, plans edits, writes edit plan (edit flow)
+  genpage-customapi-builder.md ← Single owner of the custom-api gate; discovers bound Custom APIs, writes ## Custom API Bindings + actions.json (create & edit flows)
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
+  custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
@@ -351,7 +381,7 @@ references/                    ← Shared reference docs
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
-samples/                       ← Example .tsx files (12 samples) plus app-builder spec samples
+samples/                       ← Example .tsx files (13 samples) plus app-builder spec samples
 scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
@@ -360,6 +390,7 @@ scripts/
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
+  list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
@@ -446,7 +477,7 @@ skills/
 | `/genpage` | Build and deploy generative pages for a model-driven Power App |
 | `/app-builder` | **(Preview)** Build and edit a whole model-driven app — tables, columns, relationships, adaptive forms, views, Choice-column charts, generative pages, app + sitemap, sample data, and admin-gated AI features — from a natural-language intent, via the vendored `cds-maker-sdk` |
 | `/report-issue` | File a bug/issue about the model-apps plugin to the GitHub repository |
-| `/telemetry` | Enable/disable/check anonymous usage telemetry (`on \| off \| status`) |
+| `/telemetry` | Enable, disable, or check usage telemetry (`on \| off \| status`) |
 
 ## Agents
 
@@ -459,6 +490,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
 | `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
 
@@ -499,7 +531,8 @@ values in `feature-flags.json` at the plugin root.
 - **Script backstop:** connector entrypoints call the shared
   `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
   exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
-  `--connection-refs` branch of `add-page-to-solution.js`.
+  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
+  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
@@ -553,6 +586,30 @@ The **`connectors`** flag currently ships OFF: GenPage connector support needs t
 pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring control
 (power-platform-ux), and the maker/admin ECS setting to all be released first.
 
+**Custom API gate — the single owner is `genpage-customapi-builder`.** Every Custom API
+entry point must go through it or the helper; the checklist of places that gate:
+
+1. Discovery — `genpage-customapi-builder` runs the probe first (planner + edit-planner
+   delegate to it; they do not gate inline).
+2. Scripts — `list-custom-apis.js` (`exitIfCustomApiDisabled`).
+3. Deploy — SKILL Phase 4.6 **re-probes** the flag and treats absent/malformed
+   `## Custom API Bindings` as no bindings (a plan authored while ON must not deploy
+   Custom API bindings after OFF).
+4. ALM — none needed: `config.json`'s `actionBindings` travels inside the page's
+   `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate
+   deployment prerequisite, bound by name).
+5. Codegen — `genpage-page-builder` emits `executeAction` / `executeFunction` /
+   `listBoundActions` code only when the plan has an actual binding table (never on an
+   absent/sentinel section).
+
+The **`custom-api`** flag currently ships OFF: GenPage Custom API invocation needs the
+AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime` plus the UCI and
+Controls host runtimes, a pac CLI `model genpage upload --actions` verb
+(PowerPlatform-Scale-AdminTools) to persist `actionBindings` into `config.json`, and the
+`GenUxPluginActionAllowList` ECS setting to all be released first. Note the maker-facing name
+is "Custom API" while the shipped wire contract stays `actionBindings` / `executeAction`
+(see `references/custom-api.md`).
+
 ## Hooks & Validators
 
 Hooks are registered centrally in `hooks/hooks.json` (auto-loaded by the plugin
@@ -601,7 +658,10 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** anonymous, default-on. Users opt out of transmission via
+- **Privacy:** default-on usage telemetry. Events include Dataverse organization
+  and Entra tenant GUIDs when PAC is signed in, but Model Apps excludes the
+  signed-in user's Entra object ID. The local diagnostic mirror retains the same
+  event fields. Users opt out of transmission via
   `/model-apps:telemetry off`; the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) is
   still written. CI/automation opt out via
@@ -627,6 +687,9 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 - Write descriptions in third person ("Creates X" not "This skill guides you through creating X")
 - Use progressive disclosure: SKILL.md for workflow, reference files for details
 - Link to references inline: `See [troubleshooting.md](../../references/troubleshooting.md)`
+- Immediately after the frontmatter of every user-invocable skill, run
+  `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before
+  proceeding. The check is best-effort and must never block skill execution.
 
 ## Building & Testing
 

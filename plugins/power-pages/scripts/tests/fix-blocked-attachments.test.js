@@ -9,9 +9,9 @@ blockedattachments ${SAMPLE_BLOCKED}
 `;
 
 function fakeExec(listOut, updateOut) {
-  return (cmd) => {
-    if (cmd.includes('list-settings')) return listOut;
-    if (cmd.includes('update-settings')) return updateOut || "Setting 'blockedattachments' updated successfully";
+  return (_file, args) => {
+    if (args.includes('list-settings')) return listOut;
+    if (args.includes('update-settings')) return updateOut || "Setting 'blockedattachments' updated successfully";
     return '';
   };
 }
@@ -58,9 +58,9 @@ test('dry-run does not call update-settings', async () => {
     extensions: ['js'],
     dryRun: true,
     quiet: true,
-    execImpl: (cmd) => {
-      if (cmd.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
-      if (cmd.includes('update-settings')) { updateCalled = true; return 'ok'; }
+    execImpl: (_file, args) => {
+      if (args.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
+      if (args.includes('update-settings')) { updateCalled = true; return 'ok'; }
       return '';
     },
   });
@@ -70,19 +70,61 @@ test('dry-run does not call update-settings', async () => {
   assert.deepEqual(result.wasBlocked, ['js']);
 });
 
-test('passes --environment arg when envUrl provided', async () => {
-  let capturedCmd = null;
+test('passes --environment as a literal argv value with shell disabled', async () => {
+  const calls = [];
   await fixBlockedAttachments({
     envUrl: 'https://staging.crm.dynamics.com',
     extensions: ['js'],
     quiet: true,
-    execImpl: (cmd) => {
-      capturedCmd = cmd;
-      if (cmd.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
+    execImpl: (file, args, options) => {
+      calls.push({ file, args, options });
+      if (args.includes('list-settings')) return SAMPLE_PAC_OUTPUT;
       return "Setting 'blockedattachments' updated successfully";
     },
   });
-  assert.match(capturedCmd, /--environment "https:\/\/staging\.crm\.dynamics\.com"/);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.file, 'pac');
+    assert.equal(call.options.shell, false);
+    assert.deepEqual(
+      call.args.slice(call.args.indexOf('--environment'), call.args.indexOf('--environment') + 2),
+      ['--environment', 'https://staging.crm.dynamics.com'],
+    );
+  }
+});
+
+test('passes Dataverse-derived setting metacharacters as one literal argv value', async () => {
+  const currentValue = 'exe;dll;&marker|%PATH%!;js';
+  let updateArgs = null;
+  await fixBlockedAttachments({
+    extensions: ['js'],
+    quiet: true,
+    execImpl: (_file, args, options) => {
+      assert.equal(options.shell, false);
+      if (args.includes('list-settings')) {
+        return `Setting Value\nblockedattachments ${currentValue}\n`;
+      }
+      updateArgs = args;
+      return 'updated';
+    },
+  });
+
+  const valueIndex = updateArgs.indexOf('--value');
+  assert.equal(updateArgs[valueIndex + 1], 'exe;dll;&marker|%path%!');
+});
+
+test('rejects unsafe environment URLs before invoking pac', async () => {
+  let called = false;
+  await assert.rejects(
+    () => fixBlockedAttachments({
+      envUrl: 'https://staging.crm.dynamics.com:8443',
+      extensions: ['js'],
+      quiet: true,
+      execImpl: () => { called = true; return ''; },
+    }),
+    /must not contain a port/,
+  );
+  assert.equal(called, false);
 });
 
 test('throws on pac list-settings failure', async () => {
@@ -101,8 +143,8 @@ test('throws when blockedattachments line not found in output', async () => {
     () => fixBlockedAttachments({
       extensions: ['js'],
       quiet: true,
-      execImpl: (cmd) => {
-        if (cmd.includes('list-settings')) return 'Connected\nSetting not found here\n';
+      execImpl: (_file, args) => {
+        if (args.includes('list-settings')) return 'Connected\nSetting not found here\n';
         return '';
       },
     }),

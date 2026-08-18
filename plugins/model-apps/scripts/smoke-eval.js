@@ -15,12 +15,25 @@ const { spawnSync } = require('node:child_process');
 
 // A minimal 1x1 transparent PNG (base64) for the nav-icon web resource.
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+// A minimal square SVG (base64) for the vector nav-icon web resource:
+//   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>
+const SVG_SQUARE = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTQgNGgxNnYxNkg0eiIvPjwvc3ZnPg==';
 
 // A canonical smoke spec exercising the shipped features: an entity with columns (so default views
-// enrich), an image web resource, and a subarea with a raster icon + a Fluent vectorIcon.
+// enrich), raster + SVG web resources, and two subareas that pin BOTH directions of the entity
+// `vectorIcon` contract (see appDef in lib/sdk-build.js):
+//   1. a PLATFORM REF (`/WebResources/<name>.svg`) — emitted verbatim, so a custom nav glyph and the
+//      download->build round-trip survive. This is the shape a real app carries.
+//   2. a BARE Fluent TOKEN ("Grid") — deliberately DROPPED on an entity subarea, because that shape
+//      breaks the modern app-designer property pane. Kept as a live NEGATIVE CONTROL so the drop is
+//      proven against the org rather than trusted from a code comment; validateAppSpec warns about
+//      it by design (warnings are non-blocking), which the unit tests assert is intentional.
+// The bare token used to sit on the ONLY subarea while the assertion demanded VectorIcon="Grid" in
+// the deployed sitemap — an outcome the builder can never produce, so the live smoke could only fail.
 function buildSmokeSpec(prefix = 'smk') {
   const ent = `new_${prefix}order`;
   const icon = `new_${prefix}icon.png`;
+  const vectorIcon = `new_${prefix}vec.svg`;
   return {
     solution: { uniqueName: `${prefix}SmokeSln`, displayName: `${prefix} smoke`, publisherPrefix: 'new' },
     app: { name: `${prefix} Smoke App`, description: 'smoke eval' },
@@ -35,21 +48,43 @@ function buildSmokeSpec(prefix = 'smk') {
         ],
       },
     ],
-    webResources: [{ name: icon, displayName: 'Smoke Icon', type: 'png', contentBase64: PNG_1x1 }],
+    webResources: [
+      { name: icon, displayName: 'Smoke Icon', type: 'png', contentBase64: PNG_1x1 },
+      { name: vectorIcon, displayName: 'Smoke Vector Icon', type: 'svg', contentBase64: SVG_SQUARE },
+    ],
     views: [],
     charts: [],
     forms: [],
     commands: [],
     dashboards: [],
-    appShell: { areas: [{ label: 'Main', icon, groups: [{ label: 'Records', subAreas: [{ entity: ent, title: 'Orders', icon, vectorIcon: 'Grid' }] }] }] },
+    appShell: {
+      areas: [{
+        label: 'Main',
+        icon,
+        groups: [{
+          label: 'Records',
+          subAreas: [
+            { entity: ent, title: 'Orders', icon, vectorIcon: `/WebResources/${vectorIcon}` },
+            { entity: ent, title: 'Orders (token)', icon, vectorIcon: 'Grid' },
+          ],
+        }],
+      }],
+    },
   };
 }
 
 // Run the server-side assertions against a deployed app. `read` is { queryRecords(set, opts) ->
 // rows, sitemapXml(appId) -> xml }. Returns [{ name, ok, detail }].
+//
+// Expectations are stated from the CONTRACT (the spec's authored values + the documented drop rule),
+// never derived from `appDef`. Deriving them would make this eval unable to contradict the very code
+// it exists to check: when appDef stops emitting a value, a derived "must be present" assertion
+// silently becomes "must be absent" and still passes. Keeping the expectation independent is what
+// makes a live FAIL possible. The offline suite (scripts/tests/smoke-eval.test.js) carries the other
+// half of the guarantee — that buildSmokeSpec and appDef still AGREE with this contract — so an
+// unsatisfiable assertion is caught before anyone spends a live run on it.
 async function runSmokeAssertions(spec, appId, read) {
   const ent = spec.entities[0].schemaName.toLowerCase();
-  const iconName = spec.webResources[0].name.toLowerCase();
   const results = [];
 
   const views = (await read.queryRecords('savedquery', { select: ['name', 'layoutxml'], filter: `returnedtypecode eq '${ent}' and querytype eq 0` })) || [];
@@ -57,11 +92,62 @@ async function runSmokeAssertions(spec, appId, read) {
   results.push({ name: 'default view enriched (has new_status column)', ok: enriched, detail: `${views.length} querytype-0 views` });
 
   const xml = (await read.sitemapXml(appId)) || '';
-  results.push({ name: `sitemap subarea carries Icon="${iconName}"`, ok: xml.toLowerCase().includes(`icon="${iconName}"`), detail: '' });
-  results.push({ name: 'sitemap subarea carries VectorIcon="Grid"', ok: /VectorIcon="Grid"/.test(xml), detail: '' });
+  // Subarea 0 declares a PLATFORM-REF vectorIcon (must round-trip); subarea 1 declares a BARE Fluent
+  // token (must be dropped). buildSmokeSpec fixes these roles and the unit tests pin them.
+  const subAreas = (((spec.appShell || {}).areas || [])[0] || {}).groups || [];
+  const [refSub, tokenSub] = (subAreas[0] || {}).subAreas || [];
+
+  for (const [sub, label] of [[refSub, 'platform-ref'], [tokenSub, 'bare-token']]) {
+    if (!sub) { results.push({ name: `smoke spec is missing its ${label} subarea`, ok: false, detail: 'buildSmokeSpec shape changed' }); continue; }
+    const tag = subAreaTag(xml, sub.title);
+    // A collapsed nav must FAIL rather than vacuously satisfy the icon checks below.
+    results.push({ name: `sitemap contains subarea "${sub.title}"`, ok: !!tag, detail: tag ? '' : 'no matching <SubArea> in the deployed sitemap' });
+    if (!tag) continue;
+    results.push({ name: `subarea "${sub.title}" carries Icon="${sub.icon}"`, ok: hasSitemapAttr(tag, 'Icon', sub.icon), detail: '' });
+  }
+
+  if (refSub) {
+    const tag = subAreaTag(xml, refSub.title);
+    results.push({ name: `subarea "${refSub.title}" carries VectorIcon="${refSub.vectorIcon}"`, ok: !!tag && hasSitemapAttr(tag, 'VectorIcon', refSub.vectorIcon), detail: 'a platform-ref vectorIcon must round-trip onto an entity subarea' });
+  }
+  if (tokenSub) {
+    // Document-scoped on purpose: a bare Fluent token must appear NOWHERE in the sitemap, so this
+    // also catches it leaking onto a different element than the one that declared it.
+    results.push({ name: `bare token VectorIcon="${tokenSub.vectorIcon}" is absent from the sitemap`, ok: !hasSitemapAttr(xml, 'VectorIcon', tokenSub.vectorIcon), detail: 'a bare token on an entity subarea breaks the app designer and must be dropped' });
+  }
 
   results.push({ name: 'app module was created', ok: !!appId, detail: appId || '(none)' });
   return results;
+}
+
+// Escape a value for embedding in a RegExp source string.
+const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The OPEN TAG of the <SubArea> whose title is `title`, or '' when there is none. The sitemap nests
+// the label as a child, e.g.:
+//   <SubArea Id="sub_0_0_0" Entity="new_torder" … Icon="x.png" VectorIcon="/WebResources/y.svg">
+//     <Titles><Title LCID="1033" Title="Orders" /></Titles>
+//   </SubArea>
+// Located by the SPEC's authored title rather than the builder's generated `Id`, so the eval does not
+// take its bearings from the component under test. The lookahead stops the lazy scan at the next
+// <SubArea>, so a title can never be matched against a LATER subarea's tag. Only the open tag is
+// returned: attribute checks must not be satisfiable by the nested <Title Title="…"> attribute, nor
+// by the parent <Area Icon="…"> (the smoke spec deliberately reuses one icon across area + subareas,
+// so a document-wide scan would let <Area> alone satisfy every subarea icon assertion).
+function subAreaTag(xml, title) {
+  const re = new RegExp(`<SubArea\\b[^>]*>(?:(?!<SubArea\\b)[\\s\\S])*?<Title\\b[^>]*\\bTitle="${escapeRe(title)}"`, 'i');
+  const m = re.exec(String(xml || ''));
+  if (!m) return '';
+  const open = /^<SubArea\b[^>]*>/i.exec(m[0]);
+  return open ? open[0] : '';
+}
+
+// Match a sitemap attribute exactly within `fragment`. `\b` before the name keeps `Icon="x"` from
+// matching inside `VectorIcon="x"` (there is no word boundary between `r` and `I`), which a plain
+// substring check does not. Matching is case-insensitive because Dataverse lower-cases bare
+// web-resource names; the VALUE is regex-escaped so a path's `/` and `.` stay literal.
+function hasSitemapAttr(fragment, attr, value) {
+  return new RegExp(`\\b${attr}="${escapeRe(value)}"`, 'i').test(String(fragment || ''));
 }
 
 // --- live orchestration -----------------------------------------------------------------
@@ -179,4 +265,4 @@ if (require.main === module) {
   main(env, prefix).then((code) => process.exit(code));
 }
 
-module.exports = { buildSmokeSpec, runSmokeAssertions };
+module.exports = { buildSmokeSpec, runSmokeAssertions, subAreaTag, hasSitemapAttr };

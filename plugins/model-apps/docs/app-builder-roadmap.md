@@ -73,10 +73,11 @@ are in [`architecture.md`](architecture.md).
 
 ## 🎯 MVP gaps vs the MDA Agentic Authoring spec
 
-Evaluated 2026-07-28 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
-(§3 MVP definition + §5 stack rank). **8 of 10 core P0 _primitives_ are ✅ complete** — data model + sample data
-+ auto-number + dedup, Active/Inactive + authored views, main forms, charts, gen-page landings, custom SVG sitemap
-icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart), Insight Card summaries (`ai.summaries`), and
+Evaluated 2026-08-12 against `powerplatform-modelpages-ade/docs/topics/ModelBuilder/MDA-Agentic-Authoring-spec.md`
+(§3 MVP definition + §5 stack rank). **9 of 10 core P0 _primitives_ are ✅ complete** — roles + JTBDs as first-class planning outputs,
+data model + sample data, auto-number + dedup, Active/Inactive + authored views, main forms, charts,
+gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = formFill/nlSearch/nlChart),
+Insight Card summaries (`ai.summaries`), and
 the dedup/verify quality gates. The open MVP items:
 
 - 🔲 **Wave 2 (header/navigation refresh) enabled by default** (spec rank 3, P0) — set the app-module header/nav
@@ -101,8 +102,10 @@ Important, P1 (not MVP-gating; tracked here for visibility):
   **custom app theme + logo** (rank 18 — the `design` block styles gen pages, not the app theme).
 
 P0.5 stretch (not built): **modern grid visualizations by default** (rank 11, contingent on the SDK grid-customizer)
-and **MCP server + Catalyst by default** (rank 12). A status-annotated copy of the spec's §5 stack rank lives on
-branch `users/akmaloo/mda-spec-impl-status` in `powerplatform-modelpages-ade`.
+and **MCP server + Catalyst by default** (rank 12). The spec's §5 stack rank carries a status column annotated from
+this roadmap; it is refreshed on `master` in `powerplatform-modelpages-ade` (last synced 2026-08-12, plugin v2.4.3).
+**Keep the two in step** — when a row here flips, update that column in the same pass, or the spec silently goes
+stale (ranks 1 / 14 / 29 sat wrong for two weeks after the persona work shipped).
 
 ---
 

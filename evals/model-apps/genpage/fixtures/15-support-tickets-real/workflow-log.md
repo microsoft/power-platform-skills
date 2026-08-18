@@ -8,7 +8,7 @@
 v20.18.2
 
 `pac help`
-PAC CLI Version 2.7.4+g06bb2eb (.NET 10.0.8) — >= 2.7.0 confirmed.
+PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8) — > 2.10.0 confirmed.
 
 ### Step 2: Authenticate and Select Environment
 

@@ -602,6 +602,19 @@ Platform connectors via `queryConnectorTable` (tabular) and
 presence-check before calling. See [connectors.md](./connectors.md) for the
 required patterns and the binding contract.
 
+### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
+
+When the plan's `## Custom API Bindings` is non-empty, the page may invoke Dataverse
+**Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
+API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
+(read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the
+page's bound operations. These are optional runtime methods — always presence-check before
+calling, guard Actions against double-submit, read results from `res.outputs` (never
+`res.value`), surface only the sanitized `res.error?.message`, and never auto-retry an
+`indeterminate` result. Call only the `name`s in the plan's `## Custom API Bindings`; a name
+not bound to the page fails with `not_bound`. See [custom-api.md](./custom-api.md) for the
+required patterns, the `boundTo` rules, and the full `error.code` contract.
+
 ---
 
 ## DataAPI Usage Examples

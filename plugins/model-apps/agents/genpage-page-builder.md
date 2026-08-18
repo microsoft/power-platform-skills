@@ -54,6 +54,12 @@ table, the page uses `props.dataApi` connector methods (`queryConnectorTable` /
 inline data. Never fabricate connector rows/fields; use only the discovered
 `Fields`/`Parameters`/`Response` from the plan.
 
+**Custom APIs are likewise decided separately from Data mode** by the plan's `## Custom API
+Bindings` (see the Custom-API step below): when it has an actual binding table, the page may
+call `props.dataApi.executeAction` / `executeFunction` **even in `mock` data mode** (e.g. a
+Global Function that computes a value). Never fabricate a Custom API name, parameter, or
+parameter kind; use only the plan's `## Custom API Bindings` values.
+
 ## Step 1 — Read the Plan Document
 
 Read `genpage-plan.md` at the path provided in your invocation prompt.
@@ -135,6 +141,19 @@ do not read connectors.md and do not emit any connector code. The dispatch wins
 over the plan: the orchestrator re-probes the connectors feature flag right before
 code generation, so a plan authored while the flag was ON must not produce connector
 calls that this run will never bind.
+
+Only when the plan's `## Custom API Bindings` section contains an actual binding table
+(a `| Name | Kind | …` header with at least one data row) do you treat the page as
+Custom-API-backed and also read:
+
+```
+${PLUGIN_ROOT}/references/custom-api.md
+```
+
+If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
+empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
+do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
+`listBoundActions` code.
 
 Read the relevant sample file identified in the plan:
 
@@ -400,6 +419,35 @@ if (typeof connectorApi.executeConnectorOperation !== 'function') { return; }
 const response = await connectorApi.executeConnectorOperation('new_uxtest_msnweather', 'CurrentWeather', parameters);
 if (!response.ok) { return; }
 const weather = response.body as WeatherResponse;
+```
+
+### Custom API invocation (Dataverse Actions & Functions)
+
+When the plan has `## Custom API Bindings`, the page may invoke Dataverse Custom APIs on the
+signed-in user's own token. Use only the `Name`, `Kind`, `Bound Entity`, and `Parameters`
+values from that section — never guess a Custom API name, parameter name, or parameter kind.
+Read `${PLUGIN_ROOT}/references/custom-api.md` and emit calls with the verified patterns
+there. The methods are optional at runtime, so every call must be presence-checked; guard
+each **Action** against double-submit, read results from `res.outputs` (never `res.value`),
+surface only the sanitized `res.error?.message`, and **never auto-retry** an `indeterminate`
+result (only `error.code === 'network'` is safely retryable, via a manual "Try again").
+
+Match the call to the row's `Kind`: an **Action** row uses `executeAction`; a **Function** row
+uses `executeFunction`. Calling the wrong one is rejected with `wrong_operation_kind`. For an
+entity-bound row (a `Bound Entity` table, not `(Global)`), pass
+`boundTo: { entityName: pageInput.entityName, id: pageInput.recordId }` whose `entityName`
+equals that table; for a `(Global)` row, omit `boundTo` entirely.
+
+```typescript
+const actionApi = dataApi as unknown as { executeAction?: (request: { name: string; parameters?: Record<string, unknown>; boundTo?: { entityName: string; id: string } }) => Promise<{ ok: boolean; indeterminate?: boolean; outputs?: Record<string, unknown>; error?: { message: string; code?: string } }>; };
+if (typeof actionApi.executeAction !== 'function' || isSubmitting) { return; } // presence-check + double-submit guard
+setIsSubmitting(true);
+try {
+  const res = await actionApi.executeAction({ name: 'new_ApproveOrder', parameters: { Comment: comment, Amount: amount }, boundTo: { entityName: pageInput.entityName, id: pageInput.recordId } });
+  if (res.indeterminate) { setError("We couldn't confirm this completed — refresh before retrying."); return; }
+  if (!res.ok) { setError(res.error?.message ?? 'The action failed.'); return; }
+  const { NewStatus } = res.outputs as { NewStatus: string };
+} finally { setIsSubmitting(false); }
 ```
 
 ## Step 6 — Write the .tsx File

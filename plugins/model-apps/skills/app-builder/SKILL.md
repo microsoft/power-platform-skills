@@ -1,12 +1,14 @@
 ---
 name: app-builder
-version: 0.8.0
+version: 0.8.1
 description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # app-builder — intent → model-driven app
 
@@ -104,7 +106,9 @@ Rules:
 
 ### Phase 0 — Working directory
 1. Derive a short kebab-case slug from `$ARGUMENTS` (e.g. "Project Tracker" → `project-tracker`).
-2. `mkdir -p <slug>`; resolve its absolute path. It holds `app-spec.json`, `model-app-plan.md`, and `workflow-log.md`.
+2. Create the directory (`mkdir -p <slug>` on bash/PowerShell; `mkdir <slug>` on cmd, which has no
+   `-p` and errors if it exists) and resolve its absolute path. It holds `app-spec.json`,
+   `model-app-plan.md`, and `workflow-log.md`.
 
 ### Phase 1 — Author the App Spec (interactive, main loop)
 
@@ -401,8 +405,12 @@ existing app (add a field/view/page, edit a page's code, retitle/reorder nav, sw
 deployed app fresh into a spec first**, then edit that spec and re-run Phase 2:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName> --out <working-dir>
+node "${PLUGIN_ROOT}/scripts/download-model-app.js" --env <envUrl> --app <appId|uniqueName|displayName> --out <working-dir>
 ```
+
+`--app` resolves in identity order: app id (GUID) → `uniquename` → display name. Prefer the **unique
+name** — it is immutable, while a display name can be renamed and is not unique. A display name that
+matches more than one app is refused, listing the candidate unique names rather than guessing.
 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**

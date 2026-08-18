@@ -2,6 +2,7 @@
 // the app-builder's LLM proposal and the deterministic builder.
 
 const path = require('node:path');
+const { normalizeSpecShape } = require('./spec-shape.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -411,6 +412,12 @@ function validateAppSpec(spec, opts = {}) {
   if (!spec || typeof spec !== 'object') {
     return { ok: false, errors: ['spec is not an object'], warnings };
   }
+  // Structural normalization (shared with lintAppSpec) so a half-typed collection produces findings
+  // rather than a raw TypeError. Covers NESTED collections too — `entity.columns: {}` and
+  // `appShell.areas: {}` are realistic mid-edit states that reach `for...of` and throw.
+  const shape = normalizeSpecShape(spec);
+  errors.push(...shape.errors);
+  spec = shape.spec;
   if (!spec.solution || !spec.solution.uniqueName) {
     errors.push('solution.uniqueName is required');
   }
@@ -1209,9 +1216,16 @@ function migrateAppSpec(spec) {
   out.schemaVersion = 2;
   const nameToKey = new Map();
   const used = new Set();
+  // Migration runs BEFORE validateAppSpec at every CLI entry point (build/preview/verify/teardown
+  // all migrate the file they just read, then validate), so a malformed collection reached these
+  // loops and threw a raw TypeError before the gate that is supposed to report it ever ran. Iterate
+  // defensively — but do NOT rewrite the value, or validateAppSpec would see a repaired spec and
+  // report nothing. The shape error stays for the gate to find.
+  const arr = (v) => (Array.isArray(v) ? v : []);
   // Pass 1: mint every key and wrap legacy codeFile→source. nameToKey is fully populated
   // after this loop so the rewrite pass below needs only a single scan (no forward-ref gaps).
-  for (const p of out.pages || []) {
+  for (const p of arr(out.pages)) {
+    if (!p || typeof p !== 'object') continue;
     let key = slugify(p.name);
     let n = 1;
     while (used.has(key)) { n += 1; key = `${slugify(p.name)}-${n}`; }
@@ -1222,12 +1236,15 @@ function migrateAppSpec(spec) {
   }
   // Pass 2: rewrite name-refs to keys exactly once. Because nameToKey is complete, forward refs
   // (a page referencing a later-declared page) resolve correctly without a repeated second pass.
-  for (const p of out.pages || []) {
-    for (const nav of p.navigatesTo || []) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
+  for (const p of arr(out.pages)) {
+    if (!p || typeof p !== 'object') continue;
+    for (const nav of arr(p.navigatesTo)) { if (nav && nameToKey.has(nav.targetKey)) nav.targetKey = nameToKey.get(nav.targetKey); }
   }
-  for (const a of (out.appShell && out.appShell.areas) || []) {
-    for (const g of a.groups || []) {
-      for (const sa of g.subAreas || []) { if (sa && sa.page && nameToKey.has(sa.page)) sa.page = nameToKey.get(sa.page); }
+  for (const a of arr(out.appShell && out.appShell.areas)) {
+    if (!a || typeof a !== 'object') continue;
+    for (const g of arr(a.groups)) {
+      if (!g || typeof g !== 'object') continue;
+      for (const sa of arr(g.subAreas)) { if (sa && sa.page && nameToKey.has(sa.page)) sa.page = nameToKey.get(sa.page); }
     }
   }
   return out;

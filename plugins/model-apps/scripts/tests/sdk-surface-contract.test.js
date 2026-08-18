@@ -49,6 +49,7 @@ const SKILL_SDK_SURFACE = [
   'createWebResource',
   'deleteAppCascade',
   'deleteGlobalOptionSet',
+  'deleteRecord',
   'deleteRelationship',
   'deleteRemoteArtifact',
   'deleteSecurityRole',

@@ -56,9 +56,14 @@ test('throws when required args are missing', async () => {
 
 test('AvailableUsingCustomHost: org-setting bound to a non-Platform env', async (t) => {
   const tmp = makeTmpDir();
+  const mixedCaseEnv = JSON.parse(JSON.stringify(SAMPLE_ENV_RESPONSE));
+  mixedCaseEnv.properties.linkedEnvironmentMetadata.instanceUrl =
+    'HTTPS://PascalePipelinesHost.CRM.Dynamics.Com/';
+  mixedCaseEnv.properties.linkedEnvironmentMetadata.instanceApiUrl =
+    'HTTPS://PascalePipelinesHost.API.CRM.Dynamics.Com/';
   withMockedHttp(t, [
     { match: (u) => u.includes('/GetOrgDbOrgSetting'), respond: () => ({ statusCode: 200, body: JSON.stringify({ SettingValue: '0817fd3d-a664-e99a-a758-dd9dc03ceb01' }) }) },
-    { match: (u) => u.includes('/Microsoft.BusinessAppPlatform/environments/'), respond: () => ({ statusCode: 200, body: JSON.stringify(SAMPLE_ENV_RESPONSE) }) },
+    { match: (u) => u.includes('/Microsoft.BusinessAppPlatform/environments/'), respond: () => ({ statusCode: 200, body: JSON.stringify(mixedCaseEnv) }) },
     { match: (u) => u.includes('/WhoAmI'), respond: () => ({ statusCode: 200, body: JSON.stringify({ UserId: 'u' }) }) },
     { match: (u) => u.includes('/solutions'), respond: () => ({ statusCode: 200, body: JSON.stringify({ value: [{ uniquename: 'msdyn_AppDeploymentAnchor', version: '9.1.2026034.260325188' }] }) }) },
   ]);
@@ -73,8 +78,9 @@ test('AvailableUsingCustomHost: org-setting bound to a non-Platform env', async 
   });
 
   assert.equal(result.resolutionStatus, 'AvailableUsingCustomHost');
-  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com/');
+  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com');
   assert.equal(result.finalHostInstanceApiUrl, 'https://pascalepipelineshost.api.crm.dynamics.com');
+  assert.equal(result.finalHostEnvName, 'PA Staff Pipelines Host');
   assert.equal(result.isPlatformHost, false);
   assert.equal(result.ready, true);
   assert.equal(result.pipelinesSolutionVersion, '9.1.2026034.260325188');
@@ -96,7 +102,7 @@ test('AvailableUsingPlatformHost: bound to PE, no tenant default custom host', a
   ]);
 
   const result = await detect({
-    envUrl: 'https://x.crm.dynamics.com',
+    envUrl: 'HTTPS://X.CRM.DYNAMICS.COM/',
     token: 'dv',
     userId: 'u',
     bapToken: 'bap',
@@ -107,6 +113,7 @@ test('AvailableUsingPlatformHost: bound to PE, no tenant default custom host', a
   assert.equal(result.resolutionStatus, 'AvailableUsingPlatformHost');
   assert.equal(result.isPlatformHost, true);
   assert.equal(result.tenantDefaultCustomHostEnvId, null);
+  assert.equal(result.sourceEnvUrl, 'https://x.crm.dynamics.com');
   assert.equal(result.ready, true);
 });
 
@@ -122,7 +129,7 @@ test('CannotRedirect: bound to PE but tenant default custom host points elsewher
   ]);
 
   const result = await detect({
-    envUrl: 'https://x.crm.dynamics.com',
+    envUrl: 'HTTPS://X.CRM.DYNAMICS.COM/',
     token: 'dv',
     userId: 'u',
     bapToken: 'bap',
@@ -133,7 +140,7 @@ test('CannotRedirect: bound to PE but tenant default custom host points elsewher
   assert.equal(result.resolutionStatus, 'CannotRedirect');
   assert.equal(result.tenantDefaultCustomHostEnvId, 'different-host-guid');
   assert.match(result.warnings[0], /CannotRedirect/);
-  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com/');
+  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com');
   assert.equal(result.ready, false); // didn't run verify because we early-returned
 });
 
@@ -155,6 +162,32 @@ test('OrgSettingStale: org binding points at env that returns 404 from BAP', asy
 
   assert.equal(result.resolutionStatus, 'OrgSettingStale');
   assert.equal(result.finalHostEnvUrl, null);
+});
+
+test('rejects Dataverse-derived host URLs outside the Microsoft cloud allowlist', async (t) => {
+  const tmp = makeTmpDir();
+  const maliciousEnv = JSON.parse(JSON.stringify(SAMPLE_ENV_RESPONSE));
+  maliciousEnv.properties.linkedEnvironmentMetadata.instanceUrl = 'https://host.crm.dynamics.com.attacker.invalid/';
+  maliciousEnv.properties.linkedEnvironmentMetadata.instanceApiUrl = 'https://host.api.crm.dynamics.com.attacker.invalid';
+  let tokenCalls = 0;
+
+  withMockedHttp(t, [
+    { match: (u) => u.includes('/GetOrgDbOrgSetting'), respond: () => ({ statusCode: 200, body: JSON.stringify({ SettingValue: 'bound-host-id' }) }) },
+    { match: (u) => u.includes('/Microsoft.BusinessAppPlatform/environments/'), respond: () => ({ statusCode: 200, body: JSON.stringify(maliciousEnv) }) },
+  ]);
+
+  await assert.rejects(
+    () => detect({
+      envUrl: 'https://source.crm.dynamics.com',
+      token: 'dv',
+      userId: 'u',
+      bapToken: 'bap',
+      projectRoot: tmp,
+      getTokenImpl: () => { tokenCalls++; return 'must-not-run'; },
+    }),
+    /not an allowed Microsoft Dataverse or Power Platform endpoint/,
+  );
+  assert.equal(tokenCalls, 0);
 });
 
 test('NoHost: unbound + tenant has no custom hosts and no PE', async (t) => {
@@ -180,7 +213,7 @@ test('NoHost: unbound + tenant has no custom hosts and no PE', async (t) => {
   assert.equal(result.candidates.existingPlatformHost, null);
 });
 
-test('AvailableUnboundCustomHost: unbound + exactly one Custom Host found', async (t) => {
+test('AvailableUnboundCustomHost: canonicalizes mixed-case discovered host URLs', async (t) => {
   const tmp = makeTmpDir();
   withMockedHttp(t, [
     { match: (u) => u.includes('/GetOrgDbOrgSetting'), respond: () => ({ statusCode: 200, body: JSON.stringify({ SettingValue: '' }) }) },
@@ -195,8 +228,8 @@ test('AvailableUnboundCustomHost: unbound + exactly one Custom Host found', asyn
         displayName: 'PA Staff Pipelines Host',
         environmentSku: 'Production',
         linkedEnvironmentMetadata: {
-          instanceUrl: 'https://pascalepipelineshost.crm.dynamics.com/',
-          instanceApiUrl: 'https://pascalepipelineshost.api.crm.dynamics.com',
+          instanceUrl: 'HTTPS://PascalePipelinesHost.CRM.Dynamics.Com/',
+          instanceApiUrl: 'HTTPS://PascalePipelinesHost.API.CRM.Dynamics.Com/',
           domainName: 'pascalepipelineshost',
         },
       },
@@ -215,7 +248,10 @@ test('AvailableUnboundCustomHost: unbound + exactly one Custom Host found', asyn
   });
 
   assert.equal(result.resolutionStatus, 'AvailableUnboundCustomHost');
-  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com/');
+  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com');
+  assert.equal(result.finalHostInstanceApiUrl, 'https://pascalepipelineshost.api.crm.dynamics.com');
+  assert.equal(result.sourceEnvUrl, 'https://x.crm.dynamics.com');
+  assert.equal(result.finalHostEnvName, 'PA Staff Pipelines Host');
   assert.equal(result.ready, true);
 });
 
@@ -227,9 +263,9 @@ test('cache fast-path: returns immediately when docs/alm/last-host-check.json is
     sourceEnvUrl: 'https://x.crm.dynamics.com',
     sourceEnvId: 'src',
     resolutionStatus: 'AvailableUsingCustomHost',
-    finalHostEnvUrl: 'https://pascalepipelineshost.crm.dynamics.com/',
+    finalHostEnvUrl: 'HTTPS://PascalePipelinesHost.CRM.Dynamics.Com/',
     finalHostEnvId: '0817fd3d',
-    finalHostInstanceApiUrl: 'https://pascalepipelineshost.api.crm.dynamics.com',
+    finalHostInstanceApiUrl: 'HTTPS://PascalePipelinesHost.API.CRM.Dynamics.Com/',
     isPlatformHost: false,
     actionTaken: 'none',
     pipelinesSolutionVersion: '9.1',
@@ -248,17 +284,24 @@ test('cache fast-path: returns immediately when docs/alm/last-host-check.json is
     { match: (u) => u.includes('/solutions'), respond: () => ({ statusCode: 200, body: JSON.stringify({ value: [{ version: '9.1' }] }) }) },
   ]);
 
+  let tokenResource = null;
   const result = await detect({
-    envUrl: 'https://x.crm.dynamics.com',
+    envUrl: 'HTTPS://X.CRM.DYNAMICS.COM/',
     token: 'dv',
     userId: 'u',
     bapToken: 'bap',
     projectRoot: tmp,
-    getTokenImpl: () => 't',
+    getTokenImpl: (resource) => {
+      tokenResource = resource;
+      return 't';
+    },
   });
 
   assert.equal(result.cacheHit, true);
-  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com/');
+  assert.equal(result.finalHostEnvUrl, 'https://pascalepipelineshost.crm.dynamics.com');
+  assert.equal(result.finalHostInstanceApiUrl, 'https://pascalepipelineshost.api.crm.dynamics.com');
+  assert.equal(result.sourceEnvUrl, 'https://x.crm.dynamics.com');
+  assert.equal(tokenResource, result.finalHostEnvUrl);
   assert.equal(bindingCalled, false, 'cache hit should skip the org-setting probe');
 });
 

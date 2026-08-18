@@ -182,10 +182,13 @@ async function main() {
   const sdk = makeProvision(env, workspaceDir);
   const genpageCli = makeGenpageCli(env);
   const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir }));
-  for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}\n`);
+  // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
+  // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
+  // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
+  for (const c of r.checks) process.stderr.write(`  ${c.present ? '✓' : '✗'} ${c.kind}: ${c.name}${!c.present && c.detail ? ` — ${c.detail}` : ''}\n`);
   process.stderr.write(`\n${r.ok ? '✓ verify PASS' : `✗ verify FAIL — ${r.missing.length} missing`} (${r.checks.length - r.missing.length}/${r.checks.length} present)\n`);
   // Include `errors` (alias of missing) so emitResult's failure note reports an accurate count.
-  const missing = r.missing.map((m) => `${m.kind}:${m.name}`);
+  const missing = r.missing.map((m) => `${m.kind}:${m.name}${m.detail ? ` (${m.detail})` : ''}`);
   emitResult(r.ok, { ok: r.ok, present: r.checks.length - r.missing.length, total: r.checks.length, missing, errors: missing });
 }
 

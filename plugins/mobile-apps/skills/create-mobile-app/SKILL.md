@@ -1651,9 +1651,10 @@ export default function <ScreenName>() {
 }
 ```
 
-**Skeleton template for an Auth/Profile screen** (any screen whose data calls are `useAuth()` only):
+**Skeleton template for the Profile screen** (`/(app)/profile`, always generated; app-specific content comes from the Profile spec):
 ```tsx
 import React from 'react';
+import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1665,7 +1666,22 @@ export default function <ScreenName>() {
   // There is NO `user` / `account` field. Display name comes from the ID-token claim, not from useAuth().
   const { isSignedIn, signOut } = useAuth();
 
-  // TODO: screen-builder fills JSX here
+  const handleSignOut = React.useCallback(() => {
+    Alert.alert('Sign out?', 'You can sign in again with your work or school account.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => {
+          void Promise.resolve()
+            .then(() => signOut())
+            .finally(() => router.replace('/login'));
+        },
+      },
+    ]);
+  }, [router, signOut]);
+
+  // TODO: screen-builder fills JSX here. Any visible Sign out button calls handleSignOut.
   return null;
 }
 ```
@@ -1673,8 +1689,11 @@ export default function <ScreenName>() {
 **Rules for skeleton generation:**
 - Replace `<Service>`, `<Entity>`, `<ScreenName>`, `<searchKeys>`, `<orderField>`, `<field_declarations>` with actual values from the plan's per-screen spec + Generated Services table.
 - If a service is NOT in the Generated Services table, still write the import but add `// TODO(connector-not-yet-added)` above it.
+- Profile skeletons may also include generated service/model imports when the Profile spec's `Profile content` or `Data` fields require persisted app-specific user context. Keep the sign-out helper regardless of whether Profile also loads data.
 - The skeleton is a **valid TypeScript file** (compiles with `return null`) — builders replace the `return null` with real JSX.
 - Do NOT write skeletons for screens that already exist in the template (e.g. `home.tsx` if it's already present).
+- The Profile skeleton must keep the `handleSignOut` helper and wire the planned `Sign out` button to it. Do not inline a second auth/logout path, and do not make Profile a sign-out-only screen.
+- Do not merge sign-out imports or helpers into non-Profile screen skeletons. The Profile screen is the only sign-out owner.
 - **Never destructure `user`, `account`, `profile`, or `claims` from `useAuth()`** — those fields do not exist on `AuthState`. The only fields are `isLoading`, `isAuthReady`, `isSignedIn`, `error`, `acquireToken`, `signIn`, `signOut`. If the screen needs the signed-in user's name/email, add a `// TODO: decode ID token claim` comment — do not invent a field.
 
 ---

@@ -42,8 +42,29 @@ test('sitemap-XML golden: area + subarea icons', async () => {
   // capture the sitemapxml the push serializes.
   let xml = '';
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'golden-sitemap-'));
+  // A table's MetadataId is also the `objectid` its app component carries, so one constant keeps
+  // the resolve and the read-back verification consistent.
+  const TABLE_METADATA_ID = '22222222-2222-2222-2222-222222222222';
   const httpClient = {
-    get: async () => ({ status: 200, headers: {}, body: {} }),
+    // The SDK now pins each sitemap table as an OData REFERENCE (`<EntitySetName>(<MetadataId>)`),
+    // then READS THE COMPONENTS BACK and asserts each declared table landed. Both steps fail closed,
+    // so this fake has to answer three reads that a bare `{}` used to satisfy:
+    //   GET /EntityDefinitions(LogicalName='new_gorder')?$select=MetadataId,EntitySetName
+    //   GET /appmodules(<id>) (unpublished-aware)   -> must carry `appmoduleidunique`
+    //   GET /appmodulecomponents?$filter=_appmoduleidunique_value eq <guid> and componenttype eq 1
+    get: async (url) => {
+      const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+      if (m) return { status: 200, headers: {}, body: { LogicalName: m[1], MetadataId: TABLE_METADATA_ID, EntitySetName: `${m[1]}s` } };
+      if (/\/appmodulecomponents/.test(url)) {
+        return { status: 200, headers: {}, body: { value: [{ objectid: TABLE_METADATA_ID, componenttype: 1 }] } };
+      }
+      if (/\/appmodules/.test(url)) {
+        const row = { appmoduleid: '11111111-1111-1111-1111-111111111111', appmoduleidunique: '33333333-3333-3333-3333-333333333333' };
+        // The unpublished-aware read returns a result set; a by-id retrieve returns the row.
+        return { status: 200, headers: {}, body: /RetrieveUnpublishedMultiple/i.test(url) ? { value: [row] } : row };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
     post: async (url, body) => { if (/\/sitemaps\b/.test(url) && body && body.sitemapxml) xml = String(body.sitemapxml); return { status: 204, headers: { 'odata-entityid': 'https://x/y(11111111-1111-1111-1111-111111111111)' }, body: {} }; },
     patch: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),

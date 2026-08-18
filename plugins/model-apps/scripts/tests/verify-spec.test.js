@@ -56,6 +56,28 @@ test('verifySpec: a missing entity skips its column checks', async () => {
   assert.ok(!r.checks.some((c) => c.kind === 'column'), 'no column checks when the entity is absent');
 });
 
+test('verifySpec reports missing entities without propagating dependent Dataverse read errors', async () => {
+  const spec = {
+    entities: [{ schemaName: 'new_missing', columns: [] }],
+    views: [{ entity: 'new_missing', name: 'Missing View' }],
+    appShell: { areas: [] },
+  };
+  const read = {
+    findTable: async () => null,
+    findColumns: async () => [],
+    queryRecords: async () => {
+      throw new Error('HTTP 400 metadata cache: entity was not found');
+    },
+    sitemapXml: async () => '',
+  };
+
+  const r = await verifySpec(spec, read);
+
+  assert.equal(r.ok, false);
+  assert.ok(r.missing.some((m) => m.kind === 'entity'));
+  assert.ok(r.missing.some((m) => m.kind === 'view'));
+});
+
 test('verifySpec: a Main form check is type-scoped — a same-named Quick View sibling does NOT satisfy it', async () => {
   const spec = { entities: [], views: [], charts: [], forms: [{ entity: 'zava_javavendor', name: 'Information', formType: 'Main' }], appShell: { areas: [] } };
   let captured;

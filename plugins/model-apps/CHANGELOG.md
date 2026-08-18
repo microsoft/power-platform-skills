@@ -2,7 +2,116 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.1
+## [Unreleased] — 2.4.4
+
+Adds plugin update notices, fixes four crash paths, and corrects a smoke-eval
+assertion that could never pass live.
+
+### Added
+- **Automatic plugin update notice.** Every user-invocable skill now runs the
+  non-blocking `scripts/check-version.js` preflight, which compares the installed
+  Model Apps version with `origin/main` and shows update commands for the active
+  GitHub Copilot CLI or Claude Code host when a newer version is available.
+
+### Fixed
+- **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
+  and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
+  (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona
+  privilege's `access` was a scalar rather than an array. These are work-in-progress shapes an author
+  hits constantly, and a crash killed the authoring flow instead of reporting the problem. Coverage
+  is now a single recursive descriptor shared by both gates (`lib/spec-shape.js`), reaching nested
+  collections too — `entities[].columns`, `views[].filters`, `forms[].tabs[].sections`,
+  `pages[].dataSources`, `commands[].buttons[].children`, and the `appShell.areas → groups →
+  subAreas` chain — and errors name the exact path (`appShell.areas[0].groups must be an array`).
+- **A malformed collection can no longer pass validation and then crash mid-build.** Validation
+  inspects a normalized copy while the caller keeps the original, so a silently-repaired
+  `appShell.areas: [null]` reported PASS and then threw inside the build — *after* the solution and
+  data model had been written to Dataverse. A null entry is now a blocking error, so the failure
+  happens at the gate with nothing deployed.
+- **`migrateAppSpec` no longer crashes ahead of the gate.** Every CLI entry point migrates the spec
+  it just read *before* validating it, so a malformed collection threw a raw `TypeError` before the
+  validator that exists to report it ever ran. Migration is now defensive but does **not** repair —
+  repairing would hand the gate a clean spec and the real problem would vanish.
+- **`verify-model-app` no longer surfaces a raw Dataverse HTTP 400 for a missing table.** A declared
+  table that does not exist makes the saved-view query 400 (`returnedtypecode` names an unknown
+  entity); the read error is now captured and reported as a structured missing-artifact finding.
+  Both the verify CLI and the build's verify step now print the failure `detail`, so a read that
+  failed (throttling, auth expiry, a 5xx) is distinguishable from an artifact that is genuinely
+  absent instead of both rendering as a bare `✗ view: <name>`.
+- **The live smoke eval asserted an outcome the builder never produces.** Its spec put a bare Fluent
+  `vectorIcon` ("Grid") on an *entity* subarea — the one shape the builder deliberately drops,
+  because it breaks the modern app-designer property pane — while asserting the deployed sitemap
+  contained `VectorIcon="Grid"`. The offline test hid it by hand-writing the sitemap XML it wanted to
+  see. The spec now uses an emittable `/WebResources/<name>.svg` reference and keeps the bare token
+  as a negative control; assertions are scoped to the `<SubArea>` that declared the icon (the spec
+  reuses one icon on the parent `<Area>`, which a document-wide scan let satisfy every subarea check)
+  and their expected values stay independent of the builder, so a builder that stops emitting the
+  icon makes the eval FAIL rather than silently invert into an absence check.
+
+### Changed
+- **`download-model-app.js --app` now accepts a display name**, not just an id or `uniquename`. It
+  resolves in identity order (id → `uniquename` → display name) and **fails closed** when a display
+  name matches more than one app, listing the candidate unique names instead of guessing. A display
+  name previously hit a dead-end "app 'x' not found", even though that is the only name the maker
+  portal shows.
+
+### Tests
+- A contract test drives the **real vendored SDK** and asserts the serialized sitemap bytes: a
+  platform-ref `VectorIcon` reaches the XML on an Entity subarea, and the bundle does **not** filter a
+  bare Fluent token — pinning that `appDef` is the only guard, so the drop cannot be delegated to the
+  SDK.
+
+## [2.4.2]
+
+Fixes a malformed app module: generated apps did not actually contain their tables.
+
+### Fixed
+- **Generated apps contained invalid `entity` table components instead of their real tables**
+  (ADO 6612527). An exported app read `<AppModuleComponent type="1" schemaName="entity" />` where it
+  should have listed `account`, `contact`, `activitypointer` — and the malformed app then broke
+  unrelated app-processing and metadata-discovery paths. Tables are now pinned by OData **reference**
+  (`{ '@odata.id': '<EntitySetName>(<MetadataId>)' }`) instead of as an `@odata.type` instance:
+  `Microsoft.Dynamics.CRM.entity` names a real Dataverse table (metadata-as-data), so the old payload
+  pinned the `entity` table exactly as asked. The reference form is also the only one that can express
+  an abstract EDM table such as `activitypointer`.
+- **A table that cannot be resolved now halts the build, naming it.** One bad component fails the
+  whole `AddAppComponents` call, so a silently-skipped table previously emptied the app's component
+  list rather than degrading it.
+- **App components are read back and verified after the write.** `AddAppComponents` returned 204 for
+  every corrupt app — a 2xx means the request was accepted, not which rows it wrote — and
+  `ValidateApp` reported success too. The build now asserts every declared table has a
+  `componenttype: 1` row carrying that table's MetadataId, and fails closed if it cannot check.
+
+### Changed
+- **Re-vendored `cds-maker-sdk`** with the above.
+
+### Tests
+- `app-entity-components-real-bundle.test.js` drives the shipped bundle: tables sent as references,
+  an unresolvable table refused, the read-back catching both a missing component and the exact
+  6612527 corruption (rows present but pointing at `entity`). 6 of its 7 tests fail against the
+  previous bundle.
+
+### Known limitations
+- **ADO 6603388 (download drops entity components not in the sitemap) is still open.** A live attempt
+  to construct the hidden component it describes did not succeed — pinning a table with no sitemap
+  entry returned 204 but wrote no row, before or after publish — so the download-side change cannot
+  be verified end to end yet.
+
+### Eval harness
+- **A value-less or malformed runner flag is now rejected instead of silently changing scope.**
+  `argv[++i]` is `undefined` for a trailing flag and `undefined` is falsy, so `--tier` alone became
+  "no tier filter" and `--fixtures` alone fell back to the built-in fixtures — the run then reported
+  PASS for a scope the caller never asked for. `--eval 1.5` was truncated to fixture `1` and graded
+  the wrong one; an unknown `--tier` produced "no fixtures matched the filter", blaming the fixtures
+  rather than the argument. All three runners (app-builder + genpage layers 1/2) shipped a
+  byte-identical copy of this parser, so it is now shared at `evals/model-apps/lib/eval-args.js`.
+- **A malformed fixture names the fixture.** A bare `JSON.parse` reported only a character offset,
+  which tells an operator running a corpus nothing about which fixture to fix. A UTF-8 BOM (the
+  Windows editor default) no longer fails an otherwise-valid file, and a spec that is `null`, an
+  array, a string or a number is rejected up front instead of surfacing later as an opaque
+  stage-facts error.
+
+## 2.4.1
 
 Bug fixes for apps built on **out-of-the-box** tables, and the matching `cds-maker-sdk` uptake.
 No change to any skill's public surface.

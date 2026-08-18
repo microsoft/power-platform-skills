@@ -138,6 +138,21 @@ at runtime.]
 | new_uxtest_sharepoint | /providers/Microsoft.PowerApps/apis/shared_sharepointonline | https://.../sites/foo | 5709dd6f-... | Pet | | PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime) | | |
 | new_uxtest_msnweather | /providers/Microsoft.PowerApps/apis/shared_msnweather | | | | CurrentWeather | | Location (required), units (optional) | temperature (number), conditions (string), humidity (number) |
 
+## Custom API Bindings
+[If NO Custom APIs are used, the value is exactly:]
+No custom API bindings.
+
+[Else, one row per bound Custom API. `Kind` is Action (may mutate; called with
+executeAction) or Function (read-only; called with executeFunction). `Bound Entity` is the
+table logical name for an entity-bound API, or `(Global)` for an unbound one. `Parameters`
+lists each request parameter as `name: Kind` using the declared Dataverse parameter kind.
+All values are discovered by genpage-customapi-builder via list-custom-apis.js — never
+fabricated. Persisted (via `pac ... upload --actions`) into config.json's `actionBindings`.]
+| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
+|------|------|--------------|--------------|-------------------------|
+| new_ApproveOrder | Action | salesorder | Approve Order | Comment: String, Amount: Decimal |
+| new_GetOrderSummary | Function | (Global) | Get Order Summary | OrderId: Guid |
+
 ## Solution Packaging
 [OPTIONAL section — include ONLY when packaging into a solution. Omit it entirely
 to skip packaging; when absent, the orchestrator skips Phase 6.7. This section is
@@ -194,6 +209,7 @@ connector bindings." sentinel).]
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
+| `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
 | `## Design Preferences` | Page-builder | Prose, free-form |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
@@ -209,6 +225,7 @@ Before the orchestrator fans out to builders in Phase 5, it should verify:
 - [ ] Every page in `## Pages` has a matching `### [Page Name]` subsection in `## Per-Page Specifications`
 - [ ] If `## Pages` contains Dataverse entities, `## Existing Entities` is non-empty OR `## Entity Creation Required` is non-empty
 - [ ] Every non-empty `## Connector Bindings` logical name matches an existing `connectionreference` in the selected environment
+- [ ] Every non-empty `## Custom API Bindings` name matches an existing `customapi` (uniquename) in the selected environment; entity-bound rows carry the bound table and every row its parameter kinds
 - [ ] Every tabular connector binding records discovered `Fields`; generated connector row interfaces must mark every field optional
 - [ ] Every REST/action connector binding records discovered `Parameters` and `Response`; generated request/response interfaces must be built from those schemas only
 

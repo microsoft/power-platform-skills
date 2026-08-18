@@ -140,13 +140,11 @@ test('throws when the response body is not valid JSON', async (t) => {
   );
 });
 
-// --- sanitizeEnvUrl: defense against command injection via --envUrl ---
+// --- sanitizeEnvUrl: trusted token and request destination enforcement ---
 //
-// The output of sanitizeEnvUrl is passed to helpers.getAuthToken, which
-// interpolates it into `az account get-access-token --resource "${url}"`
-// via execSync (a shell command). If we didn't sanitize, an attacker who
-// could pass a malicious --envUrl on the CLI could execute arbitrary
-// shell commands.
+// The shared validator restricts token resources and authenticated requests to
+// known Microsoft Dataverse hosts. getAuthToken also passes the URL as one
+// execFileSync argument, so shell metacharacters are never command syntax.
 
 test('sanitizeEnvUrl accepts a plain Dataverse URL and returns just the origin', () => {
   assert.equal(
@@ -155,18 +153,27 @@ test('sanitizeEnvUrl accepts a plain Dataverse URL and returns just the origin',
   );
 });
 
-test('sanitizeEnvUrl strips path, query, and fragment from the URL', () => {
-  assert.equal(
-    sanitizeEnvUrl('https://contoso.crm.dynamics.com/api/data/v9.2/solutions?$top=1#hash'),
-    'https://contoso.crm.dynamics.com'
+test('sanitizeEnvUrl rejects paths, queries, and fragments', () => {
+  assert.throws(
+    () => sanitizeEnvUrl('https://contoso.crm.dynamics.com/api/data/v9.2/solutions'),
+    /without a path or query/,
+  );
+  assert.throws(
+    () => sanitizeEnvUrl('https://contoso.crm.dynamics.com?$top=1'),
+    /without a path or query/,
+  );
+  assert.throws(
+    () => sanitizeEnvUrl('https://contoso.crm.dynamics.com#hash'),
+    /must not contain a fragment/,
   );
 });
 
-test('sanitizeEnvUrl preserves an explicit port', () => {
-  assert.equal(
-    sanitizeEnvUrl('https://contoso.crm.dynamics.com:8443/some/path'),
-    'https://contoso.crm.dynamics.com:8443'
+test('sanitizeEnvUrl rejects explicit ports', () => {
+  assert.throws(
+    () => sanitizeEnvUrl('https://contoso.crm.dynamics.com:8443'),
+    /must not contain a port/,
   );
+  assert.throws(() => sanitizeEnvUrl('https://contoso.crm.dynamics.com:443'), /must not contain a port/);
 });
 
 test('sanitizeEnvUrl strips a trailing slash by normalizing to origin', () => {
@@ -177,54 +184,32 @@ test('sanitizeEnvUrl strips a trailing slash by normalizing to origin', () => {
 });
 
 test('sanitizeEnvUrl rejects shell-injection payloads embedded in the URL', () => {
-  // The whole point of using URL.origin is that these characters are stripped
-  // (in path/query/fragment) or rejected by URL parsing (in host).
-  // Verify a few representative payloads no longer make it through.
-
-  // Path-position payload: URL parses fine, but origin throws away the path.
-  assert.equal(
-    sanitizeEnvUrl('https://contoso.crm.dynamics.com/"; rm -rf ~; echo "'),
-    'https://contoso.crm.dynamics.com'
-  );
-
-  // Query-position payload: same story.
-  assert.equal(
-    sanitizeEnvUrl('https://contoso.crm.dynamics.com?x="; rm -rf ~; echo "'),
-    'https://contoso.crm.dynamics.com'
-  );
-
-  // Newline in the URL — WHATWG URL parsing strips ASCII tabs and newlines
-  // per spec, so a newline-laced URL gets normalized to a safe origin rather
-  // than carrying the newline downstream. This is the behavior we want — a
-  // newline in a shell command argument can be used to break out of a quoted
-  // string.
-  assert.equal(
-    sanitizeEnvUrl('https://contoso\ndynamics.com'),
-    'https://contosodynamics.com'
-  );
-  assert.doesNotMatch(sanitizeEnvUrl('https://contoso\tdynamics.com'), /\s/);
+  assert.throws(() => sanitizeEnvUrl('https://contoso.crm.dynamics.com/;echo-marker'));
+  assert.throws(() => sanitizeEnvUrl('https://contoso.crm.dynamics.com/&echo-marker%PATH%'));
+  assert.throws(() => sanitizeEnvUrl('https://contoso\ndynamics.com'), /control characters/);
+  assert.throws(() => sanitizeEnvUrl('https://contoso\tdynamics.com'), /control characters/);
 });
 
 test('sanitizeEnvUrl rejects non-https protocols', () => {
-  assert.throws(() => sanitizeEnvUrl('http://contoso.crm.dynamics.com'),  /must use https/);
-  assert.throws(() => sanitizeEnvUrl('file:///etc/passwd'),               /must use https/);
-  assert.throws(() => sanitizeEnvUrl('javascript:alert(1)'),              /must use https/);
+  assert.throws(() => sanitizeEnvUrl('http://contoso.crm.dynamics.com'),  /must use HTTPS/);
+  assert.throws(() => sanitizeEnvUrl('file:///etc/passwd'),               /must use HTTPS/);
+  assert.throws(() => sanitizeEnvUrl('javascript:alert(1)'),              /must use HTTPS/);
 });
 
 test('sanitizeEnvUrl rejects URLs containing userinfo (credentials)', () => {
   assert.throws(
     () => sanitizeEnvUrl('https://attacker:pwn@contoso.crm.dynamics.com'),
-    /must not contain userinfo/
+    /must not contain credentials/
   );
   assert.throws(
     () => sanitizeEnvUrl('https://attacker@contoso.crm.dynamics.com'),
-    /must not contain userinfo/
+    /must not contain credentials/
   );
 });
 
 test('sanitizeEnvUrl rejects garbage input', () => {
   assert.throws(() => sanitizeEnvUrl(''),                    /non-empty string/);
-  assert.throws(() => sanitizeEnvUrl('   '),                 /non-empty string/);
+  assert.throws(() => sanitizeEnvUrl('   '),                 /not a valid URL/);
   assert.throws(() => sanitizeEnvUrl(null),                  /non-empty string/);
   assert.throws(() => sanitizeEnvUrl(undefined),             /non-empty string/);
   assert.throws(() => sanitizeEnvUrl(42),                    /non-empty string/);

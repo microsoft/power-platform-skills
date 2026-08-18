@@ -1,6 +1,6 @@
 # Canvas Apps Plugin
 
-Build Power Apps Canvas Apps with your coding agent as coauthor. This plugin connects AI coding assistants to the Power Apps authoring service over stdio, enabling them to validate .pa.yaml files, browse available controls and their properties, discover APIs/connectors and data sources, and sync app state from live coauthoring sessions. 
+Build Power Apps Canvas Apps with your coding agent as coauthor. This plugin connects AI coding assistants to the Power Apps authoring service over stdio, enabling them to validate .pa.yaml files, browse available controls and their properties, discover APIs/connectors and data sources, and sync app state from live coauthoring sessions.
 
 > **Preview:** This plugin is currently in [preview](https://www.microsoft.com/en-us/business-applications/legal/supp-powerplatform-preview/). These features are available before official release for customers to provide feedback.
 
@@ -29,6 +29,10 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
 
 Create or edit a Canvas App. Automatically detects whether to generate a new app from scratch
 or edit an existing one based on the current app state.
+
+Planned work uses progressive per-screen briefs and builder waves of at most three. Each
+screen runs the named runtime QA checks before the app is compiled, and compile repairs
+follow a bounded diagnostic-convergence workflow instead of regenerating completed screens.
 
 **Usage:** Invoke directly with `/canvas-app`, or use natural language to trigger it:
 

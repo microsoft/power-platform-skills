@@ -1,4 +1,5 @@
 const { getDefaultConfig } = require('expo/metro-config');
+const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/metro-logger');
 
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 // Add Metro config changes in this function only.
@@ -12,15 +13,18 @@ const config = getDefaultConfig(__dirname);
 config.resolver.sourceExts = [...config.resolver.sourceExts, 'mjs'];
 config.server = {
   ...config.server,
-  enhanceMiddleware: (middleware) => (req, res, next) => {
-    if (req.url === '/__pawrap_verify') {
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.end(JSON.stringify({ type: 'pawrap-app', version: '1' }));
-      return;
-    }
-    middleware(req, res, next);
-  },
+  enhanceMiddleware: (middleware) => withPowerNativeMetroLogging(
+    (req, res, next) => {
+      if (req.url === '/__pawrap_verify') {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.end(JSON.stringify({ type: 'pawrap-app', version: '1' }));
+        return;
+      }
+      middleware(req, res, next);
+    },
+    { projectRoot: __dirname },
+  ),
 };
 
 // Force a single copy of these regardless of where the importing module lives.
