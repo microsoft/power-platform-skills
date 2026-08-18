@@ -231,7 +231,7 @@ Examples:
 - `inspections` (list + detail + form, no detail children) → folder `app/(app)/inspections/` with `index.tsx`, `[id].tsx`, `new.tsx`
 - `inspections` (detail owns photo/edit children) → `app/(app)/inspections/[id]/index.tsx`, `app/(app)/inspections/[id]/photo.tsx`, and `app/(app)/inspections/[id]/edit.tsx`; never also create `inspections/[id].tsx`
 
-**Authenticated Dataverse identity rule:** when app identity links through `systemuser`, require `SystemusersService` in the data-source/service plan. Resolve the access-token `oid` with `SystemusersService.getAll({ filter: "azureactivedirectoryobjectid eq <oid> and isdisabled eq false", top: 2 })`, then query the profile table with `_lookup_value eq <systemuserid>`. Do not use relationship traversal (`lookupNavigation/azureactivedirectoryobjectid`) in generated mobile-service filters.
+**Authenticated Dataverse identity rule:** when app identity links through `systemuser`, require `SystemusersService` in the data-source/service plan and record the profile table's planned `systemuser` lookup logical column. Resolve the access-token `oid` with `SystemusersService.getAll({ filter: "azureactivedirectoryobjectid eq <oid> and isdisabled eq false", top: 2 })`. The screen-builder must open the generated profile model and use the exact declared read property corresponding to that lookup column (for example `_new_systemuserid_value` for `new_systemuserid`). Never put generic placeholders such as `_lookup_value` or `_systemuserlookup_value` in a concrete filter, and do not use relationship traversal (`lookupNavigation/azureactivedirectoryobjectid`).
 
 Keep total screen count tight — under 8 for v0 unless the requirements explicitly demand more. The user can iterate later.
 

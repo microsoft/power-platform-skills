@@ -256,7 +256,9 @@ const newRecord: CreateFields = {
 
 Raw Dataverse Web API examples often use a case-sensitive navigation-property schema name. Generated Power Apps services instead expose their accepted write key in `src/generated/models/<Entity>Model.ts`. For generated services, that model declaration is authoritative; never convert it to PascalCase or hide an unverified key inside `Record<string, unknown>`.
 
-For filtering across lookups, avoid `lookupNavigation/relatedColumn eq ...` in generated mobile-service options. Resolve the related row through its generated service, then filter with the source record's `_lookuplogicalname_value` GUID property.
+For filtering across lookups, avoid `lookupNavigation/relatedColumn eq ...` in generated mobile-service options. Resolve the related row through its generated service, then open the source generated model and copy the exact declared read lookup property corresponding to the planned lookup logical column (for example `_new_systemuserid_value` for `new_systemuserid`). Never substitute generic placeholders such as `_lookup_value` or `_systemuserlookup_value` into generated code.
+
+Dynamic route IDs used in Dataverse calls must be normalized with the shared `normalizeDataverseGuid` helper from `@/utils`. Do not generate an inline RFC UUID regex: Dataverse sequential GUIDs may not contain RFC version bits even though their hexadecimal `8-4-4-4-12` structure is valid.
 
 The `@odata.bind` value must be an entity set path with the GUID: `/<entitysetname>(<guid>)`
 
