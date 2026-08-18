@@ -474,7 +474,6 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:1.purpose` | gate | plan | 1 | Site name, purpose, or audience unclear — path-agnostic discovery prompt | nothing |
-| `create-site:1.localization` | not-a-gate | — | 1 | *"Add localization support?"* — records creation scope before path selection or scaffolding; explains SPA-only scope and does not write by itself | — |
 | `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
@@ -490,6 +489,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.clone-failed` | gate | progress | 1.5 | Packaged SPA clone, identity inspection, dependency installation, build/output validation, or code-site upload failed - choose retry, from-scratch fallback, or stop | partial-template-clone |
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
+| `create-site:5.7.localization` | not-a-gate | — | 5.7 | *"Would you like to add localization support to this site now?"* — selects whether to enter the child localization workflow after site implementation; the child workflow's Phase 3 gate approves every localization write | — |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |

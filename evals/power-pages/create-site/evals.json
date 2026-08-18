@@ -126,13 +126,14 @@
     {
       "id": 5,
       "prompt": "Create a React Power Pages company portal called Global Contoso and add localization for it.",
-      "expected_output": "The create-site workflow explains SPA-only localization scope, records the opt-in, includes localization in the plan, builds real pages first, invokes add-localization with FROM_CREATE_SITE, then continues accessibility/review and asks only one deployment question.",
+      "expected_output": "The create-site workflow builds the real pages first, then asks the fixed localization opt-in question immediately before invoking add-localization with FROM_CREATE_SITE. It continues accessibility/review afterward and asks only one deployment question.",
       "files": [],
       "expectations": [
-        "Shows the localization opt-in question with the SPA-only and Dataverse-language subtext",
+        "Asks 'Would you like to add localization support to this site now?' in Phase 5.7 after the real pages are built",
+        "Shows the SPA-only and Dataverse-language subtext",
+        "Offers exactly 'Yes — configure localization now' and 'No — keep this site single-language'",
         "Records LOCALIZATION_REQUESTED=true",
-        "Mentions localization in the rendered implementation plan",
-        "Invokes add-localization after real pages are built and before accessibility verification",
+        "Invokes add-localization immediately after the opt-in answer and before accessibility verification",
         "Passes the FROM_CREATE_SITE context",
         "Does not duplicate the deployment prompt"
       ]
@@ -140,10 +141,12 @@
     {
       "id": 6,
       "prompt": "Create an Astro Power Pages site called Local Bakery. Keep it English-only.",
-      "expected_output": "The workflow records localization opt-out, builds the site without invoking add-localization, and may suggest the skill later as an optional enhancement.",
+      "expected_output": "The workflow builds the site, asks the fixed localization question in Phase 5.7, records the opt-out, and continues without invoking add-localization. It may suggest the skill later as an optional enhancement.",
       "files": [],
       "expectations": [
+        "Asks the localization question only after the real pages are built",
         "Shows the localization scope subtext",
+        "Offers exactly 'Yes — configure localization now' and 'No — keep this site single-language'",
         "Records LOCALIZATION_REQUESTED=false",
         "Does not invoke add-localization during implementation",
         "Continues normal accessibility, review, and deployment phases",
