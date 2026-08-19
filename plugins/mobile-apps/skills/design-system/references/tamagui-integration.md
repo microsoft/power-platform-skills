@@ -17,8 +17,7 @@ Keep generated screens on one stable token contract:
 | Condition | Action |
 |---|---|
 | `brand/tokens.ts` exists | Import brand tokens into `tamagui.config.ts`, then add aliases. |
-| `## Design` says `tamagui-design-system: required` but no brand tokens exist | Create brand/custom tokens from the approved `## Design`, then add aliases. |
-| `## Design` says `tamagui-design-system: add-aliases` or no custom design tokens exist | Add aliases over `defaultConfig` only. |
+| `brand/tokens.ts` is missing | Add aliases over `defaultConfig` only. |
 
 Run `npx tsc --noEmit` after changing Tamagui config or root provider wiring.
 
