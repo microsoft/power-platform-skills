@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
+const { withStableDispatchCwd } = require('../../hooks/run-telemetry');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const HOOKS = path.join(PLUGIN_ROOT, 'hooks');
@@ -100,6 +101,18 @@ function toolPayload(context) {
   };
 }
 
+test('hook dispatch runs outside the caller project and restores its cwd', () => {
+  const originalCwd = process.cwd();
+  let dispatchCwd;
+
+  withStableDispatchCwd(() => {
+    dispatchCwd = fs.realpathSync(process.cwd());
+  });
+
+  assert.equal(dispatchCwd, fs.realpathSync(os.tmpdir()));
+  assert.equal(process.cwd(), originalCwd);
+});
+
 test('prompt and pretool paths emit independent start signals', (t) => {
   const context = fixture(t);
   assert.equal(runHook('prompt', {
@@ -147,7 +160,11 @@ test('nested Copilot agents log under their own owning root session', (t) => {
     cwd: context.projectRoot,
     sessionId: current.nested,
     tool_input: { skill: current.skill },
-  }, context, { HOME: homeDir }).status, 0);
+  }, context, {
+    HOME: homeDir,
+    // os.homedir() uses USERPROFILE rather than HOME on Windows.
+    USERPROFILE: homeDir,
+  }).status, 0);
 
   for (const current of sessions) {
     seedCopilotSession(homeDir, current.root, current.nested);
