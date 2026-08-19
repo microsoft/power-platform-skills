@@ -46,9 +46,11 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   `native-app-plan.md` and read `## Product Experience`, `## Design Direction`,
   `## Design`, `## Screens → ### Shared Conventions`, `### Navigation
   Contracts`, your assigned per-screen spec, and `## Generated Services`.
-  Product Experience controls composition/media/reference behavior; Shared
-  Conventions controls cross-screen grammar and tab silhouettes; Navigation
-  Contracts controls routes. Do not read sibling per-screen specs. Locked route
+  Product Experience controls composition and media behavior; Shared
+  Conventions controls cross-screen grammar and tab silhouettes. Materialize
+  the layout organically using Tamagui components based on the planner's
+  intent, your archetype sample, and the platform boundaries constraint.
+  Locked route
   conventions: `?editId=<guid>` for create-or-edit forms; `[id]` for primary
   path param; `[<entity>Id]` for nested entities; all values typed `string`. If
   a needed route is absent, return `BLOCKED` rather than inventing params.
@@ -79,27 +81,6 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
   **Verification (post-scaffold):** the doctor `node scripts/check-routes.js` parses every `router.push` / `router.replace` / `<Link href=>` and every `useLocalSearchParams<{}>` across `app/` and reports drift. Run it after any hand-edit. Wired into `package.json` as `npm run check-routes`.
 - **Your layout comes from your spec + experience/design fields — NOT from the samples.** The sample files (`screen-list.tsx`, `screen-detail.tsx`, `screen-form.tsx`) exist to show you correct Tamagui API, import patterns, and TypeScript idioms. Read them for *how to write code*, not *what to build*. Every screen's structure, density, hierarchy, and visual emphasis must come from Step 1 + Steps 1a–1d. A screen that looks like the sample with a different entity name is a failure — even if it compiles and passes the quality checklist.
-- **Required reading before writing any TSX.** You MUST load these from the plugin root:
-  - `${PLUGIN_ROOT}/shared/references/product-experience-contract.md`
-  - `${PLUGIN_ROOT}/shared/references/product-archetypes.md`
-  - `${PLUGIN_ROOT}/shared/references/visual-personalities.md`
-  - `${PLUGIN_ROOT}/shared/references/home-compositions.md`
-  - `${PLUGIN_ROOT}/shared/references/reference-fidelity.md`
-  - `${PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
-  - `${PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
-  - `${PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
-  - `${PLUGIN_ROOT}/shared/references/accessibility-checklist.md` — universal a11y rules
-  - The matching sample for your archetype — **read for code patterns and API only, not as a layout template**:
-    - List → `${PLUGIN_ROOT}/shared/samples/screen-list.tsx`
-    - Detail → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
-    - Form → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
-  - For component snippets: `${PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
-  - Read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` only for the
-    approved product archetype/workflow capabilities. Industry supplies labels,
-    never visual style.
-  - **If the plan's `## Design` section specifies a non-default font pairing or non-Professional copy tone**, also read:
-    - `${PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
-    - `${PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
 - **The Tamagui × Expo scope rule** (apply mechanically, no judgment calls):
 
   | Use **Tamagui** for | Use **Expo Router / Expo skill / RN** for |
@@ -1110,13 +1091,12 @@ Before finishing the screen, mentally verify:
 10. **Color and contrast** — follows 60/30/10 rule: 60% `$background`/`$surface0`, 30% `$color2`–`$color4` or `$surface1`–`$surface3`, 10% `$blue10`/`$accentBase`. Readable text/icons never use `$color8` or weaker; inactive tabs, helper text, metadata, modal body copy, and icon affordances use `$color10` or stronger.
 11. **Monospace for data** — IDs, timestamps, coordinates, currency use `fontFamily="$mono"`
 12. **Button labels** — action-specific ("Save inspection", "Send for review"), never generic ("Submit", "OK", "Continue")
-14. **Anti-patterns** — check against mobile-design-philosophy.md Section 16. No centered text in content flows, no unnecessary cards, no engineer-facing strings
+14. **Anti-patterns** — verify against visual primitives. No centered text in content flows, no unnecessary cards, no engineer-facing strings
 15. **Typography** — if plan specifies font pairing, headings use
 `fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply
-per-archetype rules from screen-templates.md. Letter spacing is `0` unless an
-approved brand/reference contract explicitly documents a tested exception.
-16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. Check examples in screen-templates.md "Copy Tone by Archetype" tables. No exclamation marks, no emoji, no "Submit"/"OK".
-17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections per mobile-design-philosophy.md Section 11. Dense lists use tight spacing with separators.
+platform boundaries logic. Letter spacing is `0`.
+16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. No exclamation marks, no emoji, no "Submit"/"OK".
+17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections. Dense lists use tight spacing with separators.
 18. **Card borders** — cards use background fill difference (`bg="$color2"` on `$background`), NOT `borderWidth={1}` on everything. Borders are only for list item separators (`borderBottomWidth={0.5}`) and inputs. If every surface has a border, strip them and use fill contrast instead.
 19. **Status color saturation + contrast** — use the approved materialization
 and operating context. Outdoor/gloved/safety-critical contexts may justify
@@ -1124,7 +1104,7 @@ stronger status color; product archetype/industry does not. Never use white text
 on yellow/orange unless measured AA; prefer dark text on a soft tint.
 20. **Palette integrity** — surfaces and text use approved palette tokens, not
 raw grays. Industry never supplies an implicit palette.
-21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
+21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
 22. **FlatList has `keyExtractor`** using a stable ID field, never the index.
 23. **Lists have pull-to-refresh** via `<RefreshControl />` calling the same loader as `useFocusEffect`.
 24. **Lists use `ListEmptyComponent`** — empty state is inside the FlatList, never a conditional branch above it. Pull-to-refresh must work even when the list is empty.
@@ -1149,10 +1129,7 @@ raw grays. Industry never supplies an implicit palette.
 31. **Brand negatives** — if `brand/design-system.md` exists, re-read `## Negatives` and verify the screen violates NONE of them. This is a hard gate — do not return DONE if any negative is violated.
 32. **Brand token usage** — if `brand/design-system.md` exists, verify that NO raw hex values appear in the TSX. Tamagui layout primitives use `$token` syntax (`$surface0`, `$accentBase`, etc.). Raw React Native elements (e.g. `ActivityIndicator`, `StyleSheet`) use values from `useThemeTokens()` (e.g. `theme.accentBase`, `theme.surface0`) — never hardcode hex literals.
 33. **Domain differentiation** — could this screen belong to a different app unchanged? If yes, it is too generic. The row style, hero element, empty state copy, and visual emphasis must reflect the actual entity and domain. A status-stripe card on an inspection list looks different from a stat-card row on a project list — verify the entity-specific fields are surfaced prominently, not buried.
-34. **Composition/workflow patterns** — Home resolves `Home composition` from
-`home-compositions.md`; workflow screens resolve `Operational pattern` from
-`screen-templates.md`. Implement the required layout pieces, First Viewport,
-media, and reference materialization rather than a generic CRUD/dashboard shell.
+34. **Composition/workflow patterns** — Implement the required layout pieces naturally rather than a generic CRUD/dashboard shell.
 35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(color|bg|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
 36. **Button themes are not semantic shortcuts.** Grep your TSX for `theme="active"`, `theme="primary"`, and similar generic theme names. If the theme name was not present in `tamagui.config.ts`, replace it with explicit tokens (`bg`, `color`, `borderColor`) or a shared component. Primary CTAs must never look disabled because a guessed theme fell back to a neutral surface.
 37. **No raw hex outside `brand/tokens.ts`** — grep `grep -E '#[0-9a-fA-F]{3,8}' <file>` should return zero matches in your screen file. If you find one: replace with the corresponding `$token` for Tamagui primitives, or with `theme.<tokenName>` for raw RN elements.
@@ -1163,16 +1140,7 @@ media, and reference materialization rather than a generic CRUD/dashboard shell.
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
 43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
 44. **Buttons never silently no-op.** If an action depends on required state (`record`, `id`, selected row, loaded service data), either guarantee that state exists before rendering the button, or render the button disabled with a visible reason. Do not write handlers like `if (!record) return;` on an enabled visible button.
-45. **Product Experience materialized.** Home matches its composition key and
-First Viewport values; required media has stable loading/error/empty fallbacks;
-signature components are present; tab silhouette matches Shared Conventions;
-duplicate-action policy is satisfied.
-46. **Reference contract materialized.** Every required motif appears and every
-forbidden-drift item is absent. `high`/`strict-structural` screens are marked for
-runtime visual QA; source inspection alone is not proof.
-47. **Runtime measurement IDs exist once.** Signature screens expose the
-canonical `experience-*` testIDs from `product-experience-contract.md`; do not
-reuse an ID on multiple views.
+45. **Product Experience materialization** relies entirely on organic AI generation matching the product intent and boundaries.
 
 ### Operational UX rules (control density + trust)
 
