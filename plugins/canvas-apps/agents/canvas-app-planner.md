@@ -50,9 +50,44 @@ exactly, record an explicit approximation and reason; never silently rename butt
 "drag-style", call buttons "handles", or put copy in the app that promises an interaction
 the controls do not provide.
 
+Convert every concrete requested or approved-plan action into an Action Contract. Treat
+create, edit, delete, search, filter, flag, review, approve, reject, and similar verbs as
+separate flows with their own visible entry point, owning screen, handler, required data
+effect, and observable result. Broad words such as "manage", "maintain", or "track" do not
+require universal CRUD across every entity. However, a role-scoped requirement to manage
+all records of the app's primary entity is operational: plan a reachable management list,
+record detail, correction/update, and remove/cancel paths unless the request narrows the
+allowed operations or the domain makes a destructive action inappropriate. A review or
+approval workflow that distinguishes final approved records requires both approve and
+reject/decline decisions and visible resulting statuses unless the request explicitly
+defines a one-way review. Once included, each action must be planned end to end rather
+than represented by a screen or entity alone.
+
+Treat temporal qualifiers and outputs as behavior, not decorative copy. Quarterly,
+monthly, annual, cycle, period, or similar requirements need a shared field or derivation
+that is visible on affected forms and records and can distinguish the active period.
+Export, download, print, or report requests need their own Action Contract with the exact
+eligible-record predicate, output fields, trigger, and visible completion evidence. If
+discovered controls and data sources cannot provide the requested output mechanism, plan
+an explicit approximation rather than omitting the action.
+
+Decompose compound behavior into acceptance paths. Reordering, moving, constraints,
+derived metrics, version comparison, category management, and ranking each need an initial
+state, success path, boundary or rejection path when applicable, shared source of truth,
+and visible evidence. Record those paths in the Action Contract rather than assuming the
+builder will infer them from a feature name.
+
+Infer the minimum supporting setup actions needed to exercise requested behavior when the
+app uses local/mock mutable data. For example, an org restructuring app needs a reachable
+way to add teams and people with manager relationships before reassignment, metrics, and
+version comparison can be meaningfully tested. These supporting actions are required
+dependencies, not universal CRUD. Add them to Requirement Coverage and Action Contracts.
+
 Use `ModernTabList` only when it switches visible panels within one screen. For navigation
 between separate screen files, plan a repeated ModernButton row with direct `OnSelect:
-=Navigate(...)` actions and an explicit current-screen appearance.
+=Navigate(...)` actions and an explicit current-screen appearance. Put every primary
+destination in that row and keep it in the initial viewport at each supported breakpoint,
+or use an immediately visible menu button that exposes the complete destination set.
 
 ## 1. Read Guidance
 
@@ -62,6 +97,7 @@ Read:
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
 - `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
+- `${PLUGIN_ROOT}/references/BehaviorGuide.md` — advanced behavior acceptance contracts
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 - `${PLUGIN_ROOT}/references/PlanTemplates.md` — the exact shape of every artifact you write
 
@@ -115,6 +151,16 @@ Before writing plans:
      If validation must wait for a submit attempt, combine one attempt flag with the
      current invalid expression; do not maintain or clear separate validity flags in each
      input's `OnChange`.
+   - For every mutation, specify how the screen reflects the new state after success.
+     Updating data without refreshing or updating the collection bound to the visible
+     list is incomplete. A success notification alone does not satisfy an outcome that
+     requires the created, edited, deleted, or transitioned record to be visible.
+   - Apply `${PLUGIN_ROOT}/references/BehaviorGuide.md` to every advanced behavior. Name
+     each required success and boundary path, the shared source of truth, and the control
+     that provides visible acceptance evidence.
+   - For every named core visualization, specify its bound source, first-render records,
+     relationship or comparison encoding, populated-state controls, and truthful empty
+     state. Do not plan blank containers or decorative rectangles as visualization content.
 7. Define data-field semantics once and reuse them. If a task has `ScheduledDate`,
    `DueDate` and `CompletedDate`, state which field drives calendar placement, which date
    the task list displays, and which field the monthly report groups by. Seed data,
@@ -165,6 +211,10 @@ For every screen brief, state explicitly:
 - That responsive layout properties derive directly from `App.Width`, `Parent.Width` or
   `Self.Width`. Do not initialize layout variables such as `varIsMobile` or `varColumns`
   in `OnVisible`; they can be unset in Studio and become stale after resize.
+- That the sole screen root always uses `Width: =Parent.Width`, `Height: =Parent.Height`,
+  `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`. Breakpoint sizing belongs on children;
+  never put a narrow-width branch, button width, panel width, or fixed desktop width on
+  the root.
 - That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
 - That the screen-level `Children:` list contains only that root, with every visible
   section nested under the root's `Children:` list.
@@ -178,6 +228,9 @@ For every screen brief, state explicitly:
 - A `TemplateSize` for every gallery that fits its row template **at each width branch**,
   counting a `ModernCard`'s image band. A dense desktop branch is the usual place card
   titles disappear.
+- For every mutation, where its observable result appears immediately afterward. Keep the
+  result in the current viewport, navigate to the bound list/detail, or provide a visible
+  control that takes the user there. Do not place the only proof far below a long form.
 - For every GridLayout: the exact `LayoutGridColumns`, `LayoutGridRows`,
   `LayoutGridColumnMinWidth`, `LayoutGridRowMinHeight` and `Height` formulas, plus every
   explicit child row/column position. The row count and height must reuse the same column
@@ -185,6 +238,17 @@ For every screen brief, state explicitly:
 - For every fixed-height section and every horizontal row with four or more substantive
   children, include a per-breakpoint layout budget: child groups, minimum widths/heights,
   gaps, padding and the resulting section size. Presence of a breakpoint is not enough.
+- For every horizontal container, prove that visible child minimum widths plus gaps and
+  padding fit at desktop, tablet, and phone widths, or specify the wrap/stack branch that
+  makes them fit. For ManualLayout, provide bounds for every simultaneously visible
+  control and prove they neither overlap nor extend beyond the parent at each supported
+  width.
+- For every text-bearing control, state whether it is single-line or wrapping and provide
+  a width/height budget for its longest planned or data-bound value.
+- Define one shared visual contract: title, section-heading, body, and caption type roles;
+  spacing scale; surface and border treatment; primary/secondary action styling; and
+  desktop/tablet/phone content density. Builders must copy these exact values rather than
+  inventing screen-local themes.
 - Group each visible label with its corresponding input in one field container before
   the row stacks.
 - For bounded local galleries of about ten rows or fewer, size the gallery to all rows
@@ -253,6 +317,7 @@ Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
 Write only orchestration information:
 
 - Mode and requirements
+- Requirement Coverage and Action Contracts
 - Working directory
 - Compact discovery summary
 - Dispatch table
@@ -291,6 +356,8 @@ Each brief contains only what that builder needs:
 
 - Action, logical screen, target file, YAML key, and control name prefix
 - Screen specification or exact edit list
+- Every Action Contract owned or affected by the screen, including the visible entry
+  point, exact handler behavior, data effect, and observable result
 - Relevant portions of data source schemas and API details
 - For every control type used on that screen: the complete list of valid input
   property names, plus the full `Enum name:` and the **compile-ready enum literal** for

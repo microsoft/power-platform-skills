@@ -41,8 +41,10 @@ Do not read `canvas-app-plan.md`, other screen briefs, or other screen YAML file
 Do not call discovery tools. The assigned documents contain all required context.
 
 Before writing, verify that the screen brief includes definitions for every control type
-it asks you to add or create. If any definition or required assignment field is missing,
-do not write partial YAML. Return:
+it asks you to add or create, and that every Required Actions row names an entry point,
+control event, required formula behavior, and observable result. If any definition,
+required assignment field, or action-contract field is missing, do not write partial YAML.
+Return:
 
 ```markdown
 Screen: [logical name]
@@ -87,6 +89,39 @@ Do not fix unrelated pre-existing issues.
 
 ### Both
 
+- Implement every row in `## Required Actions`. The entry point must be visible and
+  reachable, the named event must contain the required behavior, and the observable
+  result must be rendered from the same source or state changed by the action.
+- Keep primary navigation and management actions in the initial viewport or behind an
+  immediately visible menu or scroll affordance. A control that exists only below an
+  unscrollable or ambiguous container is not reachable.
+- For search and filter actions, bind the named input directly into the target list's
+  `Items` formula and include every field or state named by the brief.
+- For mutations, update or refresh the collection/source used by the visible list or
+  detail after success. A `Notify()` call without a visible data result is not a complete
+  implementation when the brief requires the changed record to appear, disappear, or
+  move state.
+- Make the mutation's observable result visible immediately after the handler runs. Keep
+  it in the current viewport, navigate to the bound list/detail, or expose an immediately
+  visible action that opens it. Do not leave the only changed row below a long form.
+- Implement every success, boundary, rejection, persistence, and recalculation path named
+  in `## Required Actions`. Reordering, constraints, metrics, versions, categories, and
+  rankings are incomplete when only their happy-path control or display exists.
+- Implement role-scoped management actions on the primary-record surface named by the
+  brief. Edit must load and update the selected record, delete/remove must have a
+  confirmation or cancel path, and approve/reject controls must visibly update status.
+- Persist period or cycle values in the shared record source and render them wherever the
+  brief requires period-aware review. Export/report actions must apply the exact eligibility
+  predicate and fields from the brief and show completion evidence; a notification without
+  an output is incomplete.
+- Implement supporting setup actions from `## Required Actions` against the same shared
+  source used by the requested behavior. Seeded rows do not substitute for reachable
+  creation of the minimum records needed to exercise the behavior.
+- Render every specified core visualization with bound content. Do not ship empty filled
+  containers, disabled-looking input blocks, or decorative placeholders where the brief
+  requires a hierarchy, chart, comparison, board, timeline, or map.
+- Follow the shared Visual Contract exactly. Do not introduce screen-local palette,
+  typography, spacing, surface, or action styles.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
@@ -154,6 +189,7 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
+Actions: [implemented count]/[required count]
 QA: 1 [outcome] · 2 [outcome] · …
 - [fix summary, or "clean"]
 Status: Done
@@ -161,6 +197,8 @@ Status: Done
 
 The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return
 without it is incomplete, and the orchestrator will send the screen back.
+The `Actions:` count must cover every Required Actions row. A lower implemented count
+means `Status: Blocked` with the unresolved action and reason.
 
 ## Constraints
 
@@ -173,6 +211,13 @@ without it is incomplete, and the orchestrator will send the screen back.
   unquoted — `DecimalPrecision.'1'`, not `DecimalPrecision.1`.
 - Never leave a `ModernCard` slot unset. For text-only cards set `Image: =Blank()` and,
   when supported by the control definition, `HeaderImage: =Blank()`.
+- The sole responsive screen root always sets `Width: =Parent.Width`,
+  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`. Never copy a
+  child control's fixed or conditional width onto the root during a repair.
+- A bounded Gallery's `Height` and empty-state visibility count the same source/filter
+  expression used by `Items`. Never size or classify an empty gallery from
+  `Self.AllItems`, `Self.AllItemsCount`, or rendered `AllItemsCount`; those values can
+  create a zero-height materialization cycle.
 - Every multiword ModernButton or link that is a direct child of a vertical AutoLayout
   container sets `Width: =Parent.Width`; `LayoutMinWidth` and stretch alignment alone do
   not make the rendered control fill the row.

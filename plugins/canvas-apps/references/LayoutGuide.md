@@ -74,7 +74,7 @@ For flexible, responsive designs:
 ```
 
 1. **Dynamic gallery height:**
-   `Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)`
+   `Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))`
 2. **Container scrolling:** `LayoutOverflowY: =LayoutOverflow.Scroll`
 3. **AutoLayout child properties:** `AlignInContainer`, `FillPortions`,
    `LayoutMinWidth/Height`, `LayoutMaxWidth/Height`
@@ -207,11 +207,16 @@ directly.
 
 Small bounded lists should not create a second hidden scroll region. For a local roster
 of roughly ten or fewer rows inside a scrollable root, include every row and its template
-padding in the gallery height, then let the root scroll:
+padding in the gallery height, then let the root scroll. Count the gallery's source
+expression, not `Self.AllItemsCount`: rendered-item counts depend on the gallery having a
+non-zero height and can create a zero-height cycle.
 
 ```yaml
-Height: =Self.AllItemsCount * Self.TemplateHeight + ((Self.AllItemsCount + 1) * Self.TemplatePadding)
+Height: =With({rowCount: CountRows(<same source/filter used by Items>)}, rowCount * Self.TemplateHeight + ((rowCount + 1) * Self.TemplatePadding))
 ```
+
+Use that same source count for empty-state visibility. Do not derive either property from
+`Self.AllItems`, `Self.AllItemsCount`, or another rendered gallery property.
 
 ## Give labelled controls room for their longest value
 
