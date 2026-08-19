@@ -92,7 +92,7 @@ connector wiring.
 
 5. Start mobile app:
 
-	`/create-mobile-app` starts Metro with the app's normal `npm run dev` command.
+	`/create-mobile-app` starts Metro after its explicit schema and type-check gates.
     The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
     so `/debug-app` works after switching between VS Code, Copilot CLI, and
     Claude Code without asking for a terminal ID.

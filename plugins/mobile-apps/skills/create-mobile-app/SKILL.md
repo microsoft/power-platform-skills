@@ -1899,7 +1899,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
 
-This skill launches the template's normal `npm run dev` command so:
+This skill runs the schema/typecheck gates explicitly, then launches `npx expo start`. Manual `npm run dev` remains the template's normal entry point and produces the same project-local log because logging is configured in `metro.config.js`.
 
 1. The native Metro URL is printed by Expo — the user can scan it immediately.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
@@ -1921,15 +1921,15 @@ npm run generate-schemas    # refresh schema map for any data sources added sinc
 npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server:
+Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then start the dev server without rerunning the `predev` schema hook:
 
 ```bash
-npm run dev
+npx expo start
 ```
 
 This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
 
-The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual starts.
+The orchestrator already ran `npm run generate-schemas` for the final gate; `predev` remains a safety net for manual `npm run dev` starts.
 
 Read the initial terminal output and locate the generated `.powernative` log directly:
 
