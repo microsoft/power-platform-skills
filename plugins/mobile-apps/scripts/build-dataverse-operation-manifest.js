@@ -50,6 +50,11 @@ const DERIVED_COLUMN_TYPES = new Set([
   'lookup',
   'computed',
 ]);
+const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
+  'lookup',
+  'memo',
+  'multiline',
+]);
 
 function parseArgs(argv) {
   const args = {};
@@ -1110,9 +1115,13 @@ function baseColumnCompatibility(column, liveColumn) {
       );
     }
   }
-  if (!hasOwn(liveColumn, 'sourceType') || liveColumn.sourceType === null) {
+  const normalizedColumnType = normalizeColumnType(column.type);
+  if (!hasOwn(liveColumn, 'sourceType')) {
     reasons.push('SourceType evidence is missing');
-  } else if (!DERIVED_COLUMN_TYPES.has(normalizeColumnType(column.type))
+  } else if (liveColumn.sourceType === null
+    && !NULL_SOURCE_TYPE_IS_ORDINARY_TYPES.has(normalizedColumnType)) {
+    reasons.push('SourceType evidence is missing');
+  } else if (!DERIVED_COLUMN_TYPES.has(normalizedColumnType)
     && Number(liveColumn.sourceType) !== 0) {
     reasons.push(`ordinary column has SourceType ${liveColumn.sourceType}`);
   }

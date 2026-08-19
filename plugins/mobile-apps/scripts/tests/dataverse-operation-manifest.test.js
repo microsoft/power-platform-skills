@@ -1287,6 +1287,64 @@ test('ordinary-column reuse requires complete compatible behavior evidence', () 
   }
 });
 
+test('ordinary Memo and Lookup columns accept nullable Dataverse SourceType', () => {
+  const lookupReconciliation = fullyAppliedSnapshot();
+  lookupReconciliation.tables
+    .find((tableValue) => tableValue.logicalName === 'cr1_item')
+    .columns
+    .find((columnValue) => columnValue.logicalName === 'cr1_categoryid')
+    .sourceType = null;
+  const lookupManifest = buildManifest(buildInputs(
+    createContract(),
+    lookupReconciliation,
+  ));
+  assert.equal(lookupManifest.executable, true);
+  assert.equal(lookupManifest.summary.metadataOperationCount, 0);
+
+  const memoContract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [
+      contractTable('cr1_note', 'extend', 0, [
+        contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+        contractColumn('cr1_description', 'memo', 'reuse', {
+          maxLength: 10000,
+          format: 'TextArea',
+        }),
+      ]),
+    ],
+  };
+  const memoManifest = buildManifest(buildInputs(memoContract, snapshot({
+    tables: [table('cr1_note', [
+      column('cr1_name', 'String', { primaryName: true }),
+      column('cr1_description', 'Memo', { sourceType: null }),
+    ])],
+  })));
+  assert.equal(memoManifest.executable, true);
+  assert.equal(memoManifest.summary.metadataOperationCount, 0);
+
+  const stringWithNullSourceType = column('cr1_name', 'String', {
+    primaryName: true,
+    sourceType: null,
+  });
+  const blocked = buildManifest(buildInputs({
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [
+      contractTable('cr1_note', 'extend', 0, [
+        contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+      ]),
+    ],
+  }, snapshot({
+    tables: [table('cr1_note', [stringWithNullSourceType])],
+  })));
+  assert.equal(blocked.executable, false);
+  assert.match(
+    blocked.decisions.find((item) => item.itemType === 'column').reason,
+    /SourceType evidence is missing/,
+  );
+});
+
 test('ordinary-column precision, range, date behavior, and primary-name constraints are enforced', () => {
   const contract = {
     schemaVersion: 1,
