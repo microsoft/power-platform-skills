@@ -68,13 +68,13 @@ Deterministic HTML template for `brand/design-system.html`. **Zero LLM cost** â€
     /* Typography ladder */
     .type-ladder { display: flex; flex-direction: column; gap: 16px; }
     .type-row { display: flex; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid #eee; }
-    .type-role { width: 80px; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; flex-shrink: 0; }
+    .type-role { width: 80px; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0; flex-shrink: 0; }
     .type-sample { flex: 1; }
 
     /* Component gallery */
     .components { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
     .component-card { background: white; border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--border); }
-    .component-card h3 { font-size: 14px; color: var(--text-muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .component-card h3 { font-size: 14px; color: var(--text-muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0; }
 
     /* Buttons */
     .btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 20px; font-family: var(--body-font); font-size: 15px; font-weight: 500; border: none; cursor: pointer; transition: all 0.15s; }

@@ -21,7 +21,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 34, 9: 42 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 40, 9: 48 },
   weight:        { 4: '400', 6: '600', 7: '700' },
-  letterSpacing: { 4: 0, 5: 0, 6: -0.3, 7: -0.5, 8: -0.7, 9: -1.0 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 
 const bodyFont = createFont({
@@ -29,7 +29,7 @@ const bodyFont = createFont({
   size:          { 1: 11, 2: 12, 3: 13, 4: 16, 5: 18 },
   lineHeight:    { 1: 16, 2: 18, 3: 20, 4: 24, 5: 28 },
   weight:        { 4: '400', 5: '500', 6: '600', 7: '700' },
-  letterSpacing: { 1: 0.4, 2: 0.2, 3: 0, 4: 0 },
+  letterSpacing: { 1: 0, 2: 0, 3: 0, 4: 0 },
 })
 ```
 
@@ -45,7 +45,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 34, 9: 42 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 40, 9: 48 },
   weight:        { 4: '400', 6: '600', 7: '700', 8: '800' },
-  letterSpacing: { 4: 0, 5: 0, 6: -0.2, 7: -0.3, 8: -0.5, 9: -0.7 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 ```
 
@@ -61,7 +61,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 34, 9: 42 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 40, 9: 48 },
   weight:        { 4: '400', 6: '600', 7: '700', 8: '800' },
-  letterSpacing: { 4: 0, 5: 0, 6: -0.3, 7: -0.5, 8: -0.8, 9: -1.0 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 
 // Body uses the same family — differentiate through weight only
@@ -70,7 +70,7 @@ const bodyFont = createFont({
   size:          { 1: 11, 2: 12, 3: 13, 4: 16, 5: 18 },
   lineHeight:    { 1: 16, 2: 18, 3: 20, 4: 24, 5: 28 },
   weight:        { 4: '400', 5: '500', 6: '600' },
-  letterSpacing: { 1: 0.3, 2: 0.1, 3: 0, 4: 0 },
+  letterSpacing: { 1: 0, 2: 0, 3: 0, 4: 0 },
 })
 ```
 
@@ -84,7 +84,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 34, 9: 42 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 40, 9: 48 },
   weight:        { 4: '400', 6: '600', 7: '700', 8: '800' },
-  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: -0.3, 8: -0.5, 9: -0.7 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 
 const monoFont = createFont({
@@ -92,7 +92,7 @@ const monoFont = createFont({
   size:          { 1: 11, 2: 12, 3: 13, 4: 15 },
   lineHeight:    { 1: 16, 2: 18, 3: 20, 4: 22 },
   weight:        { 4: '400', 5: '500' },
-  letterSpacing: { 1: 0.5, 2: 0.3, 3: 0, 4: 0 },
+  letterSpacing: { 1: 0, 2: 0, 3: 0, 4: 0 },
 })
 ```
 
@@ -108,7 +108,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 36, 9: 48 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 42, 9: 54 },
   weight:        { 4: '400', 6: '600', 7: '700' },
-  letterSpacing: { 4: 0, 5: -0.2, 6: -0.4, 7: -0.6, 8: -0.8, 9: -1.2 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 ```
 
@@ -277,20 +277,19 @@ Four profiles. The plan's `## Design` section specifies which one to use. Screen
 
 ---
 
-## Industry-to-Tone Default Mapping
+## Personality/Audience-to-Tone Mapping
 
-| Industry | Default tone | Override guidance |
+| Approved personality / audience | Draft tone | Override guidance |
 |---|---|---|
-| Enterprise / LOB | Professional | — |
-| Productivity | Professional | — |
-| Finance | Professional | Premium finance may use Editorial |
-| Field / Ops | Utilitarian | — |
-| Healthcare (staff) | Professional | Patient-facing apps use Warm |
-| Healthcare (patient) | Warm | — |
-| Education | Warm | — |
-| Consumer / Retail | Warm | Premium brands may use Editorial |
-| Content / Journaling | Editorial | — |
-| Creative tools | Editorial | Collaborative tools may use Warm |
+| Utility | Utilitarian | Audience/brand may require Professional |
+| Polished operational | Professional | Warm is valid for supportive teams |
+| Premium brand-forward | Warm or brand-defined | Editorial is valid for restrained brands |
+| Editorial | Editorial | Professional for regulated UI chrome |
+| Immersive | Brand-defined | Keep errors/actions direct |
+| Playful consumer | Warm | Do not weaken safety/error clarity |
+| Reference-driven | Derive from approved intake | Explicit brand voice wins |
+
+Industry supplies domain vocabulary, not the tone profile.
 
 ---
 

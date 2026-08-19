@@ -1,6 +1,6 @@
 ---
 name: preview-screens
-description: Use when the user wants to preview generated screens in a browser without starting Metro / a simulator — for example after /create-mobile-app finishes or after /edit-app regenerates a screen.
+description: Use when the user wants a quick static browser approximation of generated mobile screens without Metro or a simulator. This is for sharing/layout inspection only and never proves native rendering, Product Experience geometry, accessibility, or reference fidelity; use /visual-qa for premium/reference/release checks.
 user-invocable: true
 allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
@@ -10,13 +10,16 @@ model: sonnet
 
 # Preview Screens
 
-Generates a self-contained HTML file that renders every screen in the app as a phone-frame mockup (375 × 812) with tab navigation and a dark/light toggle. The agent reads TSX files, understands the Tamagui component tree, and produces equivalent HTML/CSS — no programmatic TSX parsing.
+Generates a self-contained HTML approximation of screens as phone-frame mockups
+with tab navigation and a dark/light toggle. It reads Product Experience and
+TSX to preserve intended composition, but it does not execute React Native.
 
 ## When to use
 
 - After generating screens, to see a quick visual preview without running Metro/Expo
 - To share a screenshot-ready mockup with stakeholders
 - To verify layout before deploying
+- To prove premium/reference fidelity or release readiness → use `/visual-qa`
 
 ## When NOT to use
 
@@ -73,16 +76,22 @@ Glob pattern="app/**/*.tsx" path="<working_dir>"
 - `app/login.tsx` → "Login"
 - `app/oauth-callback.tsx` → skip (not a visible screen)
 
-If `native-app-plan.md` exists in the working directory, read its `## Screens` section for human-friendly labels.
+If `native-app-plan.md` exists, read `## Product Experience`, `## Design
+Direction`, `## Design`, and `## Screens` for composition, first-viewport,
+media/reference, and human-friendly labels. Read `design-intake.md` when present.
 
 Build an ordered list: `[ { path, screenName, screenId } ]`.
 
-**Default tab ordering — Home first, then two details, then the rest.** Step 5 marks the first entry as `active`, so the order below directly controls which screen the user lands on when `preview.html` opens.
+**Default tab ordering — Home first, then two repeated-loop screens, then the
+rest.** Step 5 marks the first entry active.
 
 Sort the list with this priority:
 
 1. **Home / dashboard first.** The first screen matching any of these paths (in this priority): `app/(app)/home.tsx`, `app/(app)/index.tsx`, `app/(app)/dashboard.tsx`, `app/index.tsx` (only if it's a real home screen — not the auth redirect you already filtered out in Step 2). If `native-app-plan.md` flags one screen as the home/landing screen, prefer that.
-2. **Then up to two detail screens.** A "detail" screen is any TSX whose route segment uses a dynamic param — file path contains `[` and `]` (e.g. `app/(app)/recipes/[id].tsx`, `app/(app)/orders/[orderId]/edit.tsx`). Take the first two in the order they were discovered (alphabetical by path is fine).
+2. **Then up to two screens representing the approved repeated user loop.** Use
+   workflow capabilities, Screen Map purpose, and per-screen specs. Prefer a
+   workflow/action screen and its object/detail screen; do not select Detail
+   merely because its path contains `[id]`.
 3. **Then everything else** in discovery order.
 
 If there are fewer than two detail screens, just include whatever exists and continue with the rest — do not pad with non-detail screens to force a count of 3.
@@ -127,6 +136,9 @@ For each screen in the ordered list from Step 2:
    - Map every shorthand prop to its CSS equivalent (`flex={1}` → `flex:1`, `bg="$color2"` → `background:var(--color2)`, etc.)
    - Map token values to pixels (`p="$4"` → `padding:16px`)
    - Replace `<Ionicons name="..." />` icons with Unicode equivalents (see mapping reference Section 3, Guideline 4 — the icon substitution table uses Ionicons names)
+    - Preserve the approved Home composition, relative first-viewport region,
+       media ratio/fallback, action placement, and next-section hint
+    - Show required reference motifs and a Reference Contract panel when present
 
 4. **Handle dynamic content:**
    - `.map()` over arrays → generate 3–4 representative placeholder items
@@ -146,6 +158,10 @@ Use inline styles on elements. Keep each screen's HTML self-contained (no shared
 ### Step 5 — Assemble preview.html
 
 Use the phone frame template from the mapping reference (Section 4) as the outer shell.
+
+Add a prominent page banner and per-phone caption:
+
+`Static approximation — runtime screenshot required. Use /visual-qa for native fidelity.`
 
 Replace the placeholders:
 
@@ -209,6 +225,9 @@ open "<working_dir>/preview.html" 2>/dev/null \
 
 - **Read-only with respect to source code.** This skill only creates/overwrites `preview.html` — it never modifies TSX files, layouts, configs, or the memory bank.
 - **Static approximation.** The preview does not execute React, handle state, or fetch data. Dynamic lists show placeholder items. Interactions (button taps, navigation) are not functional.
+- **Not a fidelity gate.** It cannot measure native view geometry, platform
+   chrome, safe areas, Dynamic Type, media loading, gestures, or reference
+   fidelity. Never mark visual QA passed from this artifact.
 - **Native capabilities are placeholders.** PDF viewer, PDF report, sharing, printing, and pen/signature capture are shown as static states only. Browser preview must not imply native capture/viewer APIs work there.
 - **Re-running** `/preview-screens` overwrites the previous `preview.html`.
 - **No memory-bank update** needed — previews are ephemeral artifacts.

@@ -1,6 +1,9 @@
 # Design Directions — overview
 
-Three named gestalts the internal `/design-system` style picker uses. Each is a bundle of ~12 design tokens chosen to maximise contrast against the other two so the user can decide at a glance.
+Three visual materialization profiles the internal `/design-system` style
+picker uses. They are independent of product archetype and industry. Legacy
+bundle IDs remain `inspection`, `saas`, and `product` for compatibility, but
+new plans record the canonical visual-personality names below.
 
 ## Why three?
 
@@ -12,30 +15,36 @@ The three are intentionally far apart in look, not "shades of beige". If the use
 
 ## The three directions
 
-### 1. Inspection
+### 1. Utility (legacy bundle: `inspection`)
 **Reference apps:** Uber Driver, Lyft Driver, ServiceTitan, Procore, Field Service Lightning, Square for Restaurants
 
 For someone outside, in gloves, in sunlight, with one hand on a clipboard. Glance-first, tap-second. High contrast, fully saturated status colors, big touch targets, no decorative motion (jitters in moving vehicles).
 
-**Pick when:** field operations, work orders, deliveries, audits, dispatch, inspections, anything outdoor or hands-busy.
+**Pick when:** the approved personality is `utility`, or operating context says
+outdoor/gloved/safety-critical and the user prefers direct visual expression.
+An inspection or maintenance archetype does not select this automatically.
 
 → [direction-inspection.md](./direction-inspection.md)
 
-### 2. SaaS
+### 2. Polished Operational (legacy bundle: `saas`)
 **Reference apps:** Microsoft Teams mobile, Asana, Slack, Salesforce mobile, Notion (the trustworthy default), GitHub mobile
 
 The look people inside an org expect. Familiar, professional, doesn't surprise. Cool gray base + one brand color, hairline-bordered cards, row-with-chevron lists, subtle motion. The "safe and trusted" pick.
 
-**Pick when:** internal tools, employee-facing dashboards, task trackers, request systems, anything where Microsoft 365 family resemblance is a feature.
+**Pick when:** the approved personality is `polished-operational`: quiet,
+trustworthy repeated work. It is the least-assumptive standalone baseline, not
+an industry default.
 
 → [direction-saas.md](./direction-saas.md)
 
-### 3. Product
+### 3. Premium Brand-forward (legacy bundle: `product`)
 **Reference apps:** Linear, Notion (consumer side), Spotify, Airbnb, Headspace, Robinhood, Apple Music
 
 Apps you'd download by choice. Type-led, warm or rich-dark surfaces, single muted accent, sentence-style rows over icon-rich cards, generous whitespace, asymmetric layouts. The premium feel.
 
-**Pick when:** consumer-facing apps, employee experience apps where retention matters (HR onboarding, learning, wellness), executive dashboards that need to look "designed."
+**Pick when:** the approved personality is `premium-brand-forward`, or product
+identity/retention/reference quality matters. CMMS, inspections, and other
+operational products may validly choose this profile.
 
 → [direction-product.md](./direction-product.md)
 
@@ -43,11 +52,11 @@ Apps you'd download by choice. Type-led, warm or rich-dark surfaces, single mute
 
 Existing `surface` token in `shared/references/design-planning.md`:
 
-| Direction | Surface (existing token) | Plus |
+| Personality | Surface (existing token) | Plus |
 |---|---|---|
-| Inspection | `strong-cards` | High-contrast bg, status stripe on card |
-| SaaS | `subtle-depth` | Hairline border + mild shadow on raised |
-| Product | `editorial` | Flat warm bg, full-bleed sections, asymmetry |
+| Utility | `strong-cards` | High-contrast bg, status stripe on card |
+| Polished Operational | `subtle-depth` | Hairline border + mild shadow on raised |
+| Premium Brand-forward | `editorial` | Flat warm/rich bg, full-bleed sections, asymmetry |
 
 The new direction names *bundle* the existing tokens with palette + typography + tone choices, so the user picks one thing instead of nine.
 
@@ -72,7 +81,10 @@ Picking one direction cascades into ~30 downstream decisions in the screen-build
 | Accent count | Inspection: status-driven multi / SaaS: 1 brand color / Product: 1 muted |
 | Tone of copy | Inspection: direct / SaaS: professional / Product: conversational |
 
-This is the contract: **one human decision unlocks 30+ machine decisions, consistently**.
+This is a materialization shortcut, not the Product Experience contract. It may
+fill unresolved token/component choices but cannot override approved Home
+composition, First Viewport geometry, media, navigation silhouette, or
+reference motifs.
 
 ## Hybrid handling
 

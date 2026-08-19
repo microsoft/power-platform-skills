@@ -23,6 +23,7 @@ const VALIDATORS = [
   { script: 'validate-write-safety.js', appliesTo: () => true },
   { script: 'validate-protected-paths.js', appliesTo: () => true },
   { script: 'validate-package-deps.js', appliesTo: (filePath) => path.basename(filePath) === 'package.json' },
+  { script: 'validate-experience-contract.js', appliesTo: (filePath) => path.basename(filePath) === 'native-app-plan.md' },
   { script: 'validate-icon-imports.js', appliesTo: (filePath) => hasExtension(filePath, SOURCE_EXTENSIONS) },
   { script: 'validate-connector-first.js', appliesTo: (filePath) => hasExtension(filePath, SOURCE_EXTENSIONS) },
   { script: 'validate-dataverse-payload.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
@@ -30,6 +31,7 @@ const VALIDATORS = [
   { script: 'validate-navigation-idempotency.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
   { script: 'validate-screen-quality.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
   { script: 'validate-color-contrast.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
+  { script: 'validate-screen-composition.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
 ];
 
 function isTextFile(filePath) {

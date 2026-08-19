@@ -1,6 +1,8 @@
-# Direction: Inspection
+# Materialization Profile: Utility (legacy ID: inspection)
 
-For field, ops, and outdoor apps. Built so a technician with gloves on, in sunlight, can find what they need at a glance and tap large targets without precision.
+For an approved `utility` personality or outdoor/gloved/safety-critical
+operating context. Product archetype and industry never select this profile
+automatically.
 
 ## Reference apps
 

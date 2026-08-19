@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "templateVersion": 1,
+  "templateOwner": "power-platform-skills/mobile-app",
+  "pluginVersion": "0.3.0",
+  "source": "pa-wrap-tools/templates/expo-app-standalone",
+  "sourceRef": "main",
+  "experienceContractVersion": 1,
+  "minimumPluginVersion": "0.3.0"
+}

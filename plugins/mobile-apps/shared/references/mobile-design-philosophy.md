@@ -8,6 +8,10 @@ Required reading for `screen-builder` and `native-app-planner`. Defines **why** 
 
 Every screen should feel designed, not generated. Benchmark: a well-made iOS app — same attention to whitespace, alignment, hierarchy. Screenshot your screen next to iOS Settings — if it looks busier or more cramped, fix it.
 
+Read `product-experience-contract.md`, `visual-personalities.md`,
+`home-compositions.md`, and `reference-fidelity.md` before applying this guide.
+Those approved contracts outrank the generic defaults below.
+
 ---
 
 ## 1. Visual Hierarchy
@@ -21,6 +25,10 @@ Every screen has exactly one primary action and one primary piece of information
 | Body / row title | `Text fontSize="$5"` | 16px |
 | Secondary | `Paragraph color="$color10"` | 14px |
 | Caption / meta | `Text fontSize="$3" color="$color9"` | 13px |
+
+The approved First Viewport Contract may require a larger display headline or
+signature component on Home. Compact panel/card headings still use the scale
+above; do not put hero-scale text inside small controls.
 
 - **Weight:** `700` titles, `600` section headers, `400` body. Never bold body text.
 - **Color:** Primary `$color12`, secondary `$color10`, tertiary `$color9`. Accent (`$blue10`) for interactive only.
@@ -38,7 +46,9 @@ When the aesthetic direction calls for it (Editorial, Soft/Organic), pair a **se
 | Refined Minimal (default) | Inter | Inter | -0.3 at `$8`+ only | 1.5x |
 | Bold / Expressive | DM Sans bold | DM Sans lighter weight | -0.5 to -0.8 | 1.5x |
 
-**Negative tracking on headlines:** Apply `letterSpacing` of -0.5 to -1.0 on `fontSize="$7"` and above. Never apply negative tracking below `$6`. This pulls letters closer and makes headings feel authoritative, not loose.
+**Letter spacing:** Keep `letterSpacing={0}` unless a supplied brand system has
+an explicit, tested exception. Hierarchy comes from family, size, weight, and
+line height rather than compressed text.
 
 **Line height for body:** Long-form body text (detail screen descriptions, onboarding copy) uses 1.5–1.6x line height for reading comfort. Dense list rows use tighter default (1.3x).
 
@@ -71,13 +81,22 @@ All text shares the same left margin. Never mix center-aligned and left-aligned 
 - **Forms:** 3–5 visible fields before scroll. Group with section headers.
 - **Glance Test:** Can user understand this screen in 2 seconds from title + one visual element alone?
 
-### Home Screen Dashboard
+### Home Composition
 
-For most useful mobile apps, Home is a dashboard, not a welcome page and not a duplicate of the first list. It should answer three questions in one glance: what matters now, what changed recently, and what should I do next?
+Home has no universal layout. Use the approved key from
+`home-compositions.md`: asset command, media command, object command,
+relationship command, data command, scan command, queue first, timeline first,
+narrative Home, personalized feed, or operational dashboard.
 
-Home should usually contain: a compact context header, one current/next item card, a progress/status/priority strip when relevant, 2–4 summary tiles, 3–5 recent/upcoming/recommended rows, and one bottom primary CTA. Keep the list/detail tabs for browsing everything; Home summarizes and routes.
+Materialize every First Viewport Contract field: signature component, viewport
+share, minimum height, media rule, headline minimum, metric maximum, action
+placement, next-section visibility, and duplicate-action policy. Stable
+dimensions prevent data, loading states, and long labels from shifting the
+composition.
 
-The structure is generic, but the content must be domain-specific: inspection apps show assignment/progress/defects; learning apps show next lesson/streak/progress; finance apps show balance/due items/recent activity; healthcare apps show next appointment/tasks; CRM apps show pipeline/follow-ups. Do not copy a field-ops dashboard shape into domains where another current-state summary is more natural.
+Use `operational-dashboard` only when users truly compare multiple metrics and
+queues. Do not copy dashboard structure across archetypes, and do not duplicate
+the same primary action in both Home content and a dedicated tab/dock control.
 
 ---
 
@@ -136,23 +155,31 @@ The structure is generic, but the content must be domain-specific: inspection ap
 
 ---
 
-## 7. Industry-Adaptive Design
+## 7. Context-Adaptive Ergonomics
 
-| Industry | Density | Color | Typography | Touch | Key pattern |
-|---|---|---|---|---|---|
-| Enterprise/LOB | Medium-high | Minimal accent, blue CTA | Inter, no decorative | Standard 44pt | Dense rows, metadata-rich |
-| Consumer | Lower | Brand accent prominent | Custom font OK | Standard | Larger radius, imagery |
-| Field/Ops | High | High contrast, status colors | Larger body `$5`–`$6` | 52pt+ | Camera/scan forward, offline indicator |
-| Finance | Medium | Blue dominant, conservative | High-contrast, no decorative | Standard | Whitespace, trust signals |
-| Healthcare | Lower | Warm, approachable | Rounded sans-serif | Standard | Friendly illustrations, compassionate copy |
-| Education | Medium | Bright, playful | Slightly rounded | Standard | Gamification, streaks |
-| Productivity | High | Near-monochrome | System font, mono for data | Standard | Strong grid, batch ops |
+Industry supplies vocabulary and regulatory/content constraints, not visual
+personality. Adapt ergonomics from operating context:
+
+| Operating context | Ergonomic adaptation |
+|---|---|
+| Outdoor / glare | Measured high contrast, larger critical text, avoid subtle-only state cues |
+| Gloves / hands busy | 52pt+ frequent targets, fewer adjacent controls, scan/camera-first input |
+| One-handed phone | Frequent actions in lower reach zone; top actions secondary |
+| Safety critical | Redundant text/icon status, confirmation for irreversible action, persistent lockout state |
+| Intermittent connectivity | Visible sync state, local draft/resume, retry without data loss |
+| Desk/tablet power use | Denser scanning is allowed when approved; preserve touch targets and mobile workflow |
+
+Visual personality, density, palette, type, radius, media, and Home composition
+remain independent Gate 3 decisions.
 
 ---
 
 ### Field/Ops Workflow Screens
 
-Inspection, dispatch, safety, maintenance, aviation, warehouse, and route apps need workflow-specific screens, not just CRUD screens with different labels.
+Inspection, dispatch, safety, maintenance, aviation, warehouse, and route
+capabilities need workflow-specific screens, not just CRUD screens with
+different labels. These interaction patterns do not force an Industrial visual
+personality.
 
 | Workflow | Mobile UX shape |
 |---|---|
@@ -196,15 +223,12 @@ Endings: brief confirmation after save, undo after delete, silent draft save on 
 
 ---
 
-## 10. Aesthetic Direction
+## 10. Visual Personality
 
-| Direction | When | Characteristics |
-|---|---|---|
-| **Industrial** | Field ops, maintenance | Monospace data, uppercase tracked labels, edge-to-edge rows, single accent |
-| **Editorial** | Content, learning | Serif headings, generous line height, minimal cards, section numbers |
-| **Refined Minimal** | Productivity, enterprise (default) | Inter, precise weight hierarchy, low-radius bordered cards |
-| **Soft / Organic** | Healthcare, wellness, consumer | Rounded sans-serif, warm shadow, tinted surfaces |
-| **Bold / Expressive** | E-commerce, social | Saturated brand color, strong shadows, full-color accent cards |
+Use the approved personality from `visual-personalities.md`: utility, polished
+operational, premium brand-forward, editorial, immersive, playful consumer, or
+reference driven. Any product archetype may use any personality when the
+operating-context and accessibility constraints remain satisfied.
 
 ---
 
@@ -279,5 +303,10 @@ Before returning, check none of these are present:
 - [ ] Fully saturated status pills — desaturate status colors for non-field apps (see `color-palette-architecture.md`). Use `$color3`/`$color10` tinted pills, not raw `$red10`/`$green10` fills on white text
 - [ ] Pure gray palette with no hue — if the plan specifies a custom palette or industry, apply the named palette (see `color-palette-architecture.md`). Even default apps should use Tamagui's built-in hue-tinted tokens, not raw gray hex values
 - [ ] Dark mode uses pure black (#000) or raw white (#fff) — dark surfaces should be near-black with a hue tint, text should be warm cream not pure white (see `color-palette-architecture.md` dark mode rules)
+- [ ] Home uses a generic header + equal KPI grid + rows + CTA despite another approved composition
+- [ ] Required media is absent, blank, or has no loading/error fallback
+- [ ] Signature component is materially smaller than its First Viewport Contract
+- [ ] Primary content action duplicates a dedicated tab/dock action when forbidden
+- [ ] Neighboring tab roots have the same dominant component and grouping silhouette
 
 If 3+ are present, fix before returning.

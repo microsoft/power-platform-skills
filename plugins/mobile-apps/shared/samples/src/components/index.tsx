@@ -549,7 +549,7 @@ export function FormField({
 }) {
   return (
     <YStack gap="$2">
-      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0.6}>
+      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0}>
         {label.toUpperCase()}
       </Text>
       {children}

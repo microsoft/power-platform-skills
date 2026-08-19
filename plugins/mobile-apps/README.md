@@ -2,9 +2,13 @@
 
 This template is an Expo, React Native, and TypeScript starter for building a standalone mobile app that connects to Power Platform data through `@microsoft/power-apps-native-host`.
 
+> **Plugin status:** v0.3.0. The template records source and compatibility in
+> `.powerapps-native/version.json`; plan status/rendering and Product Experience
+> validation follow the canonical four-gate architecture described below.
+
 ## Requirements
 
-- Node.js 24 LTS.
+- Node.js 22 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
 
@@ -90,18 +94,6 @@ connector wiring.
     environment-specific page and writes the pasted client ID to
     `auth.config.json`.
 
-    ### Required API permissions
-
-    The Microsoft Entra app registration requires these delegated permissions
-    from the **Power Platform API**:
-
-    - `PowerApps.Apps.Play`
-    - `PowerApps.Apps.Read`
-    - `Connectivity.Connectors.Read`
-    - `Connectivity.Connections.Read`
-    - `Connectivity.Connections.Write`
-    - `Connectivity.Connections.UserConsent`
-
 5. Start mobile app:
 
 	Run the below command in a new terminal from the app directory.
@@ -122,33 +114,6 @@ This template is provided under the license in `LICENSE`.
 
 The mobile-app plugin is stored in `plugins/mobile-apps` in the `power-platform-skills` marketplace. It works with GitHub Copilot in VS Code and Claude Code.
 
-## Manual migration to a new template
-
-To migrate without `upgrade-template`, create a new app from the latest template
-instead of modifying the old app in place. Commit or back up the old app first.
-
-1. Create the new app and install its dependencies.
-2. Copy the contents of `app/` and `src/` from the old app into the same
-    directories in the new app:
-
-    ```bash
-    cp -R ../old-app/app/. app/
-    cp -R ../old-app/src/. src/
-    ```
-
-3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
-    `power.config.json`, and `offline-profile.json` as needed. Review each file
-    before replacing the version supplied by the new template.
-4. Keep the new template's `package.json`, root configuration files,
-    `android/`, and `ios/`. Reapply old customizations selectively rather than
-    copying these files wholesale.
-5. Run `npm install`, `npm run type-check`, and the bundle command for each
-    target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
-6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
-    update the migrated `app/` and `src/` code for the new template APIs while
-    preserving the new template configuration. Review the changes and rerun the
-    failing command until the build succeeds.
-
 ## Hello world — your first run
 
 After the prereq sanity check passes:
@@ -161,7 +126,7 @@ Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table cre
 
 ## Quick examples
 
-The plugin is conversational — you describe what you want and the skill drives the rest. Five typical flows:
+The plugin is conversational — you describe what you want and the skill drives the rest. Six typical flows:
 
 ### 1. Create a new app from a one-liner
 
@@ -170,13 +135,21 @@ The plugin is conversational — you describe what you want and the skill drives
 ```
 
 What happens:
-1. **Wizard** (~30s) — confirms device class / aesthetic
-2. **Requirements brief** — the orchestrator infers features (data entry, camera, location), pre-checks them, asks you to confirm or adjust
-3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
-4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
-5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
+1. **Gate 1** — confirms requirements, product archetype, workflow capabilities,
+    operating context, target platforms/environment, and any visual references
+2. **Gate 2** — approves complete architecture: data, projections, offline,
+    native capabilities, connectors, and blockers
+3. **Gate 3** — approves Product Experience: screen graph/specs, visual
+    personality, Home composition, First Viewport geometry, media, navigation,
+    and reference fidelity
+4. **Gate 4** — final implementation confirmation
+5. **Design system** — materializes the approved experience into composition,
+    signature components, brand tokens, typography, components, and previews
 6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
+7. **Dev server + visual QA** — `npm run dev` starts Metro; scan the QR with
+    your native dev client on a device. Native screenshot/view-tree checks then
+    verify Home, tab silhouettes, clipping, media, and premium/reference
+    fidelity when required.
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
@@ -245,6 +218,7 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /deploy                        # npm run build + npx power-apps push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
+> /visual-qa                     # native screenshot + Product Experience verification
 > /list-connections              # diagnostic when a service call returns 401
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
@@ -263,7 +237,7 @@ Common follow-ups:
 | "Improve the search screen for mobile" | Re-plans/rebuilds the affected search or list screen, then previews. |
 | "Add loading, empty, and error states" | Updates the screen spec and TSX state handling, then type-checks. |
 | "Add a detail screen for the selected record" | Updates navigation contracts, creates the detail route, and updates the source screen navigation. |
-| "Update the design to match branding" | Runs the design refresh/reskin path, rebuilds affected screens when layout grammar changes, then previews. |
+| "Update the design to match branding" | Token-only requests use design refresh; premium/reference/composition changes update Product Experience, rebuild affected screens, and run native visual QA. |
 | "Add a form to create a new Dataverse record" | Updates plan/data needs, builds the form route and create payload, and verifies generated services. |
 | "Add barcode scanning and use the scan value to search" | Adds the native scanner wrapper if supported, updates screen flow, and rebuilds affected screens. |
 | "Add a new requirement with a new screen" | Determines whether the feature needs data model, connector, native, or design changes, applies those first, then plans/builds the new screen. |
@@ -278,7 +252,7 @@ Example edit flows:
 | `/edit-app "Add a detail screen for the selected record"` | Source list/search screen, table/service, fields/actions, route style | Screen-plan delta, route/layout update, Generated Services snapshot, detail skeleton, detail + source screen builders, route check |
 | `/edit-app "Add a form to create a new record in Dataverse"` | Table, required/editable fields, launch point, after-save behavior, lookup/file/image fields | Data-model update via `/add-dataverse` if needed, schema generation, form skeleton, form + parent screen builders, create-payload validation |
 | `/edit-app "Add barcode scanning and use the scanned value to search records"` | Scanner location, scanned value meaning, table/service/field to search, no/multiple-match behavior | `/add-native barcode-scanner`, data-model update if target field is missing, scanner/search screen rebuild, static gates, optional `/debug-app` handoff if you report a symptom |
-| `/edit-app "Update the design to better match company branding"` | Brand source and scope: palette, typography, components/density, or full reskin | `/design-system --refresh` or `--reskin`, affected screen rebuild when layout grammar changes, style sweep, preview |
+| `/edit-app "Update the design to better match company branding"` | Brand/reference source and whether scope is tokens, component grammar, composition/media/navigation, personality, or full redesign | Product Experience update for structural scope, `/design-system` materialization, affected screen rebuild, validators, static preview, native visual QA |
 
 ## Commands
 
@@ -298,9 +272,10 @@ Example edit flows:
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
-| `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
+| `/design-system` | ✅ v0 | Materializes approved Product Experience from brand/reference inputs (logo, brand doc, website, free text, canvas app, code app, Figma, or screenshots) into composition, media/navigation/signature components, `brand/design-system.md`, `brand/tokens.ts`, typography, a gallery, and branded previews. Presets never override archetype/composition. Auto-invoked by `/create-mobile-app`; also standalone. |
 | `/design-react-native-app` | ✅ v0 | Automated LLM design refinement agent. Reviews generated screens for visual coherence, RTL support, accessibility, and Unsplash imagery usage, applying direct stylistic improvements. Often invoked automatically after deterministic styling sweeps. |
-| `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
+| `/preview-screens` | ✅ v0 | Renders generated TSX screens through Tamagui-to-HTML mapping as a static browser approximation (no Metro). Useful for sharing, but not a native fidelity or release gate. |
+| `/visual-qa` | ✅ v0 | Runs native Expo screenshot/view-tree QA against Product Experience and design intake, checks geometry/media/safe areas/Dynamic Type/tab silhouettes, repairs focused drift, and writes `.visual-qa/report.md`. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
 | `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Auto-proposed by `/create-mobile-app` Step 6.85 for offline-relevant apps; also runs standalone on existing apps. |
@@ -314,7 +289,7 @@ Example edit flows:
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — coordinates the data-model + screen-planner architects, plans native capabilities + connectors inline, runs 4 approval gates |
+| `native-app-planner` | Orchestrator — coordinates architecture and experience planning for Gates 2–3; product archetype and visual personality remain independent |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
@@ -324,6 +299,7 @@ Example edit flows:
 
 ## See also
 
+- [Product Archetype and UX Architecture Report](docs/product-archetype-architecture-report.md) — CMMS vs field inspection case study, decision ownership, implemented contracts, migration, and validation architecture
 - [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template) — bundled Expo standalone template and fresh-template working directory source
 - [Expo docs](https://docs.expo.dev/)
 - [Power Apps developer docs](https://learn.microsoft.com/en-us/power-apps/developer/)

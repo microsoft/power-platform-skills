@@ -1,0 +1,23 @@
+{
+  "skill_name": "visual-qa",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Metro is running for my gym equipment CMMS app. The approved Product Experience is premium-brand-forward with an asset-command Home, a 42% EquipmentCommandHero, required equipment imagery, and high fidelity to design-intake.md. Run full visual QA on iOS and Android, fix composition drift, and report the captures.",
+      "expected_output": "Runs contract/static gates, requires native evidence, measures experience-* views, compares normalized reference hierarchy, fixes focused source issues, captures the full matrix or reports missing coverage, and writes .visual-qa/report.md plus manifest.json.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Do a native visual smoke test of the utility-style inspection app that is open in the Expo dev client. There is no reference screenshot. Check Home and each tab for clipping, safe areas, blank media, action reach, and repeated layouts. Don't redesign it just because it is operational.",
+      "expected_output": "Uses standard native smoke scope, preserves the utility personality, checks Product Experience and tab silhouettes, captures native screenshots, fixes concrete failures only, and does not require pixel/reference comparison.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Run visual QA for this redesigned mobile app, but Metro is not running, Expo MCP is unavailable, and I have not provided any native screenshots.",
+      "expected_output": "Performs available static preflight, asks once for native evidence, then returns BLOCKED: no native visual evidence without treating HTML preview or source inspection as a runtime pass.",
+      "files": []
+    }
+  ]
+}

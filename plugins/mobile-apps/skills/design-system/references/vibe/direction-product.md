@@ -1,6 +1,9 @@
-# Direction: Product
+# Materialization Profile: Premium Brand-forward (legacy ID: product)
 
-For consumer-grade apps and premium employee experience. Type-led, warm or rich-dark, single muted accent, asymmetric layouts. Looks like an app you'd download by choice.
+For an approved `premium-brand-forward`, editorial, immersive, or playful
+personality. Operational products, including CMMS and inspections, may use this
+profile when their workflow ergonomics remain intact.
+Never select or reject it automatically from industry or product archetype.
 
 ## Reference apps
 
@@ -21,7 +24,7 @@ typography: display-headings + sans-body
 heading_font: Fraunces   # or Lora, Söhne, Inter Display
 body_font: Inter
 body_size: 16pt
-heading_letter_spacing: -0.02em
+heading_letter_spacing: 0
 list_style: sentence
 density: sparse
 motion: liberal-tasteful
@@ -64,7 +67,7 @@ tone: conversational
 - **Heading font:** Fraunces, Lora, Söhne, or Inter Display — distinct from body, more personality
 - **Body font:** Inter or system sans
 - **Sizes:** body 16pt, secondary 14pt, titles 22–32pt, page titles 36–48pt
-- **Tracking:** `-0.02em` on titles ≥ 24pt (negative tracking — modern feel)
+- **Tracking:** `0`; family, size, weight, and line height carry hierarchy
 - **Weights:** 400 body, 500 medium, 600 titles. Avoid 700/800 on display fonts.
 - **Italics:** allowed for system messages, captions, attribution. Used sparingly.
 - **Line-height:** 1.7 body (reading-comfort), 1.1–1.2 titles (tight, magazine-like)
@@ -88,7 +91,7 @@ tone: conversational
 - **Type-led, no icon required:**
   ```tsx
   <YStack items="flex-start" gap="$3" px="$5" py="$10">
-    <Text fontSize="$8" fontWeight="500" letterSpacing={-0.5}>
+    <Text fontSize="$8" fontWeight="500" letterSpacing={0}>
       Nothing here yet.
     </Text>
     <Text fontSize="$5" color="$color10" lineHeight="$6">
@@ -153,10 +156,9 @@ tone: conversational
 - Apps where retention and engagement matter
 - Brand-led / marketing-adjacent apps
 
-## When this misfits
+## Constraints
 
-- Outdoor / field use (low contrast, small accents disappear in sun)
-- Data-dense workflows (sparse rhythm wastes screen real estate)
-- Compliance / approval workflows (the warmth feels wrong for serious processes)
-- Time-pressured operations (decoration slows decision-making)
-- Apps where users value efficiency over experience (the design feels precious)
+- Outdoor/gloved use needs larger targets and measured high contrast.
+- Dense/time-pressured workflows may override density while preserving
+  hierarchy, media, type, and brand expression.
+- Compliance/approval flows retain explicit status and confirmation behavior.

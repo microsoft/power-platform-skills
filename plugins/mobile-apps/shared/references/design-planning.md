@@ -2,17 +2,34 @@
 
 Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
 
+Read these canonical contracts first:
+
+- [product-experience-contract.md](product-experience-contract.md)
+- [product-archetypes.md](product-archetypes.md)
+- [visual-personalities.md](visual-personalities.md)
+- [home-compositions.md](home-compositions.md)
+- [reference-fidelity.md](reference-fidelity.md)
+
+The dimensions are independent. Industry supplies vocabulary. Product archetype
+describes the repeated loop. Workflow capabilities describe behavior. Operating
+context supplies ergonomic constraints. Visual personality and Home composition
+control expression. Never use an industry/archetype keyword as an automatic
+palette, density, typography, radius, or composition selection.
+
 Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
 
 ---
 
-## Default Stack
+## Least-Assumptive Baseline
 
-The bundled Expo template already ships a complete, production-ready design baseline. **If no design keywords are detected and the user did not specify an aesthetic, use the default and skip Step 3c's confirmation question entirely.**
+The bundled Expo template ships a technically complete baseline. When no visual
+signal exists, use `polished-operational` with `tailored` ambition as the draft
+and review it at Gate 3. Do not treat the absence of adjectives as approval for
+a generic dashboard or default blue UI.
 
 | Layer | Default | Where it lives |
 |---|---|---|
-| Aesthetic | Clean + Professional | — |
+| Visual personality | Polished operational | `visual-personalities.md` |
 | Font | Inter | `@tamagui/font-inter` (already in template) |
 | Theme | System light/dark auto-switch | `app/_layout.tsx` `useColorScheme()` |
 | Tokens | Tamagui `defaultConfig` | `tamagui.config.ts` (already in template) |
@@ -20,13 +37,17 @@ The bundled Expo template already ships a complete, production-ready design base
 | Animation | Platform-native transitions only | Expo Router default |
 | Border radius | Medium (`$4` Tamagui default) | — |
 
-Default = **`tamagui-design-system: add-aliases`** (the always-run minimum). Record `## Design` with the full inferred-from-industry block plus that line. There is no skip path — see the execution mapping below. Screen-builders depend on `$surface*` and `$accent*` aliases existing on every project, so this minimum invocation is non-negotiable.
+Baseline = **`tamagui-design-system: add-aliases`** (the always-run minimum).
+Record the full `## Product Experience` and `## Design` blocks. Screen-builders
+depend on `$surface*` and `$accent*` aliases existing on every project, so this
+minimum invocation is non-negotiable.
 
 ---
 
-## Step 1 — Keyword Detection
+## Step 1 — Independent Signal Detection
 
-Scan requirements and wizard answers. Map matches to design decisions.
+Scan requirements, wizard answers, brand input, and reference input. Map only
+explicit visual signals to visual decisions.
 
 | If requirements mention… | Design decision |
 |---|---|
@@ -38,22 +59,32 @@ Scan requirements and wizard answers. Map matches to design decisions.
 | "professional", "corporate", "business" | Reinforce default — no changes |
 | custom font name (e.g. "use Outfit", "we use DM Sans") | Install that font via `expo-font` |
 | "no animations", "reduce motion" | Disable all animations, add `reduceMotion` config |
+| "premium", "brand-forward", "designed", "polished" | `premium-brand-forward`; ambition `premium` |
+| "editorial", "magazine", "content-led" | `editorial` |
+| "immersive", "full-bleed", "cinematic" | `immersive` |
+| screenshot, Figma, sketch, sibling app reference | `reference-driven`; create `design-intake.md` and a binding Reference Contract |
 
-### Industry detection
+### Product and context detection
 
-Also scan for industry signals and record the industry in `## Design`. This drives visual language, emotional design, and density decisions per [mobile-design-philosophy.md](mobile-design-philosophy.md) Sections 7 and 12.
+Classify the primary repeated loop using [product-archetypes.md](product-archetypes.md).
+Record supporting behavior using capability slugs. Record industry vocabulary and
+operating context separately. These fields inform content and ergonomics but do
+not select a visual personality.
 
-| If requirements mention… | Industry | Visual language |
+| Requirement evidence | Likely product archetype | Supporting capabilities/context |
 |---|---|---|
-| "inspection", "field", "safety", "audit", "checklist", "ops", "maintenance" | Field / Ops | High contrast, large targets, offline-ready, camera-forward |
-| "finance", "banking", "payments", "transactions", "accounts", "ledger" | Finance | Blue palette, conservative type, generous whitespace, trust signals |
-| "health", "wellness", "patient", "medical", "clinic", "care" | Healthcare | Warm approachable palette, friendly type, compassionate microcopy |
-| "learning", "education", "course", "student", "training", "quiz" | Education | Bright playful palette, gamification, streak/progress patterns |
-| "productivity", "tasks", "projects", "workflow", "CRM", "tickets" | Productivity | Minimal near-monochrome, dense layout, strong grid, quick-actions |
-| "sales", "catalog", "products", "orders", "inventory", "retail" | E-commerce | Brand-forward color, product imagery, frictionless CTAs |
-| "IoT", "sensors", "telemetry", "dashboard", "monitoring" | Tech / IoT | Dark option with accent gradients, data-dense cards, real-time indicators |
+| equipment lifecycle, downtime, preventive service, repairs, parts, warranty | `asset-maintenance-cmms` | inspection, QR lookup, issue triage, indoor/outdoor work |
+| ordered checks, evidence, compliance, site sign-off | `field-inspection` | checklist, camera evidence, offline work |
+| dispatch, route, technician, travel, labor, customer sign-off | `field-service-dispatch` | location, scheduling, signature |
+| SKU, bin, cycle count, receiving, variance | `inventory-scan-first` | barcode scan, batch actions |
+| account, contact, opportunity, follow-up, relationship health | `crm-relationship-workspace` | relationship history, scheduling |
+| product catalog, collection, basket, order, fulfillment | `retail-catalog` | catalog browse, basket/order |
+| workout, exercise, set, rep, recovery, personal record | `consumer-fitness` | progress tracking, media |
+| appointment, patient, care plan, check-in | `healthcare-wellness` | scheduling, forms, progress tracking |
+| no registry match | `custom` | describe the repeated loop explicitly |
 
-If no industry signal is detected, default to **Productivity** (the most common Power Platform use case).
+Use `custom` only after checking the complete archetype registry. Never default
+an ambiguous app to Productivity merely because it runs on Power Platform.
 
 ### User stage detection
 
@@ -65,25 +96,29 @@ If no industry signal is detected, default to **Productivity** (the most common 
 
 Default: **Returning user** (most Power Platform apps are for trained staff).
 
-If **no keywords match** → default to the **Productivity** industry, apply its aesthetic direction (Refined Minimal), and write a full `## Design` section with rationale. Never write just "default (Clean + Professional)" — always explain the industry inference and what it drives.
+If no visual keywords match, draft `polished-operational` and review it at Gate
+3. If archetype confidence is low, include the top alternatives and evidence in
+Gate 1 rather than silently selecting one.
 
 ---
 
-## Step 1b — Aesthetic Direction
+## Step 1b — Visual Personality, Ambition, and Composition
 
-After keyword/industry detection, determine the aesthetic direction. This shapes *every* visual choice. See [mobile-design-philosophy.md](mobile-design-philosophy.md) Section 13 for full details.
+Choose these independently after archetype detection. Explicit user/reference
+signals outrank recommendations.
 
-| Industry | Default aesthetic direction |
-|---|---|
-| Field / Ops | Industrial / Utilitarian — high contrast, monospace data, edge-to-edge rows |
-| Finance | Refined Minimal — conservative, generous whitespace, trust signals |
-| Healthcare | Soft / Organic — warm surfaces, rounded type, friendly tone |
-| Education | Bold / Expressive — bright palette, playful type, gamified elements |
-| Productivity | Refined Minimal (default) — neutral, dense, monospace for data values |
-| E-commerce | Bold / Expressive — brand-forward color, prominent CTAs |
-| Tech / IoT | Industrial / Utilitarian — dark option, data-dense, monospace |
+| Decision | Allowed values | Default when absent |
+|---|---|---|
+| Visual personality | `utility`, `polished-operational`, `premium-brand-forward`, `editorial`, `immersive`, `playful-consumer`, `reference-driven` | `polished-operational` |
+| Visual ambition | `template`, `tailored`, `premium`, `bespoke` | `tailored` |
+| Content emphasis | `image-led`, `object-led`, `data-led`, `relationship-led`, `task-led`, `timeline-led` | derived from approved primary loop |
+| Home composition | key from `home-compositions.md` | choose deliberately from archetype candidates |
+| Reference fidelity | `none`, `directional`, `high`, `strict-structural` | `none` |
+| Media strategy | `record-media`, `local-ui-media`, `generated-placeholder`, `mixed`, `none` | explicit per composition |
 
-Override if the user explicitly names a different direction ("I want something warm and friendly" for a field app → Soft / Organic instead of Industrial).
+An asset-maintenance app may therefore be `premium-brand-forward` with an
+`asset-command` Home; a consumer app may be `utility`. This is valid, not a
+hybrid exception.
 
 ---
 
@@ -104,7 +139,9 @@ Decide whether to build a custom color palette or use Tamagui defaults. Full pal
 2. **Text scale** (text0–3) — foreground from primary to faintest
 3. **Accent triad** — deep/base/soft variants of one brand hue
 
-**Status color desaturation:** For non-field apps, desaturate `$red10`/`$green10`/`$yellow10` by 15-25% so they sit politely in the palette. Field/ops apps keep full saturation for outdoor visibility.
+**Status color saturation:** derive it from operating context and measured
+contrast. Outdoor/gloved/safety-critical contexts may use stronger status color;
+indoor maintenance does not automatically require saturated Field/Ops styling.
 
 Record the palette decision in `## Design`.
 
@@ -112,7 +149,8 @@ Record the palette decision in `## Design`.
 
 ## Step 1d — Copy Tone Selection
 
-Select a copy tone profile based on industry + aesthetic direction. Full tone reference with example strings → see [typography-and-tone.md](typography-and-tone.md).
+Select a copy tone from audience, brand, and visual personality. Full tone
+reference with example strings → see [typography-and-tone.md](typography-and-tone.md).
 
 | Tone | Voice | Button style | Empty state style | Error style |
 |---|---|---|---|---|
@@ -121,7 +159,10 @@ Select a copy tone profile based on industry + aesthetic direction. Full tone re
 | **Utilitarian** | Terse, no fluff, status-focused | Shortest verb ("Save", "Capture") | Minimal ("No items") | Status + retry ("Load failed. Retry.") |
 | **Editorial** | Calm, considered, no emoji ever | Verbs as statements ("Begin writing") | Invitational ("What will you write about?") | Understated ("We couldn't load this.") |
 
-**Industry defaults:** Enterprise/Productivity/Finance → Professional. Field/Ops → Utilitarian. Healthcare(patient)/Education/Consumer → Warm. Content/Creative → Editorial.
+**Least-assumptive defaults:** `utility` → Utilitarian;
+`polished-operational` → Professional; `premium-brand-forward` and
+`playful-consumer` → Warm unless brand guidance says otherwise; `editorial` →
+Editorial; `reference-driven` → derive from the approved reference.
 
 **Universal microcopy rules (all tones):**
 - No exclamation marks in UI text
@@ -133,19 +174,21 @@ Record the tone in `## Design`.
 
 ---
 
-## Step 2 — Aesthetic + Mood → Tamagui Decisions
+## Step 2 — Personality + Context → Tamagui Decisions
 
-Only used when deviating from default. Map the user's aesthetic + mood to concrete Tamagui + Expo choices:
+Map the approved personality, ambition, operating context, and reference
+contract to concrete Tamagui + Expo choices. This is a starting point, not a
+replacement for composition fields.
 
-| Aesthetic | Mood | Font | Font pairing | Brand token | Default theme | Animation | Tone |
+| Visual personality | Context | Font | Font pairing | Brand token | Default theme | Animation | Tone |
 |---|---|---|---|---|---|---|---|
-| Clean + Professional | — | Inter (`@tamagui/font-inter`) | Single-family (weight only) | `$blue9` | System auto | None | Professional |
-| Bold + Vibrant | Professional | `@tamagui/font-inter` bold weights | Single-family (weight only) | Custom `$accentBase` (strong hue) | Light | Spring (`withSpring`) | Professional |
-| Bold + Vibrant | Playful/Consumer | Custom (`expo-font` + e.g. Nunito) | Single-family rounded | Custom `$accentBase` (saturated) | Light | Spring + bounce | Warm |
-| Dark + Moody | Technical | `@tamagui/font-mono` | Inter + JetBrains Mono | `$green9` or `$violet9` neon | Dark forced | Fade (`withTiming`) | Utilitarian |
-| Dark + Moody | Elegant | Custom serif (e.g. Playfair via `expo-font`) | Serif heading + Inter body | `$yellow9` gold/copper | Dark forced | Slow fade | Editorial |
-| Warm + Organic | Professional | Inter + warm palette | Single-family (weight only) | Custom `$accentBase` (terracotta) | System auto | Gentle ease | Warm |
-| Warm + Organic | Playful | Custom rounded (e.g. Nunito, Poppins) | Single-family rounded | Custom `$accentBase` (coral/sage) | System auto | Springy | Warm |
+| polished-operational | repeated internal work | Inter | Single-family (weight only) | custom or restrained semantic accent | System auto | Functional | Professional |
+| utility | outdoor/gloved/safety-critical | Inter | Inter + mono for scanned/data values | high-contrast semantic accent | System auto | None | Utilitarian |
+| premium-brand-forward | product/object-led | approved display family | Display + readable sans body | custom accent triad | approved light/dark | Enriched | Warm/brand |
+| editorial | content-led | approved serif/display | Display + sans UI | muted accent | approved light/dark | Subtle | Editorial |
+| immersive | media-led | expressive display | Display + sans UI | media-aware accent | approved light/dark | Enriched/immersive | Brand |
+| playful-consumer | progress/celebration | rounded sans | Single-family rounded | saturated accessible accent | Light/system | Enriched | Warm |
+| reference-driven | binding intake | from Reference Contract | from Reference Contract | from Reference Contract | from Reference Contract | from Reference Contract | from Reference Contract |
 
 **Font installation:**
 - `@tamagui/font-inter` / `@tamagui/font-mono` — already listed as optional deps in template, add to `tamagui.config.ts`
@@ -234,7 +277,7 @@ Approved design:
 - Aesthetic direction: Refined Minimal
 - Font: Inter (default)
 - Typography: single-family, weight differentiation
-- Headline tracking: -0.3 at $8+ only
+- Headline tracking: 0
 - Body line-height: 1.5x default
 - Brand color: $blue9
 - Palette: default

@@ -478,24 +478,25 @@ function onAddToCart() {
 
 ## 14. Photo Annotation / Before-After
 
-Used for: field inspections, maintenance, real estate.
+Used for any before/after evidence capability: inspections, equipment repair
+verification, property condition, installation, or restoration.
 
 ### Before/After Pair
 ```tsx
 <XStack gap="$3">
   <YStack flex={1} gap="$1">
-    <Text fontSize="$1" color="$color8" fontWeight="600" textTransform="uppercase" letterSpacing={1}>Before</Text>
+    <Text fontSize="$1" color="$color10" fontWeight="600" textTransform="uppercase" letterSpacing={0}>Before</Text>
     <YStack height={180} bg="$color4" rounded="$3" overflow="hidden">
       <Image source={{ uri: beforeUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     </YStack>
-    <Text fontSize="$1" color="$color8">{beforeDate}</Text>
+    <Text fontSize="$1" color="$color10">{beforeDate}</Text>
   </YStack>
   <YStack flex={1} gap="$1">
-    <Text fontSize="$1" color="$color8" fontWeight="600" textTransform="uppercase" letterSpacing={1}>After</Text>
+    <Text fontSize="$1" color="$color10" fontWeight="600" textTransform="uppercase" letterSpacing={0}>After</Text>
     <YStack height={180} bg="$color4" rounded="$3" overflow="hidden">
       <Image source={{ uri: afterUri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />
     </YStack>
-    <Text fontSize="$1" color="$color8">{afterDate}</Text>
+    <Text fontSize="$1" color="$color10">{afterDate}</Text>
   </YStack>
 </XStack>
 ```
@@ -922,7 +923,7 @@ function WorkTimer({ taskId }) {
   return (
     <YStack items="center" gap="$4" p="$5">
       {/* Elapsed time display */}
-      <Text fontSize={48} fontWeight="700" fontFamily="$mono" letterSpacing={2}>
+      <Text fontSize={48} fontWeight="700" fontFamily="$mono" letterSpacing={0}>
         {formatTime(elapsed)}
       </Text>
 
@@ -1026,7 +1027,7 @@ Used for: retail, lifestyle, brand-heavy consumer apps (Nike, Airbnb style).
     style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 200 }}
   />
   <YStack position="absolute" b={0} l={0} r={0} p="$5" gap="$2">
-    <Text fontSize="$2" color="white" fontWeight="600" textTransform="uppercase" letterSpacing={2}>New arrival</Text>
+    <Text fontSize="$2" color="white" fontWeight="600" textTransform="uppercase" letterSpacing={0}>New arrival</Text>
     <H2 color="white" fontWeight="700">{title}</H2>
     <Text color="rgba(255,255,255,0.8)" fontSize="$3">{subtitle}</Text>
     <Button theme="blue" size="$4" mt="$2" self="flex-start">Shop now</Button>
@@ -1054,7 +1055,7 @@ Used for: retail, lifestyle, brand-heavy consumer apps (Nike, Airbnb style).
 - Text on images is always white — never rely on theme colors
 - Minimum 300px height for hero images, 200px for feed cards
 - Use `contentFit="cover"` always — never stretch or letterbox
-- Uppercase tracking on category/label text over images
+- Category/label text uses zero letter spacing
 
 ---
 
@@ -1073,7 +1074,7 @@ Used for: streaming, media, e-commerce — any app where content browsing IS the
       style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 260 }}
     />
     <YStack position="absolute" b={0} l={0} r={0} p="$5" gap="$3">
-      <Text fontSize="$1" fontWeight="700" textTransform="uppercase" letterSpacing={2} color="rgba(255,255,255,0.7)">{hero.category}</Text>
+      <Text fontSize="$1" fontWeight="700" textTransform="uppercase" letterSpacing={0} color="rgba(255,255,255,0.7)">{hero.category}</Text>
       <H2 color="white" fontWeight="700" lineHeight={32}>{hero.title}</H2>
       <XStack gap="$3" mt="$2">
         <Button size="$4" bg="white" icon={<Play color="black" />}>

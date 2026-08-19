@@ -1,6 +1,8 @@
-# Direction: Airline
+# Legacy Materialization Preset: Airline
 
-Commercial-aviation brand language. Deep navy + crisp white surfaces + high-visibility status — the look of carrier mobile apps (Delta, United, Lufthansa, ANA) and ground-operations tools that read as both branded and operationally serious.
+Optional branded-operational preset for an explicitly approved airline visual
+identity. Aviation keywords do not select it automatically; Product Experience
+and user-supplied brand/reference inputs remain authoritative.
 
 ## Reference apps
 

@@ -652,7 +652,7 @@ const headingFont = createFont({
   size:          { 4: 16, 5: 20, 6: 24, 7: 28, 8: 34, 9: 42 },
   lineHeight:    { 4: 22, 5: 26, 6: 30, 7: 34, 8: 40, 9: 48 },
   weight:        { 4: '400', 6: '600', 7: '700' },
-  letterSpacing: { 4: 0, 5: 0, 6: -0.3, 7: -0.5, 8: -0.7, 9: -1.0 },
+  letterSpacing: { 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
 })
 
 const bodyFont = createFont({
@@ -660,7 +660,7 @@ const bodyFont = createFont({
   size:          { 1: 11, 2: 12, 3: 13, 4: 16, 5: 18 },
   lineHeight:    { 1: 16, 2: 18, 3: 20, 4: 24, 5: 28 },
   weight:        { 4: '400', 5: '500', 6: '600', 7: '700' },
-  letterSpacing: { 1: 0.4, 2: 0.2, 3: 0, 4: 0 },
+  letterSpacing: { 1: 0, 2: 0, 3: 0, 4: 0 },
 })
 
 const customConfig = {
@@ -679,10 +679,10 @@ For reading-oriented screens (detail body, help, onboarding). Generous spacing +
 ```tsx
 <YStack gap="$8" maxW={520} px="$5">
   <YStack gap="$2">
-    <Text fontFamily="$body" fontSize="$2" letterSpacing={0.8} textTransform="uppercase" color="$color10">
+    <Text fontFamily="$body" fontSize="$2" letterSpacing={0} textTransform="uppercase" color="$color10">
       Tuesday, 14 May
     </Text>
-    <H3 fontFamily="$heading" letterSpacing={-0.5}>{title}</H3>
+    <H3 fontFamily="$heading" letterSpacing={0}>{title}</H3>
   </YStack>
 
   <Paragraph fontFamily="$heading" fontSize="$5" lineHeight={28} color="$color12">
@@ -691,13 +691,13 @@ For reading-oriented screens (detail body, help, onboarding). Generous spacing +
 
   <Separator />
 
-  <Text fontFamily="$body" fontSize="$2" color="$color10" letterSpacing={0.4} textTransform="uppercase">
+  <Text fontFamily="$body" fontSize="$2" color="$color10" letterSpacing={0} textTransform="uppercase">
     {wordCount} words · {readTime} minutes
   </Text>
 </YStack>
 ```
 
-Key patterns: `gap="$8"` between major sections, serif for prose, sans for metadata, tracked uppercase for labels.
+Key patterns: `gap="$8"` between major sections, serif for prose, sans for metadata, zero letter spacing.
 
 ## Section break (editorial spacing)
 
@@ -762,3 +762,4 @@ const customConfig = {
     },
   },
 }
+```

@@ -1,7 +1,17 @@
 {
   "$schema": "https://modelcontextprotocol.io/schema/mcp-server.json",
-  "_comment": "Optional MCP servers shipped with the mobile-app plugin. The host (Claude Code, Copilot Chat) launches these on demand; no install step required by the user. The microsoft-learn server is a hosted HTTP MCP that returns authoritative Microsoft docs (Dataverse Web API, Power Platform CLI, connectors, Graph) — use it whenever a Microsoft-platform behavior is uncertain rather than guessing. Runtime diagnosis, when requested, is driven by /debug-app reading the captured Metro terminal, not by React Native Web or direct Metro HTTP probes.",
+  "_comment": "Optional MCP servers shipped with the mobile-app plugin. Expo MCP targets a running Metro dev server for native screenshots, view-tree automation, and app logs used by /visual-qa; /debug-app remains terminal-log focused. Microsoft Learn provides authoritative Microsoft platform documentation.",
   "mcpServers": {
+    "expo": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "expo-mcp",
+        "--dev-server-url",
+        "http://localhost:8081"
+      ]
+    },
     "microsoft-learn": {
       "type": "http",
       "url": "https://learn.microsoft.com/api/mcp"

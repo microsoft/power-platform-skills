@@ -34,49 +34,49 @@ typography:
     fontSize: 80px
     fontWeight: 600
     lineHeight: 1.05
-    letterSpacing: -3.0px
+    letterSpacing: 0
   display-lg:
     fontFamily: Linear Display
     fontSize: 56px
     fontWeight: 600
     lineHeight: 1.10
-    letterSpacing: -1.8px
+    letterSpacing: 0
   display-md:
     fontFamily: Linear Display
     fontSize: 40px
     fontWeight: 600
     lineHeight: 1.15
-    letterSpacing: -1.0px
+    letterSpacing: 0
   headline:
     fontFamily: Linear Display
     fontSize: 28px
     fontWeight: 600
     lineHeight: 1.20
-    letterSpacing: -0.6px
+    letterSpacing: 0
   card-title:
     fontFamily: Linear Display
     fontSize: 22px
     fontWeight: 500
     lineHeight: 1.25
-    letterSpacing: -0.4px
+    letterSpacing: 0
   subhead:
     fontFamily: Linear Display
     fontSize: 20px
     fontWeight: 400
     lineHeight: 1.40
-    letterSpacing: -0.2px
+    letterSpacing: 0
   body-lg:
     fontFamily: Linear Text
     fontSize: 18px
     fontWeight: 400
     lineHeight: 1.50
-    letterSpacing: -0.1px
+    letterSpacing: 0
   body:
     fontFamily: Linear Text
     fontSize: 16px
     fontWeight: 400
     lineHeight: 1.50
-    letterSpacing: -0.05px
+    letterSpacing: 0
   body-sm:
     fontFamily: Linear Text
     fontSize: 14px
@@ -100,7 +100,7 @@ typography:
     fontSize: 13px
     fontWeight: 500
     lineHeight: 1.30
-    letterSpacing: 0.4px
+    letterSpacing: 0
   mono:
     fontFamily: Linear Mono
     fontSize: 13px
@@ -261,7 +261,10 @@ Linear's marketing canvas is the deepest dark surface in this collection — `{c
 
 The single chromatic accent is **Linear lavender-blue** `{colors.primary}` (#5e6ad2) — used on the brand mark, focus rings, and the primary CTA button. A lighter pressed state (`{colors.primary-pressed}` #828fff) and a focus-tinted variant (`{colors.primary-focus}` #5e69d1) extend the same hue. Linear avoids saturated greens, oranges, reds, etc. on the marketing canvas — the only semantic color is `{colors.semantic-success}` (#27a644) for status pills and the rare success indicator.
 
-Display type runs Linear's custom sans (with `SF Pro Display` fallback) at weight 500–700 with negative letter-spacing scaling from -3.0px at 80px down to 0 at body. The body family is Linear's text cut, and a Linear Mono is reserved for code snippets in product screenshots.
+Display type runs Linear's custom sans (with `SF Pro Display` fallback) at
+weight 500–700. This mobile materialization records letter spacing as `0`; the
+source marketing site's compressed tracking is not transferred to app UI. The
+body family is Linear's text cut, and a Linear Mono is reserved for code.
 
 The page rhythm is **dense product screenshots** — Linear's marketing leads with high-fidelity captures of the product UI (issue list, project view, dashboard) framed in `{colors.surface-1}` panels with `{rounded.xl}` 16px corners. The chrome is intentionally minimal so the app screenshots can do the heavy lifting.
 
@@ -269,7 +272,7 @@ The page rhythm is **dense product screenshots** — Linear's marketing leads wi
 - **Dark-canvas marketing system** — `{colors.canvas}` (#010102) is the deepest dark in this collection.
 - **Lavender-blue brand accent** (`{colors.primary}` #5e6ad2) — used scarcely on brand mark, focus, and the primary CTA.
 - Four-step surface ladder (canvas → surface-1 → surface-2 → surface-3 → surface-4) carries hierarchy without shadow.
-- Display tracking pulls aggressively negative (-3.0px at 80px); body holds at -0.05px.
+- Mobile translation uses `letterSpacing: 0`; family, scale, and weight carry hierarchy.
 - Cards use `{rounded.lg}` 12px corners with 1px hairline borders — never pill, rarely 16px.
 - **Product UI screenshots** dominate the page. The marketing chrome is a dark frame for the app.
 - No second chromatic color. No atmospheric gradients. No spotlight cards.

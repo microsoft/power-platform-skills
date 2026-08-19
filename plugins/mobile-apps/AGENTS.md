@@ -2,7 +2,10 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 26 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0.3.0 — skills and agents for planning, prototyping, building,
+> native visual QA, prototype graduation, and deployment. The latest Expo
+> standalone template snapshot is bundled under `template/`. Read
+> [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -26,8 +29,9 @@ README.md                      ← Plugin overview
 agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /create-mobile-prototype, /prototype-to-real-app, /sync-from-plan, /design-react-native-app, /add-*, ...
-scripts/                       ← shared helpers, including validate-mobile-files.js for skill-owned changed-file validation
-hooks/                         ← Validator implementations invoked explicitly by mobile workflows
+scripts/                       ← check-template-provenance.js, mobile-plan-status.js, render-mobile-plan.js, validate-mobile-files.js
+hooks/                         ← Product Experience, composition, contrast, and other workflow validators
+template/.powerapps-native/   ← versioned template provenance and compatibility contract
 ```
 
 ## Template source
@@ -49,11 +53,16 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 
 1. **Connector-first for data** — All Power Platform data access goes through connectors and generated services in `src/generated/`. No direct Graph / Azure REST calls.
 2. **Native code is allowlist-bounded; pure JavaScript is app-scoped.** Expo modules and packages that ship native source, a podspec, codegen configuration, an Expo module/config plugin, or platform projects must already exist in `template/package.json`. The rewrap binary is built from a pre-built base, so adding those packages to an app cannot add their native code. Do not classify a package from its name alone: a `react-native-*` package can still be pure JavaScript. For an explicit library request or an approved use case that benefits from an established library, the planner may select a compatible pure-JavaScript package, pin it in the app's `package.json`, and install it before builders use it; no Android/iOS rebuild is required. Do not bundle optional libraries such as `react-native-calendars` in the base template. Follow [`shared/references/javascript-dependency-planning.md`](shared/references/javascript-dependency-planning.md). `expo-haptics` remains runtime-banned even if it appears in a future template (see [`agents/screen-builder.md`](agents/screen-builder.md) HARD RULE). The native boundary and reconciliation rule are in [`skills/add-native/SKILL.md`](skills/add-native/SKILL.md).
-3. **Fresh-template mode** — `/create-mobile-app` and `/create-mobile-prototype` validate and prepare an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
+3. **Fresh-template mode and provenance** — `/create-mobile-app` and `/create-mobile-prototype` validate and prepare an existing fresh Expo standalone template working directory. `template/.powerapps-native/version.json` records source and compatibility metadata; `scripts/check-template-provenance.js` is the canonical checker. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
-6. **Plan mode** — Enter plan mode before multi-file work; per-section approval gates (data model → native APIs → screen plan).
-7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
+6. **Four-gate planning** — Gate 1 requirements/product shape, Gate 2 complete
+    architecture, Gate 3 experience, Gate 4 implementation confirmation. Internal
+    graph/spec/style passes never create extra approvals.
+7. **Persisted Product Experience** — `native-app-plan.md` is the source of
+    truth. Industry, product archetype, workflows, operating context, visual
+    personality, Home composition, First Viewport, media, navigation, and
+    reference fidelity are independent owned fields.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — Do not add `hooks/hooks.json`: Claude loads plugin hooks during unrelated workflows, so a mobile write hook can block Canvas Apps tool calls. Mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
@@ -71,14 +80,22 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary.
     - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
-    - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
+        - Legacy early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`,
+            `DESIGN_VIBE_REQUESTED:`) are folded into the owning Gate 2/Gate 3 review;
+            they never add a fifth prompt or select design from industry.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
 13. **Lifecycle state** — Mock/real mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Conversion uses `prototype → transitioning → dataverse`; only `/sync-from-plan --target-data-mode dataverse` commits the final mode after cleanup and validation. The legacy `.code-apps-native/state.json` path is migration input only.
 
 ## Decisions made
 
-- ✅ Markdown plan with Mermaid (no HTML rendering)
-- ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
+- ✅ Markdown plan with Mermaid plus structured, XSS-safe plan dashboard
+- ✅ Four approval gates with Product Experience ownership
+- ✅ Canonical product-archetype and visual-personality registries; CMMS/asset
+    maintenance is distinct from field inspection
+- ✅ Plan-aware experience/composition validators and resolved-token WCAG ratios
+- ✅ `/visual-qa` for native screenshots, view-tree geometry, reference fidelity,
+    Dynamic Type/safe-area checks, and capture reports; `/debug-app` remains
+    runtime-log/symptom focused
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ `/create-mobile-prototype` produces the same approved plan/design/screen quality as real creation, but uses deterministic in-memory CRUD services and connector throw-stubs with no environment, Dataverse, or app-registration call.
 - ✅ `/prototype-to-real-app` converts in place through a resumable lifecycle transaction: archive non-executable prototype approvals, bind environment, live-reconcile schema, replace services/connectors, consume seeds, fail-closed cleanup, restore auth/runtime, then one `/sync-from-plan`.

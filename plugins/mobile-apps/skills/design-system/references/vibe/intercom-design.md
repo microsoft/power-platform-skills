@@ -36,43 +36,43 @@ typography:
     fontSize: 72px
     fontWeight: 500
     lineHeight: 1.05
-    letterSpacing: -2.0px
+    letterSpacing: 0
   display-lg:
     fontFamily: Saans
     fontSize: 56px
     fontWeight: 500
     lineHeight: 1.10
-    letterSpacing: -1.4px
+    letterSpacing: 0
   display-md:
     fontFamily: Saans
     fontSize: 40px
     fontWeight: 500
     lineHeight: 1.15
-    letterSpacing: -0.8px
+    letterSpacing: 0
   headline:
     fontFamily: Saans
     fontSize: 28px
     fontWeight: 500
     lineHeight: 1.20
-    letterSpacing: -0.5px
+    letterSpacing: 0
   card-title:
     fontFamily: Saans
     fontSize: 22px
     fontWeight: 500
     lineHeight: 1.25
-    letterSpacing: -0.3px
+    letterSpacing: 0
   subhead:
     fontFamily: Saans
     fontSize: 20px
     fontWeight: 400
     lineHeight: 1.40
-    letterSpacing: -0.2px
+    letterSpacing: 0
   body-lg:
     fontFamily: Saans
     fontSize: 18px
     fontWeight: 400
     lineHeight: 1.50
-    letterSpacing: -0.1px
+    letterSpacing: 0
   body:
     fontFamily: Saans
     fontSize: 16px

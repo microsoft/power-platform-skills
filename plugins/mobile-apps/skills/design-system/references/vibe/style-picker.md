@@ -2,7 +2,11 @@
 
 **Shared instructions: [shared-instructions.md](../../../../shared/shared-instructions.md)** — read first.
 
-A self-contained moodboard-before-build reference for `/design-system`. Three named directions, each anchored in real-world reference apps the user already knows. Output is a single HTML page with three phone-frame mockups of the same screen rendered three different ways — user picks one (or describes a hybrid), `/design-system` locks the choice into the design system, downstream agents cascade from it.
+A self-contained moodboard-before-build reference for `/design-system`. Three
+visual personality profiles, each anchored in familiar product qualities.
+Output is one HTML page with the same user jobs and representative data rendered
+through three meaningfully different compositions. Product archetype and
+workflow stay fixed; visual personality/materialization changes.
 
 ## When to use
 
@@ -19,8 +23,15 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 ## Inputs
 
 - `working_dir` — absolute path to the project root (must contain `native-app-plan.md`)
-- Optional: `target_screen` — screen name to render (defaults to the most representative; see Step 2)
-- Optional: `default_direction` — `inspection | saas | product` to highlight as the recommended pick (defaults to keyword-inferred from app name + purpose)
+- Optional: `target_screen` — Home or primary repeated-loop screen (see Step 1)
+- Required when a plan exists: approved `## Product Experience`, including
+  product archetype, workflow, Home composition, First Viewport, media, and
+  reference fidelity
+- Optional: `default_personality` — canonical personality to highlight; defaults
+  to the approved Product Experience, never keyword/industry inference
+- Optional: `design_intake` — structured reference intake. When fidelity is
+  `high` or `strict-structural`, skip the picker because structure is already
+  binding.
 - Optional: `sub_step_mode` — `true` when invoked by `/design-system`. Changes behavior:
   - Still renders `_design_vibe.html` and asks the user
   - Returns picked direction + merged dimensions to caller
@@ -46,7 +57,7 @@ Before doing anything else, load the direction bundles. These are the source of 
 
 - [`design-directions.md`](./design-directions.md) — overview + reference-app gestalts
 - [`direction-inspection.md`](./direction-inspection.md) — full Inspection bundle (dark slate + safety orange — outdoor-only opt-in)
-- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — MVP default for zero-click flow, NOT shown in 3-up picker)
+- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — legacy status-led compatibility preset, not shown in the 3-up picker
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
 - [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan
@@ -124,44 +135,52 @@ If `## Screens` is missing the plan hasn't reached Gate 4 yet. STOP with: `BLOCK
 
 **Pick the representative screen** to render in the 3-up. Heuristic, in order:
 
-1. The first List screen in the Screen Map (lists show density + row style + accent + typography in one frame — best vehicle for design comparison)
-2. Else the first Detail screen (shows surface treatment + hierarchy)
-3. Else the Home / dashboard screen
-4. Else the first non-baseline screen (skip Login, OAuth, Splash)
+1. Home when it has an approved composition and First Viewport Contract.
+2. Else the screen hosting the primary repeated user loop.
+3. Else the first Detail screen with an object/media hero.
+4. Else the first List screen.
+5. Else the first non-baseline screen (skip Login, OAuth, Splash).
 
 Print the choice: `→ [design-system:vibe] Rendering "<screen_name>" in 3 directions.`
 
 If the user passed `target_screen` explicitly, use that instead.
 
-## Step 2 — Pick the recommended default direction
+## Step 2 — Pick the recommended visual personality
 
 **Print before starting:**
-> "→ [design-system:vibe] Inferring recommended direction from app description…"
+> "→ [design-system:vibe] Reading the approved visual personality…"
 
-If `default_direction` was passed in the prompt, use it.
+If `default_personality` was passed, use it. Otherwise read
+`## Product Experience → Visual personality`:
 
-Otherwise scan `## Project` description and `## Design` industry (if present) for keywords:
-
-| Keywords | Recommended direction |
+| Canonical personality | Highlighted profile |
 |---|---|
-| inspection, field, work order, delivery, audit, site visit, route, dispatch, technician, asset | **Inspection** |
-| tracker, request, approval, internal, dashboard, report, employee, helpdesk, expense, time, leave | **SaaS** |
-| consumer, customer, premium, engagement, experience, learning, wellness, onboarding, exec dashboard | **Product** |
-| Anything else | **SaaS** (safest default for a Power Apps audience) |
+| `utility` | Utility (legacy inspection bundle) |
+| `polished-operational` | Polished Operational (legacy SaaS bundle) |
+| `premium-brand-forward`, `editorial`, `immersive`, `playful-consumer` | Premium Brand-forward (legacy Product bundle, then adapt named dimensions) |
+| `reference-driven` | Skip picker and materialize the binding design intake |
+| missing in standalone project | Polished Operational, marked least-assumptive |
 
-The recommendation only **highlights** one card in the picker — the user can still pick any. Do not skip showing all three.
+The recommendation only highlights one profile. A profile choice may adjust
+visual personality before Gate 3 approval; it never changes product archetype
+or workflow capabilities.
 
 ## Step 3 — Render the 3-up `_design_vibe.html`
 
 **Print before starting:**
-> "→ [design-system:vibe] Rendering 3 phone-frame mockups (Inspection / SaaS / Product)…"
+> "→ [design-system:vibe] Rendering 3 phone-frame mockups (Utility / Polished Operational / Premium Brand-forward)…"
 
-For each direction, synthesize a single phone-frame HTML mock of the chosen screen, using:
-- The screen's spec from `### Per-Screen Specs` for the layout structure (which sections, how many rows)
-- The direction's bundle from `references/direction-<name>.md` for ALL visual choices (palette, typography, list style, surface, density, motion-frozen-into-static)
-- Plausible placeholder data (3–4 list items synthesized from the entity name)
+For each profile, synthesize a phone-frame HTML mock using:
 
-The three mocks must use the **same screen, same data, same layout structure** — only the design tokens differ. That's what makes the comparison legible.
+- the same user jobs, entities, actions, and representative data;
+- the approved Product Experience as non-negotiable behavior;
+- the profile bundle for personality, hierarchy, surfaces, density, type, and
+  motion cues;
+- a profile-appropriate composition. Section order, dominant component,
+  grouping, media prominence, and action placement SHOULD differ visibly.
+
+The three mocks use the same jobs and data, not the same layout structure. A
+comparison that changes only tokens has failed.
 
 Compose the 3-up page:
 
@@ -192,29 +211,29 @@ Compose the 3-up page:
     Same screen, three design vibes. Pick the one that fits, or describe a hybrid.
   </p>
   <div class="row">
-    <!-- Direction A: Inspection -->
+    <!-- Profile A: Utility -->
     <div class="col">
-      <h2>Inspection {{recommended? <span class="recommended">recommended</span>}}</h2>
+      <h2>Utility {{recommended? <span class="recommended">recommended</span>}}</h2>
       <div class="ref">Like Uber Driver, ServiceTitan, Procore.<br>Glove-friendly, outdoor-readable, status-driven.</div>
       <div class="swatches">{{6 swatch divs from inspection palette}}</div>
       <div class="frame">{{phone frame with screen rendered using inspection tokens}}</div>
-      <button class="pick" onclick="alert('Tell the agent: pick a')">Pick Inspection</button>
+      <button class="pick" onclick="alert('Tell the agent: pick a')">Pick Utility</button>
     </div>
-    <!-- Direction B: SaaS -->
+    <!-- Profile B: Polished Operational -->
     <div class="col">
-      <h2>SaaS{{recommended? ...}}</h2>
+      <h2>Polished Operational{{recommended? ...}}</h2>
       <div class="ref">Like Asana, Teams, Salesforce mobile.<br>Trusted, familiar, what your org already knows.</div>
       <div class="swatches">{{...}}</div>
       <div class="frame">{{...}}</div>
-      <button class="pick" onclick="alert('Tell the agent: pick b')">Pick SaaS</button>
+      <button class="pick" onclick="alert('Tell the agent: pick b')">Pick Polished Operational</button>
     </div>
-    <!-- Direction C: Product -->
+    <!-- Profile C: Premium Brand-forward -->
     <div class="col">
-      <h2>Product{{recommended? ...}}</h2>
+      <h2>Premium Brand-forward{{recommended? ...}}</h2>
       <div class="ref">Like Linear, Notion, Spotify.<br>Premium feel, type-led, used by choice.</div>
       <div class="swatches">{{...}}</div>
       <div class="frame">{{...}}</div>
-      <button class="pick" onclick="alert('Tell the agent: pick c')">Pick Product</button>
+      <button class="pick" onclick="alert('Tell the agent: pick c')">Pick Premium Brand-forward</button>
     </div>
   </div>
 </body>
@@ -225,9 +244,13 @@ Write to `<working_dir>/_design_vibe.html` (underscore prefix matches `_plan_pre
 
 **Rendering rules per direction:**
 
-- **Inspection** — slate background (`#0f172a` or `#1e293b`), safety-orange accent (`#FF6A00`), Inter only at 16pt+ body, card rows with a 4px left status stripe, big bottom-pinned action button, no shadows, fully saturated status pills
-- **SaaS** — white/cool-gray background, indigo accent (`#4f46e5`), Inter at default sizes, hairline-bordered cards (1px `#e5e7eb`), top-right `+` for create, subtle shadow on raised cards, desaturated pill backgrounds
-- **Product** — warm cream background (`#faf8f5`) OR rich dark (`#1a1614`), single muted accent (sage `#7d9b76`, rust `#b85c38`, or coral `#e87a64`), display heading font (Lora / Fraunces / Inter Display) with `letter-spacing: -0.02em`, sentence-style rows (no icon, no chevron, just title + grey meta line), full-bleed sections, sparse vertical rhythm
+- **Utility** — high-contrast surface, direct type, 52pt+ frequent targets,
+  explicit status, bottom-reachable action, and task/queue-first composition
+- **Polished Operational** — calm neutral surfaces, selective hairlines,
+  restrained accent, clear object/current-work hierarchy, and functional chrome
+- **Premium Brand-forward** — warm or rich surfaces, distinct display role,
+  object/media-led hierarchy, full-bleed or asymmetric sections, and enriched
+  motion cues. Letter spacing remains `0`.
 
 If the screen archetype doesn't fit a direction (e.g. an auth screen has no list to show), still render with the direction's tokens applied to its actual content — don't substitute a different screen.
 
@@ -237,7 +260,7 @@ The three frames must contrast on **density, typography, and motion** — not ju
 
 **1. Density spread (visible at thumbnail size).**
 
-| | Inspection | SaaS | Product |
+| | Utility | Polished Operational | Premium Brand-forward |
 |---|---|---|---|
 | Visible list rows above the fold | 7–9 | 5–6 | 3–4 |
 | Row vertical padding | 10–12px | 14–16px | 22–28px |
@@ -248,19 +271,22 @@ If your render has roughly the same number of rows in all three frames, you've s
 
 **2. Typography contrast (must be obvious).**
 
-- **Inspection** — heading: Inter Bold 22px, tracking 0. Numerals tabular.
-- **SaaS** — heading: Inter Semibold 20px, tracking 0. Mixed case sentence titles.
-- **Product** — heading: **Fraunces 28px Medium** (or Lora / Söhne) — visibly different family, tracking `-0.02em`. Body still sans (Inter) but with looser line-height (1.7 vs 1.4).
+- **Utility** — heading: Inter Bold 22px, tracking 0. Numerals tabular.
+- **Polished Operational** — heading: Inter Semibold 20px, tracking 0. Mixed case sentence titles.
+- **Premium Brand-forward** — heading: **Fraunces 28px Medium** (or another approved display family), tracking `0`. Body remains a readable sans with looser line-height.
 
-If all three headers look like the same sans-serif font, you've under-cooked Product. The display font on Product is the single biggest "is this designed?" signal — render it as a webfont (`@import` Fraunces from Google Fonts at the top of the HTML) so the file is self-contained.
+If all three headers and dominant regions share the same hierarchy, the Premium
+profile is under-specified. Use an approved/local display face when available;
+do not fetch a font merely for a preview.
 
-**3. Dark/light is independent of direction.** Inspection ships dark by default because outdoor work demands it, but every direction CAN render either way. Don't conflate "I want dark" with "I want Inspection." If the user later says "I love Product but in dark," that's a valid hybrid — the bundle's `background` field flips to `rich-dark` while everything else stays Product.
+**3. Dark/light is independent of personality.** Utility may be light; Premium
+may be dark. Theme choice never changes product archetype or personality.
 
 **4. Motion is shown by static cues, not animation.**
 
-- **Inspection** — no motion cues; pressed-state shadow on the primary button to imply "tap-snappy"
-- **SaaS** — small `↑` indicator on a "raised" card to imply lift; subtle drop shadow under the FAB
-- **Product** — a faint chevron `›` on the title-only row to imply "this scrolls into something"; airy spacing implies fade-in stagger
+- **Utility** — no decorative motion cues; direct pressed state
+- **Polished Operational** — restrained elevation/transition cues
+- **Premium Brand-forward** — composition and spacing imply enriched transition; no decorative glyph is required
 
 **5. Edge content beats clean content.** Real apps break at edges. Each frame must include one of:
 - A title that overflows and truncates with an ellipsis
@@ -273,9 +299,9 @@ Pick at least one edge per frame; spread different edges across the three so rev
 
 **6. Add a one-line "when to pick this" under the reference apps.**
 
-- Inspection: *"Pick this if your users wear gloves, work outdoors, or care about status at a glance."*
-- SaaS: *"Pick this if your users live in dashboards and you want Microsoft 365 family resemblance."*
-- Product: *"Pick this if design itself is the differentiator and retention matters."*
+- Utility: *"Pick this when speed, harsh context, or explicit status dominates."*
+- Polished Operational: *"Pick this for quiet, trustworthy repeated work."*
+- Premium Brand-forward: *"Pick this when identity, object/media presence, or retention matters."*
 
 These render as italic grey text directly under the reference-app line so a user who doesn't recognize the apps still gets the gist.
 
@@ -286,14 +312,19 @@ After the three columns, render a fourth full-width row:
 ```html
 <div class="hybrid">
   <h3>Or describe a hybrid</h3>
-  <p>Examples: "Product look with Inspection's data density" · "SaaS structure but Product's typography" · "Inspection but in light mode"</p>
+  <p>Examples: "Premium hierarchy with Utility touch targets" · "Polished structure with Premium typography" · "Utility in light mode"</p>
   <p class="hint">Tell the agent in chat — I'll regenerate this page with your hybrid as a 4th frame.</p>
 </div>
 ```
 
 This sets the expectation that hybrid is real, named, and supported — without requiring a working form (the chat is the input).
 
-**8. Explicit dark/light toggle per frame.** Render a small `Light / Dark` toggle pill above each phone frame, and make the alternate state available via `?dark=1` URL params or a click handler that swaps the frame's classes. This is what prevents the "I picked dark for aesthetics → got pushed into Inspection" failure mode.
+**8. Explicit dark/light toggle per frame.** Render a small `Light / Dark`
+toggle above each phone frame. Theme changes do not change personality.
+
+**9. Runtime-fidelity label.** Place this exact caption below every phone frame:
+`Static approximation — runtime screenshot required`. The picker approves a
+direction; it does not prove native rendering or reference fidelity.
 
 ## Step 4 — Open the preview in the user's browser
 
@@ -322,11 +353,11 @@ Do not block on whether the browser opened — the link is printed.
 After the browser opens (or the user opens the link), ask:
 
 > "Which direction fits? Reply with:
-> - `a` or `inspection` — for the Inspection direction
-> - `b` or `saas` — for the SaaS direction
-> - `c` or `product` — for the Product direction
-> - `hybrid: <description>` — e.g. `hybrid: Product look with Inspection's data density` or `hybrid: Inspection in light mode`
-> - `mix: <picks>` — pick individual elements across directions, e.g. `mix: Inspection's status pills, Product's typography, SaaS's spacing`
+> - `a`, `utility`, or legacy `inspection` — Utility
+> - `b`, `polished`, or legacy `saas` — Polished Operational
+> - `c`, `premium`, or legacy `product` — Premium Brand-forward
+> - `hybrid: <description>` — e.g. `hybrid: Premium hierarchy with Utility touch targets`
+> - `mix: <picks>` — e.g. `mix: Utility status treatment, Premium typography, Polished spacing`
 > - `dark` / `light` — flip the recommended direction's mode without changing direction
 > - `again` — show me a different cut (regenerates with palette/font alternates of the same three directions)
 > - `none of these` — and tell me what's missing; I'll re-render
@@ -339,15 +370,18 @@ Use `AskUserQuestion` with options if available; otherwise plain text.
 
 - **`a` / `b` / `c`** → resolve to the direction name; go to Step 6
 - **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
-- **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open / confirm loop as hybrid
+- **`mix: ...`** → element-level remix. Parse the profile dimensions, build a
+  custom materialization bundle without changing product archetype/workflow,
+  render it as a 4th frame, then confirm/refine.
 - **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
-- **`again`** → regenerate with alternate accents (e.g. Product with rust instead of sage; Inspection with amber instead of orange) — same three directions, different concrete realizations. Cap to 1 `again` per session to avoid taste-paralysis.
+- **`again`** → regenerate alternate concrete realizations of the same three
+  profiles. Cap to one retry.
 - **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open, ask again
 - **No reply / unclear** → ask once more, then default to the recommended direction with: `Defaulting to <name> based on app description; you can run /design-system --reskin any time to swap.`
 
 Cap re-renders at **3 iterations** to avoid infinite loops. After 3 the skill must lock in either the user's last clear pick or the recommended default.
 
-**Always log the rejected directions** to `memory-bank.md` under `## Design history` — what the user said no to is the strongest signal for any future re-run. One line per rejection: `- 2026-05-01 — Rejected SaaS: "too templated, looks like every internal tool"`.
+**Always log rejected profiles** to `memory-bank.md` under `## Design history`.
 
 ## Step 6 — Write the `## Design Direction` block into the plan
 
@@ -363,11 +397,17 @@ Use the schema from [`design-bundle-schema.md`](./design-bundle-schema.md). For 
 ```markdown
 ## Design Direction
 
-**Picked:** Product
+**Picked:** Premium Brand-forward
 **Reference apps:** Linear, Notion, Spotify
 **Picked at:** 2026-04-30T12:34:56Z (via /design-system style picker)
 
-surface: flat-warm
+visual_personality: premium-brand-forward
+visual_ambition: premium
+materialization_profile: product
+product_archetype: <copied from Product Experience>
+home_composition: <copied/approved>
+reference_fidelity: none
+surface: editorial
 palette: cream + sage
 typography: display-headings + sans-body
 list_style: sentence
@@ -382,7 +422,8 @@ heading_font: Fraunces
 body_font: Inter
 ```
 
-For a hybrid pick, the `Picked:` line reads `Hybrid (Product base + Inspection data density)` and the bundle dimensions show the merged values.
+For a hybrid pick, `Picked:` names canonical profiles and the bundle documents
+merged dimensions. Copied Product Experience fields remain unchanged.
 
 Append a one-line note for downstream agents:
 
@@ -395,7 +436,7 @@ Append a one-line note for downstream agents:
 Append one line to `<working_dir>/memory-bank.md` under `## Design history` (create the section if missing):
 
 ```markdown
-- 2026-04-30 — Picked direction: Product (Linear/Notion/Spotify reference). Via /design-system style picker.
+- 2026-04-30 — Picked personality: Premium Brand-forward; materialization profile: product. Via /design-system style picker.
 ```
 
 ## Step 8 — Return
@@ -404,7 +445,8 @@ Append one line to `<working_dir>/memory-bank.md` under `## Design history` (cre
 
 ```
 DESIGN_VIBE_RESULT
-direction: <Inspection|SaaS|Product|Hybrid>
+visual_personality: <utility|polished-operational|premium-brand-forward|hybrid>
+materialization_profile: <inspection|saas|product|hybrid>
 surface: <value>
 palette: <value>
 typography: <value>
@@ -425,7 +467,7 @@ The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3
 
 **If auto mode (not sub-step):** return one line to the caller:
 
-> Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
+> Visual personality/materialization picked: <value>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` as a static approximation.
 
 If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with screen-builder fan-out using the new direction.
 
@@ -435,11 +477,11 @@ If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with scr
 
 This skill's only side-effect on shared state is **one block** written into `native-app-plan.md`. Existing agents check for it conditionally:
 
-- `agents/screen-planner.md` — if `## Design Direction` exists, use its values as defaults for per-screen Density / Surface / Restraint fields. Otherwise fall back to today's industry-inferred logic.
-- `agents/screen-builder.md` — if `## Design Direction` exists, read `list_style`, `motion`, `tone`, `primary_action_shape` and apply them when choosing row/component patterns from the user's screen spec. Samples remain code/API references only. Otherwise use today's defaults.
+- `agents/screen-planner.md` — reads Product Experience first, then uses Design Direction for materialization defaults. Missing Product Experience is not an industry fallback.
+- `agents/screen-builder.md` — Product Experience controls composition/media/reference; Design Direction controls materialization details. Samples remain code/API references only.
 
 If this skill folder is removed:
-1. The orchestrator's Gate 4 falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
+1. The orchestrator's Gate 3 uses the approved Product Experience with least-assumptive materialization (no `## Design Direction` block)
 2. screen-planner and screen-builder's `if (block exists)` conditions evaluate false → behave exactly as today
 3. No other file change required
 

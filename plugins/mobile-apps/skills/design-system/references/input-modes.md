@@ -4,6 +4,40 @@ How each input flag to `/design-system` is processed, validated, and secured.
 
 ## MVP input modes (Phase 2)
 
+### `--from-screenshot <path[,path...]>`
+
+```
+Input: 1-8 PNG/JPEG/WebP screenshots
+Processing:
+  1. Apply §15.B path safety and §15.D image validation
+  2. Strip EXIF/profiles and record viewport dimensions
+  3. Extract hierarchy, normalized geometry, media ratio, type relationships,
+     navigation silhouette, required motifs, and forbidden drift
+  4. Write normalized <working_dir>/design-intake.md using
+     shared/references/reference-fidelity.md
+  5. Lock structural composition; palette/type may be enriched by brand inputs
+Cost: ~5-15k tokens depending on image count
+Failure:
+  - Vision unavailable → BLOCKED; ask for --design-intake, not a palette fallback
+  - Unsupported/oversized image → BLOCKED with the exact failed limit
+Full contract: references/reference-intake.md
+```
+
+### `--design-intake <path>`
+
+```
+Input: validated Markdown/YAML design intake
+Processing:
+  1. Validate ≤200 KB and .md/.markdown/.yaml/.yml
+  2. Apply §15.B and §15.H
+  3. Require hierarchy, geometry, typography, navigation, motifs, drift, and
+     originality policy sections
+  4. Normalize to <working_dir>/design-intake.md
+  5. Treat as highest-priority structural source
+Cost: ~0-2k tokens
+Full contract: references/reference-intake.md
+```
+
 ### Free-text notes
 
 ```
@@ -179,7 +213,8 @@ Failure → STOP with specific reason, never fall back silently.
 ### §15.B — File input
 
 ```
-Applies to: --brand-doc, --design-spec, --logo, --stylesheet, --from-canvas-app, --from-code-app
+Applies to: --brand-doc, --design-spec, --design-intake, --from-screenshot,
+--logo, --stylesheet, --from-canvas-app, --from-code-app
 
 - Accept absolute, tilde (~), or relative paths
 - Resolve relative paths against working_dir (cwd)
@@ -209,14 +244,17 @@ Applies to: --from-canvas-app (.msapp is a zip)
 ### §15.D — Image
 
 ```
-Applies to: --logo
+Applies to: --logo, --from-screenshot
 
 - Allowed formats: PNG, JPG, WebP only
 - BLOCKED: SVG (script risk), AVIF (decoder CVE history), HEIC, ICO
 - Check by magic bytes, NOT extension
 - Strip EXIF before vision model call
 - Decompressed pixel cap: 50 megapixels
-- File size cap: 5 MB
+- Logo file size cap: 5 MB
+- Screenshot file size cap: 10 MB each, 40 MB total; maximum 8 images
+- Screenshot decompressed pixel cap: 80 megapixels each
+- Animated WebP is blocked
 ```
 
 ### §15.E — Code app extraction
@@ -296,14 +334,18 @@ Token values masked. Failures logged with reason.
 When multiple flags are passed, apply in priority order:
 
 ```
-1. --design-spec    (highest — near-direct passthrough, skips Sub-steps 3+4)
-2. --brand-doc      (locks direction, skips Sub-step 3)
-3. --from-figma     (locks palette + typography + components)
-4. --from-code-app  (highest fidelity sibling)
-5. --from-canvas-app (locks palette + typography + conventions)
-6. --logo           (extracts palette, tints Sub-step 3 style picker)
-7. --from-url / --stylesheet (palette extractors)
-8. Free-text notes  (always applied as overrides on top)
+1. --design-intake  (highest structural authority)
+2. --from-screenshot (creates structural design intake)
+3. --design-spec    (exact token/component source)
+4. --brand-doc      (brand values and negatives)
+5. --from-figma     (palette + typography + components + geometry)
+6. --from-code-app  (sibling implementation evidence)
+7. --from-canvas-app (palette + typography + conventions)
+8. --logo           (palette only)
+9. --from-url / --stylesheet (palette extractors)
+10. Free-text notes (explicit overrides)
 ```
 
 Lower-priority inputs enrich; higher-priority inputs override. Conflicts surfaced for user resolution.
+Industry and product archetype are never input-mode overrides for visual
+personality or composition.

@@ -35,7 +35,11 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 ## Inputs
 
 - `working_dir` — absolute path to project root (auto-detected or passed by orchestrator)
-- Optional flags: `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`, `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- Optional flags: `--design-intake`, `--from-screenshot`, `--brand-doc`,
+  `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`,
+  `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- `--skip-planning --plan <native-app-plan.md>` — materialize the Gate
+  3-approved design without asking questions
 - Optional: `--refresh <dimension>` — palette | typography | components | density | negatives | motion
 - Optional: `--reskin` — full theme swap
 - Optional: `--add-dark-mode` — derive + wire dark theme
@@ -48,6 +52,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 - [`references/preview-template.md`](./references/preview-template.md) — HTML template for gallery render
 - [`references/refresh-flow.md`](./references/refresh-flow.md) — single-dimension refresh logic
 - [`references/input-modes.md`](./references/input-modes.md) — how each input flag is processed
+- [`references/reference-intake.md`](./references/reference-intake.md) — screenshot/design-intake extraction and fidelity contract
 - [`references/vibe/brand-examples.md`](./references/vibe/brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry)
 - [`references/vibe/style-picker.md`](./references/vibe/style-picker.md) — internal folded style picker
 
@@ -74,6 +79,19 @@ Detect invocation mode:
 
 For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
 
+**Approved-plan fast path:** when `--skip-planning --plan <path>` is present,
+read the approved `## Product Experience`, `## Design Direction`, `## Design`,
+and `## Screens` sections. Validate product archetype, visual personality,
+ambition, Home composition, First Viewport Contract, media source/fallback,
+reference fidelity, palette, typography, density, surface, motion, navigation
+silhouette, signature components, and negatives. If a Reference Contract exists,
+read and validate `design-intake.md` as well.
+Skip every `AskUserQuestion`, cost picker, brand-input picker, and style picker;
+generate all three brand artifacts and a composition-aware preview directly.
+Missing or contradictory required fields are `BLOCKED`, not permission to
+reopen planning after Gate 4. Presets may fill token details only; they may not
+replace approved composition or reference fields.
+
 **Drift detection (Mode B only — existing brand/ present):**
 
 If `brand/design-system.md` AND `brand/tokens.ts` both exist:
@@ -89,19 +107,21 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+**Standalone modes only:** stop and wait for a response. The approved-plan fast
+path skips this entire step because Gate 3 already owns the decision.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
 ```
-You're building {{app_name}} — a {{industry}} app.
+You're building {{app_name}} — a {{product_archetype}} product for {{audience}}.
 {{screen_count}} screens, {{entity_count}} entities.
 
 Do you have any brand input? (skip with Enter):
 
-(1) Skip — use Field/Ops industry defaults
-    No brand assets. I'll pick a direction from 3 visual styles (or you can skip style-picking entirely). High
-    contrast, large tap targets, safety-first colors.
+(1) Skip — use the approved Product Experience
+  No extra brand assets. I will preserve its personality, composition,
+  operating-context ergonomics, and media strategy. Without a plan, the
+  least-assumptive baseline is polished operational.
 
 (2) Free-text notes
     > "Slate-blue accent, no orange. Must look at home next to ServiceTitan."
@@ -114,6 +134,8 @@ Do you have any brand input? (skip with Enter):
     > --design-spec ~/work/design-system.md
 
 (5) More options…
+  > --from-screenshot ~/designs/home.png,~/designs/detail.png
+  > --design-intake ~/designs/design-intake.md
     > --from-url https://contoso.com           (extract palette from live site)
     > --from-canvas-app ~/exports/my-app.msapp (extract from canvas app)
     > --from-code-app ~/projects/sibling-web   (extract from code app)
@@ -130,14 +152,16 @@ If flag was passed on invocation, skip asking — process directly.
 **On skip:** Continue with no brand context.
 
 **Priority order** when multiple inputs given:
-1. `--design-spec` (highest — skips Sub-steps 3 AND 4)
-2. `--brand-doc` (locks direction, skips Sub-step 3)
-3. `--from-figma` (locks palette + typography + components)
-4. `--from-code-app` (highest fidelity sibling)
-5. `--from-canvas-app` (locks palette + typography + conventions)
-6. `--logo` (extracts palette, applied as tint)
-7. `--from-url` / `--stylesheet` (palette extractors)
-8. Free-text notes (always applied as overrides on top)
+1. `--design-intake` (highest structural authority)
+2. `--from-screenshot` (creates binding structural intake)
+3. `--design-spec` (exact token/component source)
+4. `--brand-doc` (brand values and negatives)
+5. `--from-figma` (palette + typography + components + geometry)
+6. `--from-code-app` (sibling implementation evidence)
+7. `--from-canvas-app` (palette + typography + conventions)
+8. `--logo` (palette only)
+9. `--from-url` / `--stylesheet` (palette extractors)
+10. Free-text notes (explicit overrides)
 
 ---
 
@@ -154,20 +178,25 @@ Show the cost picker, adapting the intro and option set to brand input.
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~8k tokens |
-| c | Brand preview | Apply brand to List + Form + Detail mockups; skip style picker and component sheets. | ~30 sec, ~2k tokens |
-| d | Skip everything | Use palette with industry defaults; no previews. | <5 sec, ~0 tokens |
+| c | Brand preview | Apply brand to Home plus two repeated-loop screens; skip style exploration. | ~30 sec, ~2k tokens |
+| d | Skip extra exploration | Materialize the approved Product Experience without another preview decision. | <5 sec, ~0 tokens |
 
-**If NO brand input, print:** `No brand input — defaulting to polished-inspection (white surface + Power-Platform green accent + status-stripe cards + soft-tinted pills; source: references/vibe/direction-polished-inspection.md).` Default: **c**.
+**If NO brand input, print:** `No extra brand input — materializing the approved visual personality and Home composition. If no Product Experience exists, using the least-assumptive polished-operational baseline.` Default: **c**.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply defaults | Apply polished-inspection tokens and open a 3-screen preview. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
+| c | Apply approved experience | Materialize the approved personality, composition, media, and tokens, then open a composition-aware preview. | ~30 sec, ~3k tokens |
 
-**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
+**Default rationale:** `(c)` is the zero-click path because Gate 3 already made
+the product and visual decisions. It is not a universal visual preset. In
+standalone projects without a Product Experience, it uses
+`polished-operational` + `tailored` as a transparent baseline.
 
-**Outdoor-only opt-in:** for true field-utility apps (full sun, full shift, gloves), pass `--direction inspection` to use the dark slate + safety-orange preset instead. The MVP default is light + green because that demos better and remains usable; the outdoor-dark preset is a deliberate opt-in.
+**Legacy direction aliases:** `--direction inspection|saas|product` maps to
+`utility|polished-operational|premium-brand-forward`. These aliases are explicit
+user choices only; no industry or archetype auto-selects them.
 
 **Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
 
@@ -176,20 +205,31 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 **Branches:**
 - **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
 - **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render key screen mockups (List + Form + Detail) with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — always shows 3 key screens.
-- **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
-  1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
-     **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (sourced from `pa-wrap-tools-1/templates/equipment-inspector`), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
-     4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
+- **(c) Brand preview** → skip Sub-steps 3–6, render Home plus two screens
+  representing the repeated loop with brand tokens and approved composition,
+  open browser, proceed to Sub-step 7.
+- **(c) Apply approved experience / (d) — no-brand path** → skip Sub-step 3. Run these in order:
+  1. **Deterministic Sub-step 4** — write the full `brand/design-system.md`
+     and `brand/tokens.ts` from Product Experience plus any approved materialization preset.
+      **Source-of-truth lookup order:**
+     1. Binding `design-intake.md` and `## Product Experience` composition/media/reference fields.
+     2. Approved `## Design Direction` and `## Design` materialization fields.
+     3. Explicit `--direction` legacy alias chosen by the user.
+     4. Standalone-only fallback: `polished-operational` + `tailored`, with no assumed industry palette or Home shape.
 
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
-  3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
-
-  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+      A preset supplies unresolved token/component details only. It cannot change
+      Home composition, First Viewport geometry, media, navigation silhouette,
+      signature components, or required/forbidden reference motifs.
+    2. **Mini-preview (Sub-step 6.5 lite)** — render Home plus two representative
+      workflow/content screens using the approved composition and real token
+      values. Show the experience-contract panel and label every phone frame
+      `Static approximation — runtime screenshot required`. Write
+      `<working_dir>/_design_preview.html` and open/print it according to
+      `visual_companion`.
+    3. **Return DONE** only after `brand/design-system.md`, `brand/tokens.ts`, and
+      `brand/design-system.html` exist and validate. Step 9b then applies
+      [`references/tamagui-integration.md`](./references/tamagui-integration.md)
+      in brand-import mode.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -200,7 +240,7 @@ That input didn't work. You can try another:
 (2) --logo <path>      — extract palette from logo image
 (3) --brand-doc <path> — point to existing brand markdown
 (4) --from-url <url>   — extract from a live website
-(5) Skip               — continue with industry defaults
+(5) Skip               — continue with approved Product Experience or polished-operational baseline
 
 Or fix the issue and retry the same input.
 ```
@@ -226,15 +266,22 @@ Before processing any external content, apply the sanitization rules from [`refe
 
 **Only runs on path (a).**
 
-**Skipped if:** `--brand-doc`, `--design-spec`, or `--from-figma` provided (direction already locked).
+**Skipped if:** `--design-intake`, `--from-screenshot`, `--brand-doc`,
+`--design-spec`, or `--from-figma` provided (structure/direction already locked).
 
 **Print:**
 > "→ [design-system] Rendering style picker…"
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
-- Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
+- Pass `working_dir`, `target_screen` (Home or the primary repeated-loop
+  screen), approved Product Experience, First Viewport Contract, media strategy,
+  and optional design intake
+- Highlight the approved visual personality; never infer the recommendation
+  from industry
 - The style picker renders `_design_vibe.html`, opens browser, asks user
-- Returns: picked direction name + merged bundle dimensions
+- Returns: picked personality/materialization profile plus resolved dimensions;
+  product archetype, workflow, Home composition, and reference structure remain
+  unchanged unless the user explicitly revises them through `/edit-app`
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
 
@@ -258,13 +305,34 @@ Generate the full spec deterministically from the locked direction. Follow the s
 
 ```markdown
 # {{App Name}} — Design System
-Generated: {{ISO timestamp}} | Direction: {{direction name}}
+Generated: {{ISO timestamp}} | Personality: {{visual personality}}
 
 ## Brand
 - Identity: {{one-line purpose}}
 - Voice: {{tone description}}
 - References: {{reference apps from direction bundle}}
 - Brand notes: {{user's notes if any}}
+
+## Product Experience Link
+- Product archetype, workflow capabilities, operating context
+- Visual personality, ambition, content emphasis, Home composition
+- Reference fidelity
+
+## Composition
+- Full First Viewport Contract
+- Cross-tab silhouettes
+
+## Media
+- Strategy, source, aspect/viewport ratio
+- Loading, error, and empty fallbacks
+
+## Navigation
+- Mood, silhouette, primary-action owner, safe-area behavior
+
+## Signature Components
+### {{signature component}}
+- Purpose, stable geometry, required content, states
+- Required reference motifs and forbidden drift
 
 ## Palette
 | Token | Hex | Usage |
@@ -299,14 +367,16 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 - These are enforced downstream — violations = build failure
 
 ## Provenance
-- Direction, industry, brand notes, generator version, source
+- Product archetype, visual personality/ambition, materialization preset,
+  industry context, brand notes, generator version, source, design intake,
+  reference fidelity
 ```
 
 **Write `brand/tokens.ts`:**
 
 ```typescript
 // Auto-generated by /design-system — do not hand-edit without running drift check
-// Direction: {{direction}} | Generated: {{timestamp}}
+// Personality: {{visualPersonality}} | Materialization: {{presetOrCustom}} | Generated: {{timestamp}}
 
 export const tokens = {
   color: {
@@ -340,6 +410,7 @@ export const tokens = {
     avatarSm: 32,
     avatarMd: 40,
     avatarLg: 56,
+    signatureMinHeight: {{from First Viewport Contract}},
   },
   radius: {
     sm: {{4|6}},
@@ -348,12 +419,12 @@ export const tokens = {
     full: 9999,
   },
   typography: {
-    display: { family: '{{font}}', size: {{28|32}}, weight: '{{600|700}}', lineHeight: {{1.2}}, tracking: {{-0.01|0}} },
-    heading: { family: '{{font}}', size: {{22|24}}, weight: '{{600}}', lineHeight: {{1.25}}, tracking: {{-0.005|0}} },
+    display: { family: '{{font}}', size: {{28|32|40|48}}, weight: '{{500|600|700}}', lineHeight: {{1.2}}, tracking: 0 },
+    heading: { family: '{{font}}', size: {{22|24}}, weight: '{{600}}', lineHeight: {{1.25}}, tracking: 0 },
     title: { family: '{{font}}', size: {{18|20}}, weight: '{{600}}', lineHeight: {{1.3}}, tracking: 0 },
     body: { family: '{{font}}', size: 16, weight: '400', lineHeight: 1.5, tracking: 0 },
     bodySm: { family: '{{font}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
-    caption: { family: '{{font}}', size: 12, weight: '500', lineHeight: 1.3, tracking: {{0.02|0}} },
+    caption: { family: '{{font}}', size: 12, weight: '500', lineHeight: 1.3, tracking: 0 },
     mono: { family: '{{monoFont}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
   },
 } as const;
@@ -379,17 +450,23 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 
 The HTML gallery includes:
 1. Header banner (app name, direction, timestamp)
-2. Palette swatches (all tokens with hex + usage labels)
-3. Status palette swatches
-4. Typography ladder (each role rendered at actual size/weight)
-5. Component gallery:
+2. Product Experience panel (archetype, personality, ambition, Home composition, fidelity)
+3. Composition diagram (first-viewport regions, geometry, action owner, next-section rule)
+4. Media policy and loading/error/empty fallbacks
+5. Navigation silhouette and tab-root silhouette comparison
+6. Signature-component gallery with populated/loading/error/empty states
+7. Palette swatches (all tokens with hex + usage labels)
+8. Status palette swatches
+9. Typography ladder (each role rendered at actual size/weight)
+10. Component gallery:
   - 4 button variants × 4 states (default, pressed, focused, disabled)
    - 3 input states (default, focus, error)
    - 2 card variants (flat, elevated)
    - 3 list row examples (with status pill, with meta, with badge)
    - Badge/pill examples
-6. Phone mockup of the representative screen (same template as the internal style picker)
-7. Negatives bar (strikethrough forbidden patterns)
+11. Composition-aware phone mockup of Home and representative workflow/content screens
+12. Reference requirements/forbidden drift panel when design intake exists
+13. Negatives bar (strikethrough forbidden patterns)
 
 Write to `brand/design-system.html`.
 
@@ -411,7 +488,11 @@ open "brand/design-system.html" 2>/dev/null \
 ```
 Summary
 ─────────────────────────────────────────────
-  Direction:    {{direction name}}
+  Archetype:    {{product archetype}}
+  Personality:  {{visual personality}} / {{visual ambition}}
+  Home:         {{Home composition}} / {{signature component}}
+  Reference:    {{fidelity}} ({{design-intake path or none}})
+  Media:        {{strategy}} / {{source + fallback}}
   Palette:      {{bg color}} bg, {{accent}} accent
   Typography:   {{font family}} ({{weight range}})
   Density:      {{dense|comfortable|sparse}} ({{tap_target}}px tap targets)
@@ -456,23 +537,33 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 **Prerequisites:** This step reads screen specs from `<working_dir>/native-app-plan.md` (the `## Screens` section). If that file does not exist (e.g. standalone `/design-system` run with no prior plan), skip this step entirely and proceed to Sub-step 7.
 
-**Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace default token values with the locked `brand/tokens.ts` values (palette, typography, spacing, radius).
+**Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping
+as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace
+default tokens with `brand/tokens.ts`, preserve the approved Home composition,
+First Viewport geometry, media source/fallback, tab silhouettes, and reference
+motifs, and label every frame `Static approximation — runtime screenshot
+required`.
 
-**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open browser. Proceed to Sub-step 7.
+**Approved-plan fast path:** automatically render Home plus two representative
+screens and skip the question below. Gate 3 already approved preview scope.
+
+**Path (c) "Brand preview":** Skip this question — automatically render Home
+plus the two screens that best represent the repeated user loop. If the plan has
+fewer, render whichever exist. Open browser. Proceed to Sub-step 7.
 
 **Paths (a) and (b):** Ask:
 ```
 Re-render screen preview with your brand tokens?
 
 (a) All screens     — every screen with your design applied
-(b) Key screens     — List + Form + Detail only
+(b) Key screens     — Home + two repeated-loop screens
 (c) Skip preview    — I'll see them when the app builds
 
 [default: b]
 ```
 
 - **(a)** → re-render all screens from plan with brand tokens applied
-- **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
+- **(b)** → re-render Home plus two repeated-loop screens (whichever exist)
 - **(c)** → skip, proceed to Sub-step 7
 
 Overwrites `_plan_preview.html` with branded versions. Opens browser.
@@ -488,10 +579,12 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 
 ```markdown
 ## Design history
-- {{ISO date}} — /design-system v0.1 — {{direction}} — {{confirmed|draft}}
+- {{ISO date}} — /design-system v0.2 — {{product archetype}} / {{visual personality}} / {{Home composition}} — {{confirmed|draft}}
 - visual_companion: {{yes|no|skip}}
 - design_system_locked: {{ISO timestamp}}
 - brand_notes: "{{notes or 'none'}}"
+- design_intake: {{path or none}}
+- reference_fidelity: {{none|directional|high|strict-structural}}
 - design_system_files: brand/design-system.md, brand/design-system.html, brand/tokens.ts
 ```
 
@@ -502,7 +595,10 @@ DONE
 brand_path: brand/design-system.md
 tokens_path: brand/tokens.ts
 preview_path: brand/design-system.html
-direction: {{direction name}}
+product_archetype: {{product archetype}}
+visual_personality: {{visual personality}}
+home_composition: {{Home composition}}
+reference_fidelity: {{level}}
 visual_companion: {{yes|no|skip}}
 ```
 
@@ -511,7 +607,7 @@ visual_companion: {{yes|no|skip}}
 > Design system locked at `brand/design-system.md`.
 > Preview: `brand/design-system.html`
 > Tokens: `brand/tokens.ts`
-> Direction: {{direction name}}
+> Experience: {{product archetype}} / {{visual personality}} / {{Home composition}}
 >
 > Downstream screen builders will use this as their source of truth. Negatives are HARD RULES.
 
@@ -536,6 +632,11 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 
 **Allowed dimensions:** `palette`, `typography`, `components`, `density`, `negatives`, `motion`
 
+Composition, media, navigation silhouette, reference fidelity, and signature
+components are Product Experience changes, not token refreshes. Route them
+through `/edit-app`; update Gate 3 fields, rebuild affected screens, and run
+runtime visual QA when required.
+
 **Cost table:**
 
 | Command | Tokens | Wall time | Affects screens? |
@@ -546,7 +647,7 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 | `--refresh density` | ~3k | ~30 sec | no |
 | `--refresh negatives` | ~2k | ~20 sec | no |
 | `--refresh motion` | ~3k | ~30 sec | no |
-| `--reskin` | ~50-80k | ~5-10 min | YES (every screen) |
+| `--reskin` | ~50-80k | ~5-10 min | YES (Product Experience update + affected screens) |
 | `--add-dark-mode` | ~5-8k | ~1 min | yes (ThemeProvider wired) |
 
 ---
@@ -597,10 +698,10 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
-| `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
+| `screen-builder` | `native-app-plan.md ## Product Experience` + `brand/design-system.md` (MANDATORY) | Composition/reference fields are structural; negatives and tokens govern materialization. |
 | Tamagui integration reference | `brand/tokens.ts` | Imported into `tamagui.config.ts` by `/create-mobile-app` Step 9b |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
-| `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
+| `/edit-app` | Owns Product Experience changes and routes token materialization here | Composition/media/reference changes rebuild affected screens and run visual QA |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
 
 ---
@@ -612,7 +713,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | New project via `/create-mobile-app` | Step 6.5 runs, brand/ exists |
 | Project scaffolded before this feature | No brand/ → screen-builder falls back to `## Design Direction` only |
 | `/design-system` standalone in existing project | Generates brand/, future runs pick it up |
-| `/design-system --reskin` | Re-runs style picking and updates brand/ artifacts |
+| `/design-system --reskin` | Standalone invocation delegates structural/personality changes to `/edit-app`; approved orchestrated runs update brand artifacts without another prompt |
 
 ---
 
@@ -634,7 +735,9 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 
 ## Notes
 
-- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
+- **Read-only with respect to app source code.** This skill writes only to
+  `brand/`, optional `design-intake.md`, `_design_vibe.html`, `memory-bank.md`,
+  and design/plan previews. Never touches TSX, services, or generated code.
 - **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

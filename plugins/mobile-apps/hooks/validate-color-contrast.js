@@ -14,6 +14,8 @@
  *      (`color="$color8"`, `$gray7`, etc.). These are too faint for inactive
  *      tabs, metadata, form helper text, and icon-only controls on mobile.
  *   4. White text on yellow/orange status fills, which often fails WCAG AA.
+ *   5. Actual WCAG ratios for resolvable brand-token foreground/background
+ *      pairs in text, buttons, badges, and nested status surfaces.
  *
  * Exits with code 2 + corrective message on stderr to block the call and
  * force the agent to fix it.
@@ -27,7 +29,159 @@ const fs = require('fs');
 const path = require('path');
 
 const ALLOWED_HINT =
-  'Use Tamagui semantic tokens ($color10, $color12, $blue11, $statusOverdue, etc.) — they auto-adapt across light + dark mode and are pre-tested for AA contrast. Never hardcode hex on color/bg/borderColor props in TSX. See shared/references/accessibility-checklist.md for the contrast bar (4.5:1 body / 3:1 large text + non-text UI).';
+  'Use resolved Tamagui/brand semantic tokens and verify the actual pair. Text requires 4.5:1, or 3:1 at 24sp+ / 18.66sp+ bold; non-text UI requires 3:1. Never hardcode hex on color/bg/borderColor props in TSX.';
+
+function normalizeHex(value) {
+  const raw = String(value || '').trim();
+  if (!/^#[0-9a-fA-F]{3,8}$/.test(raw)) return null;
+  if (raw.length === 4) return `#${raw.slice(1).split('').map((char) => char + char).join('')}`.toLowerCase();
+  if (raw.length === 7) return raw.toLowerCase();
+  return null;
+}
+
+function relativeLuminance(hex) {
+  const normalized = normalizeHex(hex);
+  if (!normalized) return null;
+  const channels = [1, 3, 5].map((index) => parseInt(normalized.slice(index, index + 2), 16) / 255)
+    .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground, background) {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  if (foregroundLuminance === null || backgroundLuminance === null) return null;
+  const lighter = Math.max(foregroundLuminance, backgroundLuminance);
+  const darker = Math.min(foregroundLuminance, backgroundLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function loadResolvedColors(projectRoot) {
+  const colors = new Map();
+  const aliases = new Map();
+  const tokenPath = path.join(projectRoot, 'brand', 'tokens.ts');
+  const designPath = path.join(projectRoot, 'brand', 'design-system.md');
+  const configPath = path.join(projectRoot, 'tamagui.config.ts');
+
+  if (fs.existsSync(tokenPath)) {
+    const source = fs.readFileSync(tokenPath, 'utf8');
+    let match;
+    const color = /['"]?([A-Za-z][A-Za-z0-9_-]*)['"]?\s*:\s*['"](#[0-9a-fA-F]{3,8})['"]/g;
+    while ((match = color.exec(source))) {
+      const hex = normalizeHex(match[2]);
+      if (hex) colors.set(match[1], hex);
+    }
+  }
+
+  if (fs.existsSync(designPath)) {
+    const source = fs.readFileSync(designPath, 'utf8');
+    let match;
+    const row = /^\s*\|\s*([A-Za-z][A-Za-z0-9_-]*)\s*\|\s*(#[0-9a-fA-F]{3,8})\s*\|/gm;
+    while ((match = row.exec(source))) {
+      const hex = normalizeHex(match[2]);
+      if (hex && !colors.has(match[1])) colors.set(match[1], hex);
+    }
+  }
+
+  if (fs.existsSync(configPath)) {
+    const source = fs.readFileSync(configPath, 'utf8');
+    let match;
+    const literal = /\b([A-Za-z][A-Za-z0-9_]*)\s*:\s*['"](#[0-9a-fA-F]{3,8})['"]/g;
+    while ((match = literal.exec(source))) {
+      const hex = normalizeHex(match[2]);
+      if (hex) colors.set(match[1], hex);
+    }
+    const reference = /\b([A-Za-z][A-Za-z0-9_]*)\s*:\s*brandTokens\.color\.([A-Za-z][A-Za-z0-9_]*)/g;
+    while ((match = reference.exec(source))) aliases.set(match[1], match[2]);
+  }
+
+  const semantic = {
+    background: 'bg',
+    surface0: 'bg',
+    surface1: 'surface',
+    accentBase: colors.has('accent') ? 'accent' : 'primary',
+    accentDeep: 'primary',
+    text0: 'text',
+    textMuted: 'textMuted',
+    statusSuccess: 'statusSuccess',
+    statusWarning: 'statusWarning',
+    statusDanger: 'statusDanger',
+    statusInfo: 'statusInfo',
+  };
+  for (const [alias, target] of Object.entries(semantic)) if (!aliases.has(alias)) aliases.set(alias, target);
+
+  return { aliases, colors };
+}
+
+function resolveColor(value, resolved) {
+  const literal = normalizeHex(value);
+  if (literal) return literal;
+  const token = /^\$([A-Za-z][A-Za-z0-9_-]*)$/.exec(String(value || '').trim());
+  if (!token) return null;
+  let key = token[1];
+  const seen = new Set();
+  while (resolved.aliases.has(key) && !seen.has(key)) {
+    seen.add(key);
+    key = resolved.aliases.get(key);
+  }
+  return resolved.colors.get(key) || null;
+}
+
+function propValue(tag, names) {
+  const pattern = new RegExp(`\\b(?:${names.join('|')})\\s*=\\s*["']([^"']+)["']`);
+  return pattern.exec(tag)?.[1] || null;
+}
+
+function textThreshold(tag) {
+  const numeric = /fontSize\s*=\s*\{(\d+(?:\.\d+)?)\}/.exec(tag);
+  const token = /fontSize\s*=\s*["']\$(\d+)["']/.exec(tag);
+  const tokenSizes = { 1: 12, 2: 13, 3: 14, 4: 15, 5: 16, 6: 18, 7: 20, 8: 24, 9: 30, 10: 36, 11: 48, 12: 64 };
+  const size = numeric ? Number(numeric[1]) : token ? tokenSizes[token[1]] || 0 : 0;
+  const weightMatch = /fontWeight\s*=\s*["']?(\d+|bold)/.exec(tag);
+  const bold = weightMatch && (weightMatch[1] === 'bold' || Number(weightMatch[1]) >= 700);
+  return size >= 24 || (bold && size >= 18.66) ? 3 : 4.5;
+}
+
+function findResolvedContrastIssues(content, projectRoot) {
+  const issues = [];
+  const resolved = loadResolvedColors(projectRoot);
+  if (!resolved.colors.size) return issues;
+
+  function checkPair(foregroundValue, backgroundValue, tag, context) {
+    const foreground = resolveColor(foregroundValue, resolved);
+    const background = resolveColor(backgroundValue, resolved);
+    if (!foreground || !background) return;
+    const ratio = contrastRatio(foreground, background);
+    const required = textThreshold(tag);
+    if (ratio !== null && ratio + 1e-6 < required) {
+      issues.push({
+        type: `resolved contrast ${ratio.toFixed(2)}:1 (requires ${required}:1)`,
+        match: `${context}: ${foregroundValue} (${foreground}) on ${backgroundValue} (${background})`,
+      });
+    }
+  }
+
+  let match;
+  const selfColoredText = /<(Text|Paragraph|SizableText|Label|Button\.Text)\b([^>]*)>/g;
+  while ((match = selfColoredText.exec(content))) {
+    const foreground = propValue(match[2], ['col', 'color']);
+    const background = propValue(match[2], ['bg', 'background', 'backgroundColor']);
+    if (foreground && background) checkPair(foreground, background, match[2], match[1]);
+  }
+
+  const container = /<(YStack|XStack|ZStack|Card|Button|Stack)\b([^>]*)>([\s\S]{0,1000}?)<\/\1>/g;
+  while ((match = container.exec(content))) {
+    const background = propValue(match[2], ['bg', 'background', 'backgroundColor']);
+    if (!background) continue;
+    let child;
+    const childText = /<(Text|Paragraph|SizableText|Label|Button\.Text)\b([^>]*)>/g;
+    while ((child = childText.exec(match[3]))) {
+      const foreground = propValue(child[2], ['col', 'color']);
+      if (foreground) checkPair(foreground, background, child[2], `${match[1]}>${child[1]}`);
+    }
+  }
+  return issues;
+}
 
 // ─── Pattern 1: hardcoded hex on color/bg/borderColor props ──────────────────
 // Matches:  color="#abc"  bg="#abcdef"  borderColor='#aabbcc'  color={someVar ? '#aaa' : '#bbb'}
@@ -108,7 +262,7 @@ function stripShadowColor(content) {
   return content.replace(/shadowColor\s*[:=]\s*['"]\s*#[0-9a-fA-F]{3,8}\s*['"]/g, '');
 }
 
-function findIssues(content) {
+function findIssues(content, projectRoot = process.cwd()) {
   const cleaned = stripShadowColor(content);
   const issues = [];
 
@@ -180,6 +334,8 @@ function findIssues(content) {
   }
   WHITE_ON_YELLOW_ORANGE_REVERSED.lastIndex = 0;
 
+  issues.push(...findResolvedContrastIssues(cleaned, projectRoot));
+
   return issues;
 }
 
@@ -249,6 +405,9 @@ function fixForIssue(issue) {
   if (issue.type.includes('white text on yellow/orange')) {
     return 'Use a tint background with dark amber/orange foreground, e.g. bg="$yellow3" color="$yellow11".';
   }
+  if (issue.type.includes('resolved contrast')) {
+    return 'Change the resolved foreground/background token pair until the measured ratio reaches WCAG AA; do not assume semantic token names guarantee contrast.';
+  }
   return ALLOWED_HINT;
 }
 
@@ -266,7 +425,7 @@ function runReportMode() {
     } catch {
       continue;
     }
-    for (const issue of findIssues(content)) {
+    for (const issue of findIssues(content, process.cwd())) {
       issues.push({
         validator: 'validate-color-contrast',
         file: path.relative(process.cwd(), filePath) || filePath,
@@ -304,7 +463,7 @@ function main() {
     const content = extractContent(toolName, toolInput);
     if (!content) process.exit(0);
 
-    const issues = findIssues(content);
+    const issues = findIssues(content, path.resolve(input.cwd || process.cwd()));
     if (issues.length === 0) process.exit(0);
 
     process.stderr.write(buildBlockMessage(filePath, issues));
@@ -312,8 +471,17 @@ function main() {
   });
 }
 
-if (process.argv.includes('--report')) {
-  runReportMode();
-} else {
-  main();
+if (require.main === module) {
+  if (process.argv.includes('--report')) runReportMode();
+  else main();
 }
+
+module.exports = {
+  contrastRatio,
+  findIssues,
+  findResolvedContrastIssues,
+  loadResolvedColors,
+  normalizeHex,
+  relativeLuminance,
+  resolveColor,
+};

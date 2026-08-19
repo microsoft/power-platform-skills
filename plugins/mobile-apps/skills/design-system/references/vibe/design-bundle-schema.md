@@ -22,11 +22,17 @@ Inserted between `## Native Capabilities` (or `## Connectors`) and `## Design`. 
 ```markdown
 ## Design Direction
 
-**Picked:** <Inspection | SaaS | Product | Hybrid (...)>
+**Picked:** <Utility | Polished Operational | Premium Brand-forward | Hybrid (...)>
 **Reference apps:** <comma-separated list>
 **Picked at:** <ISO 8601 timestamp> (via /design-system style picker)
 
-direction: <inspection | saas | product | hybrid>
+visual_personality: <utility | polished-operational | premium-brand-forward | editorial | immersive | playful-consumer | reference-driven>
+visual_ambition: <template | tailored | premium | bespoke>
+materialization_profile: <inspection | saas | product | custom | hybrid>
+product_archetype: <copied unchanged from Product Experience>
+home_composition: <copied/approved key from home-compositions.md>
+content_emphasis: <image-led | object-led | data-led | relationship-led | task-led | timeline-led>
+reference_fidelity: <none | directional | high | strict-structural>
 surface: <strong-cards | subtle-depth | editorial>
 background: <dark-slate | cool-gray-light | warm-cream | rich-dark>
 palette: <named bundle, e.g. "slate + safety-orange">
@@ -44,6 +50,20 @@ primary_action_shape: <rectangular | rectangular-bottom-pinned | pill>
 primary_action_position: <bottom-pinned | top-right-or-in-flow | in-flow-or-bottom-center>
 accent_color: <human-readable name (#hex)>
 tone: <direct | professional | conversational>
+
+first_viewport_signature: <component name>
+first_viewport_share: <0.20-0.65>
+first_viewport_min_height: <integer dp>
+first_viewport_media: <required | optional | forbidden>
+first_viewport_headline_min: <integer sp>
+first_viewport_metrics_max: <0-4>
+first_viewport_action: <integrated | in-flow | bottom-dock | native-navigation>
+first_viewport_next_section_visible: <true | false>
+duplicate_action_with_tab: <allowed | forbidden>
+media_strategy: <record-media | local-ui-media | generated-placeholder | mixed | none>
+media_source: <source identifier or none>
+media_fallback: <loading/error/empty behavior>
+navigation_silhouette: <one-line geometry>
 
 > Downstream agents (`screen-planner`, `screen-builder`) MUST use these values
 > as defaults for their own per-screen Surface / Density / List style / Motion
@@ -80,7 +100,9 @@ The planner's per-screen spec template (`agents/screen-planner.md` Step 4) inclu
 - `Restrained or expressive`
 - `Animations` (per-event)
 
-When `## Design Direction` is present, the planner pre-fills these fields from the bundle:
+When `## Design Direction` is present, the planner first verifies its copied
+Product Experience fields match `## Product Experience`, then pre-fills these
+materialization fields from the bundle:
 - `Density mode` ← `density`
 - `Surface style` ← `surface`
 - `Animations` ← derived from `motion`
@@ -99,7 +121,9 @@ The builder reads the block once at Step 1 (after reading its assigned screen sp
 - `empty_state` → which empty-state template to use
 - `accent_color` → resolved into `$accentBase`
 
-If `## Design Direction` is absent, the builder uses today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`.
+If `## Design Direction` is absent, the builder materializes the approved
+Product Experience with the least-assumptive token choices and records a
+concern. Missing Product Experience is not a valid fallback.
 
 ## Conditional reading (the play-out contract)
 
@@ -111,7 +135,7 @@ If "## Design Direction" section exists:
   Parse the bundle into a config object
   Use config values as defaults for design decisions
 Else:
-  Use existing industry-inferred defaults
+  Use least-assumptive materialization for approved Product Experience
 ```
 
 This is the only integration point between the internal style picker and the rest of the system. If `## Design Direction` is absent, existing agents fall back to the `Else` branch automatically.
@@ -119,7 +143,11 @@ This is the only integration point between the internal style picker and the res
 ## Validation rules
 
 - All bundle keys are required when the block exists (no partial bundles)
-- `direction` value MUST be one of: `inspection`, `saas`, `product`, `hybrid`
+- `visual_personality` MUST be in `visual-personalities.md`
+- `materialization_profile` MUST be one of: `inspection`, `saas`, `product`, `custom`, `hybrid`
+- copied `product_archetype`, `home_composition`, and reference fields MUST match `## Product Experience`
+- First Viewport values MUST be complete and within the ranges above
+- media source/fallback MUST be present when media is required
 - Color values MUST include a hex code in parentheses if a name is given
 - `Picked at` MUST be a valid ISO 8601 timestamp
 - `Reference apps` MUST be non-empty (at least 2 reference apps for clarity)

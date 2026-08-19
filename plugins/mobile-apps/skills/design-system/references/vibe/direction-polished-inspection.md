@@ -1,6 +1,8 @@
-# Direction: Polished Inspection
+# Legacy Materialization Preset: Polished Inspection
 
-**The MVP-first-run default for inspection / field-ops / asset-tracking apps.** Light surface, restrained Power-Platform green brand, status-loud pills, large tap targets. Demo-friendly polish without sacrificing field-ops ergonomics.
+Compatibility preset for explicitly selected status-led polished operational
+experiences. It is no longer the global first-run default and is never selected
+from inspection, maintenance, field-ops, or asset keywords alone.
 
 > Use this when the app needs to look "modern enterprise SaaS" in a demo room AND remain genuinely usable by an inspector with gloves. If the user wants outdoor-only dark + safety-orange (true field-utility look), pass `--direction inspection` to opt into that instead.
 
@@ -152,7 +154,7 @@ The owning mobile workflow checks these rules explicitly with the contrast and s
 - Field-ops apps where the demo audience is enterprise IT / stakeholders (not field workers)
 - Apps that need to look polished out-of-the-box for first-run impressions
 - Inspection / asset-tracking / equipment apps with status-driven workflows
-- ~70% of mobile-app traffic (the new MVP default)
+- Existing projects that already approved this preset
 
 ## When this misfits
 

@@ -2,6 +2,10 @@
 
 Detailed archetype specifications. The SKILL.md has the summary; this is the full version.
 
+`## Product Experience`, `home-compositions.md`, and any Reference Contract are
+authoritative. The catalogue provides implementation shapes; it does not choose
+the app's product archetype or visual personality.
+
 ## Catalogue keys (referenced from per-screen specs)
 
 `agents/screen-planner.md` Step 4 emits row style, hero type, and operational pattern by **key only** (e.g. `Row style: status-stripe-card`). The descriptions live here so they're authored once and read by the screen-builder when it materializes the spec into TSX. Builders MUST resolve unknown keys by looking them up in this section before falling back to a generic layout.
@@ -34,13 +38,39 @@ Pick the hero treatment that matches the entity. Never default to "H2 title + In
 | `timeline-header` | Entity is an event or has a date range | Large date display at top, timeline indicator, status below |
 | `minimal-header` | Entity is data-dense with many fields | Standard title only — data speaks for itself through well-structured InfoRows |
 
-### Operational pattern keys (Home + workflow screens)
+### Home composition keys
 
-Use these pattern names when the user's app has dashboard or workflow behavior. These are still implemented as the normal archetypes (List/Detail/Form/Tab-root), but naming the pattern prevents builders from reducing them to generic CRUD. `home-dashboard` is cross-domain; the rest are common in inspection, dispatch, safety, warehouse, maintenance, aviation, and field-service workflows.
+Resolve the selected Home key from `home-compositions.md`. The summary below is
+for quick builder lookup; the approved First Viewport Contract provides the
+measurable values.
+
+| Key | Dominant first-viewport shape | Required distinction |
+|---|---|---|
+| `asset-command` | Asset/object hero + lifecycle health + integrated next action | Asset identity dominates; metrics are supporting |
+| `media-command` | Media occupies 35-55% of first viewport + integrated identity/action | Actual product/place/object is inspectable |
+| `object-command` | Current workout/booking/case/course hero + progress | One current object dominates |
+| `relationship-command` | Person/account identity + cadence/health + next best action | Relationship, not pipeline counts, leads |
+| `data-command` | One dominant balance/score/risk + trend/threshold | No equal-weight metric grid |
+| `scan-command` | Scanner/finder target + manual fallback + recent context | Scan action has one owner; no duplicate center tab/dock |
+| `queue-first` | Prioritized urgent work + scope + recovery filters | Priority order dominates; summary counts are secondary |
+| `timeline-first` | Current date/window + overdue/today/upcoming groups | Time axis dominates |
+| `narrative-home` | Visual/type thesis + one offer/action + next-section hint | Story/context precedes operations |
+| `personalized-feed` | Personalized resume/start item + feed/progress | Recommendation or progress dominates |
+| `operational-dashboard` | Current object + 2-4 metrics + compact activity | Use only when metric/queue comparison is the real job |
+
+Every Home implementation must materialize the approved signature component,
+viewport share, minimum height, media/fallback rule, headline minimum, metric
+maximum, action placement, next-section visibility, and duplicate-action rule.
+
+### Operational pattern keys (workflow screens)
+
+Use these pattern names when the app has workflow behavior. These are still
+implemented as normal archetypes, but naming the pattern prevents builders from
+reducing them to generic CRUD. Home uses a composition key above.
 
 | Key | Use when | Required layout pieces |
 |---|---|---|
-| `home-dashboard` | The first screen after sign-in needs to summarize current state, progress, recent/upcoming activity, and next action | Context header, current/next item card, progress/status/priority strip, 2–4 summary tiles, 3–5 recent/upcoming/recommended rows, one bottom primary CTA |
+| `home-dashboard` (legacy alias) | Reading an older plan | Resolve to `operational-dashboard`, then require a Product Experience migration before broad edits |
 | `assignment-dashboard` | A worker starts from one active assignment, route, job, visit, or flight | Current assignment hero, progress/step bar, 2–4 KPI tiles, recent activity rows, one bottom primary CTA |
 | `walkaround-stepper` | A task has ordered zones/steps that can be revisited | Sticky step header with Step N / total, previous/next controls, evidence section, per-step defect chips, completion gate copy |
 | `wizard-progress-stepper` | A workflow is split into multiple form-like steps: onboarding, appointment creation, quote/order creation, request forms | Current step and total steps, optional step labels, Back/Next/Save or Finish, current-step validation gate, draft preservation across steps, dirty-cancel confirmation, final save action |
@@ -210,47 +240,35 @@ Example:
 
 Usually wraps a List archetype or a Home/Feed. The tab itself is configured in `app/(tabs)/_layout.tsx`.
 
-### Home Dashboard Pattern
+### Home Composition Pattern
 
-Home is the first screen after sign-in and should usually be a dashboard, not a welcome page. Use this when the app has meaningful current state: work, progress, tasks, inspections, approvals, schedules, dispatch, learning progress, requests, alerts, goals, balances, projects, bookings, recommendations, or saved activity.
+Home is the first screen after sign-in, but it has no universal shape. Read the
+approved Home key and First Viewport Contract before writing JSX. Use the Home
+composition catalogue above and `home-compositions.md` to build the dominant
+structure.
 
-**Purpose:** answer "what matters now, what changed recently, and what should I do next?" in one glance.
+**Required for every Home:**
 
-**Layout:**
-```
-┌─────────────────────────┐
-│ Context / current role  │
-│ ┌─ current / next item ┐│
-│ │ title + status + CTA ││
-│ └──────────────────────┘│
-│ Progress / status strip │
-│ ┌ KPI ┐ ┌ KPI ┐ ┌ KPI ┐│
-│ Upcoming / Recent rows  │
-│ [Bottom primary CTA]    │
-└─────────────────────────┘
-```
+- Stable signature-component dimensions matching viewport share and minimum height.
+- Real field bindings for the dominant object/state; no invented aggregate counts.
+- Media source plus loading/error/empty fallback when media is required or optional.
+- Exactly one primary action owner and the approved placement.
+- Long-text and Dynamic Type behavior that preserves content order without overlap.
+- A visible next-section hint when required by the contract.
+- A silhouette distinct from neighboring tab roots.
+- Reference motifs and forbidden-drift checks when fidelity is not `none`.
 
-**Required:**
-- Context header: user, shift, team, date, route, assignment, or other domain cue
-- Current/next item card: one thing to start, resume, review, or approve
-- Progress/status strip when the domain has steps or workflow state
-- 2–4 KPI tiles only; avoid stat confetti
-- 3–5 recent/upcoming rows with tap-through to the relevant list/detail
-- One primary CTA near the bottom or in native bottom chrome
+**Operational dashboard only:** current object + 2-4 real metrics + compact
+activity rows. This is one composition among many, not the default.
 
-**Domain variants:**
-- Field/inspection: current assignment, step progress, defect count, recent inspections
-- Learning: next lesson, course progress, streak, recommended practice
-- Finance: balance/health summary, upcoming due item, recent activity, review CTA
-- Healthcare/wellness: next appointment/task, care-plan progress, reminders, check-in CTA
-- CRM/sales: pipeline summary, overdue follow-ups, recent accounts, log interaction CTA
-- Consumer/service: upcoming booking/order, saved item, recommendations, support CTA
+**Do not:**
 
-**Don't:**
-- Do not show a generic "Welcome" hero with no operational content
-- Do not make Home a duplicate of the first list tab
-- Do not show more than 4 stats above the fold
-- Do not hide the primary next action in the top-right header
+- Substitute `header + KPI grid + rows + CTA` for another composition key.
+- Make Home a duplicate of the first list tab.
+- Use a generic welcome message without product state or intended narrative.
+- Add a second scan/create action when a dedicated tab or dock already owns it.
+- Shrink a required media/object hero into a decorative strip.
+- Claim reference fidelity from source inspection or static HTML alone.
 
 ## Archetype: Modal / Sheet
 

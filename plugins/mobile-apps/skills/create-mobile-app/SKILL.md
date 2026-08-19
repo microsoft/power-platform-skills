@@ -12,9 +12,30 @@ model: opus
 
 Top-level orchestrator. Owns the user-visible flow; delegates planning to the `native-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
 
+**Authoritative interaction contract:** read
+[`four-gate-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/four-gate-planning.md)
+before Step 2. A standard run has exactly four approvals: requirements,
+complete architecture, experience, and final implementation confirmation.
+Visual previews, progress updates, agent fallbacks, and internal graph/spec
+passes must not create extra prompts.
+
+Also read these canonical experience contracts before Gate 1:
+
+- [`product-experience-contract.md`](${CLAUDE_SKILL_DIR}/../../shared/references/product-experience-contract.md)
+- [`product-archetypes.md`](${CLAUDE_SKILL_DIR}/../../shared/references/product-archetypes.md)
+- [`visual-personalities.md`](${CLAUDE_SKILL_DIR}/../../shared/references/visual-personalities.md)
+- [`home-compositions.md`](${CLAUDE_SKILL_DIR}/../../shared/references/home-compositions.md)
+- [`reference-fidelity.md`](${CLAUDE_SKILL_DIR}/../../shared/references/reference-fidelity.md)
+
+**v0.3.0 contract:** every standard run has exactly four user approvals. The
+planner's data-model, capability, connector, screen-graph, screen-spec, design,
+and validator passes are internal work inside those approvals. Public progress
+lives in `mobile-app-status.json`; executable planning provenance lives in
+`.tmp/mobile-plan-status.json` and the normalized schema contract.
+
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 1.7 Publisher prefix → 2. Gate 1 requirements + operating mode + cost preview → 3. Internal planning + Gate 2 complete architecture + Gate 3 experience → 3.8 Gate 4 implementation confirmation → 3.9 Provenance + prefix verification → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 Verify dependencies → 6.5b Safe-area gate → 6.6 Scaffold `tsc` gate → 6.7 Seed memory bank → 6.75 Materialize approved design → 6.85 Apply approved offline decision → 7. Apply approved auth → 8. Apply data model → 8.5 Seed sample data → 9. Apply native capabilities → 9a. Install approved JavaScript dependencies → 9b. Integrate approved design tokens → 10. Add connectors → 10b. Wire navigation → 10.7 Snapshot services → 10.8 Generate signature components + skeletons → 11. Build screens → 11.4 Run experience/composition validators → 11.5 Refine approved design → 12. Start Metro → 12.3 Native `/visual-qa` → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -28,12 +49,16 @@ Use these markers:
 
 | State | Detection | Action |
 |---|---|---|
-| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
+| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts`, `.powerapps-native/version.json` exist; provenance check passes; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
 | Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
+| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | Resume only when Step 0 validates `memory-bank.md` and the user confirms; otherwise STOP and ask for a fresh template folder. |
 | Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`. |
 
-This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
+This gate is intentionally narrow: a new run starts from a fresh template, and
+an interrupted run resumes only through the Step 0 memory-bank contract. It
+does not adopt, repair, or overwrite an unrelated existing project. Mock-backed
+creation remains `/create-mobile-prototype`; in-place mock-to-real graduation
+remains `/prototype-to-real-app`.
 
 ---
 
@@ -79,6 +104,16 @@ If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing direct
 The bank is the only resume mechanism. Do not infer resume state from `package.json` or `node_modules/` — those can lie.
 
 After the resume check, run the **fresh-template gate** from the section above. This is a create-only command:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-template-provenance.js" \
+  --project-root "<working_dir>" --mode strict
+```
+
+The marker must identify `power-platform-skills/mobile-app`, schema version 2,
+experience contract version 1, and a compatible plugin version. A missing or
+mismatched marker blocks fresh create; do not run another skill family's
+template by guessing from `package.json`.
 
 - If `memory-bank.md` exists and the user confirms resume, resume as documented above.
 - If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
@@ -194,24 +229,22 @@ If the script exits non-zero (rare — should always exit 0 with `prefix: null`)
 
 ### Step 2 — Gather requirements
 
-Skip questions the user already answered in `$ARGUMENTS`.
-
-If the user gave no description, ask one open-ended question first:
-
-> "What would you like to build? Describe it in your own words — what it does, who uses it, and what problem it solves."
-
-Then collect with `AskUserQuestion` (batch where possible):
+Do not ask yet. Infer defaults from `$ARGUMENTS` and prepare one Gate 1
+structured question containing every missing field:
 
 | Question | Default |
 |---|---|
 | App display name | derived from description |
 | Target platforms | `ios`, `android` (multi-select, default both) |
-| Aesthetic | minimal / playful / professional / matches existing brand |
+| Visual goal | polished operational / premium brand-forward / utility / editorial / immersive / playful / matches reference or brand |
+| Visual reference | screenshot, Figma, sketch, sibling app, brand document, or none |
 | Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`.
+If the Gate 1 response chooses a different environment, resolve that supplied
+ID and re-render the same Gate 1 summary. This is a revision of Gate 1, not an
+additional approval.
 
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
@@ -220,13 +253,10 @@ npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/nul
   echo "COLLISION" || echo "OK"
 ```
 
-If `COLLISION`, ask the user via `AskUserQuestion`:
-> "An app named `<displayName>` already exists in `<ACTIVE_ENV_NAME>`. Choose:
->  1. Pick a different name (recommended)
->  2. Delete the existing app in Maker portal — DESTRUCTIVE, asks confirmation outside this skill
->  3. Continue anyway (bg `npx power-apps init` will fail; you'll have to rename later — NOT recommended)"
-
-Re-prompt for name if (1). If (2), send the user to Maker portal to delete the existing app, then re-run the collision check. Only proceed once collision is resolved.
+If `COLLISION`, stage a blocking Gate 1 concern and propose a deterministic
+non-colliding suffix (for example `<displayName> Mobile`). Gate 1 `edit` lets
+the user choose another name. Do not ask a separate pre-gate question, suggest
+destructive deletion, or approve a name that will make initialization fail.
 
 If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
@@ -234,7 +264,9 @@ Don't enter plan mode here — that's the planner agent's job in Step 3.
 
 ### Step 2b — Requirements discovery
 
-> **Goal:** Turn the user's thin prompt into a confirmed feature brief before the planner runs. The planner agent receives this brief verbatim — richer input means better data model inference, accurate connector detection, and correct screen specs.
+> **Goal:** Turn the user's prompt into Gate 1 — one grouped requirements and
+> operating-mode approval. The same interaction includes the rough cost preview;
+> do not ask a separate brief-confirmation or proceed question.
 
 #### Step 2b.0 — Prompt richness scoring (decides which path to take)
 
@@ -253,9 +285,9 @@ Tier the result:
 
 | Score | Tier | What to do |
 |---|---|---|
-| **4 / 4** | `auto-plan` | **Skip both questions.** Extract the brief silently from `<description>`, write `native-app-plan.md` placeholder, fall through to Step 2c. The user's next interaction is the cost-estimate gate. |
-| **3 / 4** | `one-tap` | **Skip the multi-select.** Extract the brief, show it once, ask only "Look right? (yes / adjust)". On `yes` → Step 2c. On `adjust` → fall through to walk-through. |
-| **≤ 2 / 4** | `walk-through` | **Current behaviour.** Run the multi-select feature picker described in Step 2b.1, then the brief confirmation. |
+| **4 / 4** | `auto-plan` | Extract silently and present the brief inside Gate 1 with estimates and operating-mode decisions. |
+| **3 / 4** | `one-tap` | Extract the brief and present it inside Gate 1. No preliminary confirmation. |
+| **≤ 2 / 4** | `walk-through` | Use one context-aware structured Gate 1 question that gathers missing requirements and approves the resulting operating mode. |
 
 Print the chosen tier so the user knows which path is running:
 
@@ -267,48 +299,35 @@ Print the chosen tier so the user knows which path is running:
 
 #### Step 2b.1 — Walk-through path (only when tier = `walk-through`)
 
-Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
-
-Wait for the user's response. Summarize their answers into a **requirements brief** — 4–8 bullet points covering what users can do, what data is tracked, and integrations.
-
-Confirm once:
-> "Here's the brief I'll use for planning:
-> • *(bullet 1)*
-> • *(bullet 2)*
-> ...
-> Look right? (yes / adjust)"
-
-Store the confirmed brief as `<requirements_brief>`. This replaces the thin `$ARGUMENTS` as the primary input to the planner.
+Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md).
+Infer context-aware feature and operating-mode choices and place them into the
+Step 2c Gate 1 question. Do not call `AskUserQuestion` here. The Gate 1
+response is both discovery and approval; summarize it into
+`<requirements_brief>`.
 
 #### Step 2b.2 — One-tap path (tier = `one-tap`)
 
-Skip the multi-select question. Extract a 6–10 bullet brief directly from `<description>` covering: user roles, key entities, primary workflow, severity / status enums if present, integrations / connectors, native capabilities, and any explicit constraints. Show it with a single confirm:
-
-> "Your description is detailed enough to skip the feature picker. Here's the brief I extracted:
-> • *(bullet 1)*
-> • *(bullet 2)*
-> ...
-> Look right? (yes / adjust / start over)"
-
-- `yes` → store as `<requirements_brief>`, fall through to Step 2c.
-- `adjust` → drop to Step 2b.1 (walk-through) so the user can edit via the multi-select.
-- `start over` → return to Step 2a and re-prompt for the description.
+Skip the preliminary multi-select. Extract a 6–10 bullet brief directly from
+`<description>` and present it only inside Gate 1 with estimates and operating
+mode. `Edit` returns to this extraction step; `Abort` exits with no files.
 
 #### Step 2b.3 — Auto-plan path (tier = `auto-plan`)
 
-Skip both the multi-select AND the brief confirmation. Extract the brief silently and store it as `<requirements_brief>`. Print it as a transparency log only:
+Skip preliminary discovery. Extract the brief silently, then present it inside
+Gate 1 with the cost and operating-mode summary:
 
 > "→ Auto-plan tier (4/4). Extracted brief from your description:
 > • *(bullet 1)*
 > • *(bullet 2)*
 > ...
-> → Going straight to the plan-cost preview (Step 2c). The brief above is locked in unless you abort there."
+> → Presenting Gate 1 requirements, operating mode, and cost preview."
 
 Do not ask for confirmation here — the user agreed to this when their prompt scored 4/4. The plan-preview gate at Step 2c remains in force as the last cheap exit before any side effects.
 
 #### Step 2b.4 — Common to all paths
 
-**Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
+Step 2c renders the Gate 1 summary. It is not a separate prompt after a brief
+confirmation; it is the single requirements approval for every richness tier.
 
 Classify Dataverse planning before Step 2c and stash
 `<dataverse_planning_mode>`:
@@ -332,22 +351,53 @@ Now execute the deferred Step 1.7 publisher-prefix detection only when
 `↷ Publisher-prefix discovery skipped — connector-only planning.`, and do not
 call `detect-publisher-prefix.js`.
 
-**Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
+Before rendering Gate 1, build `<gate1_product_experience>` using
+`product-experience-contract.md` and `product-archetypes.md`:
 
-Set tentative defaults (used by Step 3b before `/design-system` runs):
+1. Identify the primary repeated user loop and classify `product_archetype`.
+2. Record supporting behaviors as `workflow_capabilities`; scanning,
+  inspection, approval, and scheduling are not archetypes when they support a
+  broader lifecycle.
+3. Record `industry_context` only for vocabulary and business constraints.
+4. Record `operating_context` separately (indoor/outdoor, one hand, gloves,
+  safety critical, intermittent connectivity, phone/tablet).
+5. Record 2-5 short evidence phrases from the confirmed brief and classify
+  confidence as `high`, `medium`, or `low`.
+6. For low confidence, include the top two alternatives in Gate 1. The user
+  resolves them through the existing `Edit` option; do not ask another
+  question.
+7. Record every supplied visual-reference source. Validate file paths and
+  supported formats before planner dispatch; do not analyze visual style in
+  Gate 1.
 
-- `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
-- `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
+Do not infer visual personality, palette, typography, density, or Home
+composition from industry or archetype here. Those are Gate 3 decisions.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
+Design direction is inferred during planning and approved visually inside Gate
+3. `/design-system` later materializes those approved tokens with
+`--skip-planning`; it must not ask for brand/style input after Gate 4.
 
-### Step 2c — Plan preview (rough, always shown)
+Set `<visual_companion> = yes` by default. `--no-design` keeps an
+least-assumptive minimal direction and skips the HTML phone-frame preview, but
+Gate 3 still records the experience decision.
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+### Step 2c — Gate 1: requirements, operating mode, and rough plan preview
+
+> **Goal:** Give the user a cheap exit before planning or app mutation. The
+> prerequisite/environment phase may have refreshed `.resolved-environment.json`,
+> but no plan, scaffold, data source, or app code has been written. After Step 3
+> starts, every abort gets more expensive because planning artifacts and
+> architect work may already exist.
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
 **Compute the estimates from inputs already in hand** (no agent spawn — pure heuristics on the confirmed brief and the wizard answers):
+
+Resolve authentication as part of this same gate. If `$ARGUMENTS` contains an
+Entra application/client ID, validate and stage it as `existing-client-id`.
+Otherwise stage `configure-later`; do not add a fifth interaction during
+implementation. The user may supply/change the client ID through Gate 1
+`edit`.
 
 | Output | Input proxy | Computation | Confidence |
 |---|---|---|---|
@@ -357,7 +407,6 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
-| Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
 
 Print the block once, exactly in this format (substitute computed values; ranges as `low-high`):
 
@@ -366,10 +415,17 @@ Print the block once, exactly in this format (substitute computed values; ranges
 Based on your confirmed brief, before any agent runs:
 
 Scope (proxy estimates — actual numbers come from architects):
+  Industry       <industry_context>
+  Archetype      <product_archetype> (<confidence>)
+  Evidence       <comma-separated classification evidence>
+  Workflows      <comma-separated capability slugs>
+  Operating      <comma-separated operating-context slugs>
+  References     <none | comma-separated validated sources>
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
+  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 2)
   Screens     ~<low>-<high>       ← from <N> features × ~2-3 screens each
-  Approval gates  4               ← fixed (data model, native, connectors, screen plan)
+  Authentication <existing client ID: GUID | configure later>
+  Approval gates  4               ← fixed (requirements + product shape, architecture, experience, build confirmation)
 
 Time (rough — agent time only, excludes your approval latency at gates):
   Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
@@ -381,11 +437,9 @@ Token tier: Opus everywhere in v0 (model routing not yet shipped).
 ⚠ These are proxies, not measurements:
   • Table count is "noun count in brief" — architect may collapse or split
   • Time excludes your approval latency at the 4 gates
-  • If industry inference is low-confidence, +1 picker prompt
-  • If you opted into the design vibe picker, +1 prompt + planner re-spawn
   • If any gate is rejected, that section regenerates (~2-3 min each)
 
-Proceed, edit brief, or abort? [proceed/edit/abort]
+Approve requirements, edit, or abort? [approve/edit/abort]
 ─────────────────────────────────────────────────────────
 ```
 
@@ -393,9 +447,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Continue to Step 3. Default. |
-| `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
-| `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
+| `approve` (or empty / Enter) | Mark Gate 1, including its authentication decision, approved and continue to Step 3. Default. |
+| `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No planning or app mutations** — Step 2c runs before Step 3 creates planning artifacts. |
+| `abort` | Print `"Aborted at Step 2c. No plan, scaffold, data-source, or app files created. Re-run /create-mobile-app when ready."` and exit cleanly. A prerequisite `.resolved-environment.json` cache may remain; no memory bank or scaffold exists. |
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -404,30 +458,45 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
-> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Data-model readiness is quality-first, with a 10–15 minute target:
->  • Gate 1 (data model) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
->  • Gate 2 (native capabilities) — ~10s (quick)
->  • Gate 3 (connectors) — ~30–60s
->  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
+> "Gate 1 approved. Planning now performs autonomous architecture and
+> experience work, then surfaces:
+>  • Gate 2 — complete architecture, including the data model, offline scope,
+>    native capabilities, connectors, projections, risks, and sample fixtures
+>  • Gate 3 — Product Experience, screen graph/specs, design direction,
+>    signature components, and the visual preview
+>  • Gate 4 — final implementation confirmation
 >
-> For Dataverse-required apps, factual foreground milestones will show
-> environment, inventory, candidate, detail, and timing counts within 30
-> seconds. Connector-only apps skip those metadata milestones. While the
-> architect runs, new milestone IDs from
-> `.tmp/data-model-planning-status.json` are rendered without inventing
-> percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
-> applicable milestone before interrupting."
+> Dataverse-required architecture is quality-first, with a 10–15 minute target.
+> Factual environment, inventory, candidate, detail, and timing milestones begin
+> within 30 seconds and are rendered from
+> `.tmp/data-model-planning-status.json` without invented percentages;
+> connector-only apps skip them. Public phase/input state remains visible in
+> `mobile-app-status.json`, while `.tmp/mobile-plan-status.json` records approval
+> provenance. These progress artifacts and internal graph/spec/style passes do
+> not add approval prompts."
 
 ### Step 2d — Template-only mode
 
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
-### Step 3 — Plan (planner agent + 4 approval gates)
+### Step 3 — Plan (internal work + Gates 2 and 3)
 
 First, create the working and planning-artifact directories:
 
 ```bash
 mkdir -p <working_dir> <working_dir>/.tmp
+```
+
+Seed visible public progress immediately. This is status, not an approval:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
+  --project-root "<working_dir>" \
+  --phase "architecture" \
+  --message "Preparing planner inputs and Dataverse evidence" \
+  --state "running" \
+  --completed 1 --total 4 \
+  --awaiting-input false
 ```
 
 ### Step 3.0 — Foreground Dataverse planning snapshot and evidence
@@ -544,10 +613,21 @@ provide placeholder file paths.
 Benchmark method and acceptance criteria:
 [`references/dataverse-planning-benchmark.md`](references/dataverse-planning-benchmark.md).
 
+**Capability preflight before dispatch:** follow the capability table in
+`four-gate-planning.md`. Verify the planner and leaf-agent definitions are
+readable, `.tmp/` and the allowed planning outputs are writable, and, for
+`required`, `SNAPSHOT_PATH` plus `EVIDENCE_PATH` are readable. Then run the
+existing no-op `Task` probe below. A predictable failure selects inline mode
+before agent work begins. This is an internal routing check and cannot add a
+user gate. Do not reference or invent a helper script for this preflight.
+
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
 - `<working_dir>/native-app-plan.md`
+- `<working_dir>/design-intake.md` (only when Gate 1 includes visual references)
 - `<working_dir>/_screens_section.md`
+- `<working_dir>/mobile-app-plan.html`
+- `<working_dir>/mobile-app-status.json`
 - `<working_dir>/.tmp/*`
 
 All other paths in `<working_dir>/` (notably `app/`, `src/`, `package.json`, `power.config.json`, `tamagui.config.ts`, `tsconfig.json`, `node_modules/`, `memory-bank.md`) are owned by the foreground setup phases. Do not mutate them during planning.
@@ -573,11 +653,20 @@ Prompt:
   Requirements brief (confirmed with user):
   <requirements_brief — bullet points from Step 2b>
 
-  Design vibe opt-in: <design_vibe_opt_in — always "deferred" unless `--no-design` is in $ARGUMENTS, in which case use "skip". Never invent yes/no/other values.>
+  Gate 1 product experience (approved):
+  <gate1_product_experience — industry, archetype, confidence, evidence,
+  workflows, operating context, and validated reference sources>
+
+  If a required Gate 1 product field is missing or malformed, return
+  `NEEDS_CONTEXT:` for that exact field. Do not silently infer a replacement
+  after Gate 1 approval.
+
+  Design planning: <"infer-and-approve-at-gate-3" or "minimal-no-preview" when --no-design>
   Visual companion: <visual_companion — "yes" or "no">
 
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
+  Gate 1 authentication: <existing-client-id: GUID | configure-later>
   Working directory: <absolute path of <working_dir>>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
   Dataverse planning mode: <required | connector-only>
@@ -587,31 +676,48 @@ Prompt:
   Structured schema contract: <absolute
   `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
   NOT SUPPLIED>
+  Public status artifact: <working_dir>/mobile-app-status.json
+  Approval provenance receipt: <working_dir>/.tmp/mobile-plan-status.json
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
+  Follow native-app-planner.md. Perform internal planning, then run Gate 2
+  (complete architecture) and Gate 3 (experience). Gate 1 is already approved
+  and the foreground orchestrator owns Gate 4. On terminal return, emit one of
+  `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal
+  first line per AGENTS.md rule #10.
 ```
 
-The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
-On a successful `required` return, require both
-`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
-before continuing. If the receipt is missing, STOP as `BLOCKED`; this
-orchestrator must not synthesize it after the planner has returned.
+The planner writes the complete plan, presents one combined architecture gate
+and one combined experience gate, and renders `mobile-app-plan.html` for both.
+Its data-model, capability, connector, screen-graph, screen-spec, design, and
+validator passes are internal and cannot prompt independently. Wait for it to
+return before continuing; do not proceed on a partially approved plan. Require
+`mobile-app-status.json` on every successful return. On a successful `required`
+return, also require `.tmp/dataverse-schema-contract.json` and
+`.tmp/mobile-plan-status.json`. If an executable artifact or receipt is missing,
+STOP as `BLOCKED`; the orchestrator must not synthesize it after the planner
+returns.
 
-#### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
+If the approval receipt is missing, STOP as `BLOCKED`; the orchestrator must not synthesize it, restamp it, or infer approval from the plan text.
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs the four gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
+#### Step 3.1 — Inline-gate fallback (planner unavailable OR capability preflight failed)
 
-> "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
+When preflight fails OR the planner returns a capability `BLOCKED`, the
+orchestrator runs Gates 2 and 3 inline. Do not re-spawn with the same context.
+
+> "→ Planner agent unavailable in this host — running Gates 2 and 3 inline from the foreground snapshot. (No action needed.)"
 
 Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
-1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
-2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
+1. **If a draft `native-app-plan.md` exists:** read populated sections as an
+   internal baseline. Do not present them separately. Complete missing
+   projections, offline scope, screen bindings, and risks, then show the single
+   combined Gate 2.
+2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` as internal phases of Gate 3.
 
    **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+   - Before `phase: graph`: `> "→ Preparing the Gate 3 screen graph internally (~2 min for ${N} screens)…"`
+   - Before `phase: specs`: `> "→ Expanding Gate 3 screen specs internally (~1 min/screen, ~${N} min for ${N} screens)…"`
 
   **MUST forward the Dataverse planning mode in the direct architect prompt.**
   In `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and
@@ -619,40 +725,58 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
   `connector-only`, state that both paths are not supplied; never invent
   placeholder artifacts.
 
-  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — use the same `Publisher prefix (detected from env)` contract as the planner prompt above. Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
 
   In `required`, also require the direct architect to write and normalize
   `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
-  A draft Markdown section without that sidecar is not an executable Gate 1
+  A draft Markdown section without that sidecar is not an executable Gate 2
   result.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
-4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
+3. **Run Gates 2 and 3 yourself.** Finish the screen field-read contract and
+   cross-entity resolution audit before presenting Gate 2. Gate 2 combines data
+   model, offline, projections, native capabilities, and connectors. Gate 3
+   combines the locked screen graph, detailed specs, and design preview.
+4. **Write the approved `native-app-plan.md`** with Gate 1–3 entries in
+   `## Approvals`. Gate 4 is appended by Step 3.8 immediately before mutation.
 
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
-   - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
+  **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
+  - Top-level headings appear in this order: `## Overview`, `## App Requirements`, `## Product Experience`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Design`, `## Connectors`, `## Screens`, `## Approvals`, `## Plan Provenance`. Do NOT invent a `## Brief` super-section that nests the data model under it.
+  - `## Product Experience` must preserve the Gate 1 industry/archetype/workflow fields and add the Gate 3 personality, ambition, Home composition, media, First Viewport Contract, and Reference Contract fields.
+   - `## Overview` must include `Authentication:
+     <existing-client-id: GUID | configure-later>` exactly as approved at Gate
+     1 so Step 7 can apply it without another prompt.
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
 5. **Record the same structured approval receipt as the planner path.** At
-   data-model acceptance, initialize
+  Gate 2 architecture acceptance, initialize
    `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
-   contract content/hash. After each later gate is accepted, update only that
-   gate's approval record and the current plan hash; after Gate 4b, record the
-   final structured service dependencies and integrity hash. Follow
+  contract content/hash. At Gate 3 and Gate 4 acceptance, update only that
+  gate's approval record and the current plan hash; after Gate 4, record the
+  final structured service dependencies and integrity hash. Follow
    `agents/native-app-planner.md` Step 6 exactly. Never call the operation
    manifest builder to create or restamp this receipt. A changed approved
    section invalidates its record until the existing inline gate approves it
    again.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
+If the orchestrator's own `Task` tool is unavailable, fall further to
+fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus
+`EVIDENCE_PATH` with no live OData probe and write/normalize the same structured
+schema contract required by `agents/data-model-architect.md`. In
+`connector-only`, write an explicit zero-table/no-Dataverse `## Data Model`
+section and no contract. Draft native capabilities/connectors and the screen
+graph/specs against `shared/references/screen-templates.md`, then run only Gates
+2 and 3. Gate 1 is already approved and Gate 4 remains Step 3.8. This is the
+last-resort path: functional but slower because the orchestrator performs work
+the architects normally parallelize.
 
-**Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
+**Hard rule:** never silently skip Gate 2 or Gate 3 because the planner could
+not run. No mutation begins until Step 3.8 records Gate 4.
 
-#### 3.0 — Sub-agent return-status switch (canonical)
+#### Step 3.2 — Sub-agent return-status switch (canonical)
 
 Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
 
@@ -720,11 +844,15 @@ proposed-name signal is `BLOCKED`. If a collision is found and the architect
 needs compatibility facts, it may then use the separate one-time
 `detailed-dataverse-metadata` expansion for that existing table.
 
-Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
+Legacy planner-only early-return signals are handled before the status switch.
+Convert `INDUSTRY_CONFIRM_REQUESTED:` and `DESIGN_VIBE_REQUESTED:` options into
+a least-assumptive draft, re-spawn without a separate question, and surface the
+alternatives inside their owning Gate 2 or Gate 3 section. Process the new first
+line through the canonical status switch.
 
-#### Step 3.0a — Industry confirmation handoff (orchestrator-owned)
+#### Step 3.3 — Legacy classification handoff (orchestrator-owned)
 
-When the planner is uncertain about which industry the app belongs to (no keyword match, ambiguous match, or wizard-aesthetic conflict), it returns early with this single line as its message:
+Older planners may return an industry-only uncertainty signal:
 
 ```
 INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternatives-comma-sep>
@@ -732,72 +860,26 @@ INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternative
 
 Example: `INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce`
 
-This fires before Gate 1 — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
+Legacy planner outputs may emit `INDUSTRY_CONFIRM_REQUESTED:`. Do not add a
+separate prompt and do not use the industry to select design. Convert it into a
+low-confidence product-classification concern, map the repeated loop against
+`product-archetypes.md`, and include the evidence/alternatives in Gate 2. The
+already approved Gate 1 fields remain authoritative unless the user explicitly
+revises requirements.
 
-**Skip this section if `<design_vibe_opt_in>` is `yes` or `skip`** — in those cases the user is either driving design explicitly (`yes`) or has opted out of design entirely (`skip`), so industry inference doesn't matter.
+#### Step 3.4 — Legacy style-picker signal
 
-**When you see `INDUSTRY_CONFIRM_REQUESTED:` and `<design_vibe_opt_in>` is `no`:**
+If a legacy planner emits `DESIGN_VIBE_REQUESTED:`, fold its options into Gate
+3 and continue. Do not run a separate picker or defer design until after Gate
+4.
 
-1. Parse the three pipe-delimited fields. Map reason codes to a short user-facing explanation:
-   - `no-keywords` → "no clear industry signal in your description"
-   - `ambiguous-match` → "your description matches multiple industries"
-   - `wizard-conflict` → "your aesthetic answer doesn't match the inferred industry"
+If no legacy design signal is returned, continue directly to Step 3.5.
 
-2. Map each industry slug to a one-line description for the picker (use these exactly):
+#### Step 3.5 — Open the plan preview in the user's browser (orchestrator-owned)
 
-   | Slug | Description |
-   |---|---|
-   | `field-ops` | Field/Ops — high contrast, large targets, camera-forward (Uber Driver, ServiceTitan) |
-   | `finance` | Finance — blue palette, conservative type, generous whitespace (banking apps) |
-   | `healthcare` | Healthcare — warm palette, friendly type, compassionate copy (patient apps) |
-   | `education` | Education — bright playful, gamification, streak/progress (Duolingo) |
-   | `productivity` | Productivity — near-monochrome, dense layout, monospace data (Linear, Notion) |
-   | `e-commerce` | E-commerce — brand-forward color, product imagery, frictionless CTAs (retail apps) |
-   | `tech-iot` | Tech/IoT — dark + accent gradients, data-dense cards, real-time indicators (monitoring dashboards) |
+The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before Gate 3. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
 
-3. Ask one `AskUserQuestion`:
-
-   > "Quick sanity check before I build the design: I inferred this is a **<inferred-industry-description>** app, but <reason-explanation>. Confirm or pick another:
-   >
-   > **(a) <inferred-industry-description>** — recommended
-   > **(b) <alt-1-description>**
-   > **(c) <alt-2-description>**
-   > **(d) <alt-3-description>**
-   > **(e) Other / let me describe** — free text
-   >
-   > Which? (a / b / c / d / e — default: a)"
-
-4. Persist the answer:
-
-   ```bash
-   echo "<chosen-industry-slug>" > "<working_dir>/.industry-confirmed"
-   ```
-
-   For option (e), let the user free-text a description; map it to the closest slug (or `productivity` as final fallback) and store that.
-
-5. **Re-spawn the planner.** Use the same prompt as Step 3, plus an extra line:
-
-   ```
-   Industry confirmed: <chosen-industry-slug>
-   ```
-
-   The planner will see this on re-spawn, skip its detection + confidence check, and lock the industry to your value. After the re-spawn, re-check the planner's return value — it may now return normally, or it may still return `DESIGN_VIBE_REQUESTED:` (handled in Step 3a) if the user opted into the vibe picker.
-
-#### Step 3a — Style-picker handoff (no-op in current plugin layout)
-
-`/design-system` ships with this plugin and always runs at Step 6.75, so the style-picker handoff at Gate 4 is a no-op. Behavior:
-
-- The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
-- If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
-
-If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
-
-#### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
-
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before each Gate 4 plan-mode entry. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
-
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
+**When to run this:** every time the planner enters or re-enters Gate 3 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
 
 **What to do:**
 
@@ -805,7 +887,7 @@ The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan
 
    > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
 
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
+2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 3 prompt.
 
 3. **Else** attempt to open in the user's default browser via the OS-portable chain:
 
@@ -818,13 +900,63 @@ The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan
 
 4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
 
-If the planner returns without emitting a `PLAN_PREVIEW_PATH:` line, that is **expected** — the planner passes `skip_preview: true` to screen-planner since `/design-system` (always installed) renders the single visual preview at Step 6.75 after brand locks. Print:
+If the planner returns without a preview path, render
+`mobile-app-plan.html` with `scripts/render-mobile-plan.js` before Gate 3. A
+standard run must visually review design and screens at Gate 3.
 
-> "→ Gate 4 reviewed structurally. Visual preview will appear at Step 6.75 after `/design-system` locks your brand tokens (~5 min from now after scaffold)."
+### Step 3.8 — Gate 4: final implementation confirmation
 
-…and continue without attempting any browser open. **Do not warn or treat this as an error** — it is the documented behavior.
+Update public status and render the latest plan:
 
-#### 3.9 — Post-plan publisher-prefix gate
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
+  --project-root "<working_dir>" \
+  --from-plan "<working_dir>/native-app-plan.md" \
+  --phase "implementation confirmation" \
+  --message "Final scope is ready for approval" \
+  --state "waiting" \
+  --completed 3 --total 4 \
+  --awaiting-input true \
+  --input-prompt "Return to the terminal to approve implementation."
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-mobile-plan.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --status "<working_dir>/mobile-app-status.json" \
+  --output "<working_dir>/mobile-app-plan.html"
+```
+
+Open/print `mobile-app-plan.html`, then present exactly one confirmation
+containing:
+
+- included and deferred scope;
+- target environment and solution;
+- expected duration;
+- sample-data fixture count;
+- auth/deployment requirements;
+- readiness blockers.
+
+Options: `Begin implementation`, `Revise plan`, `Abort`. On approval, append
+Gate 4 to `## Approvals`, update `.tmp/mobile-plan-status.json` with the Gate 4
+approval, final plan hash, structured service dependencies, and integrity hash,
+then immediately clear public input state:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-plan-status.js" \
+  --project-root "<working_dir>" \
+  --from-plan "<working_dir>/native-app-plan.md" \
+  --phase "implementation" \
+  --message "Four approvals complete; implementation may begin" \
+  --state "approved" \
+  --completed 4 --total 4 \
+  --awaiting-input false \
+  --input-prompt "Implementation approved; no input required."
+```
+
+`Revise plan` returns to the affected Gate 2 or Gate 3 section without
+reopening unrelated approvals. Internal graph/spec/style reruns do not create a
+new gate. `Abort` stops before mutation and preserves the planning artifacts.
+
+### Step 3.9 — Post-plan provenance and publisher-prefix verification
 
 Before continuing to Step 4, verify the written `native-app-plan.md` actually uses `$DETECTED_PUBLISHER_PREFIX` from Step 1.7. Catches both the inline-fallback path missing the prefix and an architect that ignored the instruction.
 
@@ -856,6 +988,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
 Do not fall back to parsing the Markdown ER diagram when the sidecar is missing
 or malformed; route through the existing planner/direct-architect revision
 path.
+
+Before Step 4, verify `native-app-plan.md`, `mobile-app-status.json`, and the
+Gate 4 approval in `.tmp/mobile-plan-status.json` all describe the same plan
+hash. A mismatch returns to the owning Gate 2, Gate 3, or Gate 4 revision path;
+never restamp provenance as an implementation-side repair.
 
 ### Step 4 — Auth & environment selection
 
@@ -1208,100 +1345,61 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 ### Step 6.75 — Design system
 
 **Print before starting:**
-> "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
+> "→ [Step 6.75/13] Materializing the design system approved at Gate 3…"
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
-
-**Otherwise**, invoke `/design-system` (ships with this plugin):
+Do not collect brand inputs or run a cost/style picker here. Gate 3 already
+approved the design direction and visual preview. Invoke `/design-system` in
+orchestrated application mode:
 
 ```
 Invoke skill: /design-system
 
 Arguments:
   --working-dir <working_dir>
+  --skip-planning
+  --plan <working_dir>/native-app-plan.md
 ```
 
-The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
+It writes `brand/design-system.md`, `brand/tokens.ts`, and
+`brand/design-system.html` from the approved Gate 3 contract. If
+`--no-design` was approved, write the least-assumptive materialization for the
+approved Product Experience rather than prompting.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
-- `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
-- `NEEDS_CONTEXT` → surface question, re-invoke with answer.
+- `DONE_WITH_CONCERNS` → record and surface the concern; do not open a new design decision.
+- `NEEDS_CONTEXT` → return `BLOCKED` because the approved Gate 3 contract is incomplete.
 - `BLOCKED` → surface error, STOP.
 
-If the user picked path (c) Skip in the cost picker, the skill returns immediately with `DONE` and no `brand/` files. Screen-builders fall back to `## Design Direction` — same as today's behavior. **But the user still needs a visual preview before code is written** — fall through to the "Skip path preview" block below.
-
-**After `/design-system` returns `DONE` — two branches:**
-
-#### Branch A — `brand/` files exist (user picked path a, b, or d)
-
-This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
-
-#### Branch B — Skip path preview (user picked path c — no `brand/` files)
-
-The user skipped the design system but still deserves to see their screens before code is written. Render a preview with Field/Ops defaults:
-
-1. **Print:**
-   > "→ Design system skipped — rendering screen preview with Field/Ops defaults so you can validate the layout before code is written."
-
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
-
-3. **Open in browser** (if `<visual_companion> = yes`):
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
-
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
-
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
-
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
-
-**Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
-
-### Step 6.85 — Offline profile (always asked)
+### Step 6.85 — Apply the approved offline decision
 
 **Print before starting:**
-> "→ [Step 6.85/13] Asking whether to set up an offline profile…"
+> "→ [Step 6.85/13] Applying the offline scope approved at Gates 1 and 2…"
 
-Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. **This question must be asked on every run of `/create-mobile-app`** — do NOT skip it based on the initial prompt's wording, the feature picker checkboxes, the requirements brief content, or any keyword heuristic. The user's intent for offline support is not reliably inferrable from any earlier step; the only authoritative signal is an explicit answer here. The plugin owns the setup via [`/setup-offline-profile`](../setup-offline-profile/SKILL.md).
+Do not ask another question here. Gate 1 records whether offline operation is
+required, and Gate 2 approves the exact tables, relationships, columns, row
+scope, and sync interval.
 
-**Pre-conditions — only TWO branches skip this question, both with the explicit print line shown:**
-
-| Condition | Action |
+| Approved plan state | Action |
 |---|---|
-| App uses zero Dataverse tables (connectors-only — no `.datamodel-manifest.json`) | Skip — offline profiles are Dataverse-only. Print: `↷ Step 6.85 skipped — no Dataverse tables in this app.` Continue to Step 7. |
-| `memory-bank.md` `## Offline profile` already has `status: done` OR `status: not-applicable` from a prior run | Skip — answered previously. Print: `↷ Step 6.85 skipped — offline profile already <done\|not-applicable> from a prior run.` Continue to Step 7. |
-| Anything else (default — including "user didn't say 'offline' anywhere") | **Ask the question below.** |
-
-> **Important — do NOT add other skip conditions.** Earlier versions of this skill had an "auto-detect / keyword scan" preamble (`offline · field · remote · ...`) that varied the question default based on whether the initial prompt mentioned offline-indicator keywords. That heuristic was removed because it caused the orchestrator to skip the question entirely when no keywords matched, leaving users with a stale or missing profile on the next sync. The question is now unconditional for any Dataverse-backed app that hasn't already answered.
-
-**Ask one `AskUserQuestion`** — phrased neutrally, no implication that the user "should" answer Yes or No based on app type:
-
-> **Question header**: `Offline support`
->
-> **Question body**: "Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. Set one up now?"
->
-> **Options** (default = `Yes`):
-> - `Yes — create profile now (recommended)` — invokes `/setup-offline-profile`, walks the 3-gate flow, then continues to Step 7
-> - `Skip — I'll add it later via /setup-offline-profile` — continues to Step 7 with no profile (memory-bank status stays unset so the question fires again on the next `/create-mobile-app` run against this dir)
-> - `Skip — this app doesn't need offline support` — continues to Step 7; sets `memory-bank.md` `## Offline profile` `status: not-applicable` so future re-runs don't re-ask
-
-If the user picks Yes, invoke `/setup-offline-profile` as a sub-skill. It reads the same `.datamodel-manifest.json` you just wrote (Step 6 `/add-dataverse`'s Step 6d output) — no need to pass arguments. The sub-skill returns `DONE` / `DONE_WITH_CONCERNS:` / `BLOCKED:` per the agent return-status protocol. On `BLOCKED:`, propagate up. On `DONE_WITH_CONCERNS:`, surface concerns to the user inline, then continue.
+| No Dataverse tables or offline marked `not-applicable` | Record `status: not-applicable`; continue |
+| Offline deferred | Record the explicit deferral and readiness impact; continue |
+| Offline approved | Invoke `/setup-offline-profile --skip-planning --plan native-app-plan.md`; its writes must match the Gate 2 contract exactly |
 
 **State transfer:** `/setup-offline-profile` updates `memory-bank.md` `## Offline profile` and writes `offline-profile.json` to the project root. Step 13 (final summary) reads these for the wrap-up summary.
 
-**Hooked into `/add-dataverse`:** Step 6 (just before this step) sets `IsAvailableOffline=true` + `ChangeTrackingEnabled=true` on every new custom table (see [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) Step 5b body skeleton). That means `/setup-offline-profile` Gate 1 will be a no-op pass-through for fresh scaffolds — saving the user one approval click.
+On `BLOCKED`, propagate up. No offline sub-skill approval gate is permitted in
+this orchestrated path because the user already approved the complete offline
+architecture at Gate 2.
 
 ### Step 7 — Auth config
 
 **Print before starting:**
 > "→ [Step 7/13] Configuring app authentication (Entra ID app registration)…"
 
-The template ships `auth.config.json` with blank `msal.clientId` and `msal.tenantId`. There are no baked-in registration IDs to reuse. Always use the selected Power Platform environment tenant resolved earlier in the flow, then ask the user how they want to provide the Entra app registration client ID.
+The template ships `auth.config.json` with blank `msal.clientId` and
+`msal.tenantId`. There are no baked-in registration IDs to reuse. Consume the
+authentication decision approved at Gate 1; do not ask another question here.
 
 `auth.config.json` may also contain a non-secret sibling `environment` object written by `scripts/resolve-environment.js`:
 
@@ -1344,29 +1442,17 @@ TENANT_ID=$(node -e "const j=require('./.resolved-environment.json'); console.lo
 
 If `TENANT_ID` is still empty, STOP and ask the user to fix environment resolution before continuing. Do not guess the tenant and do not copy `msal.tenantId` from `auth.config.json`.
 
-#### 7.2 Choose app registration path
+#### 7.2 Apply the approved authentication decision
 
-Ask one question, using the resolved tenant:
+Read the Gate 1 authentication entry from `native-app-plan.md`.
 
-> "This app needs an Entra ID app registration in tenant `<tenant-guid>` to sign in.
->
-> Choose one:
-> (a) Paste an existing app registration client ID
-> (b) Create a new app registration from the Power Apps Wrap page, then paste its client ID
-> (c) Skip for now — configure auth later"
-
-Do not default to any option silently. The user must choose because app registration ownership varies by tenant/admin role.
-
-- **(a) Paste existing** — run the client-ID write path in 7.3.
-- **(b) Create new in Power Apps Wrap** — print the environment-specific Wrap URL in 7.4, then ask for the client ID and run 7.3. If the user cannot finish creation, allow `skip` and follow 7.5.
-- **(c) Skip** — run the skip path in 7.5.
+- `existing-client-id` → run 7.3 with the already-approved GUID.
+- `configure-later` → run 7.4.
+- Missing or malformed entry → `BLOCKED`; the four-gate plan is incomplete.
 
 #### 7.3 Write client ID into `auth.config.json`
 
-Ask:
-> "Paste the Entra ID app registration client ID for tenant `<tenant-guid>` (GUID format), or type `skip` to configure auth later:"
-
-If the user types `skip`, run 7.5. Otherwise validate UUID format. Write `auth.config.json` using `Edit`:
+Validate the Gate 1 client ID as a UUID. Write `auth.config.json` using `Edit`:
 - Replace `msal.clientId` with the user's value
 - Replace `msal.tenantId` with `<tenant-guid>` from 7.1
 - Preserve the existing top-level `environment` block if present. If it is missing but `.resolved-environment.json` exists, add that JSON as top-level `environment`.
@@ -1380,22 +1466,7 @@ Print:
 
 Jump to Step 8.
 
-#### 7.4 Create a new app registration in Power Apps Wrap
-
-Resolve the selected Power Platform environment ID from `$ACTIVE_ENV_ID`, then `power.config.json`. Print the public Power Apps Wrap URL:
-
-> "Open the Power Apps Wrap app-registration page for the selected environment:
-> `https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration`
->
-> Create the app registration on that page, then copy the Application (client) ID and paste it here.
-> The Wrap experience configures the native registration for this flow. Do not add redirect URIs or API permissions manually; tenant-wide admin consent is not required.
-> If you cannot create it now, type `skip` and run `/set-app-registration-native` later."
-
-Tell the user the registration must be created/configured from the Power Apps Wrap page for the selected environment. Do not direct them to the Entra admin center for manual redirect URI, delegated permission, or admin-consent setup.
-
-After the user creates the registration, run 7.3 to capture and write the client ID.
-
-#### 7.5 Skip auth for later
+#### 7.4 Configure auth later
 
 Write `auth.config.json` using `Edit`:
 - Set `msal.tenantId` to `<tenant-guid>` from 7.1
@@ -1553,7 +1624,7 @@ If this fails, do not continue to native capabilities, connectors, navigation, o
 ### Step 8.5 — Seed sample data (auto)
 
 **Print before starting:**
-> "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
+> "→ [Step 8.5/13] Reconciling exact sample fixtures by business key and seeding missing rows."
 
 Invoke `/add-sample-data` after Step 8. This step is **not optional** — every fresh-scaffolded app must have data to render on first launch:
 
@@ -1564,11 +1635,19 @@ Arguments:
   --working-dir <working_dir>
 ```
 
-`/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
+`/add-sample-data` reads `.datamodel-manifest.json`, discovers live insertion
+metadata, creates stable business keys for every fixture, validates required
+lookups and choice values, and executes `scripts/seed-sample-data.js` in
+dependency order. `.sample-data-journal.json` is the authoritative resume
+state; unrelated existing records never satisfy a fixture.
 
-If `.datamodel-manifest.json` is missing, surface as `DONE_WITH_CONCERNS` and continue — it means Step 8 didn't complete cleanly.
+If `.datamodel-manifest.json` is missing, return `BLOCKED`; Step 8 did not
+complete cleanly enough to seed safely.
 
-If the seeding step fails (network drop, permission error, etc.), surface the failure but continue to Step 9 — the app is still usable, just empty on first launch. The user can re-run `/add-sample-data` later to retry.
+If seeding returns `BLOCKED`, stop before Step 9 and preserve the journal. The
+user can fix the reported metadata, dependency, permission, or row error and
+re-run the same command; successful fixtures are reused by business key. A
+partial fixture must not be presented as a completed generated app.
 
 ### Step 9 — Apply native capabilities
 
@@ -1593,9 +1672,13 @@ If the plan says "None — this app uses only standard React Native components a
 
 Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
-Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
+Gate 3 approval is consent for exactly the packages and versions in the table.
+Install them into `<working_dir>` before any skeleton or builder imports them,
+validate `package.json` and the lockfile, and verify module resolution. Do not
+substitute another package/version or route a JS-only package through
+`/add-native`.
 
-### Step 9b — Apply design system
+### Step 9b — Integrate the approved design system
 
 `/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
 
@@ -1863,7 +1946,20 @@ If the directory is empty (no data sources added yet), still write the section w
 **Print before starting:**
 > "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
 
-This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders then fill in the JSX rather than starting from zero. This cuts builder output by ~50% and eliminates import-path guessing errors.
+This step analyzes `## Product Experience`, `brand/design-system.md`, Shared
+Conventions, and per-screen specs. It generates approved signature components,
+shared code, and typed screen skeletons before parallel builders start.
+
+Before generating anything, run the plan gate:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" \
+  --project-root "<working_dir>"
+```
+
+Exit `2` blocks screen generation. Repair Product Experience, Design Direction,
+design intake, Home materialization specs, or tab silhouettes and rerun. Do not
+let builders infer missing structural fields.
 
 ---
 
@@ -1871,15 +1967,24 @@ This step analyzes the per-screen specs and generates **shared code that multipl
 
 Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
-1. **Entity cards/rows** — if 2+ screens render the same entity (same Service) in a card/row format, generate a shared component.
-2. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
-3. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
-4. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
+0. **Signature components** — always generate every component named by Product
+  Experience / brand `## Signature Components`, even when only Home uses it.
+  Implement its typed props, stable geometry, required content regions,
+  populated/loading/error/empty states, media source/fallback contract, and
+  reference motifs. Do not replace it with a generic Card.
+1. **Reference primitives** — generate a shared primitive when a required motif
+  appears on 2+ screens. Preserve the motif's structure and states.
+2. **Entity cards/rows** — if 2+ screens render the same entity (same Service) in a card/row format, generate a shared component.
+3. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
+4. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
+5. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
 
 **Decision rules:**
 
 | Pattern in specs | Generate | Where |
 |---|---|---|
+| Product Experience names a signature component | `<SignatureName>.tsx` with stable state geometry | `src/components/` |
+| Required reference motif appears on 2+ screens | `<MotifName>.tsx` | `src/components/` |
 | Same entity shown as list-item on 2+ screens | `<Entity>Card.tsx` or `<Entity>Row.tsx` | `src/components/` |
 | Same choice column referenced on 2+ screens | `constants.ts` with `ENTITY_STATUS` map + tone mapping | `src/utils/` |
 | Same bounded service + similar `.getAll()` params on 2+ screens | `use<Entity>List.ts` wrapping `useListData` | `src/hooks/` |
@@ -1895,7 +2000,21 @@ cat > "<working_dir>/src/components/InspectionRow.tsx" << 'EOF'
 EOF
 ```
 
-If no cross-screen patterns are found (e.g. only 2 screens total with no overlap), skip this sub-step — the shared scaffold is sufficient.
+Signature components are not subject to the reuse threshold. If none are
+declared and no other cross-screen patterns exist, skip this sub-step.
+
+**Signature-component requirements:**
+
+- Use the First Viewport Contract's minimum height and share-compatible API.
+- Keep loading/error/empty/populated outer dimensions stable.
+- Use `expo-image` for remote/Dataverse media and approved local assets for local media.
+- Expose a typed primary-action callback only when this component owns the action.
+- Do not include an action that duplicates a tab/dock when forbidden.
+- Add the canonical `experience-*` testIDs from
+  `product-experience-contract.md` to signature, headline, media, action,
+  next-section, and metric views for runtime geometry measurement.
+- Export from a focused file and add the exact import to the owning screen skeleton.
+- Compile with placeholder data before builders start.
 
 ---
 
@@ -2131,7 +2250,13 @@ Each prompt:
   plan_path: <working_dir>/native-app-plan.md
   skeleton_exists: true
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Product Experience, Reference Contract, First
+  Viewport, Shared Conventions, and the assigned per-screen spec are binding.
+  Design Direction/brand files materialize those decisions. Inherited defaults
+  are intentional; samples are API/import references only. A typed skeleton
+  already exists at target_file with services and app-specific signature/motif
+  imports pre-resolved. Fill in JSX without discarding imports. Return per
+  AGENTS.md rule #10.
 ```
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
@@ -2152,7 +2277,7 @@ Use `✓` for DONE / DONE_WITH_CONCERNS, `↻` for NEEDS_CONTEXT (will retry), `
 After the wave's TypeScript gate passes, and only then, print the next wave start line (if any):
 > "Wave 2/<W> starting: <names>."
 
-**After each wave returns, run the Step 3.0 status switch on every builder's first line.** Branch per builder:
+**After each wave returns, run the Step 3.2 status switch on every builder's first line.** Branch per builder:
 
 - `DONE` → continue.
 - `DONE_WITH_CONCERNS: <list>` (typical case: a `// TODO(connector-not-yet-added)` stub was emitted because the referenced service is not in the Generated Services table) → batch concerns across all builders, surface the consolidated list to the user once at the end of the wave (not per-builder — that would be noise), and ask whether to fix any pending connectors via `/add-connector` before continuing to Step 12. Record in `memory-bank.md`.
@@ -2212,23 +2337,33 @@ Run one controlled stylistic debt sweep after all screen-builder waves and TypeS
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-composition.js" --project-root "<working_dir>" --report <screen-files-or-app-dir>
 ```
 
-`validate-screen-quality` includes accessibility-label/role, safe-area, touch-target, raw-hex, token, empty-state, shadow, and status-visual checks. If future stylistic hooks exist (for example `validate-accessibility-labels.js`), include them here only if they support `--report` and emit the same JSON issue shape.
+`validate-screen-quality` covers general mobile quality;
+`validate-color-contrast` resolves brand tokens and calculates measurable pairs
+when possible; `validate-screen-composition` enforces Product Experience,
+signature geometry/media, metric limits, duplicate tab actions, and tab-root
+silhouettes.
 
 For each available stylistic validator:
 
 1. Run in `--report` mode against all generated screens. Report mode is non-blocking; it emits JSON issues with `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`.
 2. Merge issues by file and rule. Keep exact line numbers for user/debug output, but do not rely on stale line numbers after the first edit in a file.
-3. Split findings into deterministic auto-fixes and judgement calls:
+3. Split findings into deterministic auto-fixes, structural contract failures,
+   and judgement calls:
   - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
+  - **Structural failures:** every composition-validator issue. Re-dispatch the
+    owning screen builder or Step 10.8 signature component generator; do not
+    downgrade these to concerns.
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
 
 These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
 
-After all validators report no auto-fixable issues, run:
+After all quality/contrast auto-fixes and all structural composition failures
+are clear, run:
 
 ```bash
 npx tsc --noEmit
@@ -2253,6 +2388,9 @@ Invoke the design skill against the project:
 ```
 Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
 
+This is an implementation pass against the already approved Gate 3 contract.
+It must not run discovery, ask for a style choice, or create another approval.
+
 Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
 ```bash
 npx tsc --noEmit
@@ -2269,13 +2407,13 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 > Want a static HTML preview first, or go straight to the live app?
 >
 > (a) Preview all screens — HTML phone frames for every screen
-> (b) Preview key screens — List + Form + Detail archetypes only
+> (b) Preview key screens — Home + two repeated-loop screens
 > (c) Skip preview
 >
 > [default: c]"
 
 - **(a)** → invoke `/preview-screens` (all screens)
-- **(b)** → invoke `/preview-screens` with only List + Form + Detail screen files (skip Login, Splash, Profile, OAuth)
+- **(b)** → invoke `/preview-screens` with Home plus two repeated-loop screen files
 - **(c)** → proceed directly to Step 12
 
 ---
@@ -2341,7 +2479,30 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 - Metro launch cmd: cd <working_dir> && npx expo start
 ```
 
-This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
+Metro remains running after Step 12. Continue directly to Step 12.3 for native
+visual QA, then Step 12.5 and the final summary. Production build + tenant push
+is a separate, explicit user action via the `/deploy` skill.
+
+### Step 12.3 — Native visual QA
+
+Read `## Product Experience` and invoke `/visual-qa` after Metro starts.
+
+- All apps: standard native smoke for Home, tab roots, clipping/overlap, safe
+  areas, blank media, action ownership, and tab silhouette variation.
+- Pass `--full` when visual ambition is `premium`/`bespoke` or reference
+  fidelity is `high`/`strict-structural`.
+- Pass `--platform` from the target platforms and the plan/design-intake paths.
+
+Handle the literal first line:
+
+- `DONE` — record capture/report paths and continue.
+- `DONE_WITH_CONCERNS:` — record missing viewport/platform coverage and surface
+  it in Step 13; do not rewrite it as pass.
+- `BLOCKED:` — preserve the completed app, record `Visual QA: BLOCKED` and the
+  exact missing native evidence/static blocker, and continue to Step 13 without
+  claiming visual completion.
+
+Do not substitute `/preview-screens` or source inspection for this step.
 
 ### Step 12.5 — Optional debug handoff
 
@@ -2361,7 +2522,7 @@ When the user is ready to deploy:
 
 ### Step 13 — Summary
 
-Print a compact status block, then present exactly 4 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
+Print a compact status block, then present exactly 5 options with no explanation. Do not add prose, tips, or "you might want to" text — keep it concise.
 
 ```
 ✅ Native code app created
@@ -2373,6 +2534,9 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+Experience    : <product archetype> / <visual personality> / <Home composition>
+Visual QA     : <PASS | CONCERNS — summary | BLOCKED — reason>
+Visual report : <.visual-qa/report.md path or not produced>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────
@@ -2380,7 +2544,7 @@ Dev server    : npx expo start — running in background terminal <id>
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
 
-Then present exactly these 4 options:
+Then present exactly these 5 options:
 
 ```
 What now?
@@ -2404,7 +2568,7 @@ Which option? (or "none — I'll keep iterating locally")
 ## Notes
 
 - This skill is the only entry point for new project creation. Do not invoke `/add-*` skills directly during a fresh-project flow — they don't know how to read the plan and would re-prompt the user.
-- The planner agent owns the approval gates. This skill never enters plan mode itself — that would create a duplicate gate.
+- The foreground orchestrator owns Gate 1 and Gate 4. The planner normally owns Gates 2 and 3; only the documented inline fallback may present those same gates. Never duplicate a gate or turn an internal pass into a fifth approval.
 - For mid-project changes after Step 13, the user should run individual `/add-*` skills, or `/edit-app` for plan-backed app iteration.
 
 ## Reference

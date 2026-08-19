@@ -78,6 +78,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | Existing screen TSX | Screen edit gate, style-quality sweep, route check when navigation changed, final `tsc` |
 | Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
 | Pure-JavaScript dependency | Approved exact-version dependency table, package-content gate, package validation, final `tsc` |
+| Product Experience / reference fidelity | Experience-contract gate, design-intake validation, affected-screen rebuild, final `tsc`, composition validator, static preview, runtime visual QA when required |
 | Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
 
 **When a gate fails:** capture full output once, classify by root cause, repair in a batch, rerun the same gate once. Do not make line-by-line fixes with `tsc` after every tiny edit. Continue only when the gate is clean or record a `BLOCKED:` / `DONE_WITH_CONCERNS:` entry in `memory-bank.md`.
@@ -146,10 +147,22 @@ Read if present:
 
 - `memory-bank.md` — project facts, target environment, visual companion flag, prior blocks
 - `.datamodel-manifest.json` — existing Dataverse tables/columns
-- `brand/design-system.md` and `brand/tokens.ts` — design constraints and token availability
+- `design-intake.md` when present — binding reference hierarchy/geometry/motifs
+- `brand/design-system.md` and `brand/tokens.ts` — materialized experience, design constraints, and token availability
 - `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
 
 Run these existing-app health checks before any mutation:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-template-provenance.js" \
+  --project-root "<working_dir>" --mode legacy
+```
+
+An incompatible owner/schema blocks edits because another skill family may own
+the app. A missing marker on an otherwise valid older generated app is a
+migration concern: preserve existing files, add the current marker only after
+the Product Experience migration and verification pass, and record the original
+absence in `memory-bank.md`.
 
 | Check | Action if unhealthy |
 |---|---|
@@ -177,7 +190,13 @@ ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\
 find src/native -maxdepth 1 -type f -name '*.ts*' 2>/dev/null | sort
 ```
 
-Also read the relevant `native-app-plan.md` sections (`## Data Model`, `## Native Capabilities`, `## Design`, `## Screens`, and `## Generated Services` if present) plus the existing TSX for any candidate screen. If `brand/design-system.md` exists, read it before asking design/screen questions so the edit preserves product grammar, density, component rules, and negatives.
+Also read `## Product Experience`, `## Data Model`, `## Native Capabilities`,
+`## Design Direction`, `## Design`, `## Screens`, and `## Generated Services`
+plus candidate TSX. If `## Product Experience` is absent, stage a legacy-plan migration using `product-experience-contract.md` before any design/screen edit;
+do not infer appearance from the old Industry/Category field. Read
+`design-intake.md` and `brand/design-system.md` before asking questions so the
+edit preserves composition, media, navigation silhouette, reference motifs,
+product grammar, and negatives.
 
 Ask only for information that cannot be inferred from the app. If there is exactly one plausible screen/table/service, state the inferred choice in the mutation preview instead of asking. If there are multiple plausible choices, ask a small multiple-choice question with those real names.
 
@@ -189,8 +208,8 @@ Build an edit brief before Step 2:
 - Target screens/routes: <existing or new>
 - Data surface: <generated service/table/connector, or none>
 - Native capability: <wrapper/control needed, or none>
-- Design scope: <tokens/component grammar/screen-specific, or none>
-- Plan sections to update: <Data Model / Native Capabilities / Screens / Design / Connectors>
+- Design scope: <tokens/component grammar/Product Experience/screen-specific, or none>
+- Plan sections to update: <Product Experience / Data Model / Native Capabilities / Screens / Design Direction / Design / Connectors>
 - App files likely touched: <routes/layouts/src/native/src/generated/brand/etc.>
 - Verification gates: <schema, tsc, routes, validators, preview>
 ```
@@ -218,7 +237,7 @@ Scenario-specific questions to ask only when the answer is not already obvious:
 | Search/mobile usability | Which existing search/list screen? Which fields should search cover? Should search run locally over loaded rows or query Dataverse/connector server-side? Are filters/sort/scope needed? |
 | Loading, empty, error states | Which list screen(s)? If no list screen exists, should `/edit-app` create a new list screen or apply states to another data screen? Are there already loading/empty/error components that should be improved rather than duplicated? |
 | Detail screen | From which source screen does the user select a record? Which table/service is the record from? Which fields/actions must appear? Should the route be push detail, modal, or formSheet? |
-| Branding/design | What is the brand source (brand doc, logo, URL, text description, existing app)? Is this palette-only, typography, component/density, or full reskin? Should all screens update or only named screens? |
+| Branding/design | What is the source (screenshot, design intake, Figma, brand doc, logo, sibling app, URL, text)? Is this palette/type only, component grammar, Home composition, media/navigation, personality/ambition, reference fidelity, or full redesign? Which screens must structurally change? |
 | Dataverse create form | Which Dataverse table? Existing table or new table? Which fields are required/editable? Where should the form launch from? What happens after save (back, detail, add another)? Are there lookup/file/image fields? |
 | Barcode/QR scan search | Where should scanning live (new scanner screen, existing search screen action, form field)? What does the scanned value represent (record ID, serial number, asset tag, SKU, custom field)? Which table/service/field should it search? What happens on no match or multiple matches? |
 | New requirement + screen | What user workflow is being added? Who uses it? What data/native/connectors does it need? Where does it sit in navigation? What is success/failure behavior? |
@@ -233,6 +252,9 @@ Existing-state checks before deciding to add vs edit:
 - For scanner work, check `src/native/` and the plan's Native Capabilities table for scanner/camera wrappers before screen work.
 - For detail screens, check Navigation Contracts and existing dynamic routes before creating another `[id].tsx`.
 - For branding, check `brand/design-system.md`, `brand/tokens.ts`, and `tamagui.config.ts` before deciding whether TSX rebuilds are needed.
+- For screenshots/references, validate and normalize `design-intake.md`.
+  `high`/`strict-structural` hierarchy, geometry, motifs, and forbidden drift
+  are binding rather than a palette hint.
 
 Use this scenario coverage matrix for common follow-ups. The goal is one user prompt -> one orchestrated edit, not a list of commands the user must run manually.
 
@@ -242,6 +264,7 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 | Add loading, empty, and error states | Screens | Screen spec + existing TSX edit | Rebuild affected list screen; verify visible loading, empty, error, retry, refresh states |
 | Add a detail screen for selected record | Screens; Data Model only if fields/services are missing | Update Screen Map + Navigation Contracts; run `/add-dataverse` or `/add-datasource` only if data surface is missing | Create route/folder/layout as needed; build detail screen and source list/search navigation |
 | Update design to match company branding | Design; Screens only if component grammar/density changes | `/design-system --refresh <dimension>` or `--reskin` | Rebuild affected screens only when tokens alone are insufficient; always preview |
+| Make it premium / match screenshot / full redesign | Product Experience, Design Direction, Design, Screens | Update the Gate 3 contract; `/design-system --skip-planning`; rebuild affected screens | Plan-aware validators + static preview + runtime visual QA |
 | Add a form to create a new Dataverse record | Screens; Data Model if table/columns/lookups/create service are missing | `/add-dataverse --skip-planning` when schema/service is missing | Build form route, create payload helper, parent navigation, and focus refresh; verify create/update payloads |
 | Add barcode scanning and use scanned value to search records | Native Capabilities, Screens; Data Model if scan target field is missing | `/add-native barcode-scanner`; `/add-dataverse` only if target field/table is absent | Build scanner/search flow, pause/lock scan callback, search via service filter, preview |
 | Add a full calendar, agenda, or scheduling view | Screens → JavaScript Dependencies | Add exact `react-native-calendars` version to the approved table, then `npm install --save-exact` before builders | Build the calendar screen with the approved pattern; no `/add-native` or Android/iOS rebuild |
@@ -283,10 +306,13 @@ Before spawning architects or mutating files, show a rough impact preview and as
 Compute:
 
 - **Cost tier:** Cheap (single existing screen), Medium (new route/form/detail or one data source), Heavy (multi-screen/nav/design/data/native), Major (reskin or broad screen rebuild).
-- **Likely plan sections:** Data Model, Native Capabilities, Connectors/Data Sources, Design, Screens.
+- **Likely plan sections:** Product Experience, Data Model, Native Capabilities,
+  Connectors/Data Sources, Design Direction, Design, Screens.
 - **Likely files:** exact screen/layout/native/brand/generated/memory files when known.
 - **Likely skills/agents:** `mobile-app:data-model-architect`, `mobile-app:screen-planner`, `mobile-app:screen-builder`, `/add-datasource`, `/add-dataverse`, `/add-sharepoint`, `/add-connector`, `/add-native`, `/design-system`, `/preview-screens`, optional `/debug-app` only when the user gives a concrete runtime symptom.
-- **Verification gates:** schema, generated services, route contracts, screen validators, preview.
+- **Verification gates:** experience contract, schema, generated services, route
+  contracts, screen composition/quality/contrast validators, static preview,
+  and runtime visual QA when ambition/fidelity requires it.
 - **Main risks:** environment drift, unsupported native package, generated service missing, navigation contract change, broad design churn, stale installed plugin cache.
 
 Print:
@@ -312,7 +338,7 @@ If the user chooses **edit**, return to Step 1 and refine the edit brief. If can
 
 **If the user picks (d) Design:**
 
-Read and execute the `/design-system` skill instead of spawning a planner agent. Determine the dimension from the user's description:
+Classify the request before invoking `/design-system`:
 
 | User says | Route to |
 |---|---|
@@ -322,11 +348,13 @@ Read and execute the `/design-system` skill instead of spawning a planner agent.
 | "change spacing", "density", "compact" | `/design-system --refresh density` |
 | "add rule", "remove rule", "negatives" | `/design-system --refresh negatives` |
 | "change animations", "motion" | `/design-system --refresh motion` |
-| "full redesign", "reskin", "new theme" | `/design-system --reskin` |
+| "premium", "brand-forward", "match this screenshot", "reference fidelity", "new Home hero/composition", "media-led", "navigation mood", "full redesign", "reskin" | Update Product Experience + Design Direction + Design + affected Screens in Step 2; then materialize with `/design-system --skip-planning` |
 
-**One-major-change-per-prompt enforced.** If the user asks to change palette AND typography → refuse, ask which first. This matches `/design-system`'s own behavior.
+**One-major-change-per-prompt applies only to isolated token refreshes.** A
+coherent approved Product Experience redesign may intentionally change
+composition, media, type, palette, components, and navigation together.
 
-After `/design-system --refresh` returns, print:
+For a token-only refresh, execute `/design-system --refresh`, then print:
 
 ```
 ✅ Design system updated. brand/design-system.md + brand/tokens.ts refreshed.
@@ -334,7 +362,9 @@ After `/design-system --refresh` returns, print:
 Continuing with verification and preview. Rebuilding screens only if component shapes, density, navigation, or screen-specific design rules changed.
 ```
 
-Do not stop after design refresh. Continue to Step 7 verification and Step 8 preview. If the refresh changed component shapes, density, negatives, or a full reskin requires TSX adjustments, include Screens in the affected sections and rebuild those screens.
+Do not stop after design refresh. Continue to Step 7 verification and Step 8
+preview. Component/density/negative changes include affected Screens and rebuild
+them. Structural/personality/reference requests never take the token-only path.
 
 ### Step 2 — Re-plan affected sections
 
@@ -346,6 +376,7 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 | Connector choice | `/add-datasource`, `/add-sharepoint`, `/add-connector` | New or changed external data/action surface |
 | Native capability | `/add-native` Step 9 | New wrappers/controls needed by edited screens |
 | JavaScript dependency | `screen-planner` + `shared/references/javascript-dependency-planning.md` | Explicit package requests or established JS libraries needed by edited screens |
+| Product Experience | `product-experience-contract.md` + `screen-planner` | Archetype migration, personality/ambition, Home composition, media, First Viewport, reference fidelity |
 | Design | `/design-system` Step 9b | Token refresh, reskin, density/component rules |
 | Navigation | `/create-mobile-app` Step 10b | Changed tabs, stacks, route groups, modal/formSheet presentation |
 | Service snapshot | `/create-mobile-app` Step 10.7 | Refresh after any data source/schema change before builders run |
@@ -379,6 +410,7 @@ Prompt:
   Update the existing <section-name> section based on the user's change request.
 
   User request: <verbatim>
+  Current Product Experience: <verbatim or legacy-migration draft>
   Current section content: <verbatim>
   Working directory: <absolute path>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
@@ -469,7 +501,11 @@ mode.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
-6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
+6. **Product Experience + Design** — for structural/personality/reference edits,
+  write the approved Product Experience, Design Direction, Design, and Screen
+  changes first; normalize `design-intake.md`; then execute `/design-system --skip-planning --plan native-app-plan.md`. Token-only edits use
+   `/design-system --refresh <dimension>`. Component/density/negative changes
+   rebuild affected screens.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
 
@@ -541,7 +577,8 @@ intermediate state.
 | New scanner/camera/PDF/pen workflow | The capability screen plus any result/detail/form screens it routes to |
 | Data-model field added for visible UI | Every screen that displays or writes the field |
 | Navigation pattern changed | Every tab/root screen and any route whose contract changed |
-| Design component/density/reskin changed | All screens whose layout grammar is affected; for full reskin, run a broad screen wave or controlled style sweep |
+| Product Experience composition/media/reference changed | Home, every screen that materializes a changed motif/silhouette, and every tab root when navigation mood changed |
+| Design component/density/reskin changed | All screens whose layout grammar is affected; structural reskins follow the Product Experience row rather than a token-only sweep |
 
 Before spawning builders:
 
@@ -620,6 +657,7 @@ Run verification after mutations. Batch-fix root causes, then rerun the failed g
 Required gates, selected by what changed:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "<working_dir>"  # any Product Experience/UI edit
 npm run generate-schemas      # if any data source/schema/connector changed
 npx tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
@@ -636,6 +674,7 @@ When screen files changed, run the mobile plugin's report-mode validators explic
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-composition.js" --project-root "<working_dir>" --report <changed-screen-files-or-app-dir>
 ```
 
 Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.
@@ -646,7 +685,8 @@ When screen files changed, run a focused version of `/create-mobile-app` Step 11
 
 Rules:
 
-1. Run `validate-screen-quality.js --report` and `validate-color-contrast.js --report` when available.
+1. Run `validate-screen-quality.js --report`, `validate-color-contrast.js
+  --report`, and plan-aware `validate-screen-composition.js --report`.
 2. Merge issues by file and rule.
 3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
@@ -663,6 +703,19 @@ Read validation, changed-screen, concern, and preview results from the Step 6
 `/sync-from-plan` return. Do not rerun TypeScript, route, style, contrast, or
 preview work unless sync explicitly returned a targeted retry instruction.
 
+Static preview is an approximation. Invoke `/visual-qa` after Metro is running
+when any condition is true:
+
+- visual ambition is `premium` or `bespoke`;
+- reference fidelity is `high` or `strict-structural`;
+- the request says premium, match screenshot/reference, full redesign, or equivalent;
+- Home composition, First Viewport, media strategy, navigation silhouette, or
+  a required reference motif changed.
+
+Pass the plan, design intake, affected routes, and target iOS/Android viewports.
+Do not mark the edit complete until visual QA passes or returns a concrete
+environment block. `/debug-app` remains the separate symptom/runtime-log path.
+
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
 Append an edit entry to `memory-bank.md`:
@@ -672,11 +725,12 @@ Append an edit entry to `memory-bank.md`:
 - Request: <verbatim or concise summary>
 - Intent brief: <target screens/routes, data surface, native capability, design scope>
 - Assumptions: <inferred choices or none>
-- Skills/agents invoked: <data-model-architect, screen-planner, add-dataverse, screen-builder, etc.>
-- Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
+- Skills/agents invoked: <data-model-architect, screen-planner, add-dataverse, screen-builder, design-system, visual-qa, etc.>
+- Plan sections changed: <Product Experience / Data Model / Native Capabilities / Screens / Design Direction / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
 - Preview: <preview.html path or not generated>
+- Visual QA: <not required | pass with capture paths | blocked with reason>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```

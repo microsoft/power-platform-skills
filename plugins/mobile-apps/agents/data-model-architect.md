@@ -85,7 +85,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 6a. Cross-entity Read Audit (when `_screens_section.md` exists OR `mode: cross-entity-audit`)
 7. Produce the `## Data Model` section
 
-**`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 1 (or rolls it into the Gate 1 view if Gate 1 has not yet been presented).
+**`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator includes this addendum in the single Gate 2 complete-architecture review; it never creates a separate approval.
 
 ---
 
@@ -200,7 +200,7 @@ node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url>
 
 Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
 
-If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 1 review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
+If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's Gate 2 architecture review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
 
 ## Step 2 — Verify Dataverse Access
 
@@ -323,7 +323,7 @@ Classify every planned column before finalizing its table decision:
 >
 > **Default is Reuse or Extend only when compatibility is proven.** Adapt is the exceptional path, not the fallback. Request bounded detailed expansion only when the candidate is inventory-only. If live metadata could not be read, mark Unverified. If already-detailed metadata remains incompatible or ambiguous, classify Defer and record what evidence or prerequisite is missing; never loop a no-op expansion or extend merely to keep the workflow moving.
 >
-> Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 1 with a name that will explode at Step 5a of `/add-dataverse`.
+> Surfacing the collision at PLAN time (not at create time) prevents the user from approving Gate 2 with a name that will explode at Step 5a of `/add-dataverse`.
 
 Build a table:
 
@@ -374,7 +374,11 @@ dependency-tier counts.
 **Print before starting:**
 > "→ Auditing planned screens for supported cross-entity read paths…"
 
-**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gate 4a/4b lands.
+**Run condition:** execute this step when EITHER (a)
+`<working_dir>/_screens_section.md` exists after internal screen graph/spec
+generation OR (b) you were invoked with `mode: cross-entity-audit`. Skip
+silently during the first data-model pass; the orchestrator reruns this audit
+before Gate 2 architecture approval.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
@@ -385,9 +389,12 @@ code, so this audit never proposes generated formula metadata.
 
 **Algorithm:**
 
-1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first (graph-only mode after Gate 4a). If absent, parse `<working_dir>/native-app-plan.md` and extract the `## Screens` section. Walk every per-screen spec and collect every `related_entity_fields` block.
+1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first
+  during internal graph/spec generation. If absent, parse
+  `<working_dir>/native-app-plan.md` and extract `## Screens`. Walk every
+  per-screen spec and collect every `related_entity_fields` block.
 
-2. **Per entry, branch on `recommends`:**
+2. **Per entry, branch on `resolution`:**
 
    - **`recommends: formatted-lookup`** — verify the source is the primary
      display name of a direct lookup. Create no column.
@@ -401,7 +408,7 @@ code, so this audit never proposes generated formula metadata.
 3. **De-duplicate.** Collapse identical source/resolution pairs and track all
    consuming screens.
 
-5. **Emit the addendum.** Write the `### Cross-entity Reads (auto-derived from screen plan)` subsection of `_dm_section.md`. Schema:
+4. **Emit the addendum.** Write the `### Cross-entity Reads (auto-derived from screen plan)` subsection of `_dm_section.md`. Schema:
 
    ```markdown
    ### Cross-entity Reads (auto-derived from screen plan)
@@ -436,7 +443,7 @@ Never model retained PDF bytes as long text/base64. File columns store PDF conte
 
 Write the section to a file in the working directory named `_dm_section.md` (the planner reads and embeds it). Use this exact structure:
 
-```markdown
+````markdown
 ## Data Model
 
 ### Summary
@@ -502,7 +509,7 @@ erDiagram
 - Image columns require special handling — see add-dataverse/references/dataverse-reference.md.
 - Generated PDFs retained in Dataverse use File columns and are uploaded only after the parent row exists.
 - Signature images from pen input normalize `data:image/png;base64,...` before Image column writes.
-```
+````
 
 Keep the authored section concise: decisions, rationale, ER columns and
 relationships, dependency tiers, and risks. Reference the deterministic
@@ -661,7 +668,7 @@ or written business/status column needed by the app, and each shown lookup
 names for Create/Extend schema. Mechanically verify that no relationship
 endpoint has an empty block and that every relationship's FK path is visible.
 
-If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
+If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 2 and can revise the architecture before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
 After `_dm_section.md` and the normalized schema contract are written,
 atomically update milestone

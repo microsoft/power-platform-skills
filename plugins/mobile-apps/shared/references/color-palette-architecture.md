@@ -132,15 +132,14 @@ Tamagui's default `$red10`, `$green10`, `$yellow10` are saturated for maximum vi
 
 ### When to desaturate
 
-| Industry | Desaturation | Reason |
+| Approved context/personality | Desaturation | Reason |
 |---|---|---|
-| Field / Ops | None (keep full saturation) | Status colors must pop in bright outdoor light |
-| Finance | 20% desaturation | Conservative palette, trust signals |
-| Healthcare | 15% desaturation | Warm palette, nothing should alarm |
-| Education | 10% desaturation | Bright but not aggressive |
-| Enterprise / Productivity | 20% desaturation | Professional, understated |
-| E-commerce | Standard | Brand colors dominate anyway |
-| Editorial / Content | 25% desaturation | Whisper, don't shout |
+| Outdoor / glare / safety-critical utility | None or low | Status must remain visible; every pair still needs measured contrast |
+| Polished operational | 15-25% | Quiet repeated work; state remains readable without dominating |
+| Premium brand-forward | 15-30% or monochrome + accent | Object/media hierarchy should dominate routine status |
+| Editorial | 20-30% | Type/content carries hierarchy |
+| Playful consumer | 5-15% | Color may be energetic but must retain role discipline |
+| Reference-driven | Match approved intake | Reference Contract controls the relationship |
 
 ### How to desaturate in Tamagui
 
@@ -159,9 +158,11 @@ Apply by spreading into your light and dark theme definitions.
 
 ---
 
-## Industry-Default Palettes
+## Optional Palette Profiles
 
-Pre-built palette configs. Use these when the user specifies an industry but not a specific brand color.
+Pre-built starting points for explicit user/brand choices. Industry never
+selects a palette automatically; Product Experience, brand input, and reference
+intake remain authoritative.
 
 ### Finance
 
@@ -183,7 +184,7 @@ Status: desaturated 15%
 - Warm, non-clinical. Sage accent feels calming without the institutional blue.
 - Dark mode: warm dark surfaces (hsl(35, 8%, 8%)), accent lightens slightly.
 
-### Field / Ops
+### Outdoor Utility
 
 ```
 Surface base: neutral gray (H=0, S=0%)
@@ -191,7 +192,7 @@ Accent: orange/amber — hsl(28, 80%, 52%) → #D4802A
 Status: full saturation
 ```
 - High contrast for outdoor readability. Orange accent is highly visible.
-- Dark mode: OLED-friendly (#000000 base option), accent stays bright.
+- Dark mode: hue-tinted near-black surface, accent stays bright; never pure black.
 
 ### Education
 

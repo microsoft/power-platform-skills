@@ -42,7 +42,16 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **NEVER write `_layout.tsx` files.** The orchestrator owns all `_layout.tsx` files at Step 10b — both the outer `app/(app)/_layout.tsx` (Tabs/Drawer) and per-folder inner ones (`app/(app)/<folder>/_layout.tsx`). If your `target_file` IS a `_layout.tsx`, your assigned task is wrong — STOP and report `BLOCKED [<screen_name>]: target_file is a _layout.tsx (<path>) — orchestrator owns layouts, not builders`. Two parallel builders writing the same folder's `_layout.tsx` would race; only the orchestrator can serialize that. **You also do not need to declare the route in any `_layout.tsx`** — the orchestrator already wrote the `<Stack.Screen name="<your-name>">` line for you. Just write your screen's content.
 - **Your `target_file` may be nested.** With the folder-grouped navigation pattern, paths like `app/(app)/inspections/[id].tsx` and `app/(app)/inspections/new.tsx` are normal. The folder is guaranteed to exist (orchestrator created it at Step 10b.2). Just write to whatever absolute path you were given. Do NOT modify the path or strip the folder.
 - **Home screen is always `app/(app)/home.tsx`.** If your `target_file` ends in `app/(app)/index.tsx` and your screen is the app's main landing screen, the path is wrong — it must be `app/(app)/home.tsx` (route `/(app)/home`). The template's `app/index.tsx` hardcodes a redirect to `/(app)/home`; writing `index.tsx` causes an "Unmatched route" crash on launch.
-- **Read only your screen's spec — with one exception: `### Navigation Contracts`.** Open `native-app-plan.md`, find the section under `## Screens` → `### Per-Screen Specs` → your screen, and use only that for layout/data/state decisions. **However, you MUST also read the `### Navigation Contracts` table** (sibling section under `## Screens`) before writing any `router.push(...)` or `useLocalSearchParams<...>` call. The contracts table is the ONE place cross-screen knowledge lives — it tells you what query/path params each route accepts so a caller and a receiver agree. Locked conventions: `?editId=<guid>` for create-or-edit forms (never `?id=` / `?recordId=`); `[id]` for primary entity path param; `[<entity>Id]` for nested entities; all param values typed `string`. If a route you need to push to is NOT in the Navigation Contracts table, STOP and report `BLOCKED [<screen_name>]: route <path> not in Navigation Contracts — need planner clarification on params.` Do not invent params.
+- **Read the owning contracts, then only your screen spec.** Open
+  `native-app-plan.md` and read `## Product Experience`, `## Design Direction`,
+  `## Design`, `## Screens → ### Shared Conventions`, `### Navigation
+  Contracts`, your assigned per-screen spec, and `## Generated Services`.
+  Product Experience controls composition/media/reference behavior; Shared
+  Conventions controls cross-screen grammar and tab silhouettes; Navigation
+  Contracts controls routes. Do not read sibling per-screen specs. Locked route
+  conventions: `?editId=<guid>` for create-or-edit forms; `[id]` for primary
+  path param; `[<entity>Id]` for nested entities; all values typed `string`. If
+  a needed route is absent, return `BLOCKED` rather than inventing params.
 
 - **HARD RULE — Route Intent Matrix + tap idempotency.** Navigation APIs are NOT interchangeable. Apply this matrix exactly: (1) **singleton destinations** (`/(app)/workout/form`, `/(app)/recovery/form`, `/login`, and any route the plan marks singleton) use `router.navigate(...)`, never `router.push(...)`; (2) **entity detail drill-down** routes use `router.push(...)`; (3) **auth/guard redirects** use `router.replace(...)`. Any primary navigation CTA (`Start`, `Continue`, `Open`, `Next`) must be double-tap safe: lock with `isNavigating`, early-return when true, set lock before calling router, and unlock in `finally` (or after transition callback). On iOS this prevents duplicate transitions and accidental double stack entries.
 
@@ -69,8 +78,13 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   ```
 
   **Verification (post-scaffold):** the doctor `node scripts/check-routes.js` parses every `router.push` / `router.replace` / `<Link href=>` and every `useLocalSearchParams<{}>` across `app/` and reports drift. Run it after any hand-edit. Wired into `package.json` as `npm run check-routes`.
-- **Your layout comes from your spec + design fields — NOT from the samples.** The sample files (`screen-list.tsx`, `screen-detail.tsx`, `screen-form.tsx`) exist to show you correct Tamagui API, import patterns, and TypeScript idioms. Read them for *how to write code*, not *what to build*. Every screen's structure, density, hierarchy, and visual emphasis must come from Step 1 (spec) + Steps 1a–1c (design fields). A screen that looks like the sample with a different entity name is a failure — even if it compiles and passes the quality checklist.
+- **Your layout comes from your spec + experience/design fields — NOT from the samples.** The sample files (`screen-list.tsx`, `screen-detail.tsx`, `screen-form.tsx`) exist to show you correct Tamagui API, import patterns, and TypeScript idioms. Read them for *how to write code*, not *what to build*. Every screen's structure, density, hierarchy, and visual emphasis must come from Step 1 + Steps 1a–1d. A screen that looks like the sample with a different entity name is a failure — even if it compiles and passes the quality checklist.
 - **Required reading before writing any TSX.** You MUST load these from the plugin root:
+  - `${PLUGIN_ROOT}/shared/references/product-experience-contract.md`
+  - `${PLUGIN_ROOT}/shared/references/product-archetypes.md`
+  - `${PLUGIN_ROOT}/shared/references/visual-personalities.md`
+  - `${PLUGIN_ROOT}/shared/references/home-compositions.md`
+  - `${PLUGIN_ROOT}/shared/references/reference-fidelity.md`
   - `${PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
   - `${PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
   - `${PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
@@ -80,7 +94,9 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
     - Detail → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
     - Form → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
   - For component snippets: `${PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
-  - **If the plan's `## Design` section names an industry**, also read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and apply the relevant sections per the "When to Use This Document" table at the bottom. For example: finance → Sections 2, 3, 5, 6, 7, 19, 20; field/ops → Sections 8, 9, 10, 14, 15, 23, 24. Skip this file only if the plan says "Industry: productivity" with no further industry signal.
+  - Read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` only for the
+    approved product archetype/workflow capabilities. Industry supplies labels,
+    never visual style.
   - **If the plan's `## Design` section specifies a non-default font pairing or non-Professional copy tone**, also read:
     - `${PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
     - `${PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
@@ -118,25 +134,40 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   For lookup labels and IDs, select the real `_<lookup>_value` field in your `$select` and read with `lookupName(record, '<lookupLogicalName>')`. The lookup logical/navigation name itself (for example `new_venueid`) is also forbidden in `$select`; it belongs only in `@odata.bind` writes or `$expand`. For choice / status / boolean / datetime / money labels, read with `formattedValue(record, '<columnLogicalName>')` or fall back to the generated option const. On bounded lists that use `useSearchFilter(...)`, fields MUST be real string properties from generated types; never add an inferred display-name field just to make search prettier. Cursor lists do not use `useSearchFilter`; they push search into the service `filter` option.
 - **HARD RULE — Cross-entity Field Resolution.** Before writing the screen's `select: [...]` or load step, walk every UI field your spec displays. For each field that sources data from an entity OTHER than the screen's primary fetch target, follow this algorithm exactly. The full supported-path reference is at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads). The screen-builder MUST apply the rule mechanically — do NOT invent your own resolution.
 
-  1. **Follow the planned recommendation** from `related_entity_fields`.
+  1. **Follow the spec's canonical `resolution`.** Current specs require
+     `resolution`. For a legacy spec that omits it, accept deprecated
+     `recommends` only as a compatibility alias and normalize it before applying
+     this rule: `formatted-lookup` → `formatted-lookup`, `chained-fetch` →
+     `chained-fetch`, and `external-projection-required` →
+     `materialized-projection`. Never require both fields; when `resolution` is
+     present, it is authoritative.
+     - `formatted-lookup`: select the real lookup value and render with
+       `lookupName`; create no shadow field.
+     - `calc-column`: verify the planned `_calc` column exists in the generated
+       model, select it, and render it read-only.
+     - `materialized-projection`: verify the planned ordinary target column
+       exists, select it, and never treat it as authoritative for reads that
+       require the source ID. If this screen writes the projection source, also
+       implement the exact Gate 3 `Projection write-through` action after the
+       source write succeeds. Missing write-through instructions are `BLOCKED`.
+     - `chained-fetch`: follow the table below.
+      2. **For chained fetches, branch on archetype × cardinality:**
 
-     | Recommendation | Action |
-     |---|---|---|
-     | `formatted-lookup` | Select the real `_<lookup>_value` field and render `lookupName(record, '<lookupLogicalName>')`. |
-     | `chained-fetch` | Perform one bounded related `get` / `getAll` in the screen load step, never inside `map()` or `renderItem`. |
-     | `external-projection-required` | Render no fake fallback data. Return `BLOCKED` and name the field/source. The user must supply a supported server-owned projection outside this workflow. |
+      | Screen archetype | Cardinality | Action |
+      |---|---|---|
+     | List (`top ≥ 5`), Tab-root, Dashboard | 1:1 (N:1 lookup chain) | **STOP — do not create an N+1 fetch.** Return `BLOCKED` because Gate 2 should have selected formatted lookup, a supported calc column, or an owned materialized projection before implementation. |
+     | Detail (single record) | 1:1 (N:1 lookup chain) | Scaffold a chained `<RelatedService>.get(record._<lookup>_value, { select: [...] })` in the screen's load step. One record on screen = one extra round trip is fine. Display via `lookupName(...)` or direct field read. |
+      | Detail / single-record form or modal | 1:many or M:N | Scaffold one bounded `<ChildService>.getAll({ filter: \`_<parentid>_value eq '${id}'\`, select: [...] })` in the load step. Calc columns cannot traverse 1:many or M:N. |
+      | List (`top ≥ 5`), Tab-root, Dashboard | 1:many or M:N per-row field or aggregate | **STOP — do not create N+1 collection reads.** Return `BLOCKED` because Gate 2 should have selected an owned materialized projection. |
 
-  2. **Verify before exit.** Every UI field in your spec must have either a
-     primary select, formatted lookup annotation, or bounded chained fetch.
-     Otherwise return `BLOCKED [<screen_name>]: field <field> requires an external projection`.
+      3. **Verify before exit.** Every UI field in your spec must have either a
+      primary select (including a verified calc column or materialized projection),
+      formatted lookup annotation, or bounded chained fetch. Otherwise return
+      `BLOCKED [<screen_name>]: field <field> has no supported resolution`.
 
-  3. **TODO comment shape** for an external projection:
-
-     ```ts
-     // TODO(cross-entity-read): screen displays <field> from related <entity>.
-     // Supply a maker-created formula column or another server-owned projection,
-     // then rerun Dataverse reconciliation. Never chain reads in renderItem.
-     ```
+  4. **No silent projection fallback.** Do not create a copied local field or
+     one-time refresh script from the builder. Projection ownership belongs to
+     Gate 2 and `.datamodel-manifest.json`.
 
 - **HARD RULE — server-managed columns are NEVER in a create or update payload.** The Dataverse server owns these fields; including them in a `*Service.create({...})` or `*Service.update({...})` returns HTTP 400 on every save. Generated `create()` types may include server-managed fields (`ownerid`, `statecode`, primary IDs, etc.) because they mirror the full model; do **not** satisfy those types by emitting junk values. For any screen with create/update behavior, use a narrow write helper/type whose input contains only editable fields. If the skeleton imports an app-level helper, call it; otherwise define the helper inside your assigned screen file. Do **not** create or modify shared `src/utils/`, `src/hooks/`, or service files from a screen-builder. Forbidden keys in any create/update payload:
   - `ownerid`, `owneridtype` (set automatically from the calling user; assignment uses `Assign` action, not create)
@@ -431,12 +462,30 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## Screens` → `### Per-Screen Specs`. Capture **all** of the following — every field is a build instruction, not decoration:
 
 **Functional fields:**
+- **Product Experience** — read this before the per-screen spec. Capture product
+  archetype, workflows, operating context, visual personality/ambition, content
+  emphasis, Home composition, navigation mood, density, reference fidelity,
+  media strategy, the complete First Viewport Contract, and Reference Contract.
+  Missing Product Experience is `NEEDS_CONTEXT`; do not fall back to industry.
+- **Shared Experience composition** — read signature component, First Viewport
+  summary, media fallbacks, reference motifs/forbidden drift, and this screen's
+  tab-root silhouette from Shared Conventions.
 - **Domain layout decisions** — read this block FIRST (added by screen-planner). It answers: what data fields matter most, what is the visual emphasis, and what makes this screen different from a generic CRUD screen. These answers are binding — they override any generic "use the sample" instinct. If this block is absent, derive the answers yourself from the entity name + archetype before writing any JSX.
 - **Role** (when present) — gates which controls render for which persona. Combine with the UX contract: e.g. `Role: Supervisor` on an override screen → render the PIN gate; `Role: Inspector (edit) / Supervisor (read)` → hide edit chevrons / submit CTA when the signed-in user is a Supervisor. The role itself does not generate auth code (that lives in shared `useAuth()`); it tells you which conditional UI branches the spec expects. If absent, treat the screen as open to all signed-in users.
 - **Profile content** (Profile screen only) — app-specific sections to render above sign-out. Use any generated services named in the Data field for persisted user/role/preference context; otherwise render local/static app context from the spec. Do not collapse Profile into a single sign-out button.
 - **Sign-out affordance** (Profile screen only) — binding placement and label for sign-out. Use the skeleton's `handleSignOut` when present, or implement the same confirmed `useAuth().signOut` + `router.replace('/login')` flow locally. Do not move sign-out to Home, drawer, header, overflow menus, or any business-data screen.
 - Row style override (List screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the style that best communicates the entity's key fields. Do NOT default to generic cards.
 - Hero type override (Detail screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the hero that fits the entity.
+- **Home composition** (Home only) — required key from
+  `home-compositions.md`. Resolve its required layout pieces before JSX.
+- **First viewport materialization** (Home only) — required exact geometry,
+  media, type, metrics, action, next-section, and duplicate-action fields. All
+  must match Product Experience.
+- **Reference materialization** — required when fidelity is not `none`. Every
+  required motif and forbidden-drift rule relevant to this screen is binding.
+- **Media source and fallbacks** — required when media is required or optional.
+  Implement populated, loading, failed, and absent behavior without changing
+  the signature component's stable dimensions.
 - Layout delta — combine the screen-specific layout delta with the archetype pattern, Shared Conventions, and Design Direction. A compact spec is intentional; absence of universal chrome/layout rules is not a missing requirement.
 - Data calls (generated services + methods + arguments)
 - **Audit** (when present) — one-line bullet shaped `<trigger>: event <code> (<label>); payload: <field, field, field>`. Expand it to a real call by writing inside the named handler:
@@ -479,7 +528,56 @@ Also read `<working_dir>/app/(app)/home.tsx` for **code idioms only** — how sa
 
 Apply the **Tamagui × Expo scope rule** from Hard Rules above. The Expo `building-native-ui` skill (if available) is the source of truth for navigation, gestures, sheets, modals, search bars, native tabs, and library preferences. Tamagui replaces inline `style={{...}}` and bare `<View>` containers in those examples — nothing else.
 
-## Step 1a — Read `## Design Direction` (if present)
+## Step 1a — Read and Validate `## Product Experience` (MANDATORY)
+
+**Print before starting:**
+> "→ [<screen_name>] Resolving Product Experience composition and reference contract…"
+
+Parse the canonical section and enforce it before materialization:
+
+1. Validate product archetype against `product-archetypes.md`, visual
+  personality against `visual-personalities.md`, and Home composition against
+  `home-compositions.md`.
+2. Validate every First Viewport field. Share must be 0.20-0.65; minimum height
+  and headline minimum are positive; metric maximum is 0-4; media/action values
+  use the canonical enums.
+3. If fidelity is `high` or `strict-structural`, read
+  `<working_dir>/design-intake.md`. Missing or malformed intake is `BLOCKED`.
+4. For Home, require `Home composition` and `First viewport materialization` in
+  the assigned spec. A mismatch with Product Experience is `BLOCKED`.
+5. If media is required, verify an approved field/local asset/source and
+  loading/error/empty fallbacks exist before writing. Remote and Dataverse
+  media use `expo-image`; actual inspectable content is not replaced by a
+  decorative gradient or icon.
+6. If the signature component is declared in `src/components/`, import it. If
+  the plan declares it as shared but the orchestrator did not scaffold it,
+  return `BLOCKED [<screen_name>]: required signature component <name> is missing from src/components` rather than replacing it with a generic Card.
+7. Check action ownership against tab routes. When duplicate action with tab is
+  forbidden, do not render the same primary action in both content and tab/dock.
+8. Add the canonical `experience-*` testIDs to signature, headline, media,
+  primary action, next section, metrics, and required motifs. These IDs are
+  non-visible and let `/visual-qa` measure the native view tree.
+
+For a responsive first-viewport region, use stable geometry equivalent to:
+
+```tsx
+const { height: viewportHeight } = useWindowDimensions();
+const signatureHeight = Math.max(
+  FIRST_VIEWPORT_MIN_HEIGHT,
+  Math.round(viewportHeight * FIRST_VIEWPORT_SHARE),
+);
+
+<YStack minH={signatureHeight} overflow="hidden">
+  {/* Populated/loading/error/empty states all keep this outer geometry. */}
+</YStack>
+```
+
+Apply the approved headline minimum and metric maximum. When `Next section
+visible: yes`, size the region and surrounding spacing so the first child/heading
+of the next section is visible at default Dynamic Type on the smallest target
+viewport. Do not disable font scaling to force the fit.
+
+## Step 1b — Read `## Design Direction` (if present)
 
 After reading your per-screen spec, also check `<plan_path>` for a `## Design Direction` section. **If it exists**, parse the YAML-style bundle and use these values as defaults wherever the per-screen spec is silent:
 
@@ -492,11 +590,16 @@ After reading your per-screen spec, also check `<plan_path>` for a `## Design Di
 - `accent_color` → applied through `$accentBase`
 - `heading_font` / `body_font` → font family on titles vs body
 
-Per-screen spec values always win. The Design Direction bundle is the *fallback* for fields the per-screen spec didn't pin.
+Per-screen structural fields and Product Experience always win. The Design
+Direction bundle is a materialization fallback only. Its copied
+`product_archetype`, `home_composition`, `reference_fidelity`, and first-viewport
+fields must match Product Experience or the build is `BLOCKED`.
 
-**If no `## Design Direction` section exists**, use today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`. Do not block on its absence.
+**If no `## Design Direction` exists**, use least-assumptive materialization for
+the approved Product Experience and return `DONE_WITH_CONCERNS`; do not infer
+appearance from industry.
 
-## Step 1b — Read brand/design-system.md (MANDATORY if present)
+## Step 1c — Read brand/design-system.md (MANDATORY if present)
 
 **Print before starting:**
 > "→ [<screen_name>] Reading brand design system…"
@@ -505,7 +608,15 @@ Check if `<working_dir>/brand/design-system.md` exists.
 
 **If it exists**, read the full file and extract:
 
-1. **## Palette** — use these hex values as the source of truth for all color tokens. Map to Tamagui tokens:
+1. **## Product Experience Link** — verify archetype, personality, ambition,
+  Home composition, and fidelity match the plan.
+
+2. **## Composition / ## Media / ## Navigation / ## Signature Components** —
+  apply stable geometry, media states, navigation silhouette, action ownership,
+  and signature-component contracts. These are structural and must match the
+  plan; mismatch is `BLOCKED`.
+
+3. **## Palette** — use these hex values as the source of truth for all color tokens. Map to Tamagui tokens:
    - `bg` → `$surface0` / `$background`
    - `surface` → `$surface1` / `$color2`
    - `primary` → `$accentBase` / `$blue10`
@@ -514,27 +625,35 @@ Check if `<working_dir>/brand/design-system.md` exists.
    - `text-muted` → `$color10`
    - `border` → `$borderColor`
 
-2. **## Typography** — use these font families and sizes. Override any plan-level defaults.
+4. **## Typography** — use these font families and sizes. Override materialization defaults, but not the approved headline minimum. Letter spacing is `0`.
 
-3. **## Components** — follow component specs (button shapes, card styles, list row heights, badge treatments). These override per-screen spec defaults.
+5. **## Components** — follow component specs (button shapes, card styles, list row heights, badge treatments). These override lower-priority materialization defaults.
 
-4. **## Negatives** — these are **HARD RULES**. Every line prefixed with ✗ is a forbidden pattern. Before returning your screen, verify against EVERY negative:
+6. **## Negatives** — these are **HARD RULES** when consistent with Product Experience. Every line prefixed with ✗ is a forbidden pattern. Before returning your screen, verify against EVERY negative:
    - If your screen violates ANY negative → fix it before returning
-   - Negatives override all other design guidance (including per-screen specs)
+   - Negatives override lower-priority materialization guidance. Product
+     Experience and Reference Contract remain structurally authoritative.
    - Common negatives: "No chevrons", "No shadows", "No system fonts", "No tap targets under 52px"
 
-5. **## Motion** — follow the motion policy. If "Forbidden: spring bounces" → do not use spring animations.
+7. **## Motion** — follow the motion policy. If "Forbidden: spring bounces" → do not use spring animations.
 
 **If it does NOT exist**, fall back to today's behavior: read `## Design Direction` from the plan only. Do not block on its absence.
 
 **Priority order (highest wins):**
-1. `brand/design-system.md` ## Negatives (absolute — never violated)
-2. `brand/design-system.md` ## Components, ## Palette, ## Typography
-3. Per-screen spec values from the plan
-4. `## Design Direction` bundle defaults
-5. `mobile-design-philosophy.md` defaults
+1. `## Product Experience` First Viewport and Reference Contract
+2. Per-screen Home/first-viewport/reference materialization and Shared
+  Conventions/tab silhouette
+3. `brand/design-system.md` Composition, Media, Navigation, Signature
+  Components, and reference-derived Negatives
+4. `brand/design-system.md` Components, Palette, Typography, and remaining
+  Negatives
+5. `## Design Direction` materialization defaults
+6. `mobile-design-philosophy.md` defaults
 
-## Step 1c — Translate Design Fields to Code Decisions
+If a lower-priority negative contradicts Product Experience or Reference
+Contract, return `BLOCKED` for design-system repair. Never silently choose one.
+
+## Step 1d — Translate Experience and Design Fields to Code Decisions
 
 **Print before starting:**
 > "→ [<screen_name>] Translating design fields (density, surface, accent, hero) to token decisions…"
@@ -562,13 +681,51 @@ All translation tables below use the **custom path** names (`$surface0`, `$accen
 
 ---
 
+### Home composition → dominant structure
+
+| Key | Code decision |
+|---|---|
+| `asset-command` | Stable asset/object hero first; lifecycle/health and one integrated action; at most approved supporting metrics |
+| `media-command` | `expo-image` or approved local asset fills the contracted region; identity/action integrate with media; preserve crop/fallback geometry |
+| `object-command` | One current object/progress region dominates; supporting activity follows |
+| `relationship-command` | Identity/cadence/next-best-action lead; pipeline/counts remain secondary |
+| `data-command` | One dominant metric plus trend/threshold; never an equal KPI grid |
+| `scan-command` | Scanner/finder target and manual fallback lead; enforce one action owner |
+| `queue-first` | Prioritized queue/exception dominates; scope and recovery filters visible; counts secondary |
+| `timeline-first` | Time axis and overdue/today/upcoming groups dominate |
+| `narrative-home` | Approved image/type thesis and one offer/action lead; next section remains visible |
+| `personalized-feed` | Personalized resume/start item leads into feed/progress |
+| `operational-dashboard` | Current object + 2-4 approved metrics + compact activity; use only when approved |
+
+Do not substitute one key's structure for another because a sample is easier.
+
+### Media and reference → state parity
+
+- Populated, skeleton/loading, failed, and empty media branches share the same
+  contracted outer dimensions and crop behavior.
+- Required media renders the actual product/place/object/record when available;
+  do not use generic atmospheric stock imagery.
+- Implement each required reference motif explicitly and check every forbidden
+  drift item before returning.
+- Preserve hierarchy and normalized geometry at `high`/`strict-structural`
+  fidelity; native platform differences are verified later by runtime visual QA.
+
+### Tab silhouette → cross-screen consistency without sameness
+
+Implement this screen's declared dominant component, scroll axis, grouping,
+primary control, and media use. Shared tokens/component grammar stay
+consistent, but do not collapse neighboring tab roots into identical headers,
+chips, and bordered rows.
+
+---
+
 ### Visual emphasis → hero element
 
 | Visual emphasis says | Code decision |
 |---|---|
 | "oversized stat" | Primary metric: `fontSize="$10"` `fontWeight="700"` `fontFamily="$heading"`, placed above fold, full width |
 | "edge-to-edge rows" | No card wrapper on list rows. `XStack` with `borderBottomWidth={0.5} borderColor="$surface3"` only. No surface bg on rows |
-| "full-bleed image" | `Image` at 100% width, zero horizontal padding on parent, `contentFit="cover"`, height ≥ 200px |
+| "full-bleed image" | `expo-image` `Image` at 100% width, zero horizontal padding, `contentFit="cover"`, height from the First Viewport Contract |
 | "nothing — content leads" | No hero element. First content starts at standard density padding with no extra emphasis |
 | "badge / count" | `YStack` badge: `width={20} height={20} rounded={10} bg="$accentBase"`, `Text color="$accentOnAccent" fontSize={10} fontWeight="700"`, `position="absolute"` |
 
@@ -767,6 +924,11 @@ Before writing the TSX, print a brief summary of what you're about to write. Thi
 > "→ [<screen_name>] Plan:
 >   • File: <target_file>
 >   • Archetype: <List|Detail|Form|Auth|Tab-root|Modal|Empty>
+>   • Product: <product archetype> / <workflow capabilities>
+>   • Experience: <visual personality> / <visual ambition>
+>   • Composition: <Home key or screen silhouette> / <signature component if applicable>
+>   • First viewport: <share, min height, media, headline, metrics, action, next-section rule>
+>   • Reference: <fidelity, required motifs, forbidden drift>
 >   • Key components: <2-4 main UI elements>
 >   • Data: <service(s) used or 'static'>
 >   • Brand negatives applied: <count> rules checked
@@ -949,12 +1111,19 @@ Before finishing the screen, mentally verify:
 11. **Monospace for data** — IDs, timestamps, coordinates, currency use `fontFamily="$mono"`
 12. **Button labels** — action-specific ("Save inspection", "Send for review"), never generic ("Submit", "OK", "Continue")
 14. **Anti-patterns** — check against mobile-design-philosophy.md Section 16. No centered text in content flows, no unnecessary cards, no engineer-facing strings
-15. **Typography** — if plan specifies font pairing, headings use `fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply per-archetype rules from screen-templates.md "Typography by Archetype" table. Apply negative tracking (`letterSpacing` -0.5 to -1.0) on titles at `fontSize="$7"` and above.
+15. **Typography** — if plan specifies font pairing, headings use
+`fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply
+per-archetype rules from screen-templates.md. Letter spacing is `0` unless an
+approved brand/reference contract explicitly documents a tested exception.
 16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. Check examples in screen-templates.md "Copy Tone by Archetype" tables. No exclamation marks, no emoji, no "Submit"/"OK".
 17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections per mobile-design-philosophy.md Section 11. Dense lists use tight spacing with separators.
 18. **Card borders** — cards use background fill difference (`bg="$color2"` on `$background`), NOT `borderWidth={1}` on everything. Borders are only for list item separators (`borderBottomWidth={0.5}`) and inputs. If every surface has a border, strip them and use fill contrast instead.
-19. **Status color saturation + contrast** — for non-field apps, status pills use desaturated colors (e.g., `bg="$green3" color="$green10"` not `bg="$green9" color="white"`). Never use white text on yellow/orange status fills (`bg="$yellow9" color="white"` fails often); use `bg="$yellow3" color="$yellow11"` / `bg="$orange3" color="$orange11"` or a much darker fill. Only field/ops apps keep full saturation for outdoor visibility, and even then the foreground/background pair must be AA.
-20. **Palette warmth** — if the plan specifies a custom palette or industry, surfaces and text must use the named palette tokens (not raw grays like `#f5f5f5`/`#1a1a1a`). Even default Tamagui tokens have hue tinting — use `$background`/`$color2`/`$color12`, never hardcoded hex gray.
+19. **Status color saturation + contrast** — use the approved materialization
+and operating context. Outdoor/gloved/safety-critical contexts may justify
+stronger status color; product archetype/industry does not. Never use white text
+on yellow/orange unless measured AA; prefer dark text on a soft tint.
+20. **Palette integrity** — surfaces and text use approved palette tokens, not
+raw grays. Industry never supplies an implicit palette.
 21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
 22. **FlatList has `keyExtractor`** using a stable ID field, never the index.
 23. **Lists have pull-to-refresh** via `<RefreshControl />` calling the same loader as `useFocusEffect`.
@@ -980,7 +1149,10 @@ Before finishing the screen, mentally verify:
 31. **Brand negatives** — if `brand/design-system.md` exists, re-read `## Negatives` and verify the screen violates NONE of them. This is a hard gate — do not return DONE if any negative is violated.
 32. **Brand token usage** — if `brand/design-system.md` exists, verify that NO raw hex values appear in the TSX. Tamagui layout primitives use `$token` syntax (`$surface0`, `$accentBase`, etc.). Raw React Native elements (e.g. `ActivityIndicator`, `StyleSheet`) use values from `useThemeTokens()` (e.g. `theme.accentBase`, `theme.surface0`) — never hardcode hex literals.
 33. **Domain differentiation** — could this screen belong to a different app unchanged? If yes, it is too generic. The row style, hero element, empty state copy, and visual emphasis must reflect the actual entity and domain. A status-stripe card on an inspection list looks different from a stat-card row on a project list — verify the entity-specific fields are surfaced prominently, not buried.
-34. **Dashboard/workflow patterns** — if the spec includes `Operational pattern: <key>`, look up the required layout pieces in [`shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Operational pattern keys" and implement that contract — NOT a generic CRUD shell. Same lookup applies to `Row style:` (List screens) and `Hero type:` (Detail screens). The reference is the source of truth for every catalogue key the spec emits; never improvise a different layout for a known key.
+34. **Composition/workflow patterns** — Home resolves `Home composition` from
+`home-compositions.md`; workflow screens resolve `Operational pattern` from
+`screen-templates.md`. Implement the required layout pieces, First Viewport,
+media, and reference materialization rather than a generic CRUD/dashboard shell.
 35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(color|bg|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
 36. **Button themes are not semantic shortcuts.** Grep your TSX for `theme="active"`, `theme="primary"`, and similar generic theme names. If the theme name was not present in `tamagui.config.ts`, replace it with explicit tokens (`bg`, `color`, `borderColor`) or a shared component. Primary CTAs must never look disabled because a guessed theme fell back to a neutral surface.
 37. **No raw hex outside `brand/tokens.ts`** — grep `grep -E '#[0-9a-fA-F]{3,8}' <file>` should return zero matches in your screen file. If you find one: replace with the corresponding `$token` for Tamagui primitives, or with `theme.<tokenName>` for raw RN elements.
@@ -991,6 +1163,16 @@ Before finishing the screen, mentally verify:
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
 43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
 44. **Buttons never silently no-op.** If an action depends on required state (`record`, `id`, selected row, loaded service data), either guarantee that state exists before rendering the button, or render the button disabled with a visible reason. Do not write handlers like `if (!record) return;` on an enabled visible button.
+45. **Product Experience materialized.** Home matches its composition key and
+First Viewport values; required media has stable loading/error/empty fallbacks;
+signature components are present; tab silhouette matches Shared Conventions;
+duplicate-action policy is satisfied.
+46. **Reference contract materialized.** Every required motif appears and every
+forbidden-drift item is absent. `high`/`strict-structural` screens are marked for
+runtime visual QA; source inspection alone is not proof.
+47. **Runtime measurement IDs exist once.** Signature screens expose the
+canonical `experience-*` testIDs from `product-experience-contract.md`; do not
+reuse an ID on multiple views.
 
 ### Operational UX rules (control density + trust)
 

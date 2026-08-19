@@ -1,6 +1,8 @@
-# Direction: SaaS
+# Materialization Profile: Polished Operational (legacy ID: saas)
 
-The default productivity look. Familiar, professional, the look people inside an org expect from internal tools. Microsoft 365 / Asana / Salesforce family resemblance.
+A least-assumptive profile for quiet, trustworthy repeated work. It is not a
+Productivity-industry default; any archetype may use it when approved.
+Never select it automatically from industry or product archetype.
 
 ## Reference apps
 

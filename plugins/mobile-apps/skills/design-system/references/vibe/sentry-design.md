@@ -203,7 +203,7 @@ What makes Sentry distinctive is its embrace of the "dark IDE" aesthetic without
 - Use deep purple backgrounds (`#1f1633`, `#150f23`) — never pure black (`#000000`)
 - Apply inset shadows on primary buttons for the tactile pressed effect
 - Use Dammit Sans ONLY for hero/display headings — Rubik for everything else
-- Apply `text-transform: uppercase` with `letter-spacing: 0.2px` on buttons and labels
+- Apply `text-transform: uppercase` with `letter-spacing: 0` on buttons and labels
 - Use the lime-green accent (`#c2ef4e`) sparingly for maximum impact
 - Employ frosted glass effects (`blur(18px) saturate(180%)`) for layered surfaces
 - Maintain the warm purple shadow tones — shadows should feel purple-tinted, not neutral gray
