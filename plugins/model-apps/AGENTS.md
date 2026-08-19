@@ -456,6 +456,7 @@ references/                    ← Shared reference docs
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
   troubleshooting.md           ← Deployment/runtime/env issues
+  persona-validation.md        ← app-builder: probe-persona prerequisites, reading `inconclusive`, scope limit
   verified-icons.txt           ← ~5000 Fluent UI icon names; Grep-validated by page-builder
 samples/                       ← Example .tsx files (13 samples) plus app-builder spec samples
 scripts/
