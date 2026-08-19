@@ -484,11 +484,11 @@ test('entityPrivileges is ABSENT (not broken) when the client or org url is miss
 });
 
 test('rolePrivileges paginates and never caps with top', async () => {
-  // Found by a LIVE run: with the previous 	op: 5000 a System Administrator role returned
+  // Found by a LIVE run: with the previous `top: 5000` a System Administrator role returned
   // EXACTLY 5000 rows -- silently truncated. Paginated it returns 7119, so 2119 privileges were
   // being dropped. A truncated page is the worst shape for this check: a declared privilege that
   // fell off the end reads as NOT HELD, so verify reports a correctly configured role as missing.
-  // Dataverse honors  as a hard cap and omits @odata.nextLink, and the SDK rejects
+  // Dataverse honors `$top` as a hard cap and omits @odata.nextLink, and the SDK rejects
   // paginate+top, so asserting the ABSENCE of top matters as much as the presence of paginate.
   const calls = [];
   const sdk = stubSdk();
