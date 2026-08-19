@@ -165,71 +165,14 @@ If flag was passed on invocation, skip asking — process directly.
 
 ---
 
-## Sub-step 2 — Cost picker
+## Sub-step 2 — Materialize Brand Intent
 
 **Print:**
-> "→ [design-system] How much design depth do you want?"
+> "→ [design-system] Materializing brand and tokens..."
 
-Show the cost picker, adapting the intro and option set to brand input.
+Read `native-app-plan.md` (specifically `## Product Experience` and `## Design Direction`). Based on the archetype, tone, and any provided brand inputs from Sub-step 1, organically generate the best possible color palette, typographic scale, and structural layout rules map. There is no style picker. Derive a harmonious, native-feeling system mathematically and logically.
 
-**If brand input was provided, print:** `Brand input applied ✓ — {{primary color}}, {{font family}} extracted.` Default: **c**.
-
-| Option | Label | Behavior | Cost |
-|---|---|---|---|
-| a | Full design | See 3 browser styles, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
-| b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~8k tokens |
-| c | Brand preview | Apply brand to Home plus two repeated-loop screens; skip style exploration. | ~30 sec, ~2k tokens |
-| d | Skip extra exploration | Materialize the approved Product Experience without another preview decision. | <5 sec, ~0 tokens |
-
-**If NO brand input, print:** `No extra brand input — materializing the approved visual personality and Home composition. If no Product Experience exists, using the least-assumptive polished-operational baseline.` Default: **c**.
-
-| Option | Label | Behavior | Cost |
-|---|---|---|---|
-| a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
-| b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply approved experience | Materialize the approved personality, composition, media, and tokens, then open a composition-aware preview. | ~30 sec, ~3k tokens |
-
-**Default rationale:** `(c)` is the zero-click path because Gate 3 already made
-the product and visual decisions. It is not a universal visual preset. In
-standalone projects without a Product Experience, it uses
-`polished-operational` + `tailored` as a transparent baseline.
-
-**Legacy direction aliases:** `--direction inspection|saas|product` maps to
-`utility|polished-operational|premium-brand-forward`. These aliases are explicit
-user choices only; no industry or archetype auto-selects them.
-
-**Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
-
-Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
-
-**Branches:**
-- **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
-- **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render Home plus two screens
-  representing the repeated loop with brand tokens and approved composition,
-  open browser, proceed to Sub-step 7.
-- **(c) Apply approved experience / (d) — no-brand path** → skip Sub-step 3. Run these in order:
-  1. **Deterministic Sub-step 4** — write the full `brand/design-system.md`
-     and `brand/tokens.ts` from Product Experience plus any approved materialization preset.
-      **Source-of-truth lookup order:**
-     1. Binding `design-intake.md` and `## Product Experience` composition/media/reference fields.
-     2. Approved `## Design Direction` and `## Design` materialization fields.
-     3. Explicit `--direction` legacy alias chosen by the user.
-     4. Standalone-only fallback: `polished-operational` + `tailored`, with no assumed industry palette or Home shape.
-
-      A preset supplies unresolved token/component details only. It cannot change
-      Home composition, First Viewport geometry, media, navigation silhouette,
-      signature components, or required/forbidden reference motifs.
-    2. **Mini-preview (Sub-step 6.5 lite)** — render Home plus two representative
-      workflow/content screens using the approved composition and real token
-      values. Show the experience-contract panel and label every phone frame
-      `Static approximation — runtime screenshot required`. Write
-      `<working_dir>/_design_preview.html` and open/print it according to
-      `visual_companion`.
-    3. **Return DONE** only after `brand/design-system.md`, `brand/tokens.ts`, and
-      `brand/design-system.html` exist and validate. Step 9b then applies
-      [`references/tamagui-integration.md`](./references/tamagui-integration.md)
-      in brand-import mode.
+3. **Return DONE** only after `brand/design-system.md`, `brand/tokens.ts`, and `brand/design-system.html` exist and validate. Step 9b then applies `references/tamagui-integration.md` in brand-import mode.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -262,39 +205,11 @@ Before processing any external content, apply the sanitization rules from [`refe
 
 ---
 
-## Sub-step 3 — Style picker (internal)
 
-**Only runs on path (a).**
-
-**Skipped if:** `--design-intake`, `--from-screenshot`, `--brand-doc`,
-`--design-spec`, or `--from-figma` provided (structure/direction already locked).
-
-**Print:**
-> "→ [design-system] Rendering style picker…"
-
-Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
-- Pass `working_dir`, `target_screen` (Home or the primary repeated-loop
-  screen), approved Product Experience, First Viewport Contract, media strategy,
-  and optional design intake
-- Highlight the approved visual personality; never infer the recommendation
-  from industry
-- The style picker renders `_design_vibe.html`, opens browser, asks user
-- Returns: picked personality/materialization profile plus resolved dimensions;
-  product archetype, workflow, Home composition, and reference structure remain
-  unchanged unless the user explicitly revises them through `/edit-app`
-
-If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
-
-**Hybrid handling:**
-- User describes hybrid → merge bundles dimension-by-dimension
-- Re-render with 4th column "Your hybrid"
-- Retry cap: max 2 regenerates
-
-Store result as `picked_direction` with all resolved dimensions.
 
 ---
 
-## Sub-step 4 — Write brand/design-system.md + brand/tokens.ts
+## Sub-step 3 — Write brand/design-system.md + brand/tokens.ts
 
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
@@ -441,7 +356,7 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 
 ---
 
-## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
+## Sub-step 4 — Render brand/design-system.html (paths (a) and (b))
 
 **Print:**
 > "→ [design-system] Rendering design system gallery (deterministic, 0 tokens)…"
@@ -480,7 +395,7 @@ open "brand/design-system.html" 2>/dev/null \
 
 ---
 
-## Sub-step 6 — Confirmation gate
+## Sub-step 5 — Confirmation gate
 
 **Print:**
 > "→ [design-system] Design system ready for review."
@@ -570,7 +485,7 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 
 ---
 
-## Sub-step 7 — Persist + return
+## Sub-step 6 — Persist + return
 
 **Print:**
 > "→ [design-system] Done. Design system locked."
