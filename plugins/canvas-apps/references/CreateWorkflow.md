@@ -8,7 +8,7 @@ Read:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 

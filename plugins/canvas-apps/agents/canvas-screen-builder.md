@@ -165,7 +165,7 @@ incomplete, and the orchestrator will send the screen back.
 ## Constraints
 
 - Modify exactly one screen file.
-- Never edit `[working directory]/App.pa.yaml` or `[working directory]/_EditorState.pa.yaml`.
+- Do not edit `[working directory]/App.pa.yaml` or `[working directory]/_EditorState.pa.yaml`; the top-level orchestrator owns app-level and cross-file ordering changes.
 - Never substitute a filename, YAML key, or control name prefix.
 - Never use a property absent from that control's definition.
 - Never write a version suffix on a `Control:` value.

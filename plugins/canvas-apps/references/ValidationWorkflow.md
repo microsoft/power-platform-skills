@@ -161,8 +161,9 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
 - The only sanctioned re-delegation is back to `canvas-app-planner` when a builder
   returned `Status: Blocked` because its brief was genuinely missing a definition or an
   assignment field — never for a diagnostic on a file that already exists.
-
-Never modify `[working directory]/_EditorState.pa.yaml` while repairing diagnostics.
+- Modify `[working directory]/_EditorState.pa.yaml` when a diagnostic identifies it or when the requested
+  screen or component-definition order requires correction. Preserve valid names and
+  repair only the affected order entries.
 
 ### Verify before you summarize
 

@@ -19,7 +19,7 @@ Anything else is **complex**.
 
 1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit
    touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
-   sizing, scrolling, or colour.
+   sizing, scrolling, or color.
 2. Use `describe_control` before adding a property not already present on that control.
 3. Apply targeted edits directly to the `[working directory]` folder.
 4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
@@ -31,7 +31,7 @@ Read:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 

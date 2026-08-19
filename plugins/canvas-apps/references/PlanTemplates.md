@@ -43,6 +43,9 @@ CREATE
 |--------|--------|-------------|----------|-------------|--------------|
 | Create | [Landing] | `[working directory]/Screen1.pa.yaml` | Screen1 | [Prefix] | `[working directory]/Screen1.screen-plan.md` |
 | Create | [Additional] | `[working directory]/[Name].pa.yaml` | [Name] | [Prefix] | `[working directory]/[Name].screen-plan.md` |
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Plan Index — EDIT
@@ -81,6 +84,9 @@ EDIT
 seed data — or "None"]
 ### After builders
 [Changes referencing screens that do not exist yet, such as StartScreen — or "None"]
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Shared Plan

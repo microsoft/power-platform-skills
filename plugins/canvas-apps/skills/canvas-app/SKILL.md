@@ -56,6 +56,7 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    - No two rows target the same file.
    - No two rows share a `Name Prefix`.
    - In CREATE mode the first row targets `[working directory]/Screen1.pa.yaml` with YAML key `Screen1`.
+   - `## Editor State Changes` exists and contains exact final order lists or `None`.
 4. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
    Verify each brief's assignment matches its dispatch row.
 5. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
@@ -140,6 +141,9 @@ After all builders finish:
   `[working directory]/canvas-app-plan.md` to `[working directory]/App.pa.yaml`. The `### Before builders` group was
   already applied at pre-dispatch. If a group says `None`, do not edit the file for it.
 - The orchestrator is the sole owner of EDIT changes to `[working directory]/App.pa.yaml`.
+- Apply `## Editor State Changes` from `[working directory]/canvas-app-plan.md` to
+  `[working directory]/_EditorState.pa.yaml` after all builders finish. If it says `None`, leave the
+  file unchanged.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 
 ## Shared Invariants
