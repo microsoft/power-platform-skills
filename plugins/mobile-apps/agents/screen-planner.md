@@ -175,7 +175,7 @@ Default for a typical CRUD app: **Tabs + Stack**.
 **Print before starting:**
 > "→ Listing screens by archetype (List / Detail / Form / Auth / Tab-root / Modal-Sheet / Onboarding)…"
 
-Every user-facing screen must map to one of seven **screen archetypes** defined in `${PLUGIN_ROOT}/shared/references/screen-templates.md`:
+Every user-facing screen must map to a screen archetype based on UX boundaries:
 
 | Archetype | When to use | Required elements |
 |---|---|---|
@@ -186,7 +186,7 @@ Every user-facing screen must map to one of seven **screen archetypes** defined 
 | **Tab-root** | Top-level tab destination | Usually wraps a List or Home |
 
 **Home has no universal default.** Replace `app/(app)/home.tsx` with a
-deliberate composition selected from `home-compositions.md`. The approved
+
 `## Product Experience → Home composition` is authoritative. Archetype suggests
 candidates but does not mandate one.
 
@@ -339,7 +339,7 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 **Experience composition**
 - Product archetype: `<slug from Product Experience>`
 - Visual personality / ambition: `<slug> / <level>`
-- Home composition: `<key from home-compositions.md>`
+- Home composition: <composition deduction>
 - First viewport: `<signature component, viewport share, minimum height, media, headline minimum, metric maximum, action placement, next-section rule>`
 - Media strategy: `<source + loading/error/empty fallback>`
 - Reference fidelity: `<none | directional | high | strict-structural>`
@@ -415,7 +415,7 @@ For each screen the user adds, provide this compact shape:
 - **Domain layout decisions:** (answer the 3 questions above — required)
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
-- **Home composition** (Home only) — REQUIRED. One key from `home-compositions.md`: `asset-command`, `media-command`, `object-command`, `relationship-command`, `data-command`, `scan-command`, `queue-first`, `timeline-first`, `narrative-home`, `personalized-feed`, or `operational-dashboard`.
+- **Home composition** (Home only) — REQUIRED. Organic deduction based on product boundaries.
 - **First viewport materialization** (Home only) — REQUIRED. Name the signature component and exact source values for viewport share, minimum height, media requirement/source/fallback, headline minimum, metric maximum, primary-action placement, next-section visibility, and duplicate-action policy. This must match `## Product Experience`.
 - **Reference materialization** (required when fidelity is not `none`) — name each required hierarchy region/motif this screen implements and every forbidden-drift item it must avoid. A binding motif cannot be replaced with a generic Card.
 - **Operational pattern** (workflow screens only): one of `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. `home-dashboard` is retained only as a legacy alias for `operational-dashboard`; new Home specs use `Home composition`. Omit for normal CRUD/business screens without a workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.

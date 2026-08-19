@@ -516,9 +516,7 @@ Apply the **Tamagui × Expo scope rule** from Hard Rules above. The Expo `buildi
 
 Parse the canonical section and enforce it before materialization:
 
-1. Validate product archetype against `product-archetypes.md`, visual
-  personality against `visual-personalities.md`, and Home composition against
-  `home-compositions.md`.
+1. Validate product intent against instructions.
 2. Validate every First Viewport field. Share must be 0.20-0.65; minimum height
   and headline minimum are positive; metric maximum is 0-4; media/action values
   use the canonical enums.
@@ -629,7 +627,7 @@ Check if `<working_dir>/brand/design-system.md` exists.
 4. `brand/design-system.md` Components, Palette, Typography, and remaining
   Negatives
 5. `## Design Direction` materialization defaults
-6. `mobile-design-philosophy.md` defaults
+6. Platform minimum styles
 
 If a lower-priority negative contradicts Product Experience or Reference
 Contract, return `BLOCKED` for design-system repair. Never silently choose one.
