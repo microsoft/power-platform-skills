@@ -161,8 +161,11 @@ test('hydrateSpec strips the transient solution.prefixResolved flag from the per
 // into a URL subarea. Passing it through made validateAppSpec reject the whole spec, so
 // download-model-app.js wrote NO spec at all and the entire download -> edit -> rebuild flow was
 // blocked for the app over one unrelated nav entry.
+//
+// The fix ROUND-TRIPS it rather than dropping it: the validator accepts a token whose web resource is
+// declared in webResources[], and the download collects that name so its content is fetched.
 
-function appWithUrl(url) {
+function appWithUrl(url, webResources) {
   return {
     app: async () => ({
       name: 'Ops',
@@ -182,39 +185,69 @@ function appWithUrl(url) {
     }),
     pages: async () => [],
     entities: async () => [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
-    webResources: async () => [],
+    webResources: async () => webResources || [],
     solution: async () => ({ uniqueName: 'Ops', publisherPrefix: 'new' }),
   };
 }
 
-test('hydrateSpec DROPS a $webresource: URL subarea instead of emitting an invalid spec (#430)', async () => {
-  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html'));
+const HOMEPAGE_WR = [{ name: 'new_homepage.html', type: 'html', contentBase64: 'PGh0bWw+' }];
+
+test('hydrateSpec ROUND-TRIPS a $webresource: URL subarea (#430)', async () => {
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', HOMEPAGE_WR));
   const subs = spec.appShell.areas[0].groups[0].subAreas;
-  assert.strictEqual(subs.some((s) => s.title === 'Home'), false, 'the token subarea must be dropped');
-  assert.ok(subs.some((s) => s.entity === 'new_order'), 'the rest of the nav must survive');
-  assert.strictEqual(spec.droppedSubareas, 1, 'the drop must be COUNTED so the maker is told');
+  const home = subs.find((x) => x.title === 'Home');
+  assert.ok(home, 'the subarea must survive, not be dropped');
+  assert.strictEqual(home.url, '$webresource:new_homepage.html', 'the token must round-trip verbatim');
+  assert.strictEqual(spec.droppedSubareas, 0, 'nothing should be dropped');
 });
 
-test('hydrateSpec still emits a real http(s) URL subarea (#430 must not over-drop)', async () => {
+test('a spec with a declared web-resource subarea PASSES validation (#430 end to end)', async () => {
+  // The actual reported symptom: validateAppSpec rejected the downloaded spec, so no file was written.
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', HOMEPAGE_WR));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
+});
+
+test('an UNDECLARED web-resource subarea is a hard validation error, not a dangling link (#430)', async () => {
+  // Rebuilding a nav entry that points at a resource the spec cannot recreate would leave a broken
+  // link in the target environment, so the reference must be self-contained.
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', []));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, false);
+  assert.ok(
+    (v.errors || []).some((e) => /undeclared web resource/.test(e)),
+    'expected an undeclared-web-resource error, got ' + JSON.stringify(v.errors),
+  );
+});
+
+test('the /WebResources/<name> form round-trips too (#430)', async () => {
+  const spec = await hydrateSpec(appWithUrl('/WebResources/new_homepage.html', HOMEPAGE_WR));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
+test('hydrateSpec still emits a real http(s) URL subarea (#430 must not regress links)', async () => {
   const spec = await hydrateSpec(appWithUrl('https://contoso.example/help'));
   const subs = spec.appShell.areas[0].groups[0].subAreas;
-  assert.ok(subs.some((s) => s.url === 'https://contoso.example/help'), 'a real link must round-trip');
+  assert.ok(subs.some((x) => x.url === 'https://contoso.example/help'), 'a real link must round-trip');
   assert.strictEqual(spec.droppedSubareas, 0);
 });
 
-test('hydrateSpec drops any scheme the validator would reject, not just $webresource (#430)', async () => {
-  // Tested against the shared isSafeHttpUrl rule, so a javascript:/file: nav entry cannot fail the
-  // whole download either — and the drop rule cannot drift from the validation rule.
-  for (const url of ['$webresource:x.html', '/WebResources/x.html', 'javascript:alert(1)', 'file:///etc/passwd', 'not a url']) {
+test('an unexpressible scheme is DROPPED, never emitted (#430 safety)', async () => {
+  // The http(s) guard exists to stop an ARBITRARY scheme becoming a nav entry in a shipped app.
+  // Allowing the web-resource token must not weaken that.
+  for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'not a url']) {
     const spec = await hydrateSpec(appWithUrl(url));
     const subs = spec.appShell.areas[0].groups[0].subAreas;
-    assert.strictEqual(subs.some((s) => s.title === 'Home'), false, url + ' should be dropped');
+    assert.strictEqual(subs.some((x) => x.title === 'Home'), false, url + ' should be dropped');
+    assert.strictEqual(spec.droppedSubareas, 1, url + ' should be counted as dropped');
   }
 });
 
-test('a spec hydrated from an app with a web-resource subarea PASSES validation (#430 end to end)', async () => {
-  // The actual reported symptom: validateAppSpec rejected the downloaded spec, so no file was written.
-  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html'));
+test('validateAppSpec rejects a javascript: subarea url outright (#430 guard intact)', async () => {
+  const spec = await hydrateSpec(appWithUrl('https://ok.example/x'));
+  spec.appShell.areas[0].groups[0].subAreas.push({ title: 'Bad', url: 'javascript:alert(1)' });
   const v = validateAppSpec(spec, { profile: 'plan' });
-  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
+  assert.strictEqual(v.ok, false);
+  assert.ok((v.errors || []).some((e) => /http\(s\) URL or a \$webresource/.test(e)), JSON.stringify(v.errors));
 });

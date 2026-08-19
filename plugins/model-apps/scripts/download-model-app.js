@@ -119,6 +119,16 @@ function collectSitemap(app) {
       for (const sa of g.subAreas || []) {
         if (sa.type === 'Entity' && sa.entity) entities.add(String(sa.entity).toLowerCase());
         addIcon(sa.icon); addIcon(sa.vectorIcon);
+        // A URL subarea can TARGET a web resource rather than link out — the Site Map Designer's
+        // "custom page backed by an HTML web resource" writes `$webresource:<name>`. Collect it the
+        // same way a token-referenced icon is collected, so the resource's CONTENT is fetched and
+        // re-declared into `webResources[]`. Without this the rebuilt app would carry a nav entry
+        // pointing at a resource the spec never recreates — a dangling link in the target env.
+        // `webResourceNameFromRef` returns null for a real http(s) link, so those are untouched.
+        if (sa.type === 'URL' && sa.url) {
+          const wr = webResourceNameFromRef(sa.url);
+          if (wr) customRefs.add(wr);
+        }
       }
     }
   }

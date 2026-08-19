@@ -403,6 +403,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   { "entity": "new_customer", "title": "Customers" },                              // a table (nav icon = its TABLE icon)
   { "dashboard": "Operations", "title": "Overview", "icon": "new_overview.svg" },  // a built dashboard (by name)
   { "url": "https://…",       "title": "Help" },                                   // an external link
+  { "url": "$webresource:new_home.html", "title": "Home" },                        // a declared web resource
   { "page": "overview",       "title": "Overview" }                                // a genpage — KEY (schemaVersion 2)
 ] } ] } ] }
 ```
@@ -410,6 +411,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
+  the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
+  `/WebResources/<name>` path. A web-resource reference **must name a declared `webResources[]` entry**,
+  the same rule a dashboard `webresource` tile uses, so the app stays self-contained on export/import;
+  an undeclared one is an error. Any other scheme is rejected: a `javascript:` or `file:` nav entry in
+  a shipped app is a script-injection / local-file-exfil vector.
 - Any area or subarea may set **`icon`**. This is either a declared image `webResources[]` NAME
   (png/jpg/gif/svg/ico — validated against `webResources[]`) OR a **platform icon reference** — a path
   (`/WebResources/…`, `/_imgs/…`) or a `$webresource:<name>` — which a **downloaded** app carries verbatim

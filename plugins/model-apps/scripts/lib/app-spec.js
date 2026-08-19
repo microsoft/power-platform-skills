@@ -851,7 +851,27 @@ function validateAppSpec(spec, opts = {}) {
         // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
         if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
-        if (sa.url && !isSafeHttpUrl(sa.url)) errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL (got '${sa.url}')`);
+        // A sitemap URL subarea is EITHER a real link OR a web-resource TOKEN. The Site Map
+        // Designer's "custom page backed by an HTML web resource" writes `$webresource:<name>`
+        // (Dataverse also serves the same resource at `/WebResources/<name>`), which is a standard,
+        // documented navigation feature — not an escape hatch.
+        //
+        // Allowing it does NOT weaken the http(s) guard, which exists to stop an ARBITRARY scheme
+        // (`javascript:`, `file:`) becoming a nav entry in a shipped app. A token is not arbitrary:
+        // it names a web resource INSIDE the solution, and it must be DECLARED in `webResources[]`
+        // — exactly the rule a dashboard `webresource` tile already uses. So the reference is
+        // self-contained and travels on export/import, and an undeclared one is a hard error rather
+        // than a dangling link.
+        if (sa.url) {
+          const wrRef = webResourceNameFromRef(sa.url);
+          if (wrRef) {
+            if (!webResourceNames.has(String(wrRef).toLowerCase())) {
+              errors.push(`sitemap subArea "${sa.title || ''}" targets undeclared web resource '${wrRef}' (declare it in webResources[])`);
+            }
+          } else if (!isSafeHttpUrl(sa.url)) {
+            errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL or a $webresource:<name> reference (got '${sa.url}')`);
+          }
+        }
         // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);

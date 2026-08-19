@@ -737,3 +737,31 @@ test('a COMPONENT-only table with no primary name is dropped with a warning, not
   assert.strictEqual(good.primaryAttribute.schemaName, 'name');
   assert.strictEqual(bad.primaryAttribute, null, 'an empty PrimaryNameAttribute must not become a guessed name');
 });
+
+test('collectSitemap collects the web resource a URL subarea TARGETS, so its content is fetched (#430)', () => {
+  // The Site Map Designer's "custom page backed by an HTML web resource" writes a token into a URL
+  // subarea. Without collecting it, a rebuild would emit a nav entry pointing at a resource the spec
+  // never recreates -- a dangling link in the target environment.
+  const app = {
+    siteMap: {
+      areas: [{
+        title: 'Main',
+        groups: [{
+          title: 'G',
+          subAreas: [
+            { type: 'URL', url: '$webresource:new_homepage.html', title: 'Home' },
+            { type: 'URL', url: '/WebResources/new_second.html', title: 'Second' },
+            { type: 'URL', url: 'https://contoso.example/help', title: 'Help' },
+          ],
+        }],
+      }],
+    },
+  };
+  const { customRefs } = collectSitemap(app);
+  assert.ok(customRefs.includes('new_homepage.html'), '$webresource: token must be collected');
+  assert.ok(customRefs.includes('new_second.html'), '/WebResources/ form must be collected');
+  assert.strictEqual(
+    customRefs.some((r) => /contoso\.example|https/.test(r)), false,
+    'a real http(s) link is not a web resource and must NOT be collected',
+  );
+});

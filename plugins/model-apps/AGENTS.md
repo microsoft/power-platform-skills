@@ -262,17 +262,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (every tile carries the deployed view/chart ids), so a rebuild recreates the dashboard against the
   existing views/charts without re-declaring them (genpage/entity/URL subareas round-trip losslessly). A
   dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`.
-  **A URL subarea carrying a WEB-RESOURCE TOKEN is dropped, not emitted.** The Site Map Designer's
-  "custom page backed by an HTML web resource" writes `$webresource:<name>` into a URL subarea; the App
-  Spec has no `webresource` subarea kind and the validator requires http(s) (a deliberate guard — a
-  `javascript:`/`file:` nav entry in a shipped app is an injection / exfil vector). Passing the token
-  through made the WHOLE download fail validation and write no spec at all, blocking download → edit →
-  rebuild for the entire app over one unrelated nav entry (issue #430). It is now dropped like
-  `CustomPage` and counted in `droppedSubareas`, so the maker is told which nav entry will be missing and
-  `--allow-lossy-download` writes the rest. The drop is keyed off the **shared `isSafeHttpUrl`** rule, so
-  any scheme the validator would reject is dropped rather than failing the download, and the two cannot
-  drift. Supporting such a subarea end-to-end is a real feature (schema + build + the web resource's own
-  content, which download does not capture) — not done.
+  **A URL subarea that TARGETS a web resource round-trips too.** The Site Map Designer's "custom page
+  backed by an HTML web resource" writes `$webresource:<name>` (Dataverse also serves it at
+  `/WebResources/<name>`) into a URL subarea. Passing that token through used to fail the WHOLE
+  download on validation — the http(s) guard rejected it — so no spec was written at all and download
+  → edit → rebuild was blocked for the entire app over one nav entry (issue #430). It is now a real
+  round-trip: `collectSitemap` adds the referenced name to `customRefs` so the resource's CONTENT is
+  fetched and re-declared into `webResources[]` (the same path a token-referenced nav ICON already
+  took), and the validator accepts the token **provided the web resource is declared** — the identical
+  rule a dashboard `webresource` tile already uses. The build needed no change: it already passes a
+  subarea `url` straight through to the sitemap.
+  This does **not** weaken the http(s) guard, which exists to stop an *arbitrary* scheme
+  (`javascript:`, `file:`) becoming a nav entry in a shipped app. A token is not arbitrary — it names
+  a resource inside the solution, and requiring it to be declared keeps the app self-contained on
+  export/import. An **undeclared** token is a hard validation error rather than a dangling link, and a
+  genuinely unexpressible url (`javascript:`, malformed) is still dropped and counted in
+  `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by

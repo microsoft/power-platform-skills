@@ -1,5 +1,5 @@
 'use strict';
-const { isSafeHttpUrl } = require('./app-spec.js');
+const { isSafeHttpUrl, webResourceNameFromRef } = require('./app-spec.js');
 // Reconstruct a COMPLETE app-spec from a DEPLOYED app (the edit flow's "pull everything" step). Pure
 // + testable: `read` supplies the deployed state — the app (sitemap JSON, via the SDK's app read
 // path which surfaces entity/genPage/icon subareas), its generative pages (via pac list+download),
@@ -31,23 +31,20 @@ function subAreaToSpec(sa, pageRefById, dashboardNameById) {
     return name ? { ...base, dashboard: name } : null; // drop only if we couldn't reconstruct the dashboard
   }
   if (sa.type === 'URL' && sa.url) {
-    // A sitemap URL subarea does not always carry a real link. The Site Map Designer's "custom page
-    // backed by an HTML web resource" writes a TOKEN instead — `$webresource:<name>` (Dataverse also
-    // serves the same resource at `/WebResources/<name>`). The App Spec has no `webresource` subarea
-    // kind, and the validator requires http(s) (`isSafeHttpUrl`, a deliberate guard: a javascript:
-    // or file: nav entry in a shipped app is a script-injection / local-file-exfil vector).
+    // A URL subarea is EITHER a real link OR a web-resource TOKEN (`$webresource:<name>`, which
+    // Dataverse also serves at `/WebResources/<name>`) — the Site Map Designer's "custom page backed
+    // by an HTML web resource". BOTH round-trip: the validator accepts a token whose web resource is
+    // declared in `webResources[]`, and `collectSitemap` adds that name to the download's
+    // `customRefs`, so its CONTENT is fetched and re-declared — the same path a custom nav icon
+    // referenced by token already takes.
     //
-    // Passing the token through therefore made the WHOLE download fail validation and write no spec
-    // at all — blocking download → edit → rebuild for the entire app over one unrelated nav entry,
-    // with an error naming a validator rather than the offending subarea, and `--allow-lossy-download`
-    // did not cover it. Drop it like CustomPage instead, so it is counted in `droppedSubareas`: the
-    // maker is told exactly which nav entry will be missing, and the existing lossy override writes
-    // the rest of the app.
-    //
-    // Tested against the shared `isSafeHttpUrl` rather than a `$webresource:` string match, so ANY
-    // scheme the validator would reject is dropped here rather than failing the download, and the two
-    // cannot drift apart.
-    return isSafeHttpUrl(sa.url) ? { ...base, url: sa.url } : null;
+    // Anything else (a `javascript:`/`file:` scheme, a malformed string) cannot be expressed in the
+    // App Spec, so it is dropped here rather than emitted. Passing it through made the WHOLE download
+    // fail validation and write no spec at all, blocking download → edit → rebuild for the entire app
+    // over one nav entry (issue #430). A drop is counted in `droppedSubareas`, so the maker is told
+    // which entry will be missing and `--allow-lossy-download` writes the rest.
+    if (webResourceNameFromRef(sa.url) || isSafeHttpUrl(sa.url)) return { ...base, url: sa.url };
+    return null;
   }
   return null; // CustomPage / unmapped — not hydrated
 }
