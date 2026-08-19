@@ -135,21 +135,25 @@ The plugin is conversational — you describe what you want and the skill drives
 ```
 
 What happens:
-1. **Gate 1** — confirms requirements, product archetype, workflow capabilities,
+1. **Gate 1** — confirms requirements, primary product structure, workflow capabilities,
     operating context, target platforms/environment, and any visual references
 2. **Gate 2** — approves complete architecture: data, projections, offline,
     native capabilities, connectors, and blockers
-3. **Gate 3** — approves Product Experience: screen graph/specs, visual
-    personality, Home composition, First Viewport geometry, media, navigation,
-    and reference fidelity
+3. **Gate 3** — approves Product Experience through a validated structural
+    preview: screen graph/specs, visual character, Home hierarchy, First
+    Viewport geometry, action ownership, media, navigation, and reference
+    fidelity
 4. **Gate 4** — final implementation confirmation
 5. **Design system** — materializes the approved experience into composition,
     signature components, brand tokens, typography, components, and previews
-6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
-7. **Dev server + visual QA** — `npm run dev` starts Metro; scan the QR with
+6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, and spawns N parallel screen-builders for the TSX
+7. **Refine + validate** — `/design-react-native-app` runs in non-interactive,
+    plan-aware, UI-only mode; changed files then pass quality, contrast,
+    composition, route, and TypeScript gates
+8. **Dev server + visual QA** — `npm run dev` starts Metro; scan the QR with
     your native dev client on a device. Native screenshot/view-tree checks then
-    verify Home, tab silhouettes, clipping, media, and premium/reference
-    fidelity when required.
+    verify Home, tab silhouettes, clipping, media, premium/reference fidelity,
+    and required RTL locale coverage.
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 

@@ -18,7 +18,7 @@ const CONTRACTS = {
     fallback: 'foreground-data-model-from-snapshot',
   },
   'screen-planner': {
-    pluginFiles: ['agents/screen-planner.md', 'shared/references/screen-templates.md'],
+    pluginFiles: ['agents/screen-planner.md', 'shared/references/mobile-ux-boundaries.md'],
     needsSnapshot: false,
     writes: ['_screens_section.md', 'mobile-app-plan.html'],
     fallback: 'foreground-screen-plan',

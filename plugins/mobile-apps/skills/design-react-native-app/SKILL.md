@@ -10,7 +10,74 @@ model: opus
 
 Create a cohesive, accessible, and production-ready design for a React Native application. Implement the design in the user's project when one is available.
 
+## Invocation modes
+
+### Standalone mode
+
+Use the conversational workflow below when the user invokes this skill directly.
+Gather only genuinely missing design context and implement the requested design.
+
+### Orchestrated UI-only mode
+
+Use this mode when `/create-mobile-app`, `/create-mobile-prototype`,
+`/sync-from-plan`, or another approved app workflow invokes the skill after
+screen generation.
+
+The parent invocation supplies this contract:
+
+```text
+--orchestrated
+--working-dir <project-root>
+--plan <project-root>/native-app-plan.md
+--brand <project-root>/brand/design-system.md
+--tokens <project-root>/brand/tokens.ts
+--scope <comma-separated generated screen/component paths>
+--ui-only
+--no-questions
+```
+
+These may be serialized prompt fields rather than literal CLI flags. Their
+semantics are binding either way.
+
+In orchestrated mode:
+
+1. **Never ask a question or present a style picker.** Gate 3 already approved
+	the experience and Gate 4 already approved implementation. Missing required
+	context returns `NEEDS_CONTEXT:` or `BLOCKED:`; it never opens another gate.
+2. **Read the full approved contract before editing:** `## Product Experience`,
+	`## Design Direction`, `## Design`, `## Screens`, and `### Navigation
+	Contracts` from the plan; `design-intake.md` when referenced; the complete
+	brand design system, tokens, and every scoped source file.
+3. **Treat plan and brand artifacts as read-only.** Preserve First Viewport
+	geometry, media/reference requirements, tab silhouettes, action ownership,
+	navigation intent, brand negatives, and every `experience-*` testID.
+4. **Modify only files named by `--scope`.** Allowed changes are JSX hierarchy
+	inside approved regions, Tamagui layout and semantic-token usage,
+	typography, spacing, grouping, responsive behavior, accessibility props,
+	logical start/end layout for RTL, and presentation of loading/empty/error/
+	pressed/selected/disabled states.
+5. **Do not modify behavior.** Preserve route strings and params, navigation
+	APIs, service calls, query/mutation logic, Dataverse payloads, form schemas,
+	permissions, native wrappers, and authentication. If a visual improvement
+	requires one of these, return a concern instead of editing it.
+6. **Never edit** `native-app-plan.md`, `design-intake.md`, `brand/`,
+	`tamagui.config.ts`, `package.json`, lockfiles, `app.config.*`, route layout
+	files, `src/generated/`, services, models, hooks, utilities, native wrappers,
+	or data/config artifacts.
+7. **Do not install dependencies or introduce unapproved media.** Unsplash,
+	remote images, custom fonts, icon packages, and animation libraries are
+	forbidden unless the approved plan already names the exact source/package.
+8. **Use the project's existing Tamagui and Expo APIs.** Do not replace the
+	styling system, add raw hex values, or bypass semantic brand tokens.
+
+Before the first edit, record the scoped files and verify every intended change
+is representational rather than behavioral. After editing, return the plugin
+status protocol described under Completion response.
+
 ## Understand the request
+
+In orchestrated mode, skip discovery and extract these facts from the approved
+plan and brand artifacts. Do not ask for them again.
 
 Use requirements already supplied by the user. Determine:
 
@@ -23,6 +90,9 @@ Use requirements already supplied by the user. Determine:
 If essential product direction is missing and multiple substantially different designs would be reasonable, ask one focused question at a time. Otherwise, make sensible assumptions and proceed.
 
 ## Confirm the design direction
+
+This section is standalone-only. In orchestrated mode, the approved Product
+Experience and brand design system are the design direction.
 
 Before generating or implementing the design, confirm the user's preferred visual direction unless they already provided one. Ask one question at a time and present these choices:
 
@@ -51,6 +121,10 @@ When working in an existing project:
 - Reuse the existing framework, component library, navigation solution, assets, and coding conventions.
 - Preserve existing behavior unless the user requests a change.
 - Do not replace working project configuration or add dependencies solely for minor visual effects.
+
+In orchestrated mode, additionally verify that every scoped file belongs to
+`app/(app)/**` or an explicitly supplied app-owned visual component path. A
+scope escape is `BLOCKED`, not permission to broaden the edit.
 
 If no project exists, provide a concrete screen specification and reusable React Native component code.
 
@@ -155,6 +229,10 @@ Build complete screens and flows rather than disconnected decorative elements.
 
 ## Use Unsplash imagery
 
+In orchestrated mode, skip this section unless the approved plan names the exact
+Unsplash source and permits network-dependent media. Do not add photography
+merely to make an already approved screen look richer.
+
 When photography would improve the design and the user has not supplied suitable assets, use contextually relevant images from Unsplash instead of generic placeholder graphics.
 
 - Choose specific, stable `images.unsplash.com` image URLs so the design is deterministic. Do not use random-image or redirect endpoints.
@@ -214,7 +292,36 @@ Do not claim visual verification on a simulator or device unless it was actually
 Do not claim WCAG 2.2 AA conformance unless both automated checks and manual checks of applicable success criteria were completed.
 Do not describe a design as polished or production-ready without reviewing rendered screens on both target platforms when both are requested.
 
+In orchestrated mode, validation inside this skill is intentionally narrow:
+
+1. Run the mobile changed-file dispatcher against every changed scoped file.
+2. Run the project's TypeScript command.
+3. Report the exact changed-file list and any remaining qualitative concern.
+
+The parent workflow owns the post-refinement quality, contrast, composition,
+route, and native visual-QA gates. Do not claim those gates passed merely because
+TypeScript passed.
+
 ## Completion response
+
+In orchestrated mode, the literal first line must follow the plugin protocol:
+
+```text
+DONE
+
+Changed files: <comma-separated paths or none>
+Preserved: routes, service/data behavior, plan contracts, brand artifacts, experience testIDs
+Validation: <changed-file dispatcher and TypeScript results>
+```
+
+Use `DONE_WITH_CONCERNS: <concise concerns>` when UI changes are valid but RTL,
+native evidence, or another qualitative requirement remains unverified. Use
+`NEEDS_CONTEXT: <missing approved input>` when required plan/brand context is
+absent. Use `BLOCKED: <boundary violation>` for a scope escape or a requested
+change that cannot be made without altering behavior. Do not return `DONE` after
+editing a forbidden path.
+
+In standalone mode, state:
 
 State:
 

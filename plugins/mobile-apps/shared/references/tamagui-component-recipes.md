@@ -637,7 +637,9 @@ const theme = useTheme()
 
 ## Typography setup (dual-font pairing)
 
-When the plan's `## Design` specifies a font pairing, add this to `tamagui.config.ts`. Full pairing catalog → [typography-and-tone.md](typography-and-tone.md).
+When the plan's `## Design` specifies a font pairing, add this to
+`tamagui.config.ts`. Use the exact approved families and derive a readable scale
+that respects Dynamic Type and the mobile UX boundaries.
 
 This matches the standalone template's Tamagui 2 + Config v5 customization region.
 
@@ -720,46 +722,3 @@ For content-heavy screens, use generous gaps between major sections. This is the
 ```
 
 Compare: `gap="$4"` (16px) feels cramped. `gap="$8"` (32px) feels designed. Use `$8` to `$10` between sections, `$2` to `$3` within sections.
-
-## Named palette tokens
-
-When the plan specifies a custom palette, override Tamagui's default tokens. Full methodology → [color-palette-architecture.md](color-palette-architecture.md).
-
-```tsx
-// Inside the tamagui.config.ts customization markers — warm ochre brand
-const customConfig = {
-  ...defaultConfig,
-  animations,
-  themes: {
-    ...defaultConfig.themes,
-    light: {
-      ...defaultConfig.themes.light,
-      background: '#F7F3EC',       // default page background
-      surface0: '#F7F3EC',         // semantic page background
-      surface1: '#FBF8F2',         // lightly elevated
-      surface2: '#EFE8DA',         // card fill
-      surface3: '#E4DCC9',         // hairlines
-      color4: '#C9BEA3',           // surface4 — muted borders
-      color12: '#1C1B17',          // text0 — primary ink
-      color11: '#3A372F',          // text1 — secondary
-      color10: '#6B6557',          // text2 — tertiary
-      color9: '#948C7A',           // text3 — faintest
-      blue10: '#A8763E',           // repurpose as brand accent
-    },
-    dark: {
-      ...defaultConfig.themes.dark,
-      background: '#0E0D0B',       // default page background
-      surface0: '#0E0D0B',         // semantic page background
-      surface1: '#14130F',         // lightly elevated
-      surface2: '#1E1C18',         // card fill
-      surface3: '#2D2A22',         // borders
-      color4: '#3A372F',           // surface4 dark
-      color12: '#F2EAD8',          // text0 dark (cream, not white)
-      color11: '#D4CCB8',          // text1 dark
-      color10: '#948C7A',          // text2 dark
-      color9: '#6B6557',           // text3 dark
-      blue10: '#C8965E',           // accent brightens in dark mode
-    },
-  },
-}
-```

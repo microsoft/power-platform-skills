@@ -259,8 +259,8 @@ function validateHome(projectRoot, markdown, homePath, homeContent, issues) {
   if (Number.isFinite(metricsMaximum) && metricCount > metricsMaximum) {
     addIssue(issues, relativeHome, 'too-many-supporting-metrics', `Reduce first-viewport Stat/Metric/KPI components to the approved maximum (${metricsMaximum}).`, String(metricCount));
   }
-  if (composition !== 'operational-dashboard' && metricCount >= 3) {
-    addIssue(issues, relativeHome, 'dashboard-drift', `${composition} must not collapse into an equal-weight KPI dashboard.`, String(metricCount));
+  if (metricCount >= 3 && Number.isFinite(metricsMaximum) && metricsMaximum < 3) {
+    addIssue(issues, relativeHome, 'dashboard-drift', 'The first viewport exceeds its approved metric hierarchy and collapses into an equal-weight KPI dashboard.', String(metricCount));
   }
   if (media === 'required') {
     if (!/from\s+["']expo-image["']|require\([^)]*assets\//.test(combined) || !/<Image\b/.test(combined)) {

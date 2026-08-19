@@ -329,20 +329,65 @@ After the script-based stylistic sweep, apply the final layer of context-aware d
 **Print before starting:**
 > "-> [prototype 9.6/10] Running automated design refinement pass to polish UI, typography, RTL layouts, and accessibility..."
 
+Write the exact allowed files to
+`<PROJECT_DIR>/.tmp/design-refinement-scope.json` and capture a baseline:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-ui-only-refinement.js" \
+  --project-root "$PROJECT_DIR" \
+  --scope-file "$PROJECT_DIR/.tmp/design-refinement-scope.json" \
+  --snapshot "$PROJECT_DIR/.tmp/design-refinement-before.json" \
+  --capture
+```
+
 Invoke the design skill:
 ```text
 /design-react-native-app
-```
-Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, run:
+Arguments:
+  --orchestrated
+  --working-dir <PROJECT_DIR>
+  --plan <PROJECT_DIR>/native-app-plan.md
+  --brand <PROJECT_DIR>/brand/design-system.md
+  --tokens <PROJECT_DIR>/brand/tokens.ts
+  --scope <exact generated screen files plus exact app-owned visual components>
+  --ui-only
+  --no-questions
+```
+Instruct the skill to refine only the supplied files against the approved plan,
+design intake when present, and complete brand design system. Preserve mock
+service behavior, routes, form/data contracts, plan/brand artifacts, and
+`experience-*` testIDs. Do not install dependencies or add unapproved media.
+
+Apply the plugin first-line status switch. A scope escape or behavior change is
+`BLOCKED`. Verify the filesystem delta before trusting that status:
+
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-ui-only-refinement.js" \
+  --project-root "$PROJECT_DIR" \
+  --snapshot "$PROJECT_DIR/.tmp/design-refinement-before.json" \
+  --verify
+```
+
+Exit `2` is `BLOCKED`. Use the auditor's `changed` list as authoritative. When
+it is non-empty, rerun the changed-file dispatcher and all five Step 9 gates,
+including quality and contrast, then run composition as an additional
+structural gate:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-composition.js" \
+  --project-root "$PROJECT_DIR" --report <changed-screen-or-component-files>
 npm --prefix "$PROJECT_DIR" run type-check
 ```
-to guarantee it didn't break TS typing.
 
-After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
-the user opted out of visual companion output.
+Append these post-refinement results to `.tmp/final-validation.md`. Do not claim
+WCAG or RTL verification from source inspection; native evidence remains a
+separate concern.
+
+After validation and design polish, invoke `/preview-screens --working-dir
+<PROJECT_DIR>` only when the original request includes `--preview` or the user
+explicitly asked for a shareable static approximation. Otherwise proceed to
+Metro; the native app is the default review surface.
 
 ### Step 10 - Record State And Start Metro
 

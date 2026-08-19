@@ -227,7 +227,7 @@ Rules:
 
 ## References
 
-- `shared/references/screen-templates.md`
+- `shared/references/mobile-ux-boundaries.md`
 - `shared/references/accessibility-checklist.md`
 - `shared/references/data-performance.md`
 - `shared/samples/screen-list.tsx`

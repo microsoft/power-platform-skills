@@ -112,13 +112,20 @@ Internalize:
 - Conversion guidelines — placeholder rules, icon substitutions, what to skip (Section 3)
 - Phone frame HTML template (Section 4) — this is the outer shell
 
-Also check if the project has custom brand tokens:
+Read generated brand tokens first:
 
 ```text
-Glob pattern="tamagui.config.ts" path="<working_dir>"
+Glob pattern="brand/tokens.ts" path="<working_dir>"
 ```
 
-If found, read it and extract any custom color tokens (look for `tokens: { color: { ... } }`). Add them as additional CSS custom properties in the generated HTML.
+If found, read `brand/tokens.ts` and extract semantic color, spacing, radius,
+size, and typography values. These are the preview's token source of truth. Add
+them as CSS custom properties and use the approved heading/body families in the
+phone frames.
+
+Only when `brand/tokens.ts` is absent, inspect `tamagui.config.ts` for inline
+custom tokens. Current branded projects import tokens into Tamagui, so parsing
+only `tamagui.config.ts` silently falls back to generic blue/white styling.
 
 ### Step 4 — Read and convert each screen
 
@@ -169,7 +176,9 @@ Replace the placeholders:
 - **`{{TABS}}`** — one `<button class="tab" ...>` per screen, first tab gets class `active`
 - **`{{SCREENS}}`** — all screen `<div>` blocks from Step 4, first screen gets class `active`
 
-If the project has custom brand tokens (from Step 3), add them to the `:root` CSS block.
+If the project has custom brand tokens (from Step 3), add them to the `:root`
+CSS block and replace the mapping reference's default accent, surface, text,
+radius, and typography values.
 
 ### Step 6 — Write the file
 
@@ -236,4 +245,4 @@ open "<working_dir>/preview.html" 2>/dev/null \
 
 - [tamagui-html-mapping.md](../../shared/references/tamagui-html-mapping.md) — component + token mapping + phone frame template
 - [tamagui-component-recipes.md](../../shared/references/tamagui-component-recipes.md) — copy-paste Tamagui snippets (context for recognizing patterns)
-- [screen-templates.md](../../shared/references/screen-templates.md) — screen archetype layouts
+- [mobile-ux-boundaries.md](../../shared/references/mobile-ux-boundaries.md) — non-negotiable mobile layout and interaction constraints

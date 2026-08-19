@@ -21,18 +21,18 @@ function compositionPlan() {
 ## Product Experience
 - Contract version: 1
 - Industry context: fitness
-- Product archetype: asset-maintenance-cmms
+- Product archetype: Equipment maintenance lifecycle from inspection through return to service
 - Classification confidence: high
 - Classification evidence: equipment lifecycle
-- Workflow capabilities: qr-lookup, preventive-maintenance
-- Operating context: indoor-mobile-work
-- Visual personality: premium-brand-forward
-- Visual ambition: premium
-- Content emphasis: object-led
-- Home composition: asset-command
-- Navigation mood: atmospheric
+- Workflow capabilities: QR lookup and preventive maintenance
+- Operating context: Indoor one-handed mobile work
+- Visual personality: Precise equipment-focused interface with quiet premium detailing
+- Visual ambition: Distinct branded experience with production-level polish
+- Content emphasis: Current equipment identity and health dominate supporting maintenance metrics
+- Home composition: Equipment identity and health lead into next service and one integrated action
+- Navigation mood: Branded native navigation subordinate to equipment content
 - Navigation silhouette: branded bottom tabs
-- Density: comfortable
+- Density: Comfortable scanning rhythm for repeated technician use
 - Reference fidelity: none
 - Media strategy: record-media
 - Media source: equipment image
@@ -66,7 +66,7 @@ _None._
 
 ### Per-Screen Specs
 #### Home (\`/(app)/home\`)
-- **Home composition:** \`asset-command\`
+- **Home composition:** Equipment identity and health lead into next service and one integrated action
 - **First viewport materialization:** EquipmentCommandHero
 `;
 }

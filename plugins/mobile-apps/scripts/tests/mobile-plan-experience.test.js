@@ -26,9 +26,9 @@ test('status synchronizes Product Experience fields from plan', () => {
   const plan = path.join(dir, 'native-app-plan.md');
   fs.writeFileSync(plan, `## Product Experience
 - Contract version: 1
-- Product archetype: asset-maintenance-cmms
-- Visual personality: premium-brand-forward
-- Home composition: asset-command
+- Product archetype: Equipment maintenance lifecycle from inspection through return to service
+- Visual personality: Precise equipment-focused interface with quiet premium detailing
+- Home composition: Equipment identity and health lead into next service and one integrated action
 - Reference fidelity: high
 
 ### First Viewport Contract
@@ -37,31 +37,31 @@ test('status synchronizes Product Experience fields from plan', () => {
 | Signature component | EquipmentCommandHero |
 `);
   assert.deepStrictEqual(experienceStatusFromPlan(plan), {
-    productArchetype: 'asset-maintenance-cmms',
-    visualPersonality: 'premium-brand-forward',
-    homeComposition: 'asset-command',
+    productArchetype: 'Equipment maintenance lifecycle from inspection through return to service',
+    visualPersonality: 'Precise equipment-focused interface with quiet premium detailing',
+    homeComposition: 'Equipment identity and health lead into next service and one integrated action',
     referenceFidelity: 'high',
   });
 });
 
 test('plan renderer creates structured navigation, experience status, progress, and input banner safely', () => {
-  const markdown = '## Product Experience\n- Product archetype: `asset-maintenance-cmms`\n\n| Field | Requirement |\n|---|---|\n| Home | asset-command |\n<script>alert(1)</script>\n\n## Screens\n### Home\n**Composition:** asset-command';
+  const markdown = '## Product Experience\n- Product archetype: `Equipment maintenance lifecycle`\n\n| Field | Requirement |\n|---|---|\n| Home | Equipment identity leads into next service |\n<script>alert(1)</script>\n\n## Screens\n### Home\n**Composition:** Equipment identity and health';
   const html = renderPlan(markdown, {
     phase: 'architecture approval',
     completed: 2,
     total: 4,
     awaitingInput: true,
     inputPrompt: 'return to terminal',
-    productArchetype: 'asset-maintenance-cmms',
-    visualPersonality: 'premium-brand-forward',
-    homeComposition: 'asset-command',
+    productArchetype: 'Equipment maintenance lifecycle',
+    visualPersonality: 'Precise equipment-focused interface',
+    homeComposition: 'Equipment identity and health lead into next service',
     visualQaState: 'pending',
   });
   assert.strictEqual(splitSections(markdown).length, 2);
   assert.match(html, /50% complete/);
   assert.match(html, /Input required/);
-  assert.match(html, /asset-maintenance-cmms/);
-  assert.match(html, /premium-brand-forward/);
+  assert.match(html, /Equipment maintenance lifecycle/);
+  assert.match(html, /Precise equipment-focused interface/);
   assert.match(html, /<table>/);
   assert.match(html, /<h2>Home<\/h2>/);
   assert.doesNotMatch(html, /<section[^>]*>[\s\S]*?<pre>&lt;script/);

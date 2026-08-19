@@ -5,11 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const {
-  PRODUCT_ARCHETYPES,
-  VISUAL_PERSONALITIES,
-  validateExperienceContract,
-} = require('../validate-experience-contract');
+const { validateExperienceContract } = require('../validate-experience-contract');
 
 const fixtures = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'experience-contracts.json'), 'utf8'));
 
@@ -53,26 +49,17 @@ function toPlan(fixture) {
 _None._
 
 ## Design Direction
-visual_personality: ${fixture.visualPersonality}
-visual_ambition: ${fixture.visualAmbition}
-materialization_profile: custom
-product_archetype: ${fixture.productArchetype}
-home_composition: ${fixture.homeComposition}
-content_emphasis: ${fixture.contentEmphasis}
-reference_fidelity: ${fixture.referenceFidelity}
-first_viewport_signature: ${fixture.signature}
-first_viewport_share: ${fixture.viewportShare}
-first_viewport_min_height: ${fixture.minimumHeight}
-first_viewport_media: ${fixture.media}
-first_viewport_headline_min: ${fixture.headlineMinimum}
-first_viewport_metrics_max: ${fixture.metricsMaximum}
-first_viewport_action: ${fixture.primaryAction}
-first_viewport_next_section_visible: ${fixture.nextSectionVisible === 'yes'}
-duplicate_action_with_tab: ${fixture.duplicateActionWithTab}
-media_strategy: ${fixture.mediaStrategy}
-media_source: ${fixture.mediaSource}
-media_fallback: ${fixture.mediaFallback}
-navigation_silhouette: ${fixture.navigationSilhouette}
+density: ${fixture.density}
+surface: Group related content only when it clarifies ownership; otherwise use full-width content and separators
+motion: Functional state and spatial transitions with reduced-motion support
+list_style: Entity-specific full-width rows ordered by the fields users scan first
+tone: Direct human labels, actionable errors, and domain-specific empty states
+primary_action_shape: Stable high-contrast action with a visible verb label
+primary_action_position: Bottom-reachable owner on workflow screens; native navigation only when approved
+status_treatment: One contained status cue with text and accessible contrast
+empty_state: Domain condition, next-step explanation, and one recovery action
+heading_font: Approved brand heading family or project default
+body_font: Approved readable body family or project default
 
 ## Design
 Complete materialization.
@@ -99,45 +86,39 @@ Complete materialization.
 `;
 }
 
-test('registries accept all fixture archetypes and personalities', () => {
+test('fixtures use concrete free-form product and visual contracts', () => {
   for (const fixture of fixtures) {
-    assert.ok(PRODUCT_ARCHETYPES.has(fixture.productArchetype), fixture.productArchetype);
-    assert.ok(VISUAL_PERSONALITIES.has(fixture.visualPersonality), fixture.visualPersonality);
+    assert.match(fixture.productArchetype, /\s/);
+    assert.match(fixture.visualPersonality, /\s/);
+    assert.match(fixture.homeComposition, /\s/);
   }
 });
 
 for (const fixture of fixtures) {
-  test(`validates independent archetype/personality fixture: ${fixture.id}`, () => {
+  test(`validates prompt-derived experience fixture: ${fixture.id}`, () => {
     assert.deepStrictEqual(validateExperienceContract(toPlan(fixture), { projectRoot: __dirname }), []);
   });
 }
 
-test('CMMS remains asset maintenance when inspection is a supporting capability', () => {
+test('product structure remains independent from supporting capabilities', () => {
   const fixture = fixtures.find((item) => item.id === 'cmms-premium');
-  assert.match(fixture.workflowCapabilities, /ordered-checklist/);
-  assert.strictEqual(fixture.productArchetype, 'asset-maintenance-cmms');
-  assert.strictEqual(fixture.visualPersonality, 'premium-brand-forward');
-  assert.strictEqual(fixture.homeComposition, 'asset-command');
+  assert.match(fixture.productArchetype, /maintenance lifecycle/i);
+  assert.match(fixture.workflowCapabilities, /ordered checks/i);
+  assert.doesNotMatch(fixture.visualPersonality, /inspection/i);
 });
 
-test('operational archetypes are not forced to utility personality', () => {
-  const operational = fixtures.filter((fixture) => ['asset-maintenance-cmms', 'inventory-scan-first'].includes(fixture.productArchetype));
-  assert.ok(operational.some((fixture) => fixture.visualPersonality === 'premium-brand-forward'));
-  assert.ok(operational.some((fixture) => fixture.visualPersonality === 'playful-consumer'));
-});
-
-test('rejects Design Direction drift from Product Experience', () => {
+test('rejects placeholder Design Direction materialization', () => {
   const fixture = fixtures[0];
-  const plan = toPlan(fixture).replace('visual_personality: premium-brand-forward', 'visual_personality: utility');
+  const plan = toPlan(fixture).replace(`density: ${fixture.density}`, 'density: <choose later>');
   const issues = validateExperienceContract(plan, { projectRoot: __dirname });
-  assert.ok(issues.some((issue) => issue.rule === 'direction-contract-drift' && issue.field === 'visual personality'));
+  assert.ok(issues.some((issue) => issue.rule === 'missing-field' && issue.field === 'density'));
 });
 
-test('rejects first-viewport geometry drift from Product Experience', () => {
+test('rejects invalid first-viewport geometry', () => {
   const fixture = fixtures[0];
-  const plan = toPlan(fixture).replace(`first_viewport_min_height: ${fixture.minimumHeight}`, 'first_viewport_min_height: 180');
+  const plan = toPlan(fixture).replace(`| Minimum height | ${fixture.minimumHeight} |`, '| Minimum height | 100 |');
   const issues = validateExperienceContract(plan, { projectRoot: __dirname });
-  assert.ok(issues.some((issue) => issue.rule === 'direction-contract-drift' && issue.field === 'first viewport min height'));
+  assert.ok(issues.some((issue) => issue.rule === 'invalid-range' && issue.field === 'minimum height'));
 });
 
 test('rejects required media without a source', () => {
@@ -146,10 +127,9 @@ test('rejects required media without a source', () => {
   assert.ok(issues.some((issue) => issue.rule === 'missing-required-media'));
 });
 
-test('rejects media-command when media is not required', () => {
-  const fixture = { ...fixtures.find((item) => item.id === 'retail-immersive'), media: 'optional' };
-  const issues = validateExperienceContract(toPlan(fixture), { projectRoot: __dirname });
-  assert.ok(issues.some((issue) => issue.rule === 'media-command-contract'));
+test('accepts a concrete free-form Home composition', () => {
+  const fixture = fixtures.find((item) => item.id === 'retail-immersive');
+  assert.deepStrictEqual(validateExperienceContract(toPlan(fixture), { projectRoot: __dirname }), []);
 });
 
 test('rejects incomplete Home composition materialization', () => {

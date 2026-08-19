@@ -328,8 +328,9 @@ Resolve these independent axes without being constrained to a hardcoded list:
   ambition, content emphasis, Home composition, navigation mood and silhouette,
   density, media strategy, concrete media source, loading/error/empty media
   fallback, and reference fidelity. Explicit visual/reference signals outrank
-  recommendations. If absent, draft `polished-operational` + `tailored`, then
-  show it at Gate 3.
+  inferred choices. If absent, derive a restrained but app-specific expression
+  from audience, workflow frequency, content, and operating context, then show
+  it at Gate 3.
 4. **Define strict geometry** — output a layout contract including: signature component width/height boundaries, required media, placement rules, and strict cross-screen composition consistency rules.
 5. **Materialize direction** — generate custom palette, typography, and component styling organically based on the Product Experience. Do not rely on markdown bundles.
 
@@ -347,10 +348,10 @@ and is reviewed at Gate 3. Do not create another question.
 
 | Confidence | When | Action |
 |---|---|---|
-| Product `high` | One registry loop clearly explains the primary repeated work | Preserve Gate 1 choice. |
+| Product `high` | One prompt-grounded loop clearly explains the primary repeated work | Preserve Gate 1 choice. |
 | Product `low` | Multiple loops remain equally plausible | Show approved choice, evidence, and alternatives in Gate 1/Gate 2; do not hide it. |
 | Visual `high` | Explicit brand/aesthetic/reference signal exists | Build the contract from that signal. |
-| Visual `low` | No visual signal or conflicting signals | Use the least-assumptive expression and mark it low confidence inside Gate 3. |
+| Visual `low` | No visual signal or conflicting signals | Derive from audience, workflow, content, and operating context; mark it low confidence inside Gate 3. |
 
 ## Step 3b — Plan Connectors Inline (Gate 2)
 
@@ -665,7 +666,31 @@ Wait for return; apply the Step 3.0 status switch:
 Before each planner-owned gate, update the visible status, render the same
 authoritative plan, and tell the foreground orchestrator what to open:
 
+For Gate 3, first rebuild the temporary structural projection from the current
+plan. This script validates the Product Experience and preview contract before
+writing; exit `2` returns to the owning graph/spec/design step for repair and no
+experience preview may open.
+
 ```bash
+GATE3_PREVIEW_CONTRACT="<working_dir>/.tmp/gate3-preview-contract.json"
+
+node "${PLUGIN_ROOT}/scripts/build-gate3-preview-contract.js" \
+  --project-root "<working_dir>" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$GATE3_PREVIEW_CONTRACT"
+```
+
+The JSON is a disposable rendering projection, not another plan or approval
+artifact. Rebuild it after every Gate 3 rejection. Gate 2 omits it because that
+gate approves architecture rather than experience.
+
+```bash
+PREVIEW_CONTRACT_ARGS=()
+# Gate 3 only; leave the array empty for Gate 2.
+PREVIEW_CONTRACT_ARGS=(
+  --preview-contract "<working_dir>/.tmp/gate3-preview-contract.json"
+)
+
 node "${PLUGIN_ROOT}/scripts/mobile-plan-status.js" \
   --project-root "<working_dir>" \
   --phase "<architecture|experience>" \
@@ -677,6 +702,7 @@ node "${PLUGIN_ROOT}/scripts/mobile-plan-status.js" \
 node "${PLUGIN_ROOT}/scripts/render-mobile-plan.js" \
   --plan "<working_dir>/native-app-plan.md" \
   --status "<working_dir>/mobile-app-status.json" \
+  "${PREVIEW_CONTRACT_ARGS[@]}" \
   --output "<working_dir>/mobile-app-plan.html"
 ```
 
@@ -728,8 +754,12 @@ connectors exist.
 
 #### 5c.3 — Gate 3: experience
 
-Render the same `mobile-app-plan.html` with the staged screen graph, detailed
-specs, and design preview. Set `awaitingInput: true`, then enter plan mode once:
+Build and validate `.tmp/gate3-preview-contract.json`, then render the same
+`mobile-app-plan.html` with the staged screen graph, detailed specs, and
+structural design preview. The preview must show one to three representative
+frames, First Viewport annotations, primary-action ownership, cross-tab
+silhouettes, draft visual-system rationale, and binding reference constraints.
+Set `awaitingInput: true`, then enter plan mode once:
 
 ```
 ## Gate 3 of 4 — Experience
@@ -741,6 +771,11 @@ specs, and design preview. Set `awaitingInput: true`, then enter plan mode once:
 
 Approve the experience?
 ```
+
+The preview approves hierarchy, geometry, media intent, navigation silhouette,
+and design direction. It is explicitly not a native screenshot, WCAG proof, RTL
+proof, or pixel-fidelity claim. Those remain post-implementation visual-QA
+responsibilities.
 
 Rejecting screen membership returns internally to graph generation; rejecting
 layout/spec/design regenerates specs only. Neither path creates an intermediate

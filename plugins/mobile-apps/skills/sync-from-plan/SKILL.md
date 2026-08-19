@@ -301,27 +301,70 @@ After the script-based stylistic sweep, apply the final layer of context-aware d
 **Print before starting:**
 > "-> [sync 6.5/8] Running automated design refinement pass to polish UI, typography, RTL layouts, and accessibility..."
 
+Write the exact allowed files to
+`<PROJECT_DIR>/.tmp/design-refinement-scope.json` and capture a baseline:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-ui-only-refinement.js" \
+  --project-root "$PROJECT_DIR" \
+  --scope-file "$PROJECT_DIR/.tmp/design-refinement-scope.json" \
+  --snapshot "$PROJECT_DIR/.tmp/design-refinement-before.json" \
+  --capture
+```
+
 Invoke the design skill:
 ```text
 /design-react-native-app
-```
-Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, you MUST run a final TypeScript gate:
+Arguments:
+  --orchestrated
+  --working-dir <PROJECT_DIR>
+  --plan <PROJECT_DIR>/native-app-plan.md
+  --brand <PROJECT_DIR>/brand/design-system.md
+  --tokens <PROJECT_DIR>/brand/tokens.ts
+  --scope <exact changed screen files plus affected app-owned visual components>
+  --ui-only
+  --no-questions
+```
+Instruct the skill to refine only the supplied files against the approved plan,
+design intake when present, and complete brand design system. Preserve routes,
+service/data behavior, plan/brand artifacts, and `experience-*` testIDs. Do not
+install dependencies or add unapproved media.
+
+Apply the plugin first-line status switch. A scope escape or behavior change is
+`BLOCKED`. Verify the filesystem delta before trusting that status:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/audit-ui-only-refinement.js" \
+  --project-root "$PROJECT_DIR" \
+  --snapshot "$PROJECT_DIR/.tmp/design-refinement-before.json" \
+  --verify
+```
+
+Exit `2` is `BLOCKED`. Use the auditor's `changed` list as authoritative. When
+it is non-empty, rerun the mandatory changed-file validator, route and screen
+contracts, quality, contrast, and composition gates from Step 6 against that
+exact changed list, then run TypeScript:
+
 ```bash
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-### Step 7 - Preview
+Only proceed to preview after every deterministic post-refinement gate is clean.
+Source review alone does not prove WCAG or RTL rendering.
 
-Unless `--no-preview`, invoke:
+### Step 7 - Optional Static Preview
+
+Only when the request includes `--preview` or explicitly asks for a shareable
+static approximation, invoke:
 
 ```text
 /preview-screens --working-dir <PROJECT_DIR>
 ```
 
-Preview is a review artifact; it never replaces static gates and must not add a
-React Native Web target or runtime route crawl.
+Otherwise skip directly to Step 8. Preview is an optional sharing artifact; it
+never replaces static gates or native visual QA and must not add a React Native
+Web target or runtime route crawl.
 
 ### Step 8 - Record State
 

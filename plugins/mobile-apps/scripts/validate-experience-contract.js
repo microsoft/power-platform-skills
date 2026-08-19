@@ -4,53 +4,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const PRODUCT_ARCHETYPES = new Set([
-  'asset-maintenance-cmms',
-  'field-inspection',
-  'field-service-dispatch',
-  'facilities-operations',
-  'inventory-scan-first',
-  'crm-relationship-workspace',
-  'retail-catalog',
-  'healthcare-wellness',
-  'consumer-fitness',
-  'learning-coaching',
-  'finance-operations',
-  'scheduling-booking',
-  'admin-operations',
-  'custom',
-]);
-
-const VISUAL_PERSONALITIES = new Set([
-  'utility',
-  'polished-operational',
-  'premium-brand-forward',
-  'editorial',
-  'immersive',
-  'playful-consumer',
-  'reference-driven',
-]);
-
-const HOME_COMPOSITIONS = new Set([
-  'asset-command',
-  'media-command',
-  'object-command',
-  'relationship-command',
-  'data-command',
-  'scan-command',
-  'queue-first',
-  'timeline-first',
-  'narrative-home',
-  'personalized-feed',
-  'operational-dashboard',
-]);
-
 const ENUMS = {
   'classification confidence': new Set(['high', 'medium', 'low']),
-  'visual ambition': new Set(['template', 'tailored', 'premium', 'bespoke']),
-  'content emphasis': new Set(['image-led', 'object-led', 'data-led', 'relationship-led', 'task-led', 'timeline-led']),
-  'navigation mood': new Set(['functional', 'atmospheric', 'cinematic', 'reference-driven']),
-  density: new Set(['sparse', 'comfortable', 'compact', 'dense']),
   'reference fidelity': new Set(['none', 'directional', 'high', 'strict-structural']),
   'media strategy': new Set(['record-media', 'local-ui-media', 'generated-placeholder', 'mixed', 'none']),
 };
@@ -248,17 +203,15 @@ function validateDesignDirection(markdown, fields, viewport, issues) {
   }
   const values = parseYamlFields(section);
   const required = [
-    'visual personality', 'visual ambition', 'materialization profile',
-    'product archetype', 'home composition', 'content emphasis',
-    'reference fidelity', 'first viewport signature', 'first viewport share',
-    'first viewport min height', 'first viewport media',
-    'first viewport headline min', 'first viewport metrics max',
-    'first viewport action', 'first viewport next section visible',
-    'duplicate action with tab', 'media strategy', 'media source',
-    'media fallback', 'navigation silhouette',
+    'density', 'surface', 'motion', 'list style', 'tone',
+    'primary action shape', 'primary action position', 'status treatment',
+    'empty state', 'heading font', 'body font',
   ];
   requireFields(values, required, issues, 'Design Direction');
 
+  // Legacy plans may repeat Product Experience fields in Design Direction.
+  // When present, keep validating them for drift, but do not require or
+  // constrain them through a registry.
   const comparisons = [
     ['visual personality', 'visual personality'],
     ['visual ambition', 'visual ambition'],
@@ -338,9 +291,6 @@ function validateExperienceContract(markdown, options = {}) {
   requireFields(fields, REQUIRED_FIELDS, issues, 'Product Experience');
 
   if (fields.get('contract version') !== '1') addIssue(issues, 'unsupported-contract-version', 'Contract version must be 1.', 'contract version', fields.get('contract version'));
-  if (!PRODUCT_ARCHETYPES.has(normalizedValue(fields.get('product archetype')))) addIssue(issues, 'invalid-enum', 'Unknown product archetype.', 'product archetype', fields.get('product archetype'));
-  if (!VISUAL_PERSONALITIES.has(normalizedValue(fields.get('visual personality')))) addIssue(issues, 'invalid-enum', 'Unknown visual personality.', 'visual personality', fields.get('visual personality'));
-  if (!HOME_COMPOSITIONS.has(normalizedValue(fields.get('home composition')))) addIssue(issues, 'invalid-enum', 'Unknown Home composition.', 'home composition', fields.get('home composition'));
   for (const [key, allowed] of Object.entries(ENUMS)) {
     const value = normalizedValue(fields.get(key));
     if (value && !allowed.has(value)) addIssue(issues, 'invalid-enum', `${key} has an unsupported value.`, key, fields.get(key));
@@ -368,8 +318,6 @@ function validateExperienceContract(markdown, options = {}) {
   const mediaSource = normalizedValue(fields.get('media source'));
   if (media === 'required' && (mediaStrategy === 'none' || mediaSource === 'none')) addIssue(issues, 'missing-required-media', 'Required first-viewport media needs a non-none strategy and source.');
   if (mediaStrategy !== 'none' && mediaSource === 'none') addIssue(issues, 'missing-media-source', 'Non-none media strategy requires a concrete media source.');
-  if (normalizedValue(fields.get('home composition')) === 'media-command' && media !== 'required') addIssue(issues, 'media-command-contract', 'media-command requires first-viewport media=required.');
-
   const fidelity = normalizedValue(fields.get('reference fidelity'));
   const referenceSection = getSubsection(section, 'Reference Contract');
   if (fidelity !== 'none') {
@@ -378,9 +326,6 @@ function validateExperienceContract(markdown, options = {}) {
     if (normalizedValue(reference.get('fidelity')) !== fidelity) addIssue(issues, 'reference-fidelity-drift', 'Reference Contract fidelity must match Product Experience.', 'fidelity', reference.get('fidelity'));
     if (fidelity === 'high' || fidelity === 'strict-structural') validateDesignIntake(projectRoot, reference.get('source'), issues);
   }
-  if (normalizedValue(fields.get('visual personality')) === 'reference-driven' && fidelity === 'none') addIssue(issues, 'reference-personality-without-source', 'reference-driven personality requires non-none reference fidelity.');
-  if (normalizedValue(fields.get('navigation mood')) === 'reference-driven' && fidelity === 'none') addIssue(issues, 'reference-navigation-without-source', 'reference-driven navigation requires non-none reference fidelity.');
-
   validateDesignDirection(markdown, fields, viewport, issues);
   validateScreens(markdown, fields, issues);
   return issues;
@@ -418,9 +363,6 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
-  HOME_COMPOSITIONS,
-  PRODUCT_ARCHETYPES,
-  VISUAL_PERSONALITIES,
   getSection,
   getSubsection,
   parseBulletFields,

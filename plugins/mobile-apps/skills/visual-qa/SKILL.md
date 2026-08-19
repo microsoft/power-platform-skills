@@ -24,6 +24,9 @@ platform/device cannot be automated.
 - `--screenshots <path[,path...]>` — native capture fallback.
 - `--report-only` — record findings without editing source.
 - `--full` — force the premium/reference capture matrix.
+- `--rtl-locale <locale>` — require a native RTL capture using an approved RTL
+   locale such as `ar` or `he`; infer this from the plan when localization
+   requirements name an RTL language.
 
 ## Boundaries
 
@@ -33,6 +36,8 @@ platform/device cannot be automated.
   static preview HTML, or direct Metro HTTP requests as runtime evidence.
 - Do not claim pixel parity. Native fonts/chrome/rasterization vary. Compare
   normalized geometry, hierarchy, motifs, and perceptual result.
+- Logical `start`/`end` props and source inspection are not RTL proof. Claim RTL
+   coverage only from a native capture in an actual RTL locale/direction.
 - Fix one visual contract failure at a time. Preserve data and workflow behavior.
 - Never mark missing platform/viewport coverage as pass.
 
@@ -68,6 +73,10 @@ Repair first unless `--report-only`, where it is recorded as a blocker.
 
 Parse visual ambition and reference fidelity.
 
+Also parse localization and direction requirements. When the plan names Arabic,
+Hebrew, Persian, Urdu, another RTL locale, or an explicit RTL requirement,
+require `--rtl-locale` coverage even on the standard smoke path.
+
 ### Standard native smoke
 
 Use for `template`/`tailored` with `none`/`directional` fidelity:
@@ -89,10 +98,15 @@ redesign:
 - Every tab root at one available target.
 - Every screen materializing a required reference motif.
 - One large-system-text capture of Home and the most form/list-dense route.
+- When RTL is required: Home plus the most text-dense form/list route in one
+   approved RTL locale, with realistic translated or bidirectional content and
+   large system text on at least one of those captures.
 
 Expo automation may expose only the currently connected device. Capture what is
 available, then request only the missing native captures from the user. A full
 pass requires the full matrix; partial coverage returns `DONE_WITH_CONCERNS`.
+Missing required RTL locale support or capture is also
+`DONE_WITH_CONCERNS`, never a source-inspection pass.
 
 ## Phase 2 — Detect the Native App
 
@@ -108,10 +122,15 @@ pass requires the full matrix; partial coverage returns `DONE_WITH_CONCERNS`.
 
 For each scoped screen:
 
-1. Navigate from the current screen using `mcp__expo__automation_find_view` and
+1. For an RTL capture, activate the app's existing development locale/direction
+   control or launch configuration before navigation. Do not force RTL globally
+   in production code merely to satisfy QA. If the app has no approved locale
+   path, record `RTL locale infrastructure missing` and request a native
+   screenshot after the user configures the locale.
+2. Navigate from the current screen using `mcp__expo__automation_find_view` and
    `mcp__expo__automation_tap`, following Navigation Contracts. Prefer tab labels
    and visible planned actions. Do not invent routes or use browser deep links.
-2. Find these views when applicable:
+3. Find these views when applicable:
    - `experience-signature`
    - `experience-headline`
    - `experience-media`
@@ -119,9 +138,9 @@ For each scoped screen:
    - `experience-next-section`
    - `experience-metric-1` through `experience-metric-4`
    - `experience-motif-<slug>`
-3. Call `mcp__expo__automation_take_screenshot` and preserve the returned capture
+4. Call `mcp__expo__automation_take_screenshot` and preserve the returned capture
    path/metadata in the session manifest.
-4. Call `mcp__expo__collect_app_logs`; a new error makes that screen fail and
+5. Call `mcp__expo__collect_app_logs`; a new error makes that screen fail and
    routes to `/debug-app` or a focused source fix before visual review continues.
 
 If automated navigation cannot reach one route, ask the user to navigate there
@@ -155,6 +174,16 @@ For every captured screen:
 - Loading/error/empty/populated signature/media states preserve outer geometry.
 - Touch controls remain at least 44dp, or the stricter approved context size.
 - Screenshot is not blank, all-white/all-black, or a red error overlay.
+
+For required RTL captures:
+
+- Reading and focus order follow the active locale direction.
+- Directional navigation, progress, chevrons, transitions, and gestures mirror;
+   universal media controls, numbers, brand marks, and non-directional imagery do
+   not mirror.
+- Labels, badges, inputs, validation messages, and long mixed-direction content
+   do not overlap or escape their containers.
+- Primary actions remain reachable and safe-area aligned after mirroring.
 
 Record actual and expected measurements in `manifest.json`.
 
@@ -203,6 +232,7 @@ Write `report.md`:
 - App / session / platforms / viewports
 - Product archetype / personality / ambition / Home composition
 - Reference fidelity / design intake
+- LTR/RTL locale coverage
 
 ## Results
 | Screen | Platform / viewport | Geometry | Visual | Reference | Result |
@@ -214,7 +244,7 @@ Write `report.md`:
 - <file + concise change + recapture evidence>
 
 ## Missing Coverage
-- <platform/viewport/reason>
+- <platform/viewport/locale/reason>
 
 ## Remaining Findings
 - <severity + screen + evidence + next action>

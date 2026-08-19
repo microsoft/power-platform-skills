@@ -29,7 +29,7 @@ README.md                      ← Plugin overview
 agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /create-mobile-prototype, /prototype-to-real-app, /sync-from-plan, /design-react-native-app, /add-*, ...
-scripts/                       ← check-template-provenance.js, mobile-plan-status.js, render-mobile-plan.js, validate-mobile-files.js
+scripts/                       ← build-gate3-preview-contract.js, audit-ui-only-refinement.js, check-template-provenance.js, mobile-plan-status.js, render-mobile-plan.js, validate-mobile-files.js
 hooks/                         ← Product Experience, composition, contrast, and other workflow validators
 template/.powerapps-native/   ← versioned template provenance and compatibility contract
 ```
@@ -90,13 +90,19 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 
 - ✅ Markdown plan with Mermaid plus structured, XSS-safe plan dashboard
 - ✅ Four approval gates with Product Experience ownership
-- ✅ Canonical product-archetype and visual-personality registries; CMMS/asset
-    maintenance is distinct from field inspection
+- ✅ Prompt-grounded product structure and visual character constrained by one
+    `mobile-ux-boundaries.md` contract; industry supplies vocabulary only
+- ✅ Gate 3 structural previews are normalized through
+    `.tmp/gate3-preview-contract.json`, validated, and rendered by the
+    authoritative plan renderer rather than hand-authored phone-frame HTML
 - ✅ Plan-aware experience/composition validators and resolved-token WCAG ratios
+- ✅ `/design-react-native-app` runs as a non-interactive, plan-aware, UI-only
+    refinement pass during generation; deterministic quality, contrast,
+    composition, route, and TypeScript gates rerun after every change
 - ✅ `/visual-qa` for native screenshots, view-tree geometry, reference fidelity,
-    Dynamic Type/safe-area checks, and capture reports; `/debug-app` remains
-    runtime-log/symptom focused
-- ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
+    Dynamic Type/safe-area checks, required RTL locale evidence, and capture
+    reports; `/debug-app` remains runtime-log/symptom focused
+- ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes approved artifacts. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ `/create-mobile-prototype` produces the same approved plan/design/screen quality as real creation, but uses deterministic in-memory CRUD services and connector throw-stubs with no environment, Dataverse, or app-registration call.
 - ✅ `/prototype-to-real-app` converts in place through a resumable lifecycle transaction: archive non-executable prototype approvals, bind environment, live-reconcile schema, replace services/connectors, consume seeds, fail-closed cleanup, restore auth/runtime, then one `/sync-from-plan`.
 - ✅ Prototype schema contracts use placeholder `cr_` names and are marked `planningMode: "prototype"`, `executionEligible: false`. Graduation rebases only contract-proven identifiers to the selected publisher prefix and never feeds prototype approval artifacts into the real operation-manifest fast path.

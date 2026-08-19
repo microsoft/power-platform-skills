@@ -73,7 +73,6 @@ only append into `plan_path`.
 
 - `<working_dir>/native-app-plan.md` (your `phase: specs` append target)
 - `<working_dir>/_screens_section.md` (your `phase: graph` write target)
-- `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
 - `<working_dir>/.tmp/*` (scratch)
 
 If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `npx power-apps init`, or `npm install`.
@@ -90,9 +89,9 @@ Read these constraints before the workflow:
 2. List screens with concise purposes
 3. Pick layout strategy per screen
 4. Identify data + capability dependencies per screen
-5. Check industry-specific patterns
+5. Validate workflow- and context-specific behavior
 6. Produce the `## Screens` section
-7. Generate `_plan_preview.html`
+7. Verify structural preview inputs
 
 ### Progress streaming (MANDATORY)
 
@@ -104,7 +103,7 @@ Read these constraints before the workflow:
 | Before Step 2 (graph) or before Step 4 (specs) | `echo "→ [screen-planner] phase=<phase>, N=<screen_count> screens, est ~$((N * 60))s"` |
 | Per screen during Step 4 (specs phase only) | `echo "→ [screen-planner] spec <i>/<N>: <screen_name>"` |
 | Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens append'}"` |
-| Before Step 6 preview (if not skipped) | `echo "→ [screen-planner] rendering _plan_preview.html"` |
+| Before Step 6 verification | `echo "→ [screen-planner] verifying Gate 3 structural preview inputs"` |
 
 These are pure progress signals — never block on or check echo output. Use a single `Bash` call per milestone, not batched at the end (defeats the point).
 
@@ -133,14 +132,15 @@ If a reference source is declared, read `<working_dir>/design-intake.md`. A
 missing intake for `high` or `strict-structural` fidelity is `NEEDS_CONTEXT`,
 not permission to fall back to an industry template.
 
-**If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
+**If a `## Design Direction` section exists**, parse its YAML-style key/value
+lines. Use these free-form values as defaults for per-screen design fields:
 
-- `density` → defaults `Density mode`
-- `surface` → defaults `Surface style`
-- `motion` → defaults `Animations` policy (none / subtle / liberal-tasteful)
-- `list_style` → defaults the row pattern in any List screen's spec
-- `tone` → defaults the copy register for button labels and empty-state text
-- `primary_action_shape` + `primary_action_position` → defaults primary action treatment
+- `density` -> information and spacing strategy
+- `surface` -> grouping, border, background, and elevation strategy
+- `motion` -> allowed motion and its purpose
+- `list_style` -> entity-row grammar to adapt, not a catalogue key
+- `tone` -> wording guidance for labels, errors, and empty states
+- `primary_action_shape` + `primary_action_position` -> primary action treatment and ownership
 
 Per-screen specs may still override (a celebration screen can be expressive in a restrained direction) — overrides MUST be explicit annotations, not silent contradictions.
 
@@ -149,8 +149,8 @@ Per-screen specs may still override (a celebration screen can be expressive in a
 **If `## Product Experience` is missing**, return `NEEDS_CONTEXT: plan missing
 Product Experience`. For legacy plans in `/edit-app`, create and approve a
 contract migration before planning screen changes. If only Design Direction or
-brand files are missing, use the least-assumptive materialization for the
-approved Product Experience and record a concern.
+brand files are missing, derive materialization from the approved Product
+Experience and mobile UX boundaries, then record a concern.
 
 ---
 
@@ -185,14 +185,13 @@ Every user-facing screen must map to a screen archetype based on UX boundaries:
 | **Auth** | Sign-in/up/reset | Minimal branding, one primary CTA, inline errors |
 | **Tab-root** | Top-level tab destination | Usually wraps a List or Home |
 
-**Home has no universal default.** Replace `app/(app)/home.tsx` with a
-
-`## Product Experience → Home composition` is authoritative. Archetype suggests
-candidates but does not mandate one.
+**Home has no universal default.** Replace `app/(app)/home.tsx` with the
+free-form composition approved under `## Product Experience -> Home
+composition`. Materialize that hierarchy directly.
 
 For Home, the graph/spec MUST include:
 
-- the selected composition key and why it fits the primary repeated loop;
+- the approved composition and why it fits the primary repeated loop;
 - a named signature component;
 - every field from the approved First Viewport Contract;
 - real media source and fallback when media is required;
@@ -201,8 +200,8 @@ For Home, the graph/spec MUST include:
 - a visible hint of the next section when the contract requires it;
 - the Home silhouette and how it differs from neighboring tab roots.
 
-`operational-dashboard` remains valid only when users genuinely compare several
-metrics and queues. Do not select it merely because the app has current state.
+A dashboard-like Home is valid only when users genuinely compare several
+metrics and queues. Do not choose one merely because the app has current state.
 Home must never be only a generic welcome, sign-out surface, duplicate full
 list, or renamed `header + KPI grid + rows + CTA` template.
 
@@ -303,14 +302,14 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 ### Shared Conventions
 
 **List rows**
-- Default row style: `<status-stripe-card | avatar-row | stat-card | media-tile | sentence-row | timeline-row | checklist-row>`
+- Default row grammar: `<free-form description of hierarchy, grouping, status cue, and interaction>`
 - Per-entity overrides (only if justified):
-  - `<Entity>` → `<row-style>` (reason: …)
+  - `<Entity>` -> `<entity-specific row grammar>` (reason: ...)
 
 **Detail hero**
-- Default hero type: `<status-header-band | stat-grid | image-hero | identity-block | summary-card | timeline-header | minimal-header>`
+- Default dominant region: `<free-form description of content, geometry, and action ownership>`
 - Per-entity overrides (only if justified):
-  - `<Entity>` → `<hero-type>` (reason: …)
+  - `<Entity>` -> `<entity-specific dominant region>` (reason: ...)
 
 **Field order (Detail + Form, per entity)**
 - `<Entity>`: `[fieldA, fieldB, fieldC, …]` — same order in Detail display and Form inputs
@@ -320,7 +319,7 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 
 **Empty-state pattern**
 - Icon family: Ionicons `<icon-name>`
-- Copy register: `<imperative | descriptive | playful>` (matches `## Design` tone)
+- Copy register: `<wording guidance from ## Design tone>`
 - Always pair with a primary CTA except on read-only screens
 
 **State patterns**
@@ -329,7 +328,7 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 - Empty: use the empty-state pattern above; per-screen specs only name the domain noun/icon/CTA when different
 
 **Action placement**
-- Primary actions: `<bottom CTA | extended FAB | icon-only FAB | native header | inline row action>`
+- Primary actions: `<placement, visible affordance, and ownership rationale>`
 - Home/workflow primary actions must use a visible text label. List icon-only FABs are allowed only for a single obvious create action and must still specify the accessible label.
 - Destructive actions: `<swipe + confirm | overflow + confirm | detail confirm>`
 
@@ -337,9 +336,9 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 - Inherits from `## Design Direction` block. Per-screen specs may NOT silently deviate.
 
 **Experience composition**
-- Product archetype: `<slug from Product Experience>`
-- Visual personality / ambition: `<slug> / <level>`
-- Home composition: <composition deduction>
+- Product archetype: `<repeated-loop description from Product Experience>`
+- Visual personality / ambition: `<approved free-form character and quality target>`
+- Home composition: `<approved hierarchy, geometry, and actions>`
 - First viewport: `<signature component, viewport share, minimum height, media, headline minimum, metric maximum, action placement, next-section rule>`
 - Media strategy: `<source + loading/error/empty fallback>`
 - Reference fidelity: `<none | directional | high | strict-structural>`
@@ -384,7 +383,11 @@ Reference `${PLUGIN_ROOT}/shared/samples/_layout.tsx` for existing navigation la
 
 Read and follow `${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md`. Apply it both when the user explicitly names a JavaScript library and when a screen use case has an established library that materially reduces implementation or accessibility risk. Inspect existing dependencies first; otherwise research at most three candidates with the reference's read-only npm commands, select one compatible JS-only package, and emit the exact-version evidence table in `phase: specs` or legacy mode. Do not install during planning.
 
-Calendar management is one example, not a special ownership path. Full month/week/agenda surfaces trigger candidate selection and normally evaluate `react-native-calendars` first; a lightweight `timeline-day-list` can stay on existing primitives. Other use cases follow the same candidate-selection workflow rather than requiring a hardcoded package map.
+Calendar management is one example, not a special ownership path. Full
+month/week/agenda surfaces trigger candidate selection and normally evaluate
+`react-native-calendars` first; a lightweight date-grouped list can stay on
+existing primitives. Other use cases follow the same candidate-selection
+workflow rather than requiring a hardcoded package map.
 
 ## Step 4 — Per-Screen Spec
 
@@ -413,14 +416,25 @@ Write these three answers as a `**Domain layout decisions:**` block at the top o
 For each screen the user adds, provide this compact shape:
 
 - **Domain layout decisions:** (answer the 3 questions above — required)
-- **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
-- **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
+- **Row grammar override** (List screens only, omit if Shared Conventions default applies): free-form entity-specific hierarchy and interaction rationale, never "generic cards"
+- **Dominant region override** (Detail screens only, omit if Shared Conventions default applies): free-form content, geometry, status, and action treatment
 - **Home composition** (Home only) — REQUIRED. Organic deduction based on product boundaries.
 - **First viewport materialization** (Home only) — REQUIRED. Name the signature component and exact source values for viewport share, minimum height, media requirement/source/fallback, headline minimum, metric maximum, primary-action placement, next-section visibility, and duplicate-action policy. This must match `## Product Experience`.
 - **Reference materialization** (required when fidelity is not `none`) — name each required hierarchy region/motif this screen implements and every forbidden-drift item it must avoid. A binding motif cannot be replaced with a generic Card.
-- **Operational pattern** (workflow screens only): one of `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. `home-dashboard` is retained only as a legacy alias for `operational-dashboard`; new Home specs use `Home composition`. Omit for normal CRUD/business screens without a workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
-- **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList` when the app intentionally wants a lightweight schedule without another dependency). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
-- **Control patterns** (emit only for specialized controls) — use `checkbox-field` for boolean or checklist-like toggles, `numeric-stepper` for bounded plus/minus fields, `line-item-stepper-row` for product/order/cart/inventory rows with inline quantity/count adjustment, `searchable-lookup-sheet` for Dataverse lookup/ComboBox fields with many records, `segmented-control` for 2-5 bounded mutually-exclusive options, and `recurrence-rule-editor` for repeating schedules. Include the control-specific contract: checkbox boolean vs multi-select mapping; stepper min/max/step and commit behavior (`local draft until Save/Next` by default); lookup service/search/display fields/pagination and `@odata.bind`; segmented option source, selected state, optional counts, and generated option const mapping; recurrence pattern/start/end/date-time/weekday-mask fields, summary text, and validation rules.
+- **Workflow arrangement** (workflow screens only): describe the ordered work,
+  decision points, progress, recovery, primary action, and any grouped quick
+  actions in plain language. Omit for simple read-only CRUD screens.
+- **Calendar behavior** (Calendar/schedule/appointment screens only) — REQUIRED
+  when the screen manages appointments, schedules, visits, availability, or
+  date-grouped work. Describe the date scope, browsing model, event hierarchy,
+  selection behavior, and exact approved library components. Choose components
+  from the installed or approved dependency based on the workflow; do not emit
+  a named layout preset.
+- **Specialized controls** (emit only when needed) — choose the native or
+  Tamagui control that best matches the data and task. Include its data mapping,
+  bounds/options, selected state, commit behavior, service/search/pagination
+  contract, lookup `@odata.bind`, and validation rules. Do not encode the choice
+  as a catalogue key.
 - **Archetype** — one of List / Detail / Form / Auth / Tab-root / Modal-Sheet / Empty-onboarding (see Step 2)
 - **Role** (omit if open to all signed-in users) — only when the screen is role-gated (e.g. `Supervisor only` for sign-off override, `Inspector (edit) / Supervisor (read) / Auditor (read)` for shared records). The builder uses this together with the UX contract to gate visible controls.
 - **Purpose** — one sentence
@@ -478,11 +492,11 @@ For each screen the user adds, provide this compact shape:
   API is required for projection freshness. `existing-cloud-flow` also requires
   a verified `flow_id`; a display name alone is not implementation evidence.
 
-  **`archetype_class` mapping from `Archetype`:** `List` → `list`;
-  `Tab-root` → `tab-root` (or `dashboard` when `Home composition:
-  operational-dashboard` or `Operational pattern: assignment-dashboard`);
-  `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` /
-  `Empty-onboarding` → `detail` (cold path, single-record context).
+  **`archetype_class` mapping from `Archetype`:** `List` -> `list`;
+  `Tab-root` -> `tab-root` (or `dashboard` when the approved screen data
+  contract performs multi-record hot-path comparisons or aggregates);
+  `Detail` -> `detail`; `Form` / `Modal-Sheet` / `Auth` /
+  `Empty-onboarding` -> `detail` (cold path, single-record context).
 
   Full reference: [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads).
 
@@ -532,7 +546,14 @@ For each screen the user adds, provide this compact shape:
   - `Concurrency:` identify the server version/ETag precondition when lost updates matter. A read-then-update comparison without a write precondition is not concurrency control.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
 - **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
-- **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
+- **Calendar library** — REQUIRED when the approved calendar behavior needs a
+  dedicated calendar surface. Write `react-native-calendars` and name the exact
+  components expected, for example `CalendarProvider`, `ExpandableCalendar`,
+  `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. A lightweight
+  date-grouped list can use existing primitives. The package must also appear in
+  `### JavaScript Dependencies`; the screen-builder imports it directly after
+  the orchestrator installs it. No `/add-native` wrapper or native rebuild is
+  involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
 - **State delta** — loading/error are inherited; specify only domain-specific empty copy/icon/CTA or non-standard state behavior. Empty state copy must be domain-specific (not "No items yet"). If the screen has filters, include filter-empty copy that names the active filter and recovery action. If the data source can fail independently, name the error action (`retry inspections`, `refresh assignments`) rather than treating failures as empty. For PDF/pen screens, include the specific native/artifact states: `invalidUrl` for malformed or unsupported PDF viewer input, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled` (non-error), `signatureCaptureFailed`, and `nativeModuleMissing` where applicable. Examples: `empty: calendar-outline, "No inspections scheduled", CTA "Schedule inspection"`; `filterEmpty: "No critical defects", recovery "Clear severity filter"`.
@@ -548,9 +569,12 @@ For each screen the user adds, provide this compact shape:
 
 - **A11y notes** (override only) — ONLY if the screen has a non-standard a11y requirement beyond the universal `accessibility-checklist.md` (e.g., a custom gesture that needs a screen-reader hint, an icon-only button without an obvious label). For standard screens, the universal checklist already covers everything — omit.
 - **Visual emphasis** (override only) — the answer to Question 2 in the Domain layout decisions block already pins this. Re-emit ONLY if the per-screen visual emphasis intentionally differs from what the domain block stated (rare).
-- **Density mode** (override only) — `sparse` / `comfortable` / `dense`. Emit ONLY if the screen breaks from `## Design Direction → density`. Example valid override: a celebration screen using `sparse` in an otherwise `dense` app.
-- **Surface style** (override only) — `flat` / `subtle-depth` / `strong-cards` / `editorial`. Emit ONLY if the screen intentionally contrasts the app-level surface treatment.
-- **Restrained or expressive** (override only) — omit unless the screen is one of the 1–2 designated expressive screens (completion states, empty onboarding). Default is `restrained` for everything else; do not emit it.
+- **Density override** (override only) — describe the intentional spacing and
+  information-density difference from `## Design Direction`, with a reason.
+- **Surface override** (override only) — describe the intentional grouping,
+  background, border, or elevation difference from the app-level treatment.
+- **Emphasis override** (override only) — describe why this screen needs a
+  quieter or more expressive treatment than the app-level direction.
 - **Refresh trigger** (override only) — List screens default to `useFocusEffect` (hard rule in screen-builder). Omit unless the screen needs a different refresh strategy (timer, websocket, manual-only).
 
 **Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the domain decisions or Shared Conventions overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. Do not fix this by adding repeated design boilerplate.
@@ -571,7 +595,9 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 
 **Domain layout decisions:** Status badge per zone (Pending / In progress / Done) + photo-required indicator + defect count chip. Visual emphasis: the active zone hero with progress dots. Looks different from CRUD: sticky step header + previous/next controls instead of a free-form list.
 
-- **Operational pattern:** `walkaround-stepper`
+- **Workflow arrangement:** Ordered six-zone walkthrough with persistent step
+  progress, required evidence gates, previous/next recovery, and a bottom-owned
+  Save & Continue action.
 - **Archetype:** Form
 - **Purpose:** Drive inspector through 6 ordered zones, capture per-zone evidence and defects.
 - **Route:** `/(app)/inspections/[id]/walkaround`
@@ -684,12 +710,15 @@ Section format (same in all phases):
 ### Shared Conventions
 
 **List rows**
-- Default row style: `status-stripe-card`
+- Default row grammar: full-width inspection row with site and schedule as the
+  reading order, plus one contained status cue
 - Per-entity overrides: none for v0
 
 **Detail hero**
-- Default hero type: `summary-card`
-- `Inspection` → `status-header-band` (status is the primary operational signal)
+- Default dominant region: compact record summary that leads with identity and
+  next action
+- `Inspection` -> contained status summary above the field sections (status is
+  the primary operational signal)
 
 **Field order (Detail + Form, per entity)**
 - `Inspection`: `[site, scheduledDate, status, notes, photo]`
@@ -715,9 +744,11 @@ Section format (same in all phases):
 - Inherits from `## Design Direction`; per-screen specs emit overrides only.
 
 **Experience composition**
-- Product archetype: `field-inspection`
-- Visual personality / ambition: `polished-operational` / `tailored`
-- Home composition: `queue-first`
+- Product archetype: recurring field inspections with evidence and sign-off
+- Visual personality / ambition: direct, high-trust field interface with a
+  deliberate product-specific finish
+- Home composition: next inspection and risk-prioritized work dominate the
+  first viewport, followed by a short completion history
 - First viewport: `AssignmentQueueHero`, share `0.38`, minimum `300dp`, media optional, headline `28sp`, maximum 2 metrics, bottom CTA, next section visible, duplicate tab action forbidden
 - Media strategy: local site thumbnail when available; tinted assignment fallback when absent/failed
 - Reference fidelity: `none`
@@ -739,7 +770,8 @@ None.
   2. Visual emphasis: the most urgent assignment and why it is first
   3. Different from generic: one dominant assignment queue hero leads into a priority rail, not a KPI grid
 - **Archetype:** Tab-root
-- **Home composition:** `queue-first`
+- **Home composition:** Next inspection and highest-risk queued work dominate a
+  stable first-viewport region; recent completion evidence follows.
 - **First viewport materialization:** `AssignmentQueueHero`; share `0.38`; minimum `300dp`; optional site thumbnail from the assignment's site with tinted fallback; headline minimum `28sp`; maximum 2 supporting metrics; primary action `Start inspection` at bottom; next priority row visible; duplicate tab action forbidden
 - **Purpose:** Put the next inspection and highest-risk queued work within one tap.
 - **Layout delta:** assignment queue hero → concise urgency/context strip → top three prioritized inspection rows → recent completion receipt.
@@ -750,7 +782,8 @@ None.
 - **Domain layout decisions:**
   1. Key fields: status (colored badge), site name, scheduled date
   2. Visual emphasis: the status badge — Pending/In Progress/Complete are the primary scan signal in a list
-  3. Different from generic: `status-stripe-card` rows with a left border in the status color, not plain title+date cards
+    3. Different from generic: full-width rows use one contained status cue and
+      prioritize site plus schedule rather than plain title-and-date cards
 - **Archetype:** List
 - **Purpose:** Filterable inspection queue
 - **Data:** `cr123_inspectionService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status', '_cr123_siteid_value'] })` plus generated-service `skipToken` continuation support
@@ -797,101 +830,36 @@ If the matrix has gaps, add the missing screens NOW — do not return a partial 
 Emit a one-line confirmation in your final summary so the orchestrator can verify:
 > "Coverage: <F> features / <E> entities / <V> actions all mapped to screens."
 
-## Step 6 — Generate Plan-Time Preview
-
-**If the planner passed `skip_preview: true` in your prompt, do NOT generate `_plan_preview.html`** — instead, append a markdown **Screen Graph** subsection to the same write target as Step 5 (`plan_path` in `phase: specs`, `_screens_section.md` otherwise) so the planner has structural content to show at Gate 4. Then jump to Return.
-
-The markdown screen graph replaces the HTML preview's role at Gate 4 in `skip_preview` mode. It communicates *structure* (screen list, archetype, navigation hierarchy) without misleading visuals — the real branded HTML preview gets rendered later at Step 6.75 by the orchestrator after `/design-system` locks the brand tokens.
-
-**Markdown screen-graph format** (append after the per-screen specs in the same write target as Step 5):
-
-```markdown
-### Screen Graph
-
-Navigation: <Stack | Tabs | Tabs + Stack | Drawer>
-
-| Screen          | Route                       | File                                    | Presentation | Archetype | Data source       | Native caps   |
-|-----------------|-----------------------------|-----------------------------------------|--------------|-----------|-------------------|---------------|
-| Home            | /(app)/home                 | app/(app)/home.tsx                      | default      | Tab-root  | -                 | -             |
-| Inspections     | /(app)/inspections          | app/(app)/inspections/index.tsx         | default      | List      | InspectionService | -             |
-| Inspection ID   | /(app)/inspections/[id]     | app/(app)/inspections/[id]/index.tsx    | default      | Detail    | InspectionService | -             |
-| New Inspection  | /(app)/inspections/new      | app/(app)/inspections/new.tsx           | modal        | Form      | InspectionService | camera        |
-| Profile         | /(app)/profile              | app/(app)/profile.tsx                   | default      | Tab-root  | -                 | -             |
-
-Hierarchy:
-  📋 Home
-  🔍 Inspections (push: detail; modal: new)
-  👤 Profile
-
-Total: 5 screens (3 tab roots, 1 detail, 1 form)
-Baseline kept from template: Login, OAuthCallback, Splash (3)
-New: 5
-```
-
-The Hierarchy block should reflect the actual nav pattern — for `Stack`, render a flat list; for `Tabs`, render the tab roots with their pushed sub-screens nested below; for `Drawer`, render the drawer items with their stacks. Use Ionicons-name hints inline (📋 / 🔍 / 👤 / ⚙️) keyed off the screen-name → icon map in the orchestrator's Step 10b table.
-
-**Print before starting (`skip_preview: true` branch):**
-> "→ Skipping HTML preview (Step 6.75 will render it with locked brand). Writing markdown screen graph for Gate 3 structural review."
-
-Then append the markdown block to the Step 5 write target (`plan_path` in `phase: specs`, `_screens_section.md` otherwise — NEVER both) and **return — do NOT generate any HTML**.
-
----
-
-**Otherwise (`skip_preview` is false or unset)** — the legacy HTML preview branch — continue to render `_plan_preview.html`:
+## Step 6 — Prepare Gate 3 Structural Preview Input
 
 **Print before starting:**
-> "→ Generating _plan_preview.html so you can see each screen visually before code is written…"
+> "→ Finalizing structured screen contracts for the authoritative Gate 3 preview renderer…"
 
-After writing `_screens_section.md`, generate the experience area used by
-`mobile-app-plan.html` before any TSX exists. This is a plan dashboard, not a
-runtime screenshot.
+Do not generate `_plan_preview.html`, phone-frame markup, CSS, or any other HTML
+from this agent. The screen planner owns only the Screen Map, Navigation
+Contracts, Shared Conventions, and per-screen specifications.
 
-Use the Power Pages plan-review strengths without copying its site-specific
-branding:
+Before returning, verify that the written plan provides the deterministic
+renderer with:
 
-- sticky header with plan phase and progress;
-- visible `INPUT REQUIRED` banner when `mobile-app-status.json.awaitingInput`
-  is true;
-- sidebar navigation for Architecture, Offline, Integrations, Screens, Risks,
-  and Approvals;
-- summary cards for table/screen/capability/connector counts;
-- status pills for approved, pending, blocked, and deferred items;
-- phone frames for representative screens;
-- an experience-contract panel showing archetype, personality, Home
-  composition, first-viewport geometry, media strategy, and reference fidelity;
-- the approved reference/intake hierarchy beside planned phone frames when a
-  reference exists;
-- explicit label: `Plan preview — implementation has not started`.
+- one concrete Home composition and First Viewport materialization;
+- a purpose, dominant hierarchy, layout delta, and primary-action owner for
+  every representative screen;
+- exact routes and files from Screen Map;
+- at least two distinct tab-root silhouettes when navigation uses tabs;
+- media source/fallback and reference materialization when required;
+- domain-specific state and workflow descriptions rather than generic
+  placeholders.
 
-The authoritative full-plan renderer is
-`scripts/render-mobile-plan.js`. Screen-planner owns representative phone-frame
-markup only; the planner/orchestrator renders the combined dashboard after
-merging the section into `native-app-plan.md`.
+`native-app-planner` merges this section into `native-app-plan.md`, then runs
+`scripts/build-gate3-preview-contract.js`. That script validates and writes
+`.tmp/gate3-preview-contract.json`; `scripts/render-mobile-plan.js` consumes the
+JSON to render the authoritative structural preview inside
+`mobile-app-plan.html`. Invalid preview input returns to this agent for repair.
 
-Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
-
-- **Layout:** translate the approved composition and the
-  `YStack`/`XStack`/`Card`/`Button` structure described in the spec to HTML/CSS
-  using the component mapping (Section 1) and token tables (Section 2). Do not
-  render every Home as `header + KPI cards + rows + bottom button`.
-- **Data:** for list screens, generate 3–4 plausible placeholder items based on the entity name (e.g. "Inspection #1042", "Inspection #1043"). For detail screens, populate fields with one representative placeholder record.
-- **State:** show the happy-path populated state only. No loading spinners, no error states.
-- **Actions:** render buttons with their labels. No click behavior needed.
-- **Geometry:** honor relative first-viewport share, media ratio, headline
-  hierarchy, action placement, and next-section visibility. Annotate measured
-  values in the preview.
-- **Reference:** render required motifs and flag forbidden drift. Label the
-  frame `Static approximation — runtime screenshot required`; never claim
-  fidelity from HTML alone.
-- **Baseline screens** (Login, OAuth callback, Splash): skip — users know what those look like.
-
-When running in legacy standalone preview mode, write the phone-frame file:
-
-```text
-Write file_path="<working_dir>/_plan_preview.html"
-```
-
-Use `_plan_preview.html` (not `preview.html`) so it does not collide with the post-build preview generated by `/preview-screens`.
+The JSON and HTML are projections of `native-app-plan.md`, never additional
+plans or approval surfaces. `skip_preview` may suppress opening the HTML, but it
+does not permit incomplete structural fields.
 
 ## Return Status
 
@@ -899,14 +867,13 @@ You MUST return your final message with one of these four status codes as the **
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | Section written cleanly to the phase-appropriate target (`plan_path` for `phase: specs`; `_screens_section.md` for `phase: graph` / legacy) and — in legacy with `skip_preview: false` — `_plan_preview.html` also written | `DONE` |
-| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Wrote section but had to fall back — e.g. design tokens missing so used Tamagui defaults, navigation pattern conflicts with template, screen count exceeded reasonable cap | `DONE_WITH_CONCERNS: $brandPrimary token not found, used $blue10 in preview` |
+| `DONE` | Section written cleanly to the phase-appropriate target (`plan_path` for `phase: specs`; `_screens_section.md` for `phase: graph` / legacy) with complete structural preview inputs | `DONE` |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Wrote the section but retained a non-blocking structural concern, such as an unusually high screen count | `DONE_WITH_CONCERNS: screen count exceeds the recommended v0 scope` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info — e.g. data model section references entities the planner did not pass, or connector list is empty but spec requires services | `NEEDS_CONTEXT: spec references CrInspectionService but Generated Services table is empty` |
-| `BLOCKED: <reason>` | Hit a hard wall — cannot read `native-app-plan.md`, cannot write the preview, design-planning reference unreadable. The planner MUST escalate, never silently retry | `BLOCKED: cannot read <working_dir>/native-app-plan.md (file not found)` |
+| `BLOCKED: <reason>` | Hit a hard wall — cannot read the plan, cannot write the owned section, or cannot provide required structural preview fields. The planner MUST escalate, never silently retry | `BLOCKED: Home primary-action owner is missing` |
 
 **Hard rules:**
 - Status code is the literal first line. Nothing before it.
-- If `skip_preview: true` was set and the section wrote cleanly, that is `DONE` (no concern needed).
 - Never silently downgrade `BLOCKED` to `DONE_WITH_CONCERNS` — the planner handles blocks.
 - `DONE_WITH_CONCERNS` requires at least one concern. If you have none, use `DONE`.
 
@@ -914,11 +881,7 @@ You MUST return your final message with one of these four status codes as the **
 
 After the status line and a blank line, write:
 
-> Screens section written to `<working_dir>/_screens_section.md`. Preview written to `<working_dir>/_plan_preview.html`. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
-
-If `skip_preview: true` was set, write instead:
-
-> Screens section written to `<working_dir>/_screens_section.md`. Preview skipped per skip_preview flag. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
+> Screens section written to `<working_dir>/_screens_section.md`. Structural preview inputs complete; authoritative rendering is owned by native-app-planner. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
 
 If `phase: specs` was set, write instead (note: target is `plan_path`, not `_screens_section.md`):
 

@@ -455,10 +455,15 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 - **Role** (when present) — gates which controls render for which persona. Combine with the UX contract: e.g. `Role: Supervisor` on an override screen → render the PIN gate; `Role: Inspector (edit) / Supervisor (read)` → hide edit chevrons / submit CTA when the signed-in user is a Supervisor. The role itself does not generate auth code (that lives in shared `useAuth()`); it tells you which conditional UI branches the spec expects. If absent, treat the screen as open to all signed-in users.
 - **Profile content** (Profile screen only) — app-specific sections to render above sign-out. Use any generated services named in the Data field for persisted user/role/preference context; otherwise render local/static app context from the spec. Do not collapse Profile into a single sign-out button.
 - **Sign-out affordance** (Profile screen only) — binding placement and label for sign-out. Use the skeleton's `handleSignOut` when present, or implement the same confirmed `useAuth().signOut` + `router.replace('/login')` flow locally. Do not move sign-out to Home, drawer, header, overflow menus, or any business-data screen.
-- Row style override (List screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the style that best communicates the entity's key fields. Do NOT default to generic cards.
-- Hero type override (Detail screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the hero that fits the entity.
-- **Home composition** (Home only) — required key from
-  `home-compositions.md`. Resolve its required layout pieces before JSX.
+- Row grammar override (List screens) — if omitted, inherit from `### Shared
+  Conventions`; if no shared default exists, derive hierarchy and interaction
+  from the entity's key fields. Do not default to generic cards.
+- Dominant region override (Detail screens) — if omitted, inherit from
+  `### Shared Conventions`; if no shared default exists, derive the dominant
+  content, status, and action treatment from the record workflow.
+- **Home composition** (Home only) — required free-form composition from the
+  approved plan. Materialize its hierarchy, geometry, content, and actions
+  directly; do not translate it through a catalogue key.
 - **First viewport materialization** (Home only) — required exact geometry,
   media, type, metrics, action, next-section, and duplicate-action fields. All
   must match Product Experience.
@@ -467,7 +472,10 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 - **Media source and fallbacks** — required when media is required or optional.
   Implement populated, loading, failed, and absent behavior without changing
   the signature component's stable dimensions.
-- Layout delta — combine the screen-specific layout delta with the archetype pattern, Shared Conventions, and Design Direction. A compact spec is intentional; absence of universal chrome/layout rules is not a missing requirement.
+- Layout delta — combine the screen-specific layout delta with the functional
+  archetype, Shared Conventions, and Design Direction. A compact spec is
+  intentional; absence of universal chrome/layout rules is not a missing
+  requirement.
 - Data calls (generated services + methods + arguments)
 - **Audit** (when present) — one-line bullet shaped `<trigger>: event <code> (<label>); payload: <field, field, field>`. Expand it to a real call by writing inside the named handler:
 
@@ -489,20 +497,30 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 
 The planner emits these fields ONLY when a screen intentionally breaks from the app-level default. **If a field is absent from your spec, that is by design — read the corresponding value from the plan's `## Design Direction` block (Step 1a) and apply that.** Do NOT treat absence as a gap or `BLOCKED` reason; the inheritance is the contract.
 
-Compact specs are expected. Before reporting `NEEDS_CONTEXT`, first check `### Shared Conventions`, `## Design Direction`, `brand/design-system.md`, the archetype references, and universal builder rules. Only block when a genuinely app-specific fact is missing (service, route, lookup binding, destructive behavior, required native capability, or user-facing copy that cannot be inferred from the entity/domain).
+Compact specs are expected. Before reporting `NEEDS_CONTEXT`, first check
+`### Shared Conventions`, `## Design Direction`, `brand/design-system.md`, the
+functional archetype, and universal builder rules. Only block when a genuinely
+app-specific fact is missing (service, route, lookup binding, destructive
+behavior, required native capability, or user-facing copy that cannot be
+inferred from the entity/domain).
 
 - **Visual emphasis** (if present) — overrides the emphasis implied by Question 2 in your Domain layout decisions block. If absent, derive from the domain block.
-- **Density mode** (if present) — `sparse` / `comfortable` / `dense`. If absent, use `## Design Direction → density`.
-- **Surface style** (if present) — `flat` / `subtle-depth` / `strong-cards` / `editorial`. If absent, use the app-level surface treatment from `## Design`.
-- **Restrained or expressive** (if present) — default is `restrained`; only ~1–2 screens per app are tagged `expressive`. If absent, treat as `restrained`.
+- **Density override** (if present) — apply its free-form spacing and
+  information-density difference. If absent, use `## Design Direction ->
+  density`.
+- **Surface override** (if present) — apply its free-form grouping, background,
+  border, or elevation difference. If absent, use the app-level surface
+  treatment from `## Design`.
+- **Emphasis override** (if present) — apply the stated reason this screen is
+  quieter or more expressive than the app-level direction.
 - **A11y notes** (if present) — screen-specific a11y on top of the universal checklist. If absent, the universal `accessibility-checklist.md` is sufficient — do not invent extra a11y.
 - **Refresh trigger** (if present) — overrides the default `useFocusEffect` for List screens. If absent, use `useFocusEffect`.
 
 **Design fields (app-level — read from `## Design` section):**
 - Hero visual principle — the dominant visual treatment across the whole app
-- Accent strategy — restrained / expressive / monochrome; determines where brand color appears
-- Motion policy — none / functional-only / enriched / immersive; determines which animations to write
-- Radius policy — tight / medium / loose / pill; applies to all interactive elements
+- Accent strategy — free-form placement and restraint rules for brand color
+- Motion policy — free-form description of allowed motion and its purpose
+- Radius policy — free-form shape language for interactive and grouped elements
 - One memorable thing — the visual impression this app should leave; use it as a sanity check before returning
 
 Also read `<working_dir>/app/(app)/home.tsx` for **code idioms only** — how safe-area insets are consumed, how Tamagui tokens are spelled, how `useSafeAreaInsets()` is imported. Do NOT use its layout structure as a starting point for your screen — home.tsx has a different purpose, density, and design context than your assigned screen.
@@ -558,16 +576,19 @@ viewport. Do not disable font scaling to force the fit.
 
 ## Step 1b — Read `## Design Direction` (if present)
 
-After reading your per-screen spec, also check `<plan_path>` for a `## Design Direction` section. **If it exists**, parse the YAML-style bundle and use these values as defaults wherever the per-screen spec is silent:
+After reading your per-screen spec, also check `<plan_path>` for a `## Design
+Direction` section. **If it exists**, parse its YAML-style bundle and apply each
+free-form value directly:
 
-- `list_style` (`card-with-status-stripe` / `row-with-chevron` / `sentence`) → which row pattern family to adapt from the user's spec and design direction. Use `shared/samples/` only for API/import idioms, never as copyable layout/content.
-- `motion` (`none` / `subtle` / `liberal-tasteful`) → which animations from the vocabulary are allowed; clamps how many `FadeInUp` staggers, whether parallax is permitted
-- `tone` (`direct` / `professional` / `conversational`) → button labels, error copy, empty-state copy register
-- `status_saturation` (`full` / `desaturated` / `monochrome-plus-accent`) → status pill style
-- `primary_action_shape` (`rectangular` / `rectangular-bottom-pinned` / `pill`) + `primary_action_position` → button placement and shape
-- `empty_state` (`icon-sentence-bigbutton` / `icon-explanation-ghostbutton` / `type-led`) → which empty-state template to use
-- `accent_color` → applied through `$accentBase`
-- `heading_font` / `body_font` → font family on titles vs body
+- `list_style` -> entity-row hierarchy, grouping, status cue, and interaction
+- `motion` -> allowed motion and its purpose
+- `tone` -> labels, errors, confirmations, and empty-state wording
+- `status_treatment` -> the single status cue and contrast behavior
+- `primary_action_shape` + `primary_action_position` -> affordance, placement,
+  and action ownership
+- `empty_state` -> content hierarchy and recovery action
+- `accent_color` -> applied through `$accentBase`
+- `heading_font` / `body_font` -> font family on titles versus body
 
 Per-screen structural fields and Product Experience always win. The Design
 Direction bundle is a materialization fallback only. Its copied
@@ -637,182 +658,46 @@ Contract, return `BLOCKED` for design-system repair. Never silently choose one.
 **Print before starting:**
 > "→ [<screen_name>] Translating design fields (density, surface, accent, hero) to token decisions…"
 
-Before writing any TSX, convert the captured design fields into concrete decisions. These decisions are binding — they are not hints.
+Before writing TSX, convert the approved free-form contracts into one concrete
+screen composition. Do not match words to a preset, named composition, or
+translation table.
 
----
+1. **State the hierarchy.** Identify the dominant object, decision, or action;
+  order the remaining content by task importance; and decide what is visible
+  in the first viewport.
+2. **Assign interaction ownership.** Give the primary action, navigation, row
+  tap, and destructive action one unambiguous owner each. Keep frequent actions
+  reachable and duplicate-tap safe.
+3. **Resolve geometry.** Use the exact First Viewport Contract, safe areas,
+  Dynamic Type, stable loading/error/empty dimensions, and minimum 44pt touch
+  targets. Choose spacing and grouping that fit the approved density without
+  converting its wording into a fixed numeric preset.
+4. **Resolve semantic tokens.** Read `tamagui.config.ts` and
+  `brand/design-system.md`. Use the declared `$surface*`, `$accent*`, status,
+  typography, spacing, and radius tokens. If a required semantic token is not
+  present, return a concern or block according to Step 2c; never guess a stock
+  color or raw hex value.
+5. **Materialize with Tamagui.** Choose `YStack`, `XStack`, `ZStack`, `Text`,
+  `Button`, `Input`, `Card`, `Separator`, and native/Expo primitives according
+  to the actual hierarchy. Cards are allowed only when grouping or interaction
+  ownership requires a framed surface.
+6. **Preserve media and reference parity.** Populated, loading, failed, and empty
+  branches keep the contracted geometry. Required media shows the real
+  inspectable subject when available. Implement required motifs and forbidden
+  drift directly.
+7. **Differentiate neighboring screens.** Follow each tab silhouette's dominant
+  component, scroll axis, grouping, primary control, and media use. Shared
+  grammar must not collapse tab roots into renamed copies.
+8. **Apply motion intentionally.** Translate the approved motion description
+  into the smallest Reanimated behavior that communicates state or spatial
+  change, including reduced-motion behavior. Omit decorative motion.
+9. **Check the app-level impression.** Re-read `Hero visual principle` and `One
+  memorable thing` as quality goals, not phrase triggers. Revise the screen if
+  it does not contribute to them through its actual content and hierarchy.
 
-### Token path — resolve first, use consistently
-
-Read the `tamagui-design-system: <mode>` plan field from `## Design`. This is a design-mode marker written by planning, not a skill invocation. It determines which tokens to write throughout the entire screen. **Never mix columns.**
-
-| Semantic role | Default path (`add-aliases`) | Custom path (`required`) |
-|---|---|---|
-| Page background | `$background` | `$surface0` |
-| Subtle section / input fill | `$color2` | `$surface1` |
-| Card / chip / tag bg | `$color4` | `$surface2` |
-| Pressed state / divider | `$color5` | `$surface3` |
-| Primary accent | `$blue10` | `$accentBase` |
-| Soft accent fill | `$color3` | `$accentSoft` |
-| Deep accent / pressed accent | `$blue8` | `$accentDeep` |
-| Text on accent background | `'white'` | `$accentOnAccent` |
-
-All translation tables below use the **custom path** names (`$surface0`, `$accentBase`, etc.). If you are on the default path, substitute the left column value everywhere you see a `$surface*` or `$accent*` token.
-
----
-
-### Home composition → dominant structure
-
-| Key | Code decision |
-|---|---|
-| `asset-command` | Stable asset/object hero first; lifecycle/health and one integrated action; at most approved supporting metrics |
-| `media-command` | `expo-image` or approved local asset fills the contracted region; identity/action integrate with media; preserve crop/fallback geometry |
-| `object-command` | One current object/progress region dominates; supporting activity follows |
-| `relationship-command` | Identity/cadence/next-best-action lead; pipeline/counts remain secondary |
-| `data-command` | One dominant metric plus trend/threshold; never an equal KPI grid |
-| `scan-command` | Scanner/finder target and manual fallback lead; enforce one action owner |
-| `queue-first` | Prioritized queue/exception dominates; scope and recovery filters visible; counts secondary |
-| `timeline-first` | Time axis and overdue/today/upcoming groups dominate |
-| `narrative-home` | Approved image/type thesis and one offer/action lead; next section remains visible |
-| `personalized-feed` | Personalized resume/start item leads into feed/progress |
-| `operational-dashboard` | Current object + 2-4 approved metrics + compact activity; use only when approved |
-
-Do not substitute one key's structure for another because a sample is easier.
-
-### Media and reference → state parity
-
-- Populated, skeleton/loading, failed, and empty media branches share the same
-  contracted outer dimensions and crop behavior.
-- Required media renders the actual product/place/object/record when available;
-  do not use generic atmospheric stock imagery.
-- Implement each required reference motif explicitly and check every forbidden
-  drift item before returning.
-- Preserve hierarchy and normalized geometry at `high`/`strict-structural`
-  fidelity; native platform differences are verified later by runtime visual QA.
-
-### Tab silhouette → cross-screen consistency without sameness
-
-Implement this screen's declared dominant component, scroll axis, grouping,
-primary control, and media use. Shared tokens/component grammar stay
-consistent, but do not collapse neighboring tab roots into identical headers,
-chips, and bordered rows.
-
----
-
-### Visual emphasis → hero element
-
-| Visual emphasis says | Code decision |
-|---|---|
-| "oversized stat" | Primary metric: `fontSize="$10"` `fontWeight="700"` `fontFamily="$heading"`, placed above fold, full width |
-| "edge-to-edge rows" | No card wrapper on list rows. `XStack` with `borderBottomWidth={0.5} borderColor="$surface3"` only. No surface bg on rows |
-| "full-bleed image" | `expo-image` `Image` at 100% width, zero horizontal padding, `contentFit="cover"`, height from the First Viewport Contract |
-| "nothing — content leads" | No hero element. First content starts at standard density padding with no extra emphasis |
-| "badge / count" | `YStack` badge: `width={20} height={20} rounded={10} bg="$accentBase"`, `Text color="$accentOnAccent" fontSize={10} fontWeight="700"`, `position="absolute"` |
-
----
-
-### Hero visual principle → app-wide rule for this screen
-
-The hero visual principle is an app-level constraint, not a per-screen one. Apply it as a rule that governs how the dominant data element is treated on every screen you write.
-
-| Hero visual principle says | Apply to every screen |
-|---|---|
-| "oversized numeric stats" | Any primary count, amount, or metric: `fontSize="$9"`–`"$10"` `fontFamily="$heading"` `fontWeight="700"`. Supporting label below in `$color9` `fontSize="$2"` |
-| "edge-to-edge rows" | Lists never use cards. `FlatList` rows are full-width `XStack` with bottom separator only |
-| "whitespace is the hero" | Root `py` is one step above density scale. Section gap is `$10`. No more than one content block above the fold |
-| "full-bleed imagery" | Every screen with an image entity uses full-width image, no border-radius on image container |
-| "monospace data values" | Every ID, timestamp, amount, coordinate, and status code uses `fontFamily="$mono"` — not just in list metadata, everywhere |
-
----
-
-### Density mode → padding scale
-
-| Density | `px`/`py` on root | gap between sections | list row `minH` |
-|---|---|---|---|
-| sparse | `$6`–`$8` | `$8`–`$10` | 72 |
-| comfortable | `$4` | `$5`–`$6` | 60 |
-| dense | `$2`–`$3` | `$3`–`$4` | 48 |
-
-Apply to root `YStack`, section `gap`, and `FlatList` `ItemSeparatorComponent` height.
-
----
-
-### Surface style → card strategy
-
-| Surface style | What to write |
-|---|---|
-| flat | No `Card`, no `borderWidth`. Page bg = token-path page background. Row bg = none (transparent). Edge-to-edge content |
-| subtle-depth | `YStack bg="$surface2" rounded="$3" p="$4"` for grouped content. No `borderWidth` — contrast from background difference only |
-| strong-cards | `YStack bg="$surface2" rounded="$4" p="$4" borderWidth={1} borderColor="$surface3"` for all grouped content |
-| editorial | One dominant content block per screen. Everything else `opacity={0.5}` or smaller type. Intentional blank space — do not fill it |
-
----
-
-### Accent strategy → accent placement
-
-| Strategy | Rule |
-|---|---|
-| restrained | Accent on primary CTA button and active tab/indicator only. All surfaces use neutral tokens. No accent on backgrounds or fills |
-| expressive | Accent bg on the hero element of expressive screens. Soft accent fill on selected states, active chips, tag pills |
-| monochrome | No accent tokens anywhere. Type weight and size carry all hierarchy |
-
----
-
-### Restrained vs expressive → screen-level color budget
-
-| Value | What to write |
-|---|---|
-| restrained | Neutral surfaces, accent only on primary action. This screen's color profile matches the app's default rhythm |
-| expressive | This screen is a deliberate peak. Use `$accentBase` or `$accentSoft` on the hero element background. Every other screen you write should feel quieter by comparison |
-
----
-
-### Radius policy → border-radius on all interactive elements
-
-| Policy | Buttons `rounded` | Cards `rounded` | Inputs `rounded` | Pills / tags `rounded` |
-|---|---|---|---|---|
-| tight | `$2` | `$3` | `$2` | `$4` |
-| medium | `$3` | `$4` | `$3` | `$6` |
-| loose | `$4` | `$5` | `$4` | `$8` |
-| pill | `$10` | `$4` | `$10` | `$10` |
-
-Apply to every `Button`, `Input`, `TextArea`, and grouped content `YStack` on this screen. FABs and avatar circles are always `rounded="$10"` regardless of policy.
-
----
-
-### Navigation mood → chrome treatment
-
-| Mood | What to write |
-|---|---|
-| functional | Standard Expo Router tab bar and stack header. No custom header components. `headerShown: true` with default styling. Chrome is invisible by design — users don't notice it |
-| atmospheric | Large title on tab-root screens: `headerLargeTitle: true` in `Stack.Screen options`. Stack headers use `headerTransparent: true` on detail screens. Pass `contentInsetAdjustmentBehavior="automatic"` to `ScrollView` so content scrolls under the large title |
-| cinematic | Detail screens: `headerShown: false` — build the back button inline in the screen. Tab bar hidden on detail screens: add `tabBarStyle: { display: 'none' }` to `Stack.Screen options`. Content fills to safe-area edges (`pt={insets.top}`). Navigation chrome must not compete with content |
-
----
-
-### Motion policy → which animations to write
-
-| Policy | Write |
-|---|---|
-| none | No `entering`/`exiting` props. No `withSpring` / `withTiming`. `pressStyle` only |
-| functional-only | Skeleton→data: `entering={FadeIn.duration(150)}` on data container only. `pressStyle` on interactive elements |
-| enriched | + screen root: `entering={FadeInUp.duration(250)}`. List rows: `entering={FadeInDown.delay(i * 40)}` capped at 5 items |
-| immersive | + hero element: `entering={ZoomIn.duration(400)}`. Scroll-driven header shadow via `interpolate`. `BounceIn` on celebration elements |
-
-Write only the animations matching the policy. Do not add animations not in the policy.
-
----
-
-### One memorable thing → final quality check
-
-Before returning, re-read your completed screen and answer: **does this screen contribute to the app's one memorable thing?**
-
-Examples of what "contribute" means:
-- Memorable thing = "monospace data makes it feel precise" → every data value on your screen uses `fontFamily="$mono"`
-- Memorable thing = "completion screens use a quiet summary card" → your form's success state uses the summary card pattern, not a toast
-- Memorable thing = "oversized stats anchor every dashboard" → your home screen's primary metric is `fontSize="$9"` minimum
-- Memorable thing = "whitespace is the hero" → your screen does not have more than two sections above the fold
-
-If your screen has no element that carries the memorable quality forward, revise before returning. It does not need to be the loudest screen — restrained screens contribute by staying out of the way so expressive screens can land harder.
+The resulting JSX must be explainable from the plan's product evidence, design
+artifacts, or mobile UX boundaries. If the only explanation is "this is the
+usual layout for this kind of app," revise it.
 
 ## Step 2 — Inspect Available Services
 
@@ -1102,7 +987,9 @@ stronger status color; product archetype/industry does not. Never use white text
 on yellow/orange unless measured AA; prefer dark text on a soft tint.
 20. **Palette integrity** — surfaces and text use approved palette tokens, not
 raw grays. Industry never supplies an implicit palette.
-21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
+21. **Dark mode quality** — dark mode is a designed counterpart, not a raw
+swap. Use the approved dark tokens, retain readable contrast, and replace light
+mode shadow assumptions with appropriate dark surface separation.
 22. **FlatList has `keyExtractor`** using a stable ID field, never the index.
 23. **Lists have pull-to-refresh** via `<RefreshControl />` calling the same loader as `useFocusEffect`.
 24. **Lists use `ListEmptyComponent`** — empty state is inside the FlatList, never a conditional branch above it. Pull-to-refresh must work even when the list is empty.
@@ -1126,7 +1013,10 @@ raw grays. Industry never supplies an implicit palette.
 30. **Skeleton wrapper matches populated wrapper** — same insets, padding, gap. No layout jump on data arrival.
 31. **Brand negatives** — if `brand/design-system.md` exists, re-read `## Negatives` and verify the screen violates NONE of them. This is a hard gate — do not return DONE if any negative is violated.
 32. **Brand token usage** — if `brand/design-system.md` exists, verify that NO raw hex values appear in the TSX. Tamagui layout primitives use `$token` syntax (`$surface0`, `$accentBase`, etc.). Raw React Native elements (e.g. `ActivityIndicator`, `StyleSheet`) use values from `useThemeTokens()` (e.g. `theme.accentBase`, `theme.surface0`) — never hardcode hex literals.
-33. **Domain differentiation** — could this screen belong to a different app unchanged? If yes, it is too generic. The row style, hero element, empty state copy, and visual emphasis must reflect the actual entity and domain. A status-stripe card on an inspection list looks different from a stat-card row on a project list — verify the entity-specific fields are surfaced prominently, not buried.
+33. **Domain differentiation** — could this screen belong to a different app
+unchanged? If yes, it is too generic. The row grammar, dominant region, empty
+state copy, and visual emphasis must reflect the actual entity and workflow.
+Verify the entity-specific fields are surfaced prominently, not buried.
 34. **Composition/workflow patterns** — Implement the required layout pieces naturally rather than a generic CRUD/dashboard shell.
 35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(color|bg|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
 36. **Button themes are not semantic shortcuts.** Grep your TSX for `theme="active"`, `theme="primary"`, and similar generic theme names. If the theme name was not present in `tamagui.config.ts`, replace it with explicit tokens (`bg`, `color`, `borderColor`) or a shared component. Primary CTAs must never look disabled because a guessed theme fell back to a neutral surface.
@@ -1155,7 +1045,9 @@ Apply these to every generated screen unless the per-screen spec explicitly over
 51. **Operational hierarchy comes before decorative layout.** On details/reviews, put status, decision readiness, blockers, time/deadline, and next action above history/audit/secondary links. A supervisor or field worker should know what to do in the first viewport.
 52. **Severity has clear weight.** Critical/high severity gets unmistakable but contained treatment (status pill, compact band, icon, or left stripe). Moderate/minor are quieter. Never make all statuses equally loud, and never let critical defects blend into body text.
 53. **Time should be actionable.** When a due/departure/appointment time drives work, show relative urgency (`Departs in 2h 10m`, `Due today`, `Overdue 12m`) near the raw timestamp. Keep raw formatted time available for precision.
-54. **Audit/history screens look chronological.** Use timeline rows, event icons, timestamp + actor + action, and optional grouping/toggle. Do not render audit as ordinary generic cards when the operational pattern is `audit-timeline`.
+54. **Audit/history screens look chronological.** Use chronological grouping,
+event icons, timestamp + actor + action, and an optional scope control. Do not
+render audit history as ordinary generic cards.
 55. **Tab-root operational queues may show counts.** When counts are cheap or already loaded, add badge/count treatment to tabs, filter chips, or section headers for pending reviews, open tasks, critical defects, or overdue work. Do not fetch expensive counts solely for decoration.
 56. **Selection state is unmistakable.** Pickers and start-flow rows show selected state with a check, accent edge/fill, and copied summary where useful. The selected item should be obvious before the user taps the bottom action.
 57. **Copy uses human labels, not system labels.** Prefer actor/object/action language users recognize: `Maria signed off Flight 214`, `Gate agent updated boarding status`, `Maintenance team added a blocker`. Avoid UI strings like `System`, `Record updated`, `Entity changed`, raw table names, or schema-field names unless the data truly has no actor and the screen explains that fallback.

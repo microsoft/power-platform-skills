@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Metro is running for my gym equipment CMMS app. The approved Product Experience is premium-brand-forward with an asset-command Home, a 42% EquipmentCommandHero, required equipment imagery, and high fidelity to design-intake.md. Run full visual QA on iOS and Android, fix composition drift, and report the captures.",
+      "prompt": "Metro is running for my gym equipment maintenance app. The approved Product Experience uses a precise equipment-focused interface; Home leads with equipment identity, health, and one maintenance action inside a 42% EquipmentCommandHero, with required equipment imagery and high fidelity to design-intake.md. Run full visual QA on iOS and Android, fix composition drift, and report the captures.",
       "expected_output": "Runs contract/static gates, requires native evidence, measures experience-* views, compares normalized reference hierarchy, fixes focused source issues, captures the full matrix or reports missing coverage, and writes .visual-qa/report.md plus manifest.json.",
       "files": []
     },

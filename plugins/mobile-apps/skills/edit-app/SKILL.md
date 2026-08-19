@@ -377,7 +377,10 @@ Before the first `Task`, run a silent preflight for the leaf agent you need (`mo
 Inline fallback rules:
 
 - Data Model: draft the section inline from the existing plan, `.datamodel-manifest.json`, generated models, and the user's edit brief; then gate it exactly like an agent result.
-- Screens: draft Screen Map / Navigation Contracts / per-screen spec changes inline using `agents/screen-planner.md`, `shared/references/screen-templates.md`, and the existing screen TSX; then gate it exactly like an agent result.
+- Screens: draft Screen Map / Navigation Contracts / per-screen spec changes
+  inline using `agents/screen-planner.md`,
+  `shared/references/mobile-ux-boundaries.md`, the approved Product Experience,
+  and the existing screen TSX; then gate it exactly like an agent result.
 - Native Capabilities and Connectors: already handled inline by this skill.
 - Never skip approval just because a leaf agent is unavailable.
 

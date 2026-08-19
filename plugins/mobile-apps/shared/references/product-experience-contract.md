@@ -7,15 +7,15 @@ Canonical schema for the product and visual decisions that drive a generated Pow
 | Dimension | Meaning | Owner | Approval |
 |---|---|---|---|
 | Industry context | Business domain and vocabulary | Requirements planning | Gate 1 |
-| Product archetype | Primary product structure and repeated user loop | Requirements planning | Gate 1 |
+| Product archetype | Free-form description of the primary product structure and repeated user loop | Requirements planning | Gate 1 |
 | Workflow capabilities | Behaviors the app supports | Architecture planning | Gate 2 |
 | Operating context | Where/how the app is used: indoor, outdoor, gloves, one hand, safety critical | Requirements planning | Gate 1 |
-| Visual personality | Emotional and stylistic character | Experience planning | Gate 3 |
-| Visual ambition | Template, tailored, premium, or bespoke depth | Experience planning | Gate 3 |
-| Content emphasis | Image-led, object-led, data-led, relationship-led, task-led, or timeline-led | Experience planning | Gate 3 |
-| Home composition | The landing-screen composition pattern | Screen planning | Gate 3 |
-| Navigation mood | Functional, atmospheric, cinematic, or reference-driven | Experience planning | Gate 3 |
-| Density | Sparse, comfortable, compact, or dense | Experience planning | Gate 3 |
+| Visual personality | Free-form emotional and stylistic character | Experience planning | Gate 3 |
+| Visual ambition | Approved quality and distinctiveness target | Experience planning | Gate 3 |
+| Content emphasis | What information or object dominates attention, and why | Experience planning | Gate 3 |
+| Home composition | Free-form landing-screen hierarchy and action ownership | Screen planning | Gate 3 |
+| Navigation mood | Free-form navigation character appropriate to the workflow | Experience planning | Gate 3 |
+| Density | Information density derived from audience, task frequency, and operating context | Experience planning | Gate 3 |
 | Reference source | Screenshot, Figma, sketch, sibling app, or structured design intake | Design intake | Gate 3 |
 | Reference fidelity | None, directional, high, or strict-structural | Design intake | Gate 3 |
 | Media strategy | Record media, local UI media, generated placeholder, or no media | Experience planning | Gate 3 |
@@ -30,19 +30,19 @@ Every new plan includes this top-level section between `## App Requirements` and
 ## Product Experience
 
 - Contract version: 1
-- Industry context: <slug>
-- Product archetype: <slug from product-archetypes.md>
+- Industry context: <business domain and vocabulary>
+- Product archetype: <prompt-grounded repeated-loop description>
 - Classification confidence: <high | medium | low>
 - Classification evidence: <comma-separated requirement evidence>
-- Workflow capabilities: <comma-separated capability slugs>
-- Operating context: <comma-separated context slugs>
-- Visual personality: <slug from visual-personalities.md>
-- Visual ambition: <template | tailored | premium | bespoke>
-- Content emphasis: <image-led | object-led | data-led | relationship-led | task-led | timeline-led>
-- Home composition: <slug from home-compositions.md>
-- Navigation mood: <functional | atmospheric | cinematic | reference-driven>
+- Workflow capabilities: <approved behavior descriptions>
+- Operating context: <physical and operational constraints>
+- Visual personality: <approved free-form visual character>
+- Visual ambition: <approved quality and distinctiveness target>
+- Content emphasis: <what dominates attention and why>
+- Home composition: <approved free-form hierarchy, geometry, and actions>
+- Navigation mood: <approved navigation character>
 - Navigation silhouette: <tab/drawer/header geometry and fixed chrome behavior>
-- Density: <sparse | comfortable | compact | dense>
+- Density: <task- and context-derived density description>
 - Reference fidelity: <none | directional | high | strict-structural>
 - Media strategy: <record-media | local-ui-media | generated-placeholder | mixed | none>
 - Media source: <Dataverse field, local asset, generated source, or none>
@@ -102,13 +102,17 @@ screen. Reference-specific motifs may add `experience-motif-<slug>`.
 
 ## Inference Rules
 
-1. Identify the primary repeated user loop before matching an archetype.
+1. Identify and describe the primary repeated user loop before choosing any
+	visual treatment.
 2. Treat supporting workflows as capabilities, not as the product archetype.
 3. Cite evidence from the approved brief.
-4. Use `low` confidence when two archetypes explain the primary loop equally well.
+4. Use `low` confidence when two interpretations explain the primary loop equally well.
 5. Present the low-confidence choice inside Gate 1; do not add a fifth approval.
-6. Infer a least-assumptive visual personality only when the user provides no aesthetic or reference signal. Gate 3 still reviews it.
-7. A supplied screenshot or design intake overrides personality defaults and creates a binding Reference Contract.
+6. When the user provides no aesthetic or reference signal, infer visual
+	character from audience, workflow, content, and operating context. Gate 3
+	still reviews it.
+7. A supplied screenshot or design intake outranks inferred visual choices and
+	creates a binding Reference Contract.
 
 ## Downstream Contract
 
