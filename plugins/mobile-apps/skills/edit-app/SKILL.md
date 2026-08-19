@@ -263,7 +263,7 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 | Improve search screen for mobile | Screens | `mobile-app:screen-planner` edit pass only | Rebuild the named search/list screen; run `tsc`, route check, preview |
 | Add loading, empty, and error states | Screens | Screen spec + existing TSX edit | Rebuild affected list screen; verify visible loading, empty, error, retry, refresh states |
 | Add a detail screen for selected record | Screens; Data Model only if fields/services are missing | Update Screen Map + Navigation Contracts; run `/add-dataverse` or `/add-datasource` only if data surface is missing | Create route/folder/layout as needed; build detail screen and source list/search navigation |
-| Update design to match company branding | Design; Screens only if component grammar/density changes | `/design-system --refresh <dimension>` or `--reskin` | Rebuild affected screens only when tokens alone are insufficient; always preview |
+| Update design to match company branding | Design; Screens only if component grammar/density changes | `/design-system` | Rebuild affected screens only when tokens alone are insufficient; always preview |
 | Make it premium / match screenshot / full redesign | Product Experience, Design Direction, Design, Screens | Update the Gate 3 contract; `/design-system --skip-planning`; rebuild affected screens | Plan-aware validators + static preview + runtime visual QA |
 | Add a form to create a new Dataverse record | Screens; Data Model if table/columns/lookups/create service are missing | `/add-dataverse --skip-planning` when schema/service is missing | Build form route, create payload helper, parent navigation, and focus refresh; verify create/update payloads |
 | Add barcode scanning and use scanned value to search records | Native Capabilities, Screens; Data Model if scan target field is missing | `/add-native barcode-scanner`; `/add-dataverse` only if target field/table is absent | Build scanner/search flow, pause/lock scan callback, search via service filter, preview |
@@ -338,23 +338,7 @@ If the user chooses **edit**, return to Step 1 and refine the edit brief. If can
 
 **If the user picks (d) Design:**
 
-Classify the request before invoking `/design-system`:
-
-| User says | Route to |
-|---|---|
-| "change colors", "palette", "accent" | `/design-system --refresh palette` |
-| "change fonts", "typography", "font" | `/design-system --refresh typography` |
-| "change components", "buttons", "cards" | `/design-system --refresh components` |
-| "change spacing", "density", "compact" | `/design-system --refresh density` |
-| "add rule", "remove rule", "negatives" | `/design-system --refresh negatives` |
-| "change animations", "motion" | `/design-system --refresh motion` |
-| "premium", "brand-forward", "match this screenshot", "reference fidelity", "new Home hero/composition", "media-led", "navigation mood", "full redesign", "reskin" | Update Product Experience + Design Direction + Design + affected Screens in Step 2; then materialize with `/design-system --skip-planning` |
-
-**One-major-change-per-prompt applies only to isolated token refreshes.** A
-coherent approved Product Experience redesign may intentionally change
-composition, media, type, palette, components, and navigation together.
-
-For a token-only refresh, execute `/design-system --refresh`, then print:
+Execute `/design-system` to generate a harmonized response, then print:
 
 ```
 ✅ Design system updated. brand/design-system.md + brand/tokens.ts refreshed.
@@ -503,8 +487,7 @@ mode.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Product Experience + Design** — for structural/personality/reference edits,
   write the approved Product Experience, Design Direction, Design, and Screen
-  changes first; normalize `design-intake.md`; then execute `/design-system --skip-planning --plan native-app-plan.md`. Token-only edits use
-   `/design-system --refresh <dimension>`. Component/density/negative changes
+  changes first; normalize `design-intake.md`; then execute `/design-system --skip-planning --plan native-app-plan.md`. Token-only edits use `/design-system`. Component/density/negative changes
    rebuild affected screens.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
