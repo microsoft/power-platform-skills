@@ -63,9 +63,13 @@ Create and deploy Power Pages sites using modern development approaches.
 
 ### [Model Apps](plugins/model-apps/README.md) (`plugins/model-apps`)
 
-Build and deploy Power Apps generative pages for model-driven apps.
+Build model-driven Power Apps end to end, and the generative pages that go in them.
 
-**Stack**: React + TypeScript + Fluent, deployed via PAC CLI
+**Skills**: `/app-builder` (**Preview**) builds and edits a whole app — tables, relationships, forms,
+views, charts, security roles, app + sitemap — from a natural-language intent; `/genpage` builds
+generative pages for an app that already exists. Use either independently — neither requires the other
+
+**Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 
@@ -265,4 +269,6 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Plugins that ship 1DS telemetry (currently: `power-pages`) gather anonymous usage signals. Telemetry is default-on; users opt out per-plugin via the `/<plugin>:telemetry off` command (e.g. `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. For automation/CI, each adopting plugin also honors a per-plugin opt-out environment variable `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g. `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`); when set it disables transmission with the highest precedence, overriding any `/<plugin>:telemetry` choice. See `shared/telemetry/README.md`.
+Power Pages and Model Apps ship 1DS telemetry code, but their committed configurations have different states. Power Pages telemetry is enabled and default-on; its usage events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Model Apps ships hard-disabled (`disabled: true`), so it currently transmits no events and writes no local telemetry mirror. If Model Apps is enabled later, its events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
+
+For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See `shared/telemetry/README.md` for the full field list, kill-switch semantics, and local-mirror behavior.

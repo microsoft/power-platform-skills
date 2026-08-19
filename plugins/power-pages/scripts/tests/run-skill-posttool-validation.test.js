@@ -45,13 +45,53 @@ function backdatePlan(root, secondsAgo = 60) {
   fs.utimesSync(p, ts, ts);
 }
 
-function runHook(root, skill) {
+function runHook(root, skill, env = {}) {
   return spawnSync(process.execPath, [HOOK_PATH], {
     input: JSON.stringify({ tool_input: { skill }, cwd: root }),
     encoding: 'utf8',
     cwd: root,
+    env: { ...process.env, ...env },
   });
 }
+
+function nodeRequireOption(filePath) {
+  // NODE_OPTIONS tokenization treats Windows backslashes as escapes. Forward
+  // slashes remain valid in absolute Windows paths and survive on all runners.
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
+test('activate-site validator passes a metacharacter project path literally to its child', (t) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-activation-'));
+  const root = path.join(parent, 'site-$ACTIVATION_PATH_PROBE-%ACTIVATION_PATH_PROBE%-&');
+  const preloadPath = path.join(parent, 'capture-activation-argv.cjs');
+  const capturePath = path.join(parent, 'captured-project-root.txt');
+  fs.mkdirSync(root);
+  t.after(() => fs.rmSync(parent, { recursive: true, force: true }));
+
+  writeJson(path.join(root, 'powerpages.config.json'), {
+    siteName: 'Activation path test',
+    websiteRecordId: '00000000-0000-0000-0000-000000000001',
+  });
+  fs.writeFileSync(preloadPath, `
+const fs = require('fs');
+const path = require('path');
+if (path.basename(process.argv[1] || '') === 'check-activation-status.js') {
+  const projectRootIndex = process.argv.indexOf('--projectRoot');
+  fs.writeFileSync(process.env.ACTIVATION_ARG_CAPTURE, process.argv[projectRootIndex + 1], 'utf8');
+  process.stdout.write(JSON.stringify({ activated: true, siteName: 'Activation path test' }));
+  process.exit(0);
+}
+`, 'utf8');
+
+  const res = runHook(root, 'activate-site', {
+    ACTIVATION_ARG_CAPTURE: capturePath,
+    ACTIVATION_PATH_PROBE: 'expanded-by-a-shell',
+    NODE_OPTIONS: nodeRequireOption(preloadPath),
+  });
+
+  assert.equal(res.status, 0, `hook should approve; stderr=${res.stderr}`);
+  assert.equal(fs.readFileSync(capturePath, 'utf8'), root);
+});
 
 test('hook spawns the reconcile backstop and heals a skipped refresh after an ALM skill', (t) => {
   const root = makeProject(t);

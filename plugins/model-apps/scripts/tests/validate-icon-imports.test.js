@@ -150,6 +150,37 @@ test('sibling genpage-plan.md opts a file into validation (exit 2 on bad icon)',
   assert.match(stderr, /NotARealIconRegular/);
 });
 
+// /app-builder's generate-pages phase emits the same generated pages. Its plan marker opts a
+// page in; `app-spec.json` deliberately does NOT, because this hook BLOCKS (exit 2) and the
+// plugin installs globally — a generic filename would block legitimate writes in unrelated
+// repos. Real app-builder pages are still covered by the GeneratedComponent content marker.
+test('sibling model-app-plan.md (app-builder) opts a file into validation (exit 2 on bad icon)', () => {
+  fs.writeFileSync(path.join(tmp, 'model-app-plan.md'), '# plan\n', 'utf8');
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /NotARealIconRegular/);
+});
+
+test('sibling app-spec.json alone does NOT opt a file in (generic name, blocking hook) (exit 0)', () => {
+  fs.writeFileSync(path.join(tmp, 'app-spec.json'), '{}\n', 'utf8');
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\nexport const x = 1;\n";
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 0);
+});
+
+test('an app-builder generated page IS validated via the GeneratedComponent content marker (exit 2)', () => {
+  // No sibling marker at all — the content marker alone must still opt the page in, which is
+  // why dropping app-spec.json from the sibling list loses no real app-builder coverage.
+  const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\n"
+    + 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\n';
+  const fp = writeTemp(tmp, 'overview.tsx', content);
+  const { status, stderr } = runHook(payloadFor(fp, content));
+  assert.equal(status, 2);
+  assert.match(stderr, /NotARealIconRegular/);
+});
+
 test('non-tsx file is ignored (exit 0)', () => {
   const content = "import { NotARealIconRegular } from '@fluentui/react-icons';\n";
   const fp = writeTemp(tmp, 'notes.md', content);

@@ -6,6 +6,7 @@ const {
   WORKFLOW_ASSERTIONS,
   PHASE_EXPECTATIONS,
   planSection,
+  validateGenpagePlanSchema,
   entitiesNeedCreating,
   newAppNeeded,
 } = require('../lib/assertions-layer-1.js');
@@ -26,6 +27,64 @@ function fix(overrides = {}) {
 
 function evalStub(id = 2) {
   return { id, tier: 'smoke', prompt: '', data: {}, expectations: [] };
+}
+
+function validPlan() {
+  return `# Genpage Plan
+
+## User Requirements
+Build a simple account page.
+
+## Working Directory
+D:\\work\\account-page
+
+## Plugin Root
+D:\\repo\\plugins\\model-apps
+
+## Environment
+- URL: https://org.crm.dynamics.com
+- App: Existing App (app-id)
+- Languages: English (1033) only
+- Solution: Default
+- Publisher Prefix: new
+
+## Pages
+| Page | File | Purpose | Entities |
+|------|------|---------|----------|
+| Account Overview | account-overview.tsx | Show account highlights | account |
+
+## Entity Creation Required
+No entity creation required — all entities already exist.
+
+## Existing Entities
+account
+
+## Connector Bindings
+No connector bindings.
+
+## Design Preferences
+- Styling: Clean
+- Features: Search
+- Accessibility: WCAG AA
+
+## Relevant Samples
+| Page | Sample | Reason |
+|------|--------|--------|
+| Account Overview | 7-responsive-cards.tsx | Responsive cards |
+
+## Per-Page Specifications
+
+### Account Overview
+- **File:** account-overview.tsx
+- **Purpose:** Show account highlights
+- **Entities:** account
+- **Needs caching:** true
+- **Key Features:** Search and summary cards
+- **Components:** Card, Button
+- **Layout:** Responsive grid
+- **Data Binding:** queryTable("account")
+- **Interactions:** Search box filters cards
+`;
 }
 
 // ---------- helpers ----------
@@ -73,6 +132,35 @@ test('newAppNeeded detects "create new app" intent', () => {
   assert.equal(newAppNeeded('plan: use existing app'), false);
 });
 
+// ---------- plan schema validator ----------
+
+test('validateGenpagePlanSchema: valid canonical plan passes', () => {
+  assert.deepEqual(validateGenpagePlanSchema(validPlan()), []);
+});
+
+test('validateGenpagePlanSchema: missing each required per-page field fails clearly', () => {
+  const requiredFields = [
+    'File',
+    'Purpose',
+    'Entities',
+    'Needs caching',
+    'Key Features',
+    'Components',
+    'Layout',
+    'Data Binding',
+    'Interactions',
+  ];
+
+  for (const field of requiredFields) {
+    const plan = validPlan().replace(new RegExp(`^- \\*\\*${field}:\\*\\*.*\\n`, 'm'), '');
+    const errors = validateGenpagePlanSchema(plan);
+    assert.ok(
+      errors.some((error) => error.message.includes(`missing required per-page field "${field}"`)),
+      `expected missing-field error for ${field}, got ${JSON.stringify(errors)}`
+    );
+  }
+});
+
 // ---------- workflow-log.md present check ----------
 
 test('workflow-log.md present: fail when absent', () => {
@@ -97,17 +185,40 @@ test('workflow-log.md present: pass when content exceeds threshold', () => {
 // ---------- Phase 1 prereq checks ----------
 
 test('node --version and pac help: pass when both recorded separately', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `## Phase 1
 - node --version → v20
-- pac help → PAC CLI Version 2.7.3
+- pac help → PAC CLI Version 2.11.0
 `;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
 
+test('node --version and pac help: fail when the recorded version is <= 2.10.0', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
+  const log = `## Phase 1
+- node --version → v20
+- pac help → PAC CLI Version 2.7.3
+`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+  assert.match(result.reason, /2\.10\.0/);
+});
+
+test('node --version and pac help: fail when only the node version is present (must not be mistaken for pac)', () => {
+  // The node line records v20.x; without a "PAC CLI Version" line there is no valid pac version, so
+  // the assertion must NOT pass by grabbing 20.x from `node --version`.
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
+  const log = `## Phase 1
+- node --version → v20.11.0
+- pac help → (ran, but version not captured)
+`;
+  const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
 test('node --version and pac help: fail when chained with &&', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `node --version && pac help → 2.7.3`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
@@ -115,7 +226,7 @@ test('node --version and pac help: fail when chained with &&', () => {
 });
 
 test('node --version and pac help: fail when version not verified', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version >= 2.7.0 is verified');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): node --version and pac help are run separately (not chained with &&) and PAC CLI version > 2.10.0 is verified');
   const log = `- node --version\n- pac help`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
@@ -190,33 +301,26 @@ test('plan-schema: fail when required heading missing', () => {
   const plan = `# Genpage Plan\n## User Requirements\nfoo\n`;
   const result = check({ fixture: fix({ genpagePlan: plan }), eval: evalStub() });
   assert.equal(result.status, 'fail');
-  assert.match(result.reason, /## Environment|## Pages/);
+  assert.match(result.reason, /## Working Directory/);
 });
 
 test('plan-schema: pass when all headings present', () => {
   const check = WORKFLOW_ASSERTIONS.get('Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md');
-  const plan = `# Genpage Plan
-## User Requirements
-## Working Directory
-## Plugin Root
-## Environment
-## Pages
-`;
-  const result = check({ fixture: fix({ genpagePlan: plan }), eval: evalStub() });
+  const result = check({ fixture: fix({ genpagePlan: validPlan() }), eval: evalStub() });
   assert.equal(result.status, 'pass');
 });
 
 // ---------- check-auth before entity-builder ----------
 
 test('check-auth gating: skip when no entity work', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const plan = `## Entity Creation Required\nNo entity creation required — all entities already exist.\n`;
   const result = check({ fixture: fix({ workflowLog: 'something', genpagePlan: plan }), eval: evalStub() });
   assert.equal(result.status, 'skip');
 });
 
 test('check-auth gating: pass when check-auth precedes the first entity script', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node check-auth.js → ok: true
 node create-table.js widget --solution Default`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
@@ -225,7 +329,7 @@ node create-table.js widget --solution Default`;
 });
 
 test('check-auth gating: fail when an entity script runs before check-auth', () => {
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `node create-table.js widget --solution Default
 node check-auth.js → ok: true`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
@@ -237,7 +341,7 @@ test('check-auth gating: pass when builder agent name appears before check-auth 
   // This is the meta-list scenario: "## Agents Invoked\n- entity-builder\n##
   // Commands Executed\n- check-auth.js\n- create-table.js". The runner must
   // not treat the agent NAME mention as an actual invocation.
-  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked; on ok:false the orchestrator surfaces the message to the user and halts');
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
   const log = `## Agents Invoked
 - genpage-entity-builder: invoked per workflow
 
@@ -247,6 +351,24 @@ node create-table.js widget --solution Default`;
   const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
   const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
   assert.equal(result.status, 'pass');
+});
+
+test('check-auth gating (new flow): pass when check-auth precedes provision-entities.js', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
+  const log = `node check-auth.js → ok: true
+node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('check-auth gating (new flow): fail when provision-entities.js runs before check-auth', () => {
+  const check = WORKFLOW_ASSERTIONS.get('Phase 2a: When entities need creating, scripts/check-auth.js runs and returns ok:true before entity-builder is invoked (provision-entities.js, or legacy create-table.js/add-column.js/create-relationship.js/create-record.js); on ok:false the orchestrator surfaces the message to the user and halts');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply
+node check-auth.js → ok: true`;
+  const plan = `## Entity Creation Required\n| Table | Suffix |\n| widget | widget |\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
 });
 
 // ---------- prefix discipline plan format ----------
@@ -401,7 +523,7 @@ test('Edit Phase 6 page-id: pass when --page-id and no --add-to-sitemap', () => 
 // ---------- entity-builder --solution always ----------
 
 test('Entity scripts --solution: pass when every call has --solution', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)');
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
   const log = `- node create-table.js --name widget --solution Default
 - node add-column.js --table widget --name foo --type string --solution Default`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
@@ -409,10 +531,34 @@ test('Entity scripts --solution: pass when every call has --solution', () => {
 });
 
 test('Entity scripts --solution: fail when a call missing --solution', () => {
-  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted)');
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
   const log = `- node create-table.js --name widget
 - node add-column.js --table widget --name foo --solution Default`;
   const result = check({ fixture: fix({ workflowLog: log }), eval: evalStub() });
   assert.equal(result.status, 'fail');
   assert.match(result.reason, /create-table\.js/);
+});
+
+test('Entity scripts --solution (new flow): pass when provision-entities.js used and Solution: in plan', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Environment\nSolution: Default\nPublisher Prefix: new\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
+});
+
+test('Entity scripts --solution (new flow): fail when provision-entities.js used but NO Solution: in plan or log', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const plan = `## Environment\nPublisher Prefix: new\n`;
+  const result = check({ fixture: fix({ workflowLog: log, genpagePlan: plan }), eval: evalStub() });
+  assert.equal(result.status, 'fail');
+});
+
+test('Entity scripts --solution (new flow): pass when provision-entities.js used and Solution: in entity-creation-log', () => {
+  const check = PHASE_EXPECTATIONS.get('Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration');
+  const log = `node provision-entities.js --env "$ENV_URL" --input @provision-input.json --apply`;
+  const elog = `## Environment\n- Solution: Default\n`;
+  const result = check({ fixture: fix({ workflowLog: log, entityCreationLog: elog }), eval: evalStub() });
+  assert.equal(result.status, 'pass');
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FlowAgent MCP v2.3.1 — solution flow round-trip, resolvers, list_datasets/tables
+import{createRequire}from'module';const require=createRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -27701,9 +27701,9 @@ function dataverseConnectionReferencesUrl(instanceUrl, opts) {
 var PPAPI_API_VERSION = "1";
 var PPAPI_DEFAULT_SUFFIX = "environment.api.powerplatform.com";
 function ppapiBaseUrl(envId, templateOverride, suffixOverride) {
-  const rawId = envId.replace(/^Default-/i, "");
-  const hex = rawId.replace(/-/g, "");
-  const prefix = hex.slice(0, 30);
+  const isDefault = /^Default-/i.test(envId);
+  const hex = envId.replace(/^Default-/i, "").toLowerCase().replace(/-/g, "");
+  const prefix = (isDefault ? "default" : "") + hex.slice(0, 30);
   const shard = hex.slice(30, 32);
   const template = templateOverride ?? process.env.PA_PPAPI_BASE_URL;
   if (template) {
@@ -27966,6 +27966,7 @@ async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES) {
 }
 
 // packages/core/dist/api/flow-diff.js
+import { createHash } from "node:crypto";
 function jsonEqual(a, b) {
   if (a === b)
     return true;
@@ -28123,14 +28124,19 @@ function diffFlow(current, proposed) {
   diff.summary = buildSummary(diff);
   return diff;
 }
-function hashProposal(body) {
-  const stable = stableStringify(body);
-  let h = 2166136261;
-  for (let i = 0; i < stable.length; i++) {
-    h ^= stable.charCodeAt(i);
-    h = h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)) >>> 0;
-  }
-  return ("0000000" + h.toString(16)).slice(-8);
+function hashUpdateBody(body) {
+  const p = body?.properties ?? {};
+  const normalized = {};
+  if (p.definition !== void 0)
+    normalized.definition = p.definition;
+  if (p.connectionReferences !== void 0)
+    normalized.connectionReferences = p.connectionReferences;
+  if (p.displayName !== void 0)
+    normalized.displayName = p.displayName;
+  if (p.state !== void 0)
+    normalized.state = p.state;
+  const stable = stableStringify(normalized);
+  return createHash("sha256").update(stable).digest("hex");
 }
 function stableStringify(v) {
   if (v === null || v === void 0 || typeof v !== "object")
@@ -28334,6 +28340,76 @@ function applyFlowEdits(definition, operations) {
   return { definition: next, applied };
 }
 
+// packages/core/dist/connection-refs.js
+function extractConnectorKeysFromDefinition(definition) {
+  const keys = /* @__PURE__ */ new Set();
+  function scanActions(actions) {
+    if (!actions || typeof actions !== "object")
+      return;
+    for (const action of Object.values(actions)) {
+      const connName = action?.inputs?.host?.connectionName;
+      if (connName)
+        keys.add(connName);
+      if (action?.actions)
+        scanActions(action.actions);
+      if (action?.else?.actions)
+        scanActions(action.else.actions);
+      if (action?.cases) {
+        for (const c of Object.values(action.cases)) {
+          if (c?.actions)
+            scanActions(c.actions);
+        }
+      }
+      if (action?.default?.actions)
+        scanActions(action.default.actions);
+    }
+  }
+  scanActions(definition.actions);
+  const triggers = definition.triggers;
+  if (triggers) {
+    for (const trigger of Object.values(triggers)) {
+      const connName = trigger?.inputs?.host?.connectionName;
+      if (connName)
+        keys.add(connName);
+    }
+  }
+  return keys;
+}
+async function enrichRefsWithLogicalNames(client, envId, refs, log) {
+  const needsEnrichment = Object.values(refs).some((r) => !r.connectionReferenceLogicalName);
+  if (!needsEnrichment)
+    return refs;
+  let dvRefs;
+  try {
+    dvRefs = await client.listConnections(envId);
+  } catch {
+    log?.("Dataverse connection references unavailable; using direct connections");
+    return refs;
+  }
+  const connectorToLogical = {};
+  for (const dv of dvRefs) {
+    if (dv.connectorid && dv.connectionreferencelogicalname) {
+      connectorToLogical[dv.connectorid] = dv.connectionreferencelogicalname;
+    }
+  }
+  const enriched = { ...refs };
+  let count = 0;
+  for (const [key, ref] of Object.entries(enriched)) {
+    if (ref.connectionReferenceLogicalName)
+      continue;
+    const connectorId = ref.id ?? `/providers/Microsoft.PowerApps/apis/${key}`;
+    const logicalName = connectorToLogical[connectorId];
+    if (logicalName) {
+      enriched[key] = { ...ref, connectionReferenceLogicalName: logicalName };
+      count++;
+    }
+  }
+  if (count > 0) {
+    log?.(`Resolved ${count} connection reference logical name(s) from Dataverse`);
+  }
+  return enriched;
+}
+
 // packages/core/dist/api/flow-client.js
 import { execFile } from "node:child_process";
 import { randomUUID as randomUUID2 } from "node:crypto";
@@ -28364,8 +28440,8 @@ function createSha256ContentDigest(value) {
     return "00000000";
   }
 }
-var MAX_RETRIES = 3;
-var INITIAL_DELAY_MS = 1e3;
+var MAX_RETRIES = 2;
+var INITIAL_DELAY_MS = 500;
 var APIHUB_RESOURCE = "https://apihub.azure.com";
 function extractLogicalNamesFromFlow(flow) {
   const refs = flow?.properties?.connectionReferences;
@@ -28388,9 +28464,34 @@ var FlowClient = class _FlowClient {
    * Flow RP API instead of PPAPI (issues #269, #271, #274, #276, #278, #281, #282).
    */
   ppapiUnavailableEnvs = /* @__PURE__ */ new Set();
+  /** Connection cache: key = `${envId}:${connector}`, TTL = 5 minutes. */
+  connectionCache = /* @__PURE__ */ new Map();
+  static CONNECTION_CACHE_TTL_MS = 5 * 60 * 1e3;
   constructor(auth2, config3) {
     this.auth = auth2;
     this.config = config3;
+  }
+  /** Get cached connections or null if expired/missing. */
+  getCachedConnections(envId, connector) {
+    const key = `${envId}:${connector ?? "*"}`;
+    const entry = this.connectionCache.get(key);
+    if (entry && Date.now() < entry.expiresAt)
+      return entry.value;
+    if (entry)
+      this.connectionCache.delete(key);
+    return null;
+  }
+  /** Cache a connection list. */
+  setCachedConnections(envId, connector, value) {
+    const key = `${envId}:${connector ?? "*"}`;
+    this.connectionCache.set(key, { value, expiresAt: Date.now() + _FlowClient.CONNECTION_CACHE_TTL_MS });
+  }
+  /** Invalidate connection cache for an environment (after create/delete/fix). */
+  invalidateConnectionCache(envId, connector) {
+    if (connector) {
+      this.connectionCache.delete(`${envId}:${connector}`);
+    }
+    this.connectionCache.delete(`${envId}:*`);
   }
   /** Resolve the PPAPI base URL for an environment, respecting config overrides. */
   ppapiBase(envId) {
@@ -28513,21 +28614,93 @@ var FlowClient = class _FlowClient {
     }
     await this.assertNotManaged(envId, flowId, "update_flow", opts);
     await this.snapshotBeforeMutation(envId, flowId, "update_flow", opts);
+    let autoMerged = [];
+    if (opts.autoResolveConnectionRefs !== false && body.properties?.definition) {
+      autoMerged = await this.autoMergeConnectionRefs(envId, flowId, body);
+    }
+    this.stripInjectedAuthentication(body);
     if (body.properties?.definition) {
       try {
         const ctx = await this.getFlowContext(envId, flowId);
         if (ctx.inSolution && ctx.workflowId && !ctx.warning) {
           const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, body);
-          if (updated)
+          if (updated) {
+            if (autoMerged.length)
+              updated._autoMergedConnectionRefs = autoMerged;
             return updated;
+          }
         }
       } catch {
         logger.debug(`updateFlow: Dataverse path failed, falling through to PPAPI`);
       }
     }
-    this.stripInjectedAuthentication(body);
+    this.rewriteConnectionNamesForPpapi(body);
     const path5 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    return this.ppapiRequestWithFallback(envId, path5, "PATCH", body);
+    const result = await this.ppapiRequestWithFallback(envId, path5, "PATCH", body);
+    if (autoMerged.length)
+      result._autoMergedConnectionRefs = autoMerged;
+    return result;
+  }
+  /**
+   * Detect connectors in the new definition that aren't in the current flow's
+   * connectionReferences. Auto-resolve by finding a connected connection for
+   * each missing connector. Fails on ambiguity (multiple candidates).
+   */
+  async autoMergeConnectionRefs(envId, flowId, body) {
+    const def = body.properties?.definition;
+    if (!def)
+      return [];
+    let currentRefs;
+    try {
+      const current = await this.getFlow(envId, flowId);
+      currentRefs = current.properties?.connectionReferences ?? {};
+    } catch {
+      return [];
+    }
+    const neededKeys = extractConnectorKeysFromDefinition(def);
+    const suppliedRefs = body.properties?.connectionReferences ?? {};
+    const effectiveRefs = { ...currentRefs, ...suppliedRefs };
+    const missing = [];
+    for (const key of neededKeys) {
+      if (!effectiveRefs[key])
+        missing.push(key);
+    }
+    if (missing.length === 0)
+      return [];
+    const resolved = {};
+    for (const connectorKey of missing) {
+      const connectorName = connectorKey.startsWith("shared_") ? connectorKey : `shared_${connectorKey}`;
+      try {
+        const conns = await this.listConnections(envId, { connector: connectorName });
+        const connected = conns.filter((c) => c.statuses?.[0]?.status === "Connected" || c.status === "Connected");
+        if (connected.length === 1) {
+          const conn = connected[0];
+          resolved[connectorKey] = {
+            connectionName: conn.connectionName ?? conn.name,
+            source: "Embedded",
+            id: `/providers/Microsoft.PowerApps/apis/${connectorName}`,
+            tier: "NotSpecified"
+          };
+          logger.info(`[auto-merge] Resolved ${connectorKey} \u2192 ${conn.connectionName ?? conn.name}`);
+        } else if (connected.length > 1) {
+          throw new Error(`Multiple connections available for ${connectorKey} (${connected.length} candidates). Pass explicit connectionRefs or use connectionSelection to disambiguate.`);
+        } else {
+          throw new Error(`No connected connection found for ${connectorKey}. Create one with: create-connection --env=${envId} --connector=${connectorName}`);
+        }
+      } catch (err) {
+        if (err.message?.includes("Multiple connections") || err.message?.includes("No connected connection")) {
+          throw err;
+        }
+        logger.debug(`[auto-merge] Could not resolve ${connectorKey}: ${err.message}`);
+      }
+    }
+    if (Object.keys(resolved).length > 0) {
+      if (!body.properties.connectionReferences) {
+        body.properties.connectionReferences = { ...currentRefs };
+      }
+      Object.assign(body.properties.connectionReferences, resolved);
+    }
+    return Object.keys(resolved);
   }
   /**
    * Update a solution flow by PATCHing its Dataverse clientdata directly.
@@ -28560,12 +28733,59 @@ var FlowClient = class _FlowClient {
   }
   /**
    * Remove `authentication` fields that PPAPI injects into action inputs on read.
-   * These cause WorkflowRunActionInputsInvalidProperty on write.
-   * Also translate `host.connectionName` to `host.connectionReferenceName` for
-   * solution flows where PPAPI returns connectionName but the API requires
-   * connectionReferenceName (#314 finding 2).
+   * These cause WorkflowRunActionInputsInvalidProperty on write — applies to BOTH
+   * the PPAPI and Dataverse write paths (#360).
+   *
+   * Walks top-level actions and triggers, plus common nesting containers
+   * (If/else, Switch cases, Scope, Foreach, Until) so nested actions are covered.
    */
-  stripInjectedAuthentication(body, connectionReferences) {
+  stripInjectedAuthentication(body) {
+    const def = body.properties?.definition;
+    if (!def)
+      return;
+    const stripAuth = (inputs) => {
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
+        return;
+      const inp = inputs;
+      if ("authentication" in inp)
+        delete inp.authentication;
+    };
+    const walkActions = (actions) => {
+      if (!actions || typeof actions !== "object" || Array.isArray(actions))
+        return;
+      for (const action of Object.values(actions)) {
+        stripAuth(action?.inputs);
+        if (action?.actions)
+          walkActions(action.actions);
+        if (action?.else?.actions)
+          walkActions(action.else.actions);
+        if (action?.default?.actions)
+          walkActions(action.default.actions);
+        if (action?.cases) {
+          for (const c of Object.values(action.cases)) {
+            if (c?.actions)
+              walkActions(c.actions);
+          }
+        }
+      }
+    };
+    walkActions(def.actions);
+    const triggers = def.triggers;
+    if (triggers) {
+      for (const trigger of Object.values(triggers)) {
+        stripAuth(trigger?.inputs);
+      }
+    }
+  }
+  /**
+   * Translate `host.connectionName` to `host.connectionReferenceName` for solution
+   * flows where PPAPI returns connectionName but the PPAPI write API requires
+   * connectionReferenceName (#314 finding 2).
+   *
+   * NOT called for the Dataverse write path — Dataverse clientdata stores the
+   * native format (connectionName) and the rewrite would corrupt it.
+   */
+  rewriteConnectionNamesForPpapi(body, connectionReferences) {
     const def = body.properties?.definition;
     if (!def)
       return;
@@ -28578,12 +28798,13 @@ var FlowClient = class _FlowClient {
         }
       }
     }
+    if (Object.keys(connRefMap).length === 0)
+      return;
     const fixHost = (inputs) => {
-      if (!inputs)
+      if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
         return;
-      if ("authentication" in inputs)
-        delete inputs.authentication;
-      const host = inputs.host;
+      const inp = inputs;
+      const host = inp.host;
       if (host && host.connectionName && !host.connectionReferenceName) {
         const logicalName = connRefMap[host.connectionName];
         if (logicalName) {
@@ -28592,16 +28813,30 @@ var FlowClient = class _FlowClient {
         }
       }
     };
-    const actions = def.actions;
-    if (actions) {
+    const walkActions = (actions) => {
+      if (!actions || typeof actions !== "object" || Array.isArray(actions))
+        return;
       for (const action of Object.values(actions)) {
-        fixHost(action.inputs);
+        fixHost(action?.inputs);
+        if (action?.actions)
+          walkActions(action.actions);
+        if (action?.else?.actions)
+          walkActions(action.else.actions);
+        if (action?.default?.actions)
+          walkActions(action.default.actions);
+        if (action?.cases) {
+          for (const c of Object.values(action.cases)) {
+            if (c?.actions)
+              walkActions(c.actions);
+          }
+        }
       }
-    }
+    };
+    walkActions(def.actions);
     const triggers = def.triggers;
     if (triggers) {
       for (const trigger of Object.values(triggers)) {
-        fixHost(trigger.inputs);
+        fixHost(trigger?.inputs);
       }
     }
   }
@@ -28652,7 +28887,7 @@ var FlowClient = class _FlowClient {
     const currentSnap = toSnapshot(current);
     const proposed = mergeProposal(currentSnap, body);
     const diff = diffFlow(currentSnap, proposed);
-    const proposalHash = hashProposal(proposed);
+    const proposalHash = hashUpdateBody(body);
     const { token, expiresAt } = issueToken({
       envId,
       flowId,
@@ -28670,9 +28905,7 @@ var FlowClient = class _FlowClient {
     };
   }
   async assertPreviewTokenMatches(envId, flowId, body, token) {
-    const current = await this.getFlow(envId, flowId);
-    const proposed = mergeProposal(toSnapshot(current), body);
-    const proposalHash = hashProposal(proposed);
+    const proposalHash = hashUpdateBody(body);
     const result = redeemToken(token, { envId, flowId, proposalHash });
     if (!result.ok) {
       if (result.code === "PreviewTokenMismatch") {
@@ -28686,6 +28919,42 @@ var FlowClient = class _FlowClient {
     await this.snapshotBeforeMutation(envId, flowId, "delete_flow", opts);
     const path5 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
     await this.ppapiRequestWithFallback(envId, path5, "DELETE");
+  }
+  /**
+   * Copy a flow: reads the source flow's definition + connection references,
+   * then creates a new flow with the same definition under a new name.
+   * Optionally copies to a different environment.
+   *
+   * Returns `sameEnv` (whether the copy stayed in the source environment) and
+   * `unresolvedConnectors` — connection references that won't carry over to the
+   * target environment (always empty for a same-env copy, since the existing
+   * connections keep working; non-empty for cross-env copies, which need the
+   * connections re-bound in the target env).
+   */
+  async copyFlow(envId, flowId, opts = {}) {
+    const source = await this.getFlow(envId, flowId);
+    const displayName = opts.name ?? `${source.properties.displayName} (Copy)`;
+    const targetEnv = opts.targetEnv ?? envId;
+    const sameEnv = targetEnv === envId;
+    const state = opts.state ?? "Stopped";
+    const sourceRefs = source.properties.connectionReferences ?? {};
+    const body = {
+      properties: {
+        displayName,
+        definition: source.properties.definition,
+        connectionReferences: sourceRefs,
+        state
+      }
+    };
+    const unresolvedConnectors = sameEnv ? [] : Object.keys(sourceRefs);
+    const created = await this.createFlow(targetEnv, body, { autoInjectParams: false });
+    return {
+      flowId: created.name ?? created.id,
+      displayName,
+      state,
+      sameEnv,
+      unresolvedConnectors
+    };
   }
   /**
    * Restore a flow from a previously captured backup. The current state of
@@ -28740,7 +29009,28 @@ var FlowClient = class _FlowClient {
   async publishFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "publish_flow", opts);
     const path5 = `/powerautomate/flows/${flowId}/start${this.ppapiFlowQs({})}`;
-    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    try {
+      await this.ppapiRequestWithFallback(envId, path5, "POST");
+    } catch (err) {
+      if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
+        logger.info(`[publish-flow] PPAPI blocked with CannotStartUnpublishedSolutionFlow, attempting Dataverse activation`);
+        const ctx = await this.getFlowContext(envId, flowId);
+        if (!ctx.workflowId)
+          throw err;
+        try {
+          const instanceUrl = await this.getDataverseInstanceUrl(envId);
+          const dvToken = await this.auth.getAccessToken(instanceUrl);
+          const patchUrl = `${instanceUrl}/api/data/v9.2/workflows(${ctx.workflowId})`;
+          await this.dataversePatch(patchUrl, { statecode: 1, statuscode: 2 }, dvToken);
+          logger.info(`[publish-flow] Activated via Dataverse statecode=1, statuscode=2`);
+          return;
+        } catch (dvErr) {
+          logger.warn(`[publish-flow] Dataverse activation failed: ${dvErr instanceof Error ? dvErr.message : dvErr}`);
+          throw err;
+        }
+      }
+      throw err;
+    }
   }
   async disableFlow(envId, flowId, opts = {}) {
     await this.assertNotManaged(envId, flowId, "disable_flow", opts);
@@ -28872,6 +29162,108 @@ var FlowClient = class _FlowClient {
       }
       throw err;
     }
+  }
+  // --- Run Management (cancel, resubmit, diagnose) ---
+  async cancelRun(envId, flowId, runId) {
+    const path5 = `/powerautomate/flows/${flowId}/runs/${runId}/cancel${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    return { cancelled: true, runId };
+  }
+  async resubmitRun(envId, flowId, runId, opts) {
+    let triggerName = opts?.triggerName;
+    if (!triggerName) {
+      const run = await this.getRunDetails(envId, flowId, runId);
+      triggerName = run.properties?.trigger?.name;
+      if (!triggerName)
+        throw new Error("Could not detect trigger name from run. Provide it explicitly.");
+    }
+    const path5 = `/powerautomate/flows/${flowId}/triggers/${triggerName}/histories/${runId}/resubmit${this.ppapiFlowQs({})}`;
+    await this.ppapiRequestWithFallback(envId, path5, "POST");
+    return { resubmitted: true, triggerName };
+  }
+  async getRunActionRepetitions(envId, flowId, runId, actionName) {
+    const path5 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
+    return followPagination(async (nextUrl) => {
+      if (nextUrl)
+        return this.ppapiRequest("GET", nextUrl);
+      return this.ppapiRequestWithFallback(envId, path5, "GET");
+    });
+  }
+  /** Diagnose a failed run: classify each failed/timed-out action with an actionable remediation. */
+  async diagnoseRun(envId, flowId, runId) {
+    const run = await this.getRunDetails(envId, flowId, runId);
+    const actions = await this.getRunActionDetails(envId, flowId, runId);
+    const status = run.properties?.status ?? "Unknown";
+    const failed = (actions ?? []).filter((a) => a.properties?.status === "Failed" || a.properties?.status === "TimedOut");
+    const classified = failed.map((a) => {
+      const code = a.properties?.error?.code ?? a.properties?.code ?? "Unknown";
+      const message = a.properties?.error?.message ?? "";
+      return { name: a.name, code, message, remediation: this.classifyRemediation(code, message) };
+    });
+    const summary = classified.length === 0 ? `Run ${runId} status: ${status}. No failed actions found.` : `Run ${runId} status: ${status}. ${classified.length} failed action(s): ${classified.map((a) => a.name).join(", ")}`;
+    return { status, failedActions: classified, summary };
+  }
+  classifyRemediation(code, message) {
+    const codeLower = code.toLowerCase();
+    const msgLower = message.toLowerCase();
+    if (codeLower === "unauthorized" || codeLower === "authorizationfailed" || msgLower.includes("401"))
+      return "Connection expired or insufficient permissions. Re-authenticate the connection in the flow's connection references.";
+    if (codeLower === "forbidden" || msgLower.includes("403"))
+      return "The connected account lacks permissions for this resource. Verify role assignments.";
+    if (codeLower === "notfound" || codeLower === "resourcenotfound" || msgLower.includes("404"))
+      return "Target resource not found. Verify the item/list/folder still exists and the ID is correct.";
+    if (codeLower === "throttled" || codeLower === "ratelimitexceeded" || codeLower === "429" || msgLower.includes("throttl"))
+      return "API throttling. Add retry-after logic, reduce concurrency, or batch fewer items.";
+    if (codeLower === "timedout" || codeLower === "gatewayerror" || msgLower.includes("timed out"))
+      return "Action timed out. Increase the timeout in action settings or break into smaller operations.";
+    if (codeLower === "dependencyfailed" || codeLower === "actionconditionfailed")
+      return "Upstream dependency failed. Fix the earlier failing action first \u2014 this one was skipped.";
+    if (codeLower === "invalidtemplate" || msgLower.includes("expression"))
+      return "Expression or template error. Check the expression syntax in this action's inputs.";
+    return `Error code: ${code}. Review the error message and check the connector documentation.`;
+  }
+  async cancelAllRuns(envId, flowId, opts) {
+    try {
+      const ctx = await this.getFlowContext(envId, flowId);
+      if (ctx.warning !== "no-dataverse-instance" && ctx.workflowId) {
+        const instanceUrl = await this.getDataverseInstanceUrl(envId);
+        const url = `${instanceUrl}/api/data/v9.2/workflows(${ctx.workflowId})/Microsoft.Dynamics.CRM.CancelAllCloudFlowRuns`;
+        const token = await this.auth.getAccessToken(instanceUrl);
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!resp.ok && resp.status !== 204)
+          throw new Error(`CancelAllCloudFlowRuns failed: ${resp.status}`);
+        let turnedOff2 = false;
+        if (opts.turnOff) {
+          await this.disableFlow(envId, flowId, { forceManaged: opts.forceManaged });
+          turnedOff2 = true;
+        }
+        return { method: "dataverse-bulk", turnedOff: turnedOff2 };
+      }
+    } catch {
+    }
+    const runs = await this.getRunHistory(envId, flowId, { top: 100, filter: "status eq 'Running' or status eq 'Waiting'" });
+    const cancellable = runs.filter((r) => {
+      const st = r.properties?.status;
+      return st === "Running" || st === "Waiting";
+    });
+    let cancelled = 0;
+    for (const run of cancellable) {
+      try {
+        await this.cancelRun(envId, flowId, run.name);
+        cancelled++;
+      } catch {
+      }
+    }
+    let turnedOff = false;
+    if (opts.turnOff) {
+      await this.disableFlow(envId, flowId, { forceManaged: opts.forceManaged });
+      turnedOff = true;
+    }
+    return { method: "per-run", attempted: cancellable.length, cancelled, turnedOff };
   }
   /**
    * Fetch trigger inputs from a past run. This is the same primitive the PA
@@ -29503,6 +29895,11 @@ var FlowClient = class _FlowClient {
       } catch (err) {
         lastError = err;
         if (err instanceof FlowApiError) {
+          if (err.statusCode === 401 && attempt === 0) {
+            this.auth.invalidateAccessToken?.();
+            logger.debug("PPAPI 401 \u2014 invalidated token, retrying");
+            continue;
+          }
           if (err.statusCode !== 429 && err.statusCode < 500) {
             throw err;
           }
@@ -30114,6 +30511,7 @@ var FlowClient = class _FlowClient {
     } else {
       logger.info(`Connection '${connName}' created but not yet authenticated. Status: ${(authed.properties?.statuses ?? []).map((s) => s.status).join(", ") || "Unknown"}. Run: flowagent fix-connection --env=${envId} --connector=${connector} --connection=${connName}`);
     }
+    this.invalidateConnectionCache(envId, connector);
     return authed;
   }
   async testConnection(envId, connector, connName) {
@@ -30134,6 +30532,7 @@ var FlowClient = class _FlowClient {
   async deleteConnection(envId, connector, connName) {
     const url = ppapiConnectionUrl(envId, connector, connName);
     await this.connectivityRequest("DELETE", url);
+    this.invalidateConnectionCache(envId, connector);
   }
   async getConnectionPermissions(envId, connector, connName) {
     const url = ppapiConnectionPermissionsUrl(envId, connector, connName);
@@ -30253,10 +30652,19 @@ var FlowClient = class _FlowClient {
   }
   // --- Connections (via Dataverse) ---
   async listConnections(envId, opts) {
+    const connector = opts?.connectorFilter ?? opts?.connector;
+    if (opts?.useCache !== false) {
+      const cached3 = this.getCachedConnections(envId, connector);
+      if (cached3) {
+        logger.debug(`listConnections cache hit: ${envId}:${connector ?? "*"}`);
+        return cached3;
+      }
+    }
     const instanceUrl = await this.getDataverseInstanceUrl(envId);
     const dvToken = await this.auth.getAccessToken(instanceUrl);
-    const url = dataverseConnectionReferencesUrl(instanceUrl, opts);
+    const url = dataverseConnectionReferencesUrl(instanceUrl, { connectorFilter: connector });
     const data = await this.dataverseGet(url, dvToken);
+    this.setCachedConnections(envId, connector, data.value);
     return data.value;
   }
   // --- Solutions (Dataverse) ---
@@ -30604,7 +31012,7 @@ var FlowClient = class _FlowClient {
     const headers = {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
-      "User-Agent": "power-automate-plugin/2.3.1",
+      "User-Agent": "power-automate-plugin/2.4.2",
       ...extraHeaders
     };
     if (body !== void 0) {
@@ -30812,7 +31220,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 var SCHEMA_VERSION = 1;
 function defaultCacheDir() {
   const envOverride = process.env.FLOWAGENT_TOKEN_CACHE_DIR;
@@ -30846,11 +31254,11 @@ function parseJwtClaims(token) {
 }
 function cacheKeyFile(cacheDir, resource, tenantId2, accountId) {
   const composite = `${resource}\0${tenantId2 ?? ""}\0${accountId ?? ""}`;
-  const hash = createHash("sha256").update(composite).digest("hex").slice(0, 32);
+  const hash = createHash2("sha256").update(composite).digest("hex").slice(0, 32);
   return path.join(cacheDir, `${hash}.json`);
 }
 function unkeyedFile(cacheDir, resource) {
-  const hash = createHash("sha256").update(resource).digest("hex").slice(0, 32);
+  const hash = createHash2("sha256").update(resource).digest("hex").slice(0, 32);
   return path.join(cacheDir, `_unknown-${hash}.json`);
 }
 var DiskTokenCache = class {
@@ -31062,6 +31470,11 @@ ${stdout}`.trim();
       }
     }
     return parsed.accessToken;
+  }
+  /** Invalidate cached token for a resource, forcing re-acquisition on next getAccessToken(). */
+  invalidateAccessToken(resource) {
+    const res = resource ?? this.defaultResource;
+    this.tokenCache.delete(res);
   }
 };
 var AzCliAuthError = class extends Error {
@@ -33007,42 +33420,6 @@ function createTelemetryObserver(opts = {}) {
   };
 }
 
-// packages/core/dist/connection-refs.js
-async function enrichRefsWithLogicalNames(client, envId, refs, log) {
-  const needsEnrichment = Object.values(refs).some((r) => !r.connectionReferenceLogicalName);
-  if (!needsEnrichment)
-    return refs;
-  let dvRefs;
-  try {
-    dvRefs = await client.listConnections(envId);
-  } catch {
-    log?.("Dataverse connection references unavailable; using direct connections");
-    return refs;
-  }
-  const connectorToLogical = {};
-  for (const dv of dvRefs) {
-    if (dv.connectorid && dv.connectionreferencelogicalname) {
-      connectorToLogical[dv.connectorid] = dv.connectionreferencelogicalname;
-    }
-  }
-  const enriched = { ...refs };
-  let count = 0;
-  for (const [key, ref] of Object.entries(enriched)) {
-    if (ref.connectionReferenceLogicalName)
-      continue;
-    const connectorId = ref.id ?? `/providers/Microsoft.PowerApps/apis/${key}`;
-    const logicalName = connectorToLogical[connectorId];
-    if (logicalName) {
-      enriched[key] = { ...ref, connectionReferenceLogicalName: logicalName };
-      count++;
-    }
-  }
-  if (count > 0) {
-    log?.(`Resolved ${count} connection reference logical name(s) from Dataverse`);
-  }
-  return enriched;
-}
-
 // packages/core/dist/current-env-store.js
 var CurrentEnvStore = class {
   state;
@@ -33105,6 +33482,11 @@ var CurrentFlowStore = class {
   clear() {
     this.state = { flowId: null, displayName: null, envId: null, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), source: "none" };
     return this.state;
+  }
+  /** Clear only if the pinned flow matches the given ID (e.g. after delete or confirmed 404). */
+  clearIf(flowId) {
+    if (this.state.flowId === flowId)
+      this.clear();
   }
 };
 var legacyCurrentFlowStore = new CurrentFlowStore();
@@ -41539,6 +41921,23 @@ function getNestedValue(obj, path5) {
   }
   return current;
 }
+function isNotFoundError(err) {
+  return err instanceof FlowApiError && err.statusCode === 404;
+}
+function isConflictError(err) {
+  return err instanceof FlowApiError && err.statusCode === 409;
+}
+function notFoundResult(resource, id, remediation) {
+  const payload = {
+    found: false,
+    code: "not_found",
+    resource,
+    id,
+    message: `${resource} not found (it may have been deleted or moved to another environment).`,
+    remediation: remediation ?? `Call list_flows to see current flows in this environment.`
+  };
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+}
 
 // packages/core/dist/mcp/progress.js
 function progress(extra) {
@@ -41887,7 +42286,7 @@ var jsonRecord = external_exports.preprocess((v) => {
     }
   }
   return v;
-}, external_exports.record(external_exports.unknown()));
+}, external_exports.record(external_exports.string(), external_exports.unknown()));
 function buildToolContext(mcpCtx, config3, clientFactory) {
   let client = null;
   function getClient() {
@@ -42133,7 +42532,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("list_flows", "List cloud flows. Supports name search.", { env: external_exports.string().optional().describe("Environment ID (session default if omitted)"), name: external_exports.string().optional().describe("Filter by display name"), top: external_exports.number().optional().describe("Max results (default 50)"), filter: external_exports.string().optional().describe("OData filter (advanced)") }, { readOnlyHint: true, title: "List Flows" }, async ({ env, name: name3, top, filter }) => {
+  server2.tool("list_flows", "List cloud flows. Supports name search.", { env: external_exports.string().optional().describe("Environment ID (session default if omitted)"), name: external_exports.string().optional().describe("Filter by display name"), top: external_exports.number().min(1).max(500).optional().describe("Max results (default 50)"), filter: external_exports.string().optional().describe("OData filter (advanced)") }, { readOnlyHint: true, title: "List Flows" }, async ({ env, name: name3, top, filter }) => {
     try {
       const envId = ctx.resolveEnv(env);
       ctx.rememberEnv(envId);
@@ -42185,6 +42584,12 @@ async function createMcpServer(authProvider, deps = {}) {
       }
       return safeResult(result, { singleItem: true });
     } catch (e) {
+      if (isNotFoundError(e)) {
+        const pinned = getActiveMcpContext().currentFlow.get();
+        if (pinned.flowId === flow)
+          getActiveMcpContext().currentFlow.clear();
+        return notFoundResult("Flow", flow);
+      }
       return safeError(e);
     }
   });
@@ -42311,6 +42716,8 @@ async function createMcpServer(authProvider, deps = {}) {
       await ctx.getClient().publishFlow(ctx.resolveEnv(env), flow, { forceManaged });
       return safeResult({ success: true });
     } catch (e) {
+      if (isConflictError(e))
+        return safeResult({ success: true, alreadyStarted: true, message: "Flow is already enabled." });
       return safeError(e);
     }
   });
@@ -42325,6 +42732,7 @@ async function createMcpServer(authProvider, deps = {}) {
   server2.tool("delete_flow", "Permanently delete a flow. **Refuses by default for managed-solution flows** (deletion is irreversible AND will be undone on next solution import). Pass forceManaged: true to override. **Use this when**: the flow is no longer needed AND you've confirmed no other flow / connection / app depends on it. **Do NOT use when**: you just want to stop the flow temporarily \u2014 use disable_flow (reversible). Auto-captures a backup snapshot before deletion, accessible via restore_backup for ~10 retentions.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false.") }, { destructiveHint: true, title: "Delete Flow" }, async ({ env, flow, forceManaged }) => {
     try {
       await ctx.getClient().deleteFlow(ctx.resolveEnv(env), flow, { forceManaged });
+      getActiveMcpContext().currentFlow.clearIf(flow);
       return safeResult({ success: true });
     } catch (e) {
       return safeError(e);
@@ -42408,6 +42816,8 @@ async function createMcpServer(authProvider, deps = {}) {
       const runs = await ctx.getClient().getRunHistory(ctx.resolveEnv(env), flow, top ? { top } : {});
       return safeResult(summarizeList(runs, ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.error.code", "properties.error.message"], { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" }));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Flow", flow, "The flow may have been deleted. Call list_flows to see current flows.");
       return safeError(e);
     }
   });
@@ -42415,6 +42825,8 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       return safeResult(await ctx.getClient().getRunDetails(ctx.resolveEnv(env), flow, run));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
       return safeError(e);
     }
   });
@@ -42423,6 +42835,8 @@ async function createMcpServer(authProvider, deps = {}) {
       const actions = await ctx.getClient().getRunActionDetails(ctx.resolveEnv(env), flow, run);
       return safeResult(summarizeList(actions, ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.code", "properties.error.code", "properties.error.message"], { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.code": "code", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" }));
     } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
       return safeError(e);
     }
   });
@@ -42476,10 +42890,15 @@ async function createMcpServer(authProvider, deps = {}) {
   });
   server2.tool("set_current_flow", "Pin a flow as the session's current flow. Once pinned, run/debug tools (cancel_run, resubmit_run, cancel_all_runs, get_run_action_repetitions, diagnose_run) use it when `flow` is omitted \u2014 a guardrail so an autonomous agent acts on exactly one flow.", { env: external_exports.string().optional().describe("Environment ID (for display only)"), flow: external_exports.string().describe("Flow ID to pin") }, { readOnlyHint: false, title: "Set Current Flow" }, async ({ env, flow }) => {
     try {
+      const envId = ctx.resolveEnv(env);
       let displayName = null;
       try {
-        displayName = (await ctx.getClient().getFlow(ctx.resolveEnv(env), flow)).properties?.displayName ?? null;
-      } catch {
+        const f = await ctx.getClient().getFlow(envId, flow);
+        displayName = f?.properties?.displayName ?? null;
+      } catch (e) {
+        if (isNotFoundError(e)) {
+          return notFoundResult("Flow", flow, "Cannot pin a flow that does not exist. Call list_flows to find valid flow IDs.");
+        }
       }
       const next = getActiveMcpContext().currentFlow.set(flow, { displayName, envId: env ?? null, source: "set_tool" });
       return safeResult(next);
@@ -42625,7 +43044,8 @@ async function createMcpServer(authProvider, deps = {}) {
       if (!connName) {
         const conns = await ctx.getClient().listConnections(envId, { connector });
         const active = conns.find((c) => c.statuses?.[0]?.status === "Connected" || c.status === "Connected");
-        connName = active?.name ?? active?.connectionName ?? conns[0]?.name ?? conns[0]?.connectionName;
+        const first = conns[0];
+        connName = active?.connectionName ?? active?.name ?? first?.connectionName ?? first?.name ?? first?.id;
         if (!connName) {
           return safeResult({ status: "connection_missing", connector, entityType, query, requiredAction: "create_connection" });
         }
@@ -42748,9 +43168,9 @@ async function createMcpServer(authProvider, deps = {}) {
     try {
       const opts = {};
       if (query)
-        opts.searchText = query;
+        opts.query = query;
       if (connector)
-        opts.operationGroupName = connector;
+        opts.connector = connector;
       opts.top = top || 20;
       const results = await ctx.getClient().searchOperations(ctx.resolveEnv(env), opts);
       const s = (Array.isArray(results) ? results : []).map((op) => ({
@@ -42770,13 +43190,14 @@ async function createMcpServer(authProvider, deps = {}) {
       const schema = await ctx.getClient().getOperationSchema(ctx.resolveEnv(env), connector, operation);
       const props = schema?.properties ?? schema;
       const inputs = props?.inputsDefinition ?? {};
-      const params = inputs?.parameters ?? {};
+      const params = inputs?.properties ?? inputs?.parameters ?? {};
+      const requiredSet = new Set(Array.isArray(inputs?.required) ? inputs.required : []);
       return safeResult({
         operationId: operation,
         connector,
         summary: props?.summary ?? props?.description,
         actionType: inferActionType(props),
-        parameters: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, { type: v?.type, required: v?.required ?? false, description: v?.summary ?? v?.description, enum: v?.enum, default: v?.default, dynamicValues: v?.["x-ms-dynamic-values"] ? true : void 0, dynamicTree: v?.["x-ms-dynamic-tree"] ? true : void 0 }]))
+        parameters: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, { type: v?.type, required: requiredSet.has(k) || v?.required === true, description: v?.summary ?? v?.description, enum: v?.enum, default: v?.default, dynamicValues: v?.["x-ms-dynamic-values"] ? true : void 0, dynamicTree: v?.["x-ms-dynamic-tree"] ? true : void 0 }]))
       });
     } catch (e) {
       return safeError(e);
@@ -42829,23 +43250,40 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("scaffold_flow", "Generate flow definition from template. Pass env to auto-resolve connections.", { template: external_exports.string().describe("Template ID"), env: external_exports.string().optional().describe("Environment ID for connection resolution") }, { readOnlyHint: true, title: "Scaffold Flow" }, async ({ template, env }) => {
+  server2.tool("scaffold_flow", "Generate flow definition from template. Pass env to auto-resolve connections. When env is provided, connection resolution is REQUIRED \u2014 returns an error with missing connectors if any can't be resolved. Without env, returns placeholder refs for offline use.", { template: external_exports.string().describe("Template ID"), env: external_exports.string().optional().describe("Environment ID for connection resolution") }, { readOnlyHint: true, title: "Scaffold Flow" }, async ({ template, env }) => {
     try {
       const tmpl = getTemplate(template);
       if (!tmpl)
         return safeError(new Error(`Template "${template}" not found. Use list_templates.`));
       const definition = injectTemplateMetadata(tmpl.definition);
       let refs;
+      let connectionStatus = "placeholder";
+      const unresolvedConnectors = [];
       if (env && tmpl.connectors.length > 0) {
         try {
           refs = await ctx.getClient().resolveConnectionRefs(ctx.resolveEnv(env), tmpl.connectors);
+          for (const connector of tmpl.connectors) {
+            const key = connector.replace("shared_", "shared_");
+            const ref = refs[key];
+            if (!ref?.connectionName || ref.connectionName.startsWith("REPLACE_WITH")) {
+              unresolvedConnectors.push(connector);
+            }
+          }
+          connectionStatus = unresolvedConnectors.length === 0 ? "resolved" : "partial";
         } catch {
           refs = generateConnectionRefs(tmpl.connectors);
+          unresolvedConnectors.push(...tmpl.connectors);
         }
       } else {
         refs = generateConnectionRefs(tmpl.connectors);
       }
-      return safeResult({ definition, connectionReferences: refs, template: { id: tmpl.id, name: tmpl.name, connectors: tmpl.connectors } });
+      return safeResult({
+        definition,
+        connectionReferences: refs,
+        template: { id: tmpl.id, name: tmpl.name, connectors: tmpl.connectors },
+        connectionStatus,
+        ...unresolvedConnectors.length > 0 ? { unresolvedConnectors, hint: `Missing connections for: ${unresolvedConnectors.join(", ")}. Create them with create-connection or pick_or_create_connection.` } : {}
+      });
     } catch (e) {
       return safeError(e);
     }

@@ -29,10 +29,17 @@ hooks/
   hooks.json                   ← Claude-format hooks: UserPromptSubmit
   inject-sync-reminder.cs      ← File-based .NET app that emits the sync reminder for both hosts
 references/
-  TechnicalGuide.md            ← YAML syntax, control selection, layout strategies, Power Fx patterns
+  YamlSyntax.md                ← .pa.yaml structure, syntax rules, and parse-error triage
+  ControlGuide.md              ← Control selection, property contracts, enums, and versions
+  LayoutGuide.md               ← Responsive sizing, scrolling, galleries, and contrast
+  GridLayoutGuide.md           ← Conditional GridLayout formulas and invariants
+  PowerFxGuide.md              ← State, events, named formulas, and mock data
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
-  QAChecks.md                  ← Runtime anti-pattern checks for self-QA
-  PlanTemplates.md             ← CREATE and EDIT plan document structures for canvas-app-planner
+  QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
+  PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures
+  CreateWorkflow.md            ← Empty-app planning and planner handoff
+  EditWorkflow.md              ← Simple vs complex edit routing and planning
+  ValidationWorkflow.md        ← Wave compile gates and bounded diagnostic convergence
 agents/
   canvas-app-planner.md        ← Discovers resources and writes plan document; invoked by canvas-app
   canvas-screen-builder.md     ← Builds or modifies one screen; invoked by canvas-app (parallel)
@@ -59,8 +66,8 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `canvas-app` | Receives the approved plan from the skill. Discovers available controls, APIs, and data sources; gathers control property definitions (`describe_control`); writes `App.pa.yaml` (CREATE mode) and `canvas-app-plan.md` for downstream screen builders. |
-| `canvas-screen-builder` | `canvas-app` | For Create actions: writes YAML for one new screen based on the plan. For Modify actions: applies targeted edits to one existing screen. Runs in parallel with other builders; validation is performed later by `canvas-app` using `compile_canvas`. |
+| `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
+| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports every named self-QA outcome. Builders run in waves of at most three; `canvas-app` owns compilation. |
 
 ## MCP Tools
 

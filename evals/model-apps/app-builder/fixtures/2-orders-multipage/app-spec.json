@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 2,
+  "solution": {
+    "uniqueName": "ContosoOrders",
+    "displayName": "Contoso Orders",
+    "publisherPrefix": "new"
+  },
+  "app": {
+    "name": "Orders",
+    "description": "Order operations + overview"
+  },
+  "entities": [
+    {
+      "schemaName": "new_order",
+      "displayName": "Order",
+      "pluralName": "Orders",
+      "primaryAttribute": {
+        "schemaName": "new_name",
+        "displayName": "Order #"
+      },
+      "columns": [
+        {
+          "schemaName": "new_status",
+          "displayName": "Status",
+          "type": "Choice",
+          "options": [
+            "New",
+            "Shipped",
+            "Delivered"
+          ]
+        },
+        {
+          "schemaName": "new_total",
+          "displayName": "Total",
+          "type": "Money"
+        }
+      ]
+    },
+    {
+      "schemaName": "new_customer",
+      "displayName": "Customer",
+      "pluralName": "Customers",
+      "primaryAttribute": {
+        "schemaName": "new_name",
+        "displayName": "Name"
+      },
+      "columns": []
+    }
+  ],
+  "relationships": [
+    {
+      "type": "OneToMany",
+      "referenced": "new_customer",
+      "referencing": "new_order",
+      "lookup": {
+        "schemaName": "new_CustomerId",
+        "displayName": "Customer"
+      }
+    }
+  ],
+  "forms": [
+    {
+      "entity": "new_order",
+      "type": "main",
+      "name": "Order",
+      "layout": "auto"
+    },
+    {
+      "entity": "new_customer",
+      "type": "main",
+      "name": "Customer",
+      "layout": "auto",
+      "subgrids": [
+        {
+          "childEntity": "new_order",
+          "view": "Active Orders",
+          "label": "Orders"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "entity": "new_order",
+      "type": "main",
+      "name": "Active Orders",
+      "columns": [
+        "new_name",
+        "new_status",
+        "new_total"
+      ],
+      "activeOnly": true
+    }
+  ],
+  "charts": [
+    {
+      "entity": "new_order",
+      "name": "Orders by Status",
+      "groupBy": "new_status",
+      "measure": "count",
+      "chartType": "Pie"
+    }
+  ],
+  "pages": [
+    {
+      "key": "overview",
+      "name": "Overview",
+      "purpose": "KPI overview of orders",
+      "dataSources": [
+        "new_order"
+      ],
+      "source": {
+        "kind": "intent"
+      },
+      "navigatesTo": [
+        {
+          "targetKey": "order-detail",
+          "data": {
+            "orderId": "string"
+          }
+        }
+      ],
+      "pageInput": {
+        "data": {}
+      }
+    },
+    {
+      "key": "order-detail",
+      "name": "Order Detail",
+      "purpose": "One order + line items",
+      "dataSources": [
+        "new_order"
+      ],
+      "source": {
+        "kind": "intent"
+      },
+      "pageInput": {
+        "data": {
+          "orderId": "string"
+        }
+      }
+    }
+  ],
+  "appShell": {
+    "areas": [
+      {
+        "label": "Sales",
+        "groups": [
+          {
+            "label": "Work",
+            "subAreas": [
+              {
+                "page": "overview",
+                "title": "Overview"
+              },
+              {
+                "page": "order-detail",
+                "title": "Order Detail"
+              },
+              {
+                "entity": "new_order",
+                "title": "Orders"
+              },
+              {
+                "entity": "new_customer",
+                "title": "Customers"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "design": {
+    "accentColor": "#0f6cbd",
+    "density": "comfortable",
+    "cornerRadius": "medium",
+    "darkMode": "system",
+    "layout": "cards"
+  },
+  "personas": [
+    {
+      "persona": "Order Clerk",
+      "jobs": [
+        {
+          "name": "Watch the order queue",
+          "description": "See at a glance what needs attention today",
+          "surfaces": [
+            "overview"
+          ],
+          "privileges": [
+            {
+              "entity": "new_order",
+              "access": [
+                "read"
+              ],
+              "scope": "businessUnit"
+            }
+          ]
+        },
+        {
+          "name": "Work a single order",
+          "description": "Open one order and update it",
+          "surfaces": [
+            "order-detail",
+            "Active Orders"
+          ],
+          "privileges": [
+            {
+              "entity": "new_order",
+              "access": [
+                "read",
+                "write"
+              ],
+              "scope": "businessUnit"
+            },
+            {
+              "entity": "new_customer",
+              "access": [
+                "read"
+              ],
+              "scope": "organization"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

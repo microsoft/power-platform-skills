@@ -2,20 +2,21 @@ name: validate-repository-metadata
 
 on:
     pull_request:
-        branches:
-            - main
     workflow_dispatch:
 
 jobs:
     validate-repository-metadata:
         name: validate-repository-metadata
         runs-on: ubuntu-latest
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         steps:
             - name: checkout
-              uses: actions/checkout@v4
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
             - name: setup-node
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
               with:
                   node-version: 20
 
@@ -30,3 +31,19 @@ jobs:
 
             - name: validate-telemetry-ikeys
               run: node scripts/validate-telemetry-ikeys.js
+
+            - name: test-secure-process-execution-validator
+              run: node --test scripts/tests/validate-secure-process-execution.test.js
+
+            - name: validate-secure-process-execution
+              run: node scripts/validate-secure-process-execution.js
+
+            # This repository is public, and the genpage eval fixtures are captured
+            # agent transcripts that will faithfully record whatever live environment
+            # an eval was run against. Guarding this in CI is the only reliable
+            # control: a pasted transcript looks correct to a reviewer.
+            - name: test-no-real-environments-validator
+              run: node --test scripts/tests/validate-no-real-environments.test.js
+
+            - name: validate-no-real-environments
+              run: node scripts/validate-no-real-environments.js

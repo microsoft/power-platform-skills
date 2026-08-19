@@ -1,0 +1,469 @@
+{
+  "solution": {
+    "uniqueName": "ContosoSupportDesk",
+    "displayName": "Contoso Support Desk",
+    "publisherPrefix": "new"
+  },
+  "app": {
+    "name": "Support Desk",
+    "description": "Manage customers, their support tickets, and ticket comments"
+  },
+  "entities": [
+    {
+      "schemaName": "new_customer",
+      "displayName": "Customer",
+      "pluralName": "Customers",
+      "primaryAttribute": {
+        "schemaName": "new_name",
+        "displayName": "Customer Name"
+      },
+      "columns": [
+        {
+          "schemaName": "new_segment",
+          "displayName": "Segment",
+          "type": "Choice",
+          "options": [
+            "Enterprise",
+            "Mid-Market",
+            "Small Business"
+          ]
+        },
+        {
+          "schemaName": "new_accountmanager",
+          "displayName": "Account Manager",
+          "type": "Text"
+        }
+      ],
+      "vectorIcon": "new_customer_icon",
+      "iconDescription": "a single person bust inside a rounded square"
+    },
+    {
+      "schemaName": "new_ticket",
+      "displayName": "Ticket",
+      "pluralName": "Tickets",
+      "primaryAttribute": {
+        "schemaName": "new_name",
+        "displayName": "Title"
+      },
+      "columns": [
+        {
+          "schemaName": "new_priority",
+          "displayName": "Priority",
+          "type": "Choice",
+          "options": [
+            "Low",
+            "Medium",
+            "High",
+            "Critical"
+          ]
+        },
+        {
+          "schemaName": "new_status",
+          "displayName": "Status",
+          "type": "Choice",
+          "options": [
+            "New",
+            "In Progress",
+            "Resolved",
+            "Closed"
+          ]
+        },
+        {
+          "schemaName": "new_duedate",
+          "displayName": "Due Date",
+          "type": "DateTime"
+        },
+        {
+          "schemaName": "new_description",
+          "displayName": "Description",
+          "type": "Memo"
+        }
+      ],
+      "vectorIcon": "new_ticket_icon",
+      "iconDescription": "an outlined clipboard with a checkmark on the page"
+    },
+    {
+      "schemaName": "new_comment",
+      "displayName": "Comment",
+      "pluralName": "Comments",
+      "primaryAttribute": {
+        "schemaName": "new_name",
+        "displayName": "Comment"
+      },
+      "columns": [
+        {
+          "schemaName": "new_body",
+          "displayName": "Body",
+          "type": "Memo"
+        },
+        {
+          "schemaName": "new_author",
+          "displayName": "Author",
+          "type": "Text"
+        },
+        {
+          "schemaName": "new_postedon",
+          "displayName": "Posted On",
+          "type": "DateTime"
+        }
+      ],
+      "vectorIcon": "new_comment_icon",
+      "iconDescription": "a rounded speech bubble with a tail at the lower left"
+    }
+  ],
+  "relationships": [
+    {
+      "type": "OneToMany",
+      "referenced": "new_customer",
+      "referencing": "new_ticket",
+      "lookup": {
+        "schemaName": "new_CustomerId",
+        "displayName": "Customer"
+      }
+    },
+    {
+      "type": "OneToMany",
+      "referenced": "new_ticket",
+      "referencing": "new_comment",
+      "lookup": {
+        "schemaName": "new_TicketId",
+        "displayName": "Ticket"
+      }
+    }
+  ],
+  "forms": [
+    {
+      "entity": "new_customer",
+      "type": "main",
+      "name": "Customer",
+      "layout": "auto",
+      "subgrids": [
+        {
+          "childEntity": "new_ticket",
+          "view": "Active Tickets",
+          "label": "Related Tickets"
+        }
+      ]
+    },
+    {
+      "entity": "new_ticket",
+      "type": "main",
+      "name": "Ticket",
+      "layout": "auto",
+      "purpose": "tracking",
+      "subgrids": [
+        {
+          "childEntity": "new_comment",
+          "view": "Active Comments",
+          "label": "Related Comments"
+        }
+      ]
+    },
+    {
+      "entity": "new_comment",
+      "type": "main",
+      "name": "Comment",
+      "layout": "auto"
+    }
+  ],
+  "views": [
+    {
+      "entity": "new_customer",
+      "type": "main",
+      "name": "Active Customers",
+      "columns": [
+        "new_name",
+        "new_segment",
+        "new_accountmanager"
+      ],
+      "sort": [
+        {
+          "attr": "new_name",
+          "dir": "asc"
+        }
+      ],
+      "activeOnly": true
+    },
+    {
+      "entity": "new_ticket",
+      "type": "main",
+      "name": "Active Tickets",
+      "columns": [
+        "new_name",
+        "new_priority",
+        "new_status",
+        "new_duedate"
+      ],
+      "sort": [
+        {
+          "attr": "new_duedate",
+          "dir": "asc"
+        }
+      ],
+      "activeOnly": true
+    },
+    {
+      "entity": "new_comment",
+      "type": "main",
+      "name": "Active Comments",
+      "columns": [
+        "new_name",
+        "new_author",
+        "new_postedon"
+      ],
+      "sort": [
+        {
+          "attr": "new_postedon",
+          "dir": "desc"
+        }
+      ],
+      "activeOnly": true
+    }
+  ],
+  "charts": [
+    {
+      "entity": "new_ticket",
+      "name": "Tickets by Priority",
+      "groupBy": "new_priority",
+      "measure": "count",
+      "chartType": "Pie"
+    },
+    {
+      "entity": "new_ticket",
+      "name": "Tickets by Status",
+      "groupBy": "new_status",
+      "measure": "count",
+      "chartType": "Column"
+    }
+  ],
+  "appShell": {
+    "areas": [
+      {
+        "label": "Service",
+        "groups": [
+          {
+            "label": "Support",
+            "subAreas": [
+              {
+                "entity": "new_customer",
+                "title": "Customers"
+              },
+              {
+                "entity": "new_ticket",
+                "title": "Tickets"
+              },
+              {
+                "entity": "new_comment",
+                "title": "Comments"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "sampleData": {
+    "new_customer": [
+      {
+        "new_name": "Northwind Traders",
+        "new_segment": "Enterprise",
+        "new_accountmanager": "Dana Reyes"
+      },
+      {
+        "new_name": "Contoso Ltd",
+        "new_segment": "Mid-Market",
+        "new_accountmanager": "Sam Patel"
+      },
+      {
+        "new_name": "Fabrikam Inc",
+        "new_segment": "Small Business",
+        "new_accountmanager": "Lee Cho"
+      }
+    ],
+    "new_ticket": [
+      {
+        "new_name": "Cannot log in to portal",
+        "new_priority": "High",
+        "new_status": "New",
+        "new_duedate": "2026-06-25T17:00:00Z",
+        "new_description": "Portal rejects valid credentials after the latest update.",
+        "$parent": {
+          "entity": "new_customer",
+          "match": {
+            "new_name": "Northwind Traders"
+          }
+        }
+      },
+      {
+        "new_name": "Invoice total incorrect",
+        "new_priority": "Medium",
+        "new_status": "In Progress",
+        "new_duedate": "2026-06-27T17:00:00Z",
+        "new_description": "Monthly invoice total is higher than expected.",
+        "$parent": {
+          "entity": "new_customer",
+          "match": {
+            "new_name": "Northwind Traders"
+          }
+        }
+      },
+      {
+        "new_name": "Export to Excel crashes",
+        "new_priority": "Critical",
+        "new_status": "New",
+        "new_duedate": "2026-06-24T17:00:00Z",
+        "new_description": "Export throws an unhandled exception on large datasets.",
+        "$parent": {
+          "entity": "new_customer",
+          "match": {
+            "new_name": "Contoso Ltd"
+          }
+        }
+      },
+      {
+        "new_name": "Request additional licenses",
+        "new_priority": "Low",
+        "new_status": "Resolved",
+        "new_duedate": "2026-06-20T17:00:00Z",
+        "new_description": "Customer needs 25 more Pro licenses.",
+        "$parent": {
+          "entity": "new_customer",
+          "match": {
+            "new_name": "Fabrikam Inc"
+          }
+        }
+      }
+    ],
+    "new_comment": [
+      {
+        "new_name": "Initial triage",
+        "new_body": "Reproduced the issue on staging; escalating to engineering.",
+        "new_author": "Dana Reyes",
+        "new_postedon": "2026-06-19T09:30:00Z",
+        "$parent": {
+          "entity": "new_ticket",
+          "match": {
+            "new_name": "Cannot log in to portal"
+          }
+        }
+      },
+      {
+        "new_name": "Customer update",
+        "new_body": "Customer confirmed the workaround is acceptable until the fix ships.",
+        "new_author": "Sam Patel",
+        "new_postedon": "2026-06-19T14:10:00Z",
+        "$parent": {
+          "entity": "new_ticket",
+          "match": {
+            "new_name": "Cannot log in to portal"
+          }
+        }
+      },
+      {
+        "new_name": "Root cause",
+        "new_body": "Tax-rate misconfiguration found; correcting and re-running billing.",
+        "new_author": "Lee Cho",
+        "new_postedon": "2026-06-20T11:00:00Z",
+        "$parent": {
+          "entity": "new_ticket",
+          "match": {
+            "new_name": "Invoice total incorrect"
+          }
+        }
+      }
+    ]
+  },
+  "personas": [
+    {
+      "persona": "Support Agent",
+      "jobs": [
+        {
+          "name": "Handle tickets",
+          "privileges": [
+            {
+              "entity": "new_ticket",
+              "access": [
+                "read",
+                "write",
+                "create"
+              ],
+              "scope": "businessUnit"
+            },
+            {
+              "entity": "new_comment",
+              "access": [
+                "read",
+                "create"
+              ],
+              "scope": "businessUnit"
+            },
+            {
+              "entity": "new_customer",
+              "access": [
+                "read"
+              ],
+              "scope": "organization"
+            }
+          ],
+          "surfaces": [
+            "Active Tickets",
+            "Ticket"
+          ]
+        }
+      ]
+    },
+    {
+      "persona": "Support Lead",
+      "jobs": [
+        {
+          "name": "Oversee the queue",
+          "privileges": [
+            {
+              "entity": "new_ticket",
+              "access": [
+                "read",
+                "write",
+                "create",
+                "delete",
+                "assign"
+              ],
+              "scope": "organization"
+            },
+            {
+              "entity": "new_customer",
+              "access": [
+                "read",
+                "write"
+              ],
+              "scope": "organization"
+            }
+          ],
+          "surfaces": [
+            "Active Tickets",
+            "Active Customers"
+          ]
+        }
+      ]
+    }
+  ],
+  "webResources": [
+    {
+      "name": "new_customer_icon",
+      "displayName": "new_customer icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm7 4a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm-4 9c0-1.7 1.8-3 4-3s4 1.3 4 3v1H8v-1Z'/></svg>"
+    },
+    {
+      "name": "new_ticket_icon",
+      "displayName": "new_ticket icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1Zm1 2v1h4V4h-4Zm-.3 13.7-2.4-2.4 1.4-1.4 1 1 3.9-3.9 1.4 1.4-5.3 5.3Z'/></svg>"
+    },
+    {
+      "name": "new_comment_icon",
+      "displayName": "new_comment icon",
+      "type": "svg",
+      "content": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='currentColor' d='M4 4h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z'/></svg>"
+    }
+  ]
+}

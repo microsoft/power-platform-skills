@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 33 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and Bootstrap 3→5 migration. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -388,6 +388,18 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
+### Migration
+
+#### `/migrate-bootstrap`
+
+> "Upgrade my Power Pages site from Bootstrap 3 to Bootstrap 5"
+
+Migrates a traditional Power Pages site (Liquid web templates, not code sites) from Bootstrap 3 to Bootstrap 5. Runs the `pac pages bootstrap-migrate` engine for the bulk class renames, then assists with the residual hierarchy/CSS fixes the engine can only flag.
+
+- Non-destructive: the engine writes a new `<folder>V5` copy and never edits the source
+- AI-assisted per-category fixes for grid, navbar, panel/card, and page-header changes
+- Uploads (auto-enabling the Bootstrap 5 runtime flag) and verifies the flip via `pac-log.txt`
+
 ### Support
 
 #### `/report-issue`
@@ -404,12 +416,12 @@ Collects context about the current session and opens a pre-filled GitHub issue a
 
 > "Turn off telemetry" · "Disable telemetry" · "Telemetry status"
 
-Enables, disables, or checks the status of anonymous usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
+Enables, disables, or checks the status of usage telemetry. Per-user and per-plugin; the choice is stored in `~/.power-platform-skills/config.json`. See [Telemetry & privacy](#telemetry--privacy) below.
 
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- When PAC is signed in, events include organization and tenant IDs; they can also include the signed-in user's Entra object ID when PAC exposes it
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -435,6 +447,8 @@ The plugin ships with two MCP servers configured in `.mcp.json` — they start a
 |---|---|
 | **playwright** | Headless browser automation for live previews and runtime tests |
 | **microsoft-learn** | Grounded search/fetch over official Microsoft Learn docs |
+
+The plugin host must provide an absolute `PLUGIN_ROOT` (GitHub Copilot) or `CLAUDE_PLUGIN_ROOT` (Claude Code). The Playwright bootstrap resolves its launcher only from that declared plugin root and never from the workspace working directory.
 
 ## Typical Workflow
 
@@ -465,33 +479,20 @@ A common end-to-end workflow looks like this:
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 
-## Running Without Interruption
+## Runtime approvals
 
-The plugin invokes multiple tools during a session. To reduce approval prompts:
+Keep your AI host's runtime approval prompts enabled while using this plugin.
+Plugin scripts run on your workstation with the filesystem access and cloud sign-in state available to your user account.
+A script that invokes `pac` or `az` may therefore act on Power Platform environments, Dataverse data, and Azure tenants that you can access.
 
-**Option 1 — Permission mode (recommended)**
+Before approving a command, check the executable, script path, arguments, and target environment.
+Pay particular attention to commands that read or change project files, environment configuration, tenant resources, or business data.
+Do not grant blanket approval to command families such as `node`, `npm`, `git`, `pac`, or `az`.
 
-```jsonc
-// .claude/settings.json
-{
-  "defaultMode": "acceptEdits",
-  "permissions": {
-    "allow": [
-      "Bash(npm run *)",
-      "Bash(git *)",
-      "Bash(pac *)",
-      "Bash(az *)",
-      "Bash(node *)"
-    ]
-  }
-}
-```
-
-**Option 2 — Auto-accept all**
-
-```bash
-claude --dangerously-skip-permissions
-```
+If your host supports command-specific allow rules, use them only for an exact plugin script path that you have inspected and expect to run.
+Keep approval prompts for commands whose arguments or environment variables select a project, environment, tenant, or data source.
+Permission features and rule syntax vary by host and version, so follow the documentation for your host.
+Suppressing an approval prompt does not sandbox a script, restrict the programs it can start, or guarantee that the command is safe.
 
 ## ALM prompts you may see
 
@@ -524,10 +525,10 @@ This Dataverse relationship check is intended for local validation only and shou
 
 ## Telemetry & privacy
 
-This plugin sends **anonymous** usage telemetry by default to help Microsoft
-improve it. **No personal data is ever collected** — only things like skill name,
-plugin version, OS, and Node version. It never includes file paths, prompts, tool
-inputs, site names, URLs, credentials, usernames, or hostnames.
+This plugin sends usage telemetry by default to help Microsoft improve it.
+Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
+When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**
 
@@ -537,7 +538,8 @@ inputs, site names, URLs, credentials, usernames, or hostnames.
 /power-pages:telemetry on       # resume sending telemetry
 ```
 
-When **off**, nothing leaves your machine. A local diagnostic copy of each event
+When **off**, nothing leaves your machine. A local diagnostic copy containing the
+same event fields, including available organization, tenant, and Entra object IDs,
 is still written under
 `~/.power-platform-skills/telemetry/power-pages/sessions/<sessionId>/events.jsonl`
 so you can see exactly what would have been sent; delete it anytime. Run

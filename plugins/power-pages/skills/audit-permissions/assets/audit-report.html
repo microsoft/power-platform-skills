@@ -232,12 +232,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
 <script>
 // Data populated by the audit-permissions skill
-const SITE_NAME = "__SITE_NAME__";
-
-const FINDINGS = __FINDINGS_DATA__;
+const FINDINGS = __JSON_FINDINGS_DATA__;
 // Each finding: { id, severity (critical|warning|info|pass), title, table, scope, permission, reasoning, fix, details }
 
-const INVENTORY = __INVENTORY_DATA__;
+const INVENTORY = __JSON_INVENTORY_DATA__;
 // Each item: { name, table, scope, roles, read, create, write, delete, append, appendto }
 
 // Tab navigation

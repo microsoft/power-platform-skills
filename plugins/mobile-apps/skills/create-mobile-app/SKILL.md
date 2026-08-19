@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npm run dev`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npm run dev`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -1233,7 +1233,13 @@ Arguments:
 
 Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
 
-If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9b. Do NOT skip Step 9b; Tamagui aliases and brand tokens are required for screen quality even when the app has no native capabilities.
+If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
+
+### Step 9a — Install approved pure-JavaScript dependencies
+
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+
+Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
 ### Step 9b — Apply design system
 
@@ -1666,9 +1672,10 @@ export default function <ScreenName>() {
 }
 ```
 
-**Skeleton template for an Auth/Profile screen** (any screen whose data calls are `useAuth()` only):
+**Skeleton template for the Profile screen** (`/(app)/profile`, always generated; app-specific content comes from the Profile spec):
 ```tsx
 import React from 'react';
+import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1680,7 +1687,22 @@ export default function <ScreenName>() {
   // There is NO `user` / `account` field. Display name comes from the ID-token claim, not from useAuth().
   const { isSignedIn, signOut } = useAuth();
 
-  // TODO: screen-builder fills JSX here
+  const handleSignOut = React.useCallback(() => {
+    Alert.alert('Sign out?', 'You can sign in again with your work or school account.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => {
+          void Promise.resolve()
+            .then(() => signOut())
+            .finally(() => router.replace('/login'));
+        },
+      },
+    ]);
+  }, [router, signOut]);
+
+  // TODO: screen-builder fills JSX here. Any visible Sign out button calls handleSignOut.
   return null;
 }
 ```
@@ -1688,8 +1710,11 @@ export default function <ScreenName>() {
 **Rules for skeleton generation:**
 - Replace `<Service>`, `<Entity>`, `<ScreenName>`, `<searchKeys>`, `<orderField>`, `<field_declarations>` with actual values from the plan's per-screen spec + Generated Services table.
 - If a service is NOT in the Generated Services table, still write the import but add `// TODO(connector-not-yet-added)` above it.
+- Profile skeletons may also include generated service/model imports when the Profile spec's `Profile content` or `Data` fields require persisted app-specific user context. Keep the sign-out helper regardless of whether Profile also loads data.
 - The skeleton is a **valid TypeScript file** (compiles with `return null`) — builders replace the `return null` with real JSX.
 - Do NOT write skeletons for screens that already exist in the template (e.g. `home.tsx` if it's already present).
+- The Profile skeleton must keep the `handleSignOut` helper and wire the planned `Sign out` button to it. Do not inline a second auth/logout path, and do not make Profile a sign-out-only screen.
+- Do not merge sign-out imports or helpers into non-Profile screen skeletons. The Profile screen is the only sign-out owner.
 - **Never destructure `user`, `account`, `profile`, or `claims` from `useAuth()`** — those fields do not exist on `AuthState`. The only fields are `isLoading`, `isAuthReady`, `isSignedIn`, `error`, `acquireToken`, `signIn`, `signOut`. If the screen needs the signed-in user's name/email, add a `// TODO: decode ID token claim` comment — do not invent a field.
 
 ---

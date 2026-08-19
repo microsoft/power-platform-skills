@@ -16,9 +16,10 @@ D:\Projects\power-platform-skills\plugins\model-apps
 
 ## Environment
 
-- Active Profile: aurora365-user1@auroratstgeo.onmicrosoft.com
-- Environment URL: https://aurorabapenv4ab3f.crm10.dynamics.com/
+- Active Profile: contoso-user001@contosotest1.onmicrosoft.com
+- URL: https://contosobapenv0002.crm10.dynamics.com/
 - App: Sales Hub (12345678-1234-1234-1234-123456789abc)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -36,6 +37,10 @@ No entity creation required — all entities already exist.
 
 account
 
+## Connector Bindings
+
+No connector bindings.
+
 ## Design Preferences
 
 - Card grid layout, responsive auto-fill columns
@@ -45,13 +50,24 @@ account
 
 ## Relevant Samples
 
-- plugins/model-apps/samples/7-responsive-cards.tsx (card layout reference)
-- plugins/model-apps/samples/9-list-with-caching.tsx (Dataverse list pattern + window cache)
-
+| Page | Sample | Reason |
+|------|--------|--------|
+| Accounts Gallery | 7-responsive-cards.tsx | card layout reference |
+| Accounts Gallery | 9-list-with-caching.tsx | Dataverse list pattern + window cache |
 ## Per-Page Specifications
 
 ### Accounts Gallery
 
+
+- **File:** page.tsx
+- **Purpose:** Card-based gallery of Account records, click-to-open detail
+- **Entities:** account
+- **Needs caching:** true
+- **Key Features:** Scrollable responsive account cards showing name, website, email, and phone with record navigation.
+- **Components:** Card, Text, Button, Badge, Spinner from Fluent UI V9; BuildingRegular, MailRegular, PhoneRegular, GlobeRegular icons.
+- **Layout:** Responsive card grid with scrollable page container and no viewport-sized CSS.
+- **Data Binding:** queryTable("account") on mount selecting name, websiteurl, emailaddress1, telephone1; use window in-flight de-dupe and cache.
+- **Interactions:** Clicking a card opens the Account record via Xrm.Navigation.navigateTo.
 - File: page.tsx
 - Entity: account
 - Data fetching: dataApi.queryTable on mount, window cache (`__genpage_accounts_v1`), no useCallback wrap

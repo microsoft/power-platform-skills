@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 2,
+  "solution": { "uniqueName": "ContosoAssets", "displayName": "Contoso Assets", "publisherPrefix": "new" },
+  "app": { "name": "Assets", "description": "Track assets, their status, and an operations dashboard" },
+  "globalChoices": [
+    { "name": "new_assetstatus", "displayName": "Asset Status", "options": ["Active", "In Repair", "Retired"] }
+  ],
+  "entities": [
+    { "schemaName": "new_asset", "displayName": "Asset", "pluralName": "Assets",
+      "primaryAttribute": { "schemaName": "new_name", "displayName": "Asset Name" },
+      "columns": [
+        { "schemaName": "new_status", "displayName": "Status", "type": "Choice", "globalChoice": "new_assetstatus" },
+        { "schemaName": "new_value", "displayName": "Value", "type": "Money" }
+      ] }
+  ],
+  "webResources": [
+    { "name": "new_asset.js", "type": "js", "content": "" }
+  ],
+  "commands": [
+    { "entity": "new_asset", "label": "Retire", "location": "MainTab", "library": "new_asset.js", "function": "Asset.retire" }
+  ],
+  "views": [
+    { "entity": "new_asset", "type": "main", "name": "Active Assets", "columns": ["new_name", "new_status", "new_value"], "activeOnly": true }
+  ],
+  "charts": [
+    { "entity": "new_asset", "name": "Assets by Status", "groupBy": "new_status", "measure": "count", "chartType": "Column" }
+  ],
+  "forms": [
+    { "entity": "new_asset", "type": "main", "name": "Asset", "layout": "auto" }
+  ],
+  "dashboards": [
+    { "name": "Operations", "tiles": [
+      { "type": "chart", "chart": "Assets by Status", "view": "Active Assets" },
+      { "type": "list", "view": "Active Assets", "name": "Recent Assets" }
+    ] }
+  ],
+  "appShell": {
+    "areas": [
+      { "label": "Operations", "groups": [
+        { "label": "Manage", "subAreas": [
+          { "entity": "new_asset", "title": "Assets" },
+          { "dashboard": "Operations", "title": "Ops Dashboard" }
+        ] }
+      ] }
+    ]
+  }
+}

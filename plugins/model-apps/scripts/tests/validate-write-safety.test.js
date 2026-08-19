@@ -74,6 +74,29 @@ test('genpage-plan.md in a working subdir activates the guard (exit 1)', () => {
   assert.equal(runHook(payload).status, 1);
 });
 
+// /app-builder runs the same runaway-sub-agent risk (its generate-pages phase dispatches
+// PARALLEL page-builder workers), but its working dir carries app-spec.json +
+// model-app-plan.md rather than genpage-plan.md — so those markers must activate the guard too.
+for (const marker of ['app-spec.json', 'model-app-plan.md']) {
+  test(`app-builder marker ${marker} at cwd activates the guard (exit 1)`, () => {
+    fs.rmSync(path.join(cwd, 'genpage-plan.md'), { force: true });
+    fs.writeFileSync(path.join(cwd, marker), '{}\n', 'utf8');
+    const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+    const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+    assert.equal(runHook(payload).status, 1);
+  });
+
+  test(`app-builder marker ${marker} in a working subdir activates the guard (exit 1)`, () => {
+    fs.rmSync(path.join(cwd, 'genpage-plan.md'), { force: true });
+    const wd = path.join(cwd, 'my-app');
+    fs.mkdirSync(wd);
+    fs.writeFileSync(path.join(wd, marker), '{}\n', 'utf8');
+    const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+    const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+    assert.equal(runHook(payload).status, 1);
+  });
+}
+
 test('tmpdir scratch writes are allowed (exit 0)', () => {
   const payload = {
     tool_name: 'Write',
