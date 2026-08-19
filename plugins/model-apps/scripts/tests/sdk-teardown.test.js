@@ -225,7 +225,7 @@ test('plan is ordered app -> dashboards -> commands -> forms -> charts -> views 
   const kinds = steps.map((s) => s.kind);
   // Gap 6: resetDefaultViews steps (drop parent lookups from un-deletable default views) precede the
   // relationships. fullSpec's ticket + comment are 1:N children, so both get a reset step.
-  assert.deepStrictEqual(kinds, ['app', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
+  assert.deepStrictEqual(kinds, ['app', 'genpage', 'dashboard', 'commands', 'form', 'form', 'form', 'chart', 'chart', 'view', 'view', 'view', 'resetDefaultViews', 'resetDefaultViews', 'relationship', 'relationship', 'table', 'table', 'table', 'webResource', 'webResource', 'webResource', 'solution']);
 });
 
 // Regression (found by live teardown): a table's icon web resource is referenced by the table, so
@@ -447,7 +447,7 @@ test('app teardown resolves via resolveArtifact and delegates the full cascade t
   await h.del(sdk, items[0]);
   assert.strictEqual(cascadeCalls.length, 1, 'deleteAppCascade called once');
   assert.strictEqual(cascadeCalls[0].appModuleId, 'app-1', 'app module id passed');
-  assert.strictEqual(cascadeCalls[0].appModuleIdUnique, 'u-1', 'unique id passed (deleteAppCascade handles sitemap + genpage internally)');
+  assert.strictEqual(cascadeCalls[0].appModuleIdUnique, 'u-1', 'unique id passed (deleteAppCascade removes the sitemap; generative pages are a separate step)');
 });
 
 test('app teardown skips when app not found (resolve returns [])', async () => {
@@ -587,10 +587,10 @@ test('dry-run emits the whole plan as skips and never calls SDK', async () => {
   const throwingSdk = { queryRecords: () => { throw new Error('dry-run must not call SDK'); } };
   const r = await runTeardown(fullSpec(), { apply: false }, { sdk: throwingSdk, emit: (e) => events.push(e) });
   assert.strictEqual(r.dryRun, true);
-  assert.strictEqual(r.plan.length, 22); // +1 generated app-icon WR, +1 page-manifest WR, +2 resetDefaultViews (ticket, comment)
+  assert.strictEqual(r.plan.length, 23); // +1 genpage step, +1 generated app-icon WR, +1 page-manifest WR, +2 resetDefaultViews (ticket, comment)
   const terminal = events.filter((e) => e.status !== 'start');
   assert.ok(terminal.every((e) => e.status === 'skip'));
-  assert.strictEqual(terminal.length, 22);
+  assert.strictEqual(terminal.length, 23);
 });
 
 test('apply without an sdk throws', async () => {
@@ -660,7 +660,7 @@ test('not-found artifacts are skipped, not errors, and issue no delete', async (
   // Tables will attempt deleteTable (synthetic item) but get not-found immediately, counted as deleted
   // Relationships will attempt deleteRelationship but get not-found, counted as deleted (tolerateNotFound)
   // Other artifacts (app, dashboard, commands, forms, charts, views, webResource, solution) skip when resolve returns []
-  assert.strictEqual(r.skipped.length, 15); // app, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
+  assert.strictEqual(r.skipped.length, 16); // app, genpage, dashboard, commands, 3 forms, 2 charts, 3 views, webResource, generated app-icon WR, page-manifest WR, solution
   assert.strictEqual((r.deleted.table || []).length, 3); // tables counted as deleted (tolerateNotFound)
   assert.strictEqual((r.deleted.relationship || []).length, 2); // relationships counted as deleted (tolerateNotFound)
   // Only table/relationship deletes were attempted (synthetic items); other kinds skipped before delete
@@ -896,8 +896,10 @@ test('planTeardown inserts persona role steps right after the app, before the da
   ] });
   const kinds = planTeardown(spec).map((s) => s.kind);
   assert.strictEqual(kinds[0], 'app');
-  assert.strictEqual(kinds[1], 'role');
+  // Generative pages are torn down immediately after the app (the SDK no longer cascades them).
+  assert.strictEqual(kinds[1], 'genpage');
   assert.strictEqual(kinds[2], 'role');
+  assert.strictEqual(kinds[3], 'role');
   // Roles are torn down before any relationship/table delete (a role holding a table's privileges
   // could otherwise block that table's delete).
   assert.ok(kinds.lastIndexOf('role') < kinds.indexOf('relationship'), 'roles before relationships/tables');
@@ -984,3 +986,170 @@ test('planTeardown trims the persona name in the role step (matches the SDK-crea
   assert.strictEqual(roleStep.target.name, 'Agent');
 });
 
+
+// ---------------------------------------------------------------------------------------------
+// Generative pages: the SDK's deleteAppCascade no longer removes them, so teardown
+// owns that decision for the pages IT authored. These pin who deletes what, and when it backs off.
+// ---------------------------------------------------------------------------------------------
+
+// A minimal SDK stand-in for the genpage handler: the page manifest (in a web resource) that says
+// which pages this build authored, and the live `uxagentproject` rows used to skip ones already
+// gone. The `uxagentprojectfile` branch exists ONLY so tests can prove the handler never touches
+// it — deleting the project cascades to its files, and deleting them ourselves would gut a page
+// the platform is about to refuse to delete.
+function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
+  const deleted = [];
+  const queried = [];
+  const manifestJson = JSON.stringify({ schemaVersion: 1, pages: manifestPages });
+  const sdk = {
+    async queryRecords(entity, opts = {}) {
+      queried.push(entity);
+      const filter = String(opts.filter || '');
+      if (entity === 'webresource') {
+        return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
+      }
+      if (entity === 'uxagentproject') {
+        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id }));
+      }
+      if (entity === 'uxagentprojectfile') {
+        const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
+        return (files[owner.toLowerCase()] || []).map((id) => ({ uxagentprojectfileid: id }));
+      }
+      return [];
+    },
+    async deleteRecord(entity, id) {
+      deleted.push(`${entity}:${id}`);
+    },
+  };
+  return { sdk, deleted, queried };
+}
+const PAGE_1 = '11111111-1111-4111-8111-111111111111';
+const PAGE_2 = '22222222-2222-4222-8222-222222222222';
+
+test('genpage resolve returns only pages the manifest says WE authored', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
+    livePages: [PAGE_1, PAGE_2], // PAGE_2 exists but is not ours
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+});
+
+// Deleting the project cascades to its files (the uxagentproject -> uxagentprojectfile
+// relationship is CascadeConfiguration Delete=Cascade), so ONE delete is both necessary and
+// sufficient. Deleting files ourselves first would be destructive — see the skip test below.
+test('genpage del deletes ONLY the project row and never touches its files', async () => {
+  const { sdk, deleted, queried } = genpageSdk({ files: { [PAGE_1.toLowerCase()]: ['f1', 'f2'] } });
+  await KIND_HANDLERS.genpage.del(sdk, { id: PAGE_1, name: 'Overview' });
+  assert.deepStrictEqual(deleted, [`uxagentproject:${PAGE_1}`]);
+  assert.ok(!queried.includes('uxagentprojectfile'), 'must not enumerate the page files');
+});
+
+// Dataverse is the authority on whether a page is still in use: saving an app that surfaces a page
+// creates a real dependency, and the DELETE then fails with "cannot be deleted because it is
+// referenced by N other components" (live-measured, published or not). The delete IS the check —
+// there is no pre-flight scan to go stale. (The stronger form of this — asserting the files survive
+// — is below; this one pins the deleted/skipped bookkeeping.)
+test('genpage records a still-referenced page as SKIPPED, not a failure', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const sdk = {
+    async queryRecords() { return []; },
+    async deleteRecord() { throw err; },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.deletedIds, []);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1]);
+});
+
+// A referenced page is a normal outcome, so the run must say so in the operator's words. Reporting
+// it as "undeletable" — the wording reserved for system/managed artifacts — would send someone
+// hunting a platform problem that does not exist.
+test('a dependency block reports as "still referenced", never "undeletable"', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const sdk = {
+    async queryRecords() { return []; },
+    async deleteRecord() { throw err; },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.skipped, [{ id: PAGE_1, reason: 'referenced' }]);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1], 'union list still populated for count-only callers');
+});
+
+test('a system/managed artifact still reports as "undeletable", not "referenced"', async () => {
+  const sdk = { deleteRemoteArtifact: async () => { const e = new Error('System-defined views cannot be deleted. SavedQuery Active X cannot be deleted.'); e.statusCode = 400; throw e; } };
+  const r = await deleteStep(sdk, KIND_HANDLERS.view, [{ id: 'v1', name: 'Active X' }]);
+  assert.deepStrictEqual(r.skipped, [{ id: 'v1', reason: 'undeletable' }]);
+});
+
+test('a dependency block is still a FAILURE for kinds that did not opt in', async () => {
+  const err = new Error('The savedquery(x) component cannot be deleted because it is referenced by 1 other components.');
+  const handler = { del: async () => { throw err; } };
+  await assert.rejects(() => deleteStep({}, handler, [{ id: 'v1' }]), /referenced by/);
+});
+
+// THE regression this ordering exists for. Dataverse tracks a dependency on the page ROW
+// (component type 10372) but NOT on its files (10373): measured on pages an app sitemap
+// references, the project reports 1 dependent and its DELETE is refused, while every one of its
+// files reports ZERO dependents and would delete cleanly. So if the handler deleted files first,
+// a skipped page would be left as an empty shell for the app that still references it.
+test('a still-referenced page is SKIPPED with its files left completely intact', async () => {
+  const err = new Error('The uxagentproject(11111111) component cannot be deleted because it is referenced by 1 other components.');
+  const deleted = [];
+  const sdk = {
+    // The page HAS files — a handler that enumerated and deleted them first would destroy the
+    // content of a page the platform then refuses to delete.
+    async queryRecords(entity) {
+      return entity === 'uxagentprojectfile'
+        ? [{ uxagentprojectfileid: 'f1' }, { uxagentprojectfileid: 'f2' }]
+        : [];
+    },
+    async deleteRecord(entity, id) {
+      deleted.push(`${entity}:${id}`);
+      if (entity === 'uxagentproject') throw err;
+    },
+  };
+  const r = await deleteStep(sdk, KIND_HANDLERS.genpage, [{ id: PAGE_1, name: 'Overview' }]);
+  assert.deepStrictEqual(r.skippedIds, [PAGE_1]);
+  assert.deepStrictEqual(r.deletedIds, []);
+  assert.deepStrictEqual(
+    deleted,
+    [`uxagentproject:${PAGE_1}`],
+    'the page delete must be the ONLY write attempted — its files must survive the skip'
+  );
+});
+
+test('genpage resolve ignores live pages the manifest does not claim', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
+    livePages: [PAGE_1, PAGE_2],
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+});
+
+test('genpage deletes nothing when the live-existence query fails (cannot prove what is ours)', async () => {
+  const sdk = {
+    async queryRecords(entity) {
+      if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
+      throw new Error('uxagentproject query failed');
+    },
+    async deleteRecord() {},
+  };
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});
+
+test('genpage skips a page the manifest claims but that no longer exists', async () => {
+  const { sdk } = genpageSdk({
+    manifestPages: [{ key: 'gone', name: 'Gone', pageId: PAGE_1 }],
+    livePages: [], // already deleted by hand
+  });
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});
+
+test('genpage deletes nothing when the manifest is absent or unreadable', async () => {
+  const sdk = { async queryRecords() { throw new Error('no manifest'); }, async deleteRecord() {} };
+  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  assert.deepStrictEqual(items, []);
+});

@@ -4,10 +4,29 @@ All notable changes to the **model-apps** plugin.
 
 ## [Unreleased] — 2.4.4
 
-Adds plugin update notices, fixes four crash paths, and corrects a smoke-eval
-assertion that could never pass live.
+Adds plugin update notices, proves what persona roles actually grant, makes
+jobs-to-be-done surfaces checkable, fixes four crash paths, and corrects a
+smoke-eval assertion that could never pass live.
 
 ### Added
+- **`verify` now proves what a persona security role GRANTS, not just that it
+  exists.** The `role` check only asserted a role row carrying the SDK ownership
+  marker, so a role built with the wrong access — or one whose privilege write
+  failed after the row landed — verified clean. The new `role-privileges` check
+  resolves every declared `(entity, access)` to its Dataverse `PrivilegeId` from
+  the same metadata source the SDK writes against, and asserts the role holds it
+  at **at least** the declared depth. A **subset** check by design: extra
+  privileges are never a finding, because `appAccess` injects `appmodule` read,
+  unioned jobs escalate a shared entity+access to the max declared scope, and
+  distinct entities can share one Dataverse privilege. Fails **closed** on an
+  unreadable role or table. Reader-gated, so existence-only callers are unchanged.
+- **`personas[].jobs[].surfaces[]` is checked instead of documentary.** Each entry
+  is now resolved against the spec's own views, forms, pages, dashboards, tables
+  and sitemap titles. `spec-lint` **warns** when a surface matches nothing — a
+  warning, not an error, because a surface may legitimately name an out-of-the-box
+  artifact this spec never authors. `verify` adds a `job-surface` rollup that
+  reports a deployed failure as the job it broke ("persona P can no longer do job
+  J"), rather than only "view X is missing".
 - **Automatic plugin update notice.** Every user-invocable skill now runs the
   non-blocking `scripts/check-version.js` preflight, which compares the installed
   Model Apps version with `origin/main` and shows update commands for the active

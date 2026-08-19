@@ -605,7 +605,7 @@ privilege removes it — the role converges to the spec).
 **Field reference**
 - `persona` (**required**) — the security role's display name; also its idempotency key. Must be unique across `personas[]`.
 - `jobs[]` (**required**, ≥1) — `{ name, description?, surfaces?, privileges[] }`. `privileges[]` is required and non-empty per job.
-- `jobs[].surfaces[]` (optional) — the view/form/page names (or page `key`s) that let this persona **do** the job. Documentary only: it is never applied to Dataverse. It renders the jobs→surfaces traceability table in `model-app-plan.md`, and a job with no `surfaces[]` is flagged by `spec-lint.js` as a design gap — nothing in the app demonstrably lets that persona do that job.
+- `jobs[].surfaces[]` (optional) — the view/form/page names (or page `key`s) that let this persona **do** the job. Never applied to Dataverse. It renders the jobs→surfaces traceability table in `model-app-plan.md`; a job with no `surfaces[]` is flagged by `spec-lint.js` as a design gap, and a surface that **matches nothing this spec builds** is flagged too (`lib/surface-resolver.js` resolves each entry against `views[]` / `forms[]` / `pages[]` (key **or** name) / `dashboards[]` / `entities[]` / sitemap subarea titles, case-insensitively). Both are **warnings**, never errors — a surface may legitimately name an out-of-the-box artifact this spec does not author. `verify-model-app` additionally rolls a *deployed* failure up to the job that depended on it (`job-surface`), so "view X is missing" also reads as "persona P can no longer do job J".
 - `privileges[].entity` (**required**) — a table **logical name** (e.g. `account`, `msdyn_workorder`). May be a table this spec doesn't author (standard/system tables are common); existence is resolved against live metadata by the build, not at lint time.
 - `privileges[].access` (**required**) — one or more of `read · create · write · delete · append · appendTo · assign · share`.
 - `privileges[].scope` (optional, default `user`) — `user` (Basic) · `businessUnit` (Local) · `parentChild` (Deep) · `organization` (Global), least→most permissive.
@@ -626,6 +626,15 @@ business unit is never touched. Because roles are keyed by (name, BU), two apps 
 of the **same name in the same business unit** share one role by design (the second build reuses the
 first's) — give personas distinct names, or a distinct `businessUnitId`, if you need separate roles. In
 `--changed-only` mode a persona change forces a **full build** (there is no partial security apply yet).
+
+**Verification.** `verify-model-app` proves the role **row** exists carrying the SDK ownership marker
+(`role`) *and* — when the reader supplies role/entity privilege access — that the role actually
+**grants** every declared privilege at **at least** the declared depth (`role-privileges`). The depth
+comparison is a **subset** check by design: extra privileges are never a finding, because `appAccess`
+injects `appmodule` read, unioned jobs escalate a shared entity+access to the max declared scope, and
+distinct entities can share one Dataverse privilege (a role holds one depth per privilege). It fails
+**closed** — an unreadable role, or a table whose privilege metadata cannot be read, is reported
+rather than skipped.
 
 **Validation rules** (`validateAppSpec`): `persona` required + unique; each job needs a `name` and a
 non-empty `privileges[]`; `access` values and `scope` must be valid tokens; `appAccess` must be a

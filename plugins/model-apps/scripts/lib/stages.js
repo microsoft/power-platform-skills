@@ -5,7 +5,7 @@
 // load-bearing: phases run top-to-bottom, and downstream phases depend on earlier ones (e.g. the
 // app phase consumes forms/views/charts built earlier). The `security` phase runs AFTER app-shell
 // because a persona role grants read on (and is associated to) the app module created there, so the
-// generated app opens for that persona. See docs/app-builder-staged-flow-design.md §6.
+// generated app opens for that persona. See docs/app-builder-design.md §6.
 const PHASES = ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish'];
 
 // User-facing stages, each a contiguous range of engine phases. Stages are the vocabulary the

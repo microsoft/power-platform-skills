@@ -279,6 +279,14 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         },
       };
     }
+    // Fallback for any require the intercepts above do not cover. Relative ids must resolve against
+    // the SCRIPT's directory, not this test file's — the sandbox runs verify-model-app.js source, so
+    // `./lib/x.js` means `scripts/lib/x.js`. Resolving it here (rather than adding an intercept per
+    // module) means a new `./lib/...` import in the script does not silently break every CLI test
+    // with "Cannot find module".
+    if (id.startsWith('./') || id.startsWith('../')) {
+      return require(path.resolve(path.dirname(scriptPath), id));
+    }
     return require(id);
   };
   customRequire.main = invokeAsMain ? mod : {};
@@ -398,4 +406,99 @@ test('verify CLI entrypoint converts SDK startup errors into emitResult failures
   const emitted = harness.events.find((e) => e.type === 'emitResult');
   assert.strictEqual(emitted.ok, false);
   assert.match(emitted.payload.message, /SDK unavailable/);
+});
+
+// ── entityPrivileges reader ──────────────────────────────────────────────────────────────────────
+// These tests exist because the original role-privileges tests injected a FAKE `entityPrivileges`
+// into verifySpec, which meant the real reader was never executed by any test. It shipped building a
+// RELATIVE url (`/EntityDefinitions(...)`). `createAzHttpClient` is the raw transport the SDK drives,
+// so it takes FULL request urls and validates them with `new URL(url)` for its same-origin guard — a
+// relative path throws there. verify-spec catches that per entity, so the failure was silent: every
+// entity would have reported "privileges unreadable" and the check would have failed on every live
+// run. A reader is only as tested as its narrowest untested seam.
+
+test('entityPrivileges builds an ABSOLUTE url with the /api/data prefix', async () => {
+  const seen = [];
+  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }] } }; } };
+  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+
+  const privs = await read.entityPrivileges('Account');
+
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(
+    seen[0],
+    "https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')?$select=LogicalName,Privileges",
+  );
+  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }]);
+});
+
+test('entityPrivileges survives the REAL createAzHttpClient same-origin guard', async () => {
+  // The regression test that matters: drive the reader through the actual transport rather than a
+  // hand-written stub, so the url has to satisfy the same guard it failed in production.
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const requests = [];
+  const request = async (o) => {
+    requests.push(o);
+    return { statusCode: 200, headers: {}, body: JSON.stringify({ Privileges: [{ PrivilegeId: 'p9' }] }) };
+  };
+  const httpClient = createAzHttpClient('https://contoso.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+
+  const privs = await read.entityPrivileges('co_ticket');
+
+  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p9' }]);
+  assert.strictEqual(requests.length, 1, 'the request must reach the transport, not be rejected by the guard');
+});
+
+test('entityPrivileges tolerates a trailing slash on the org url', async () => {
+  const seen = [];
+  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
+  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com/' });
+  await read.entityPrivileges('account');
+  assert.ok(!seen[0].includes('.com//api'), `double slash in ${seen[0]}`);
+});
+
+test('entityPrivileges escapes a quote in the logical name', async () => {
+  // odataLit doubles a single quote; without it the OData path literal would be malformed.
+  const seen = [];
+  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
+  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  await read.entityPrivileges("o'brien");
+  assert.match(seen[0], /LogicalName='o''brien'/);
+});
+
+test('entityPrivileges returns null on a non-2xx rather than an empty grant', async () => {
+  // null is the fail-closed signal: verify-spec reports it as a finding. An empty array would read
+  // as "this table exposes no privileges" and could pass the subset comparison vacuously.
+  const httpClient = { get: async () => ({ status: 404, body: {} }) };
+  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  assert.strictEqual(await read.entityPrivileges('account'), null);
+});
+
+test('entityPrivileges is ABSENT (not broken) when the client or org url is missing', async () => {
+  // verify-spec skips role-privileges unless both readers are functions, so an unwired reader must
+  // not exist at all. A present-but-throwing reader would report a false failure on every entity.
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'undefined');
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { httpClient: { get: async () => ({}) } }).entityPrivileges, 'undefined');
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { envUrl: 'https://contoso.crm.dynamics.com' }).entityPrivileges, 'undefined');
+});
+
+test('rolePrivileges paginates and never caps with top', async () => {
+  // Found by a LIVE run: with the previous 	op: 5000 a System Administrator role returned
+  // EXACTLY 5000 rows -- silently truncated. Paginated it returns 7119, so 2119 privileges were
+  // being dropped. A truncated page is the worst shape for this check: a declared privilege that
+  // fell off the end reads as NOT HELD, so verify reports a correctly configured role as missing.
+  // Dataverse honors  as a hard cap and omits @odata.nextLink, and the SDK rejects
+  // paginate+top, so asserting the ABSENCE of top matters as much as the presence of paginate.
+  const calls = [];
+  const sdk = stubSdk();
+  sdk.queryRecords = async (set, options) => { calls.push({ set, options }); return []; };
+  const read = readerFor(sdk, 'app', { httpClient: { get: async () => ({ status: 200, body: {} }) }, envUrl: 'https://contoso.crm.dynamics.com' });
+
+  await read.rolePrivileges('00000000-0000-0000-0000-000000000001');
+
+  const q = calls.find((c) => c.set === 'roleprivileges');
+  assert.ok(q, 'expected a roleprivileges query');
+  assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
+  assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
 });
