@@ -2,6 +2,47 @@
 
 Critical patterns for working with Dataverse in Power Apps code apps. **Read this before writing any Dataverse code.**
 
+## Approved operation manifests
+
+Fast-v2 create flows use
+`scripts/build-dataverse-operation-manifest.js` to reconcile the normalized
+schema contract against a fresh bounded execution reconciliation performed in
+Step 8. The foreground planning snapshot is evidence only and never authorizes
+writes. The manifest is bound to the environment, tenant when available,
+publisher, solution, plan hash, structured-schema hash, reconciliation
+hash/timestamp, and manifest version. Validate it with
+`--require-executable` immediately before writes. Validation deterministically
+rebuilds the expected manifest and compares all decisions, services, aliases,
+phases, API paths, and bodies; a recomputed integrity hash cannot legitimize
+tampering. Step 8 first records the fully approved plan content hash as
+`approvedPlanSha256` in the normalized schema artifact, and the builder rejects
+any later plan/artifact mismatch.
+
+Its phases are fixed and sequential: table creates with ordinary columns
+inline → extensions → relationships/lookups → alternate keys → publish.
+Execution uses `BATCH-METADATA`, which is one-process sequential HTTP, never
+OData `$batch`. Service generation remains separate and sequential. Any stale,
+mismatched, incomplete, or `unverified` supplied manifest is non-executable
+and fails closed. Only an absent fast-path handoff uses standalone
+reconciliation. A non-executable candidate permits no writes. Approved
+`Reuse`, `Adapt`, and `Defer` decisions come only from the structured schema;
+the script verifies them mechanically and never parses free-form Markdown into
+operations. Calculated/rollup/formula creation remains unsupported.
+Lookup/1:N and M:N creation also requires fresh managed-property evidence for
+the relevant endpoint relationship capabilities; missing evidence is not
+treated as permission to write.
+
+Before schema writes, persist the manifest's bound
+`.tmp/dataverse-publish-pending.json`. Keep it on any failure and delete it
+only after `PublishXml` succeeds. A rerun may therefore contain zero schema
+creates but still execute one required publish retry; after successful publish
+and checkpoint deletion, a fully applied rerun emits zero metadata POSTs.
+`BATCH-METADATA` also journals `inFlight` and completed operation fingerprints
+atomically. An uncertain resume requires a new bounded reconciliation and a
+fully regenerated manifest before the runner will continue. All request paths
+share the awaited `Retry-After` parser for both numeric seconds and HTTP-date
+values, with a bounded fallback for malformed or missing headers.
+
 ## Choice/Picklist Fields - CRITICAL
 
 Choice fields (`PicklistType`) store **integer values**, not string labels. The schema defines both:

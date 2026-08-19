@@ -17,7 +17,7 @@ Two paths:
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve plan → 3. Setup Dataverse Web API auth → 4. Review existing tables → 5. Create / extend tables → 5d. Create alternate keys → 6. Add data sources → 6b. Publish customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 8.5. Offline profile reconciliation → 9. Summary
+1. Verify project & auth → 2. Resolve plan/operation manifest → 3. Setup Dataverse Web API auth → 4. Validate manifest or reconcile live metadata → 5. Execute sequential metadata phases → 6. Add data sources → 6b. Publish fallback customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 8.5. Offline profile reconciliation → 9. Summary
 
 ---
 
@@ -40,7 +40,13 @@ Look for `native-app-plan.md` in the project root:
 test -f native-app-plan.md
 ```
 
-**If present:** read the `## Data Model` section. Extract:
+Before reading plan content, inspect `$ARGUMENTS` for the four fast-path
+artifact flags in Step 2a. When all are present, only confirm
+`native-app-plan.md` exists for hash validation; do not parse its Data Model
+section or build operations/service lists from Markdown.
+
+**If present and `<operation_manifest_mode> = fallback`:** read the
+`## Data Model` section. Extract:
 - The target reconciliation table (`reuse` / `extend` / `create` / `adapt` / `defer` decisions and evidence)
 - The Mermaid ER diagram (informational)
 - The "Creation Order" tier list
@@ -67,6 +73,30 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
   > (c) Cancel — I'll plan it elsewhere first"
 
   Default the answer to (b) so empty/cancel input auto-proceeds. The 99% case (user gave a description but no diagram) skips this prompt entirely.
+
+#### Step 2a — Approved operation-manifest fast path
+
+When `$ARGUMENTS` supplies all four paths below, record
+`<operation_manifest_mode> = candidate`:
+
+- `--schema-contract <working_dir>/.tmp/dataverse-schema-contract.json`
+- `--execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json`
+- `--operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json`
+- `--publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json`
+
+Do not reconstruct tables, columns, relationships, keys, payloads, tiers, or
+service requirements from Markdown on this path. The sidecar is the structured
+approved contract; `native-app-plan.md` remains the human review artifact and
+hash binding.
+
+An entirely absent fast-path handoff means
+`<operation_manifest_mode> = fallback` and preserves the standalone workflow
+below, beginning with Step 2 initialization. A partially supplied handoff, or
+a supplied manifest/contract/reconciliation/checkpoint that is malformed, stale,
+incomplete, or bound to different context/files, must fail closed: print the
+exact validation errors and return control to the orchestrator. Never jump to
+Step 4 without Step 2 initialization, partially trust a candidate, or mix its
+operations with agent-derived operations.
 
 ### Step 2.5 — Path A: Parse user-provided diagram
 
@@ -183,7 +213,56 @@ Capture `customizationprefix` from the solution's publisher (typical value: `cr1
 
 Requires the user to hold **System Administrator** or **System Customizer** in this environment.
 
+When `<operation_manifest_mode> = candidate`, validate the manifest now against
+the resolved environment, tenant (when available), publisher, solution, current
+plan bytes, structured-schema bytes, and fresh reconciliation bytes:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --validate "<operation-manifest-path>" \
+  --contract "<schema-contract-path>" \
+  --reconciliation "<execution-reconciliation-path>" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --environment-id "<environmentId>" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --publisher-prefix "<customizationprefix>" \
+  --solution "<solution-uniquename>" \
+  --publish-checkpoint "<publish-checkpoint-path>" \
+  --require-executable
+```
+
+Validation deterministically rebuilds the expected manifest from the bound
+structured schema, fresh reconciliation, plan, context, and pending-publish checkpoint, then
+compares the complete decisions, services, aliases, phases, API paths, and
+bodies. If validation fails, print every reported mismatch and fail closed to
+the orchestrator. Do not execute or salvage individual operations and do not
+switch a supplied candidate to the standalone fallback.
+
+Validate with `--require-executable`. Step 8 already performed the one fresh
+bounded reconciliation for every approved exact table and all of its
+columns/relationships/keys, including the child/parent/M:N relationship
+capability managed properties. Missing capability evidence fails closed. If
+the manifest remains non-executable, report its
+verification conflicts to the orchestrator. Do not add another read loop,
+change an approved decision, or enter fallback mode. A non-executable
+candidate authorizes no metadata write.
+
+If validation with `--require-executable` succeeds, set
+`<operation_manifest_mode> = valid` and continue directly to Step 5's manifest
+execution branch. This is the fast-v2 path: it skips the repeated
+agent-driven full reconciliation, not any safety check.
+
 ### Step 4 — Reconcile every planned table and column against the target
+
+If `<operation_manifest_mode> = valid`, print:
+
+> `✓ Approved operation manifest validated — complete fresh reconciliation and derived metadata coverage are bound to this environment.`
+
+Use its `decisions` as the reconciliation matrix and skip the remainder of
+Step 4/4a. Continue to Step 5. A valid manifest has no `unverified` items; its
+explicit `reuse`, `adapt`, and `defer` rows remain visible in the final
+summary.
 
 **Print before starting:**
 > "→ Reconciling every planned table and column against live target metadata before any write…"
@@ -300,6 +379,126 @@ Build and print a reconciliation matrix before Step 5:
 **Idempotency criterion (HARD):** re-running this skill against an already-applied plan MUST perform **zero** metadata writes. Every table, column, relationship, key, and calc column resolves to `reuse` or an "already exists, skipped" outcome from the Step 4 snapshot. If a re-run issues any POST, the reconciliation missed something — report it rather than writing. Use this as the acceptance check after any change to Steps 4, 5, or 5a–5d.
 
 ### Step 5 — Create / extend tables
+
+#### Valid operation-manifest execution branch
+
+When `<operation_manifest_mode> = valid`, do not have an agent rebuild request
+bodies. Read `execution.phases` in this fixed order:
+
+1. `tableCreates` — dependency-tier table creates with all ordinary columns
+   inline;
+2. `extensions` — missing ordinary columns on existing tables;
+3. `relationships` — lookups/1:N and M:N after both endpoints exist;
+4. `alternateKeys` — after target tables and columns exist;
+5. `publish` — one `PublishXml` operation only when earlier phases contain
+   writes or a bound publish-pending checkpoint requires retry.
+
+For each non-empty phase, write just that phase's `operations` array to
+`<working_dir>/.tmp/dataverse-operation-phase-<name>.json`. Read
+`integritySha256` and `binding.reconciliationSha256` from the validated
+manifest, then execute every phase with the same project-local atomic journal:
+
+```bash
+EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
+ALL_MANIFEST_OPERATIONS="<working_dir>/.tmp/dataverse-operation-all.json"
+# Write the flattened operations from every manifest phase to ALL_MANIFEST_OPERATIONS once.
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
+  BATCH-METADATA "manifest-<phase-name>" \
+  --operations "$(cat <working_dir>/.tmp/dataverse-operation-phase-<name>.json)" \
+  --solution "<solution-uniquename>" \
+  --tenant-id "<tenantId>" \
+  --journal "$EXECUTION_JOURNAL" \
+  --manifest-file "$OPERATION_MANIFEST" \
+  --manifest-hash "<manifest.integritySha256>" \
+  --reconciliation-hash "<manifest.binding.reconciliationSha256>" \
+  --manifest-operations "$(cat "$ALL_MANIFEST_OPERATIONS")"
+```
+
+Wait for the entire phase to finish before starting the next. This executor is
+not OData `$batch`; it sends one request at a time, reuses one token, preserves
+manifest order, and stops on the first non-2xx response. Never pass
+`--continue-on-error`, never parallelize phases or operations, and never
+execute `service.requiredTables` through BATCH-METADATA.
+The runner verifies the manifest file's integrity hash, requires the supplied
+operation array to equal one complete manifest phase byte-for-byte, and rejects
+that phase until every operation in preceding phases is journal-complete.
+
+The runner atomically writes `inFlight` before each request and records each
+successful operation before moving to the next. Completed fingerprints are
+based on stable request identity, not the positional index; the complete
+manifest's unique zero-based order is validated separately. Completed
+fingerprints are skipped on an exact resume. If a process may have exited after Dataverse
+accepted a request but before the journal completion write, the runner fails
+with `UNCERTAIN_METADATA_OPERATION`; do not replay the old operation array.
+Transport loss during a metadata mutation is immediately uncertain and is
+never retried in-process; reads may retain transport retry behavior.
+Perform a new bounded exact reconciliation, rebuild and revalidate the full
+manifest, then resume with both new hashes. The runner mechanically treats an
+uncertain operation omitted by the new manifest as already applied/superseded,
+or retries it only when the fresh reconciliation proves it is still required.
+
+If `summary.metadataOperationCount` is zero, issue **zero metadata POSTs** and
+print `↻ Dataverse schema already fully applied — zero metadata writes.` This
+is the required idempotent rerun behavior after successful publish. A manifest
+with zero schema operations but one checkpoint-driven `PublishXml` operation
+must run that publish retry; it is not a zero-write completion.
+
+The manifest builder writes
+`<working_dir>/.tmp/dataverse-publish-pending.json` before any schema POST when
+publish will be required. Leave this checkpoint in place after any schema or
+publish failure. Delete it only after the validated `publish` phase returns
+success. The next build validates its environment/solution/plan/contract
+binding and integrity, merges its table list into the publish phase, and
+therefore retries `PublishXml` even when every schema create is now
+idempotently skipped.
+
+On a hidden POST-time name collision, stop at the failed operation and discard
+all not-yet-run phase arrays. The execution script must not choose `Adapt` or a
+rename. Return to the existing planning revision path so the structured schema
+artifact carries the approved `Adapt` names. Then perform a fresh bounded
+reconciliation and regenerate the complete aliases, downstream relationship
+and key bodies, service-required names, phases, manifest hashes, and phase
+files. Revalidate before resuming through the journal. Never continue an old
+array after a rename. Any non-collision failure stops the metadata path with
+its exact result.
+
+Before overwriting the old manifest, preserve its path. After the revised plan
+and structured schema are approved and plan-bound, roll the existing publish
+checkpoint forward:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --roll-forward-checkpoint "$PUBLISH_CHECKPOINT" \
+  --previous-manifest "$OPERATION_MANIFEST" \
+  --journal "$EXECUTION_JOURNAL" \
+  --contract "$SCHEMA_CONTRACT" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$PUBLISH_CHECKPOINT" \
+  --environment-id "<environmentId>" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --publisher-prefix "<customizationprefix>" \
+  --solution "<solution-uniquename>"
+```
+
+This retains prior checkpoint bindings/tables as integrity-protected history,
+keeps earlier successful tables publication-pending, and maps only the
+journal-proven failed collision table to its revised in-contract alias. It
+fails closed if a completed write would disappear from the revised contract or
+change definition: completed tables/inline columns, extension columns,
+relationships (including cascade behavior), and alternate keys must each map
+to an equivalent revised structured component. It also rejects any unrelated
+out-of-contract publish target. Only after this succeeds may Step 8 overwrite
+the operation manifest.
+
+The manifest builder never emits calculated/rollup/formula creation. Reused
+computed dependencies have already crossed the exact derived-metadata barrier;
+unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and continue
+to Step 6. When there were zero writes and no checkpoint, continue without
+deleting anything. Skip the
+fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
+was already part of the validated phase order.
 
 **Print before starting:**
 > "→ Creating/extending <N> tables in tier order (sequential — Dataverse serializes metadata writes). For each: pre-flight check, then 'Creating <table>…' before the POST and '✓ <table>' on 2xx response."
@@ -800,6 +999,11 @@ Add alternate keys to `.datamodel-manifest.json` for the table:
 **Print before starting:**
 > "→ Generating TypeScript services for <N> tables via `npx power-apps add-data-source` (sequential). Print '✓ <table>Service.ts' after each."
 
+When `<operation_manifest_mode> = valid`, set `SERVICE_REQUIRED_TABLES` from
+`service.requiredTables[].logicalName`. Keep the manifest's resolved adapted
+names and exclude only explicit deferred rows. Service generation remains
+sequential outside BATCH-METADATA.
+
 For each table in `SERVICE_REQUIRED_TABLES` (regardless of reuse/extend/create), generate the TS layer from the app root. Do not derive this list from Creation Order alone because reused tables are intentionally absent from creation tiers. The CLI reads the environment ID from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
@@ -815,6 +1019,11 @@ BLOCKED: required Dataverse service missing for <logical-name>. Schema action=<r
 ```
 
 ### Step 6b — Publish customizations
+
+When `<operation_manifest_mode> = valid`, skip this step: the validated
+manifest's final `publish` phase already ran and its pending checkpoint was
+deleted, or the manifest proved there were zero metadata writes and no pending
+publish retry.
 
 **Print before starting:**
 > "→ Publishing customizations (PublishXml) so new tables/columns become queryable. ~5–20 seconds."
@@ -981,6 +1190,7 @@ Tables extended: <list (columns added)>
 Tables created : <list (in tier order)>
 Adapted       : <renamed table/column → new name, and why. Omit the line if none.>
 Deferred      : <items left out of this run and why, e.g. "cr123_note (target not customizable)". Omit the line if none.>
+Operation manifest: <validated path, operation count, or "standalone fallback">
 
 Generated services:
   src/generated/services/<Table>Service.ts × N
@@ -1025,9 +1235,13 @@ After printing the summary, **offer one-click sample-data seeding** — but only
 - Result data lives at `result.data`, not `result` itself.
 - Don't edit files under `src/generated/` — they are regenerated on every `npx power-apps add-data-source`.
 - Picklist (Choice) fields, virtual fields, lookups, and file/image columns each have non-obvious gotchas. Keep `references/dataverse-reference.md` aligned with this skill.
+- A valid operation manifest removes repeated agent reconciliation; it does not
+  change Dataverse's serialized metadata-lock latency. Real matched A/B runs
+  remain required before claiming an end-to-end timing range.
 - **When a Dataverse Web API behavior is uncertain (lookup write syntax, `$expand` nav property names, choice column shape, batch semantics, error format), query the `microsoft-learn` MCP server before guessing.** See [shared/shared-instructions.md → Microsoft Learn MCP](../../shared/shared-instructions.md#microsoft-learn-mcp-authoritative-microsoft-docs). Guessed Dataverse syntax silently 400s.
 
 ## Reference
 
 - [`scripts/dataverse-request.js`](../../scripts/dataverse-request.js) — bundled in this plugin
+- [`scripts/build-dataverse-operation-manifest.js`](../../scripts/build-dataverse-operation-manifest.js) — deterministic contract/snapshot reconciliation, binding, validation, and ordered BATCH-METADATA phase generation
 - [shared/references/offline-profile-reconciliation.md](../../shared/references/offline-profile-reconciliation.md) — Step 8.5 offline delta check + reconciliation flow

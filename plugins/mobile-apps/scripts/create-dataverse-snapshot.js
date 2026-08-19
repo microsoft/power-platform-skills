@@ -14,10 +14,18 @@ const ENTITY_SELECT = [
   'EntitySetName',
   'PrimaryIdAttribute',
   'PrimaryNameAttribute',
+  'OwnershipType',
+  'HasActivities',
+  'HasNotes',
+  'IsAvailableOffline',
+  'ChangeTrackingEnabled',
   'IsCustomEntity',
   'IsManaged',
   'IsCustomizable',
   'CanCreateAttributes',
+  'CanBePrimaryEntityInRelationship',
+  'CanBeRelatedEntityInRelationship',
+  'CanBeInManyToMany',
 ].join(',');
 
 const ATTRIBUTE_SELECT = [
@@ -57,6 +65,20 @@ const FORMULA_TYPE_BY_ATTRIBUTE = {
   Money: 'MoneyAttributeMetadata',
   Picklist: 'PicklistAttributeMetadata',
   String: 'StringAttributeMetadata',
+};
+
+const ORDINARY_METADATA_FIELDS_BY_TYPE = {
+  BigIntAttributeMetadata: ['MinValue', 'MaxValue'],
+  BooleanAttributeMetadata: ['DefaultValue'],
+  DateTimeAttributeMetadata: ['Format', 'DateTimeBehavior'],
+  DecimalAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
+  DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
+  FileAttributeMetadata: ['MaxSizeInKB'],
+  ImageAttributeMetadata: ['MaxHeight', 'MaxWidth', 'MaxSizeInKB'],
+  IntegerAttributeMetadata: ['MinValue', 'MaxValue', 'Format'],
+  MemoAttributeMetadata: ['MaxLength', 'Format'],
+  MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource'],
+  StringAttributeMetadata: ['MaxLength', 'Format', 'FormatName'],
 };
 
 const CONCEPT_ALIASES = {
@@ -641,6 +663,28 @@ function choiceMetadataType(attribute) {
   return CHOICE_TYPE_BY_ATTRIBUTE[attribute.AttributeType] || null;
 }
 
+function ordinaryMetadataType(attribute) {
+  const typeName = attribute.AttributeTypeName?.Value;
+  if (typeName === 'FileType') return 'FileAttributeMetadata';
+  if (typeName === 'ImageType') return 'ImageAttributeMetadata';
+  const candidate = `${attribute.AttributeType || ''}AttributeMetadata`;
+  return hasOwn(ORDINARY_METADATA_FIELDS_BY_TYPE, candidate) ? candidate : null;
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function lowerCamel(value) {
+  return `${value[0].toLowerCase()}${value.slice(1)}`;
+}
+
+function normalizeTypedConstraint(value) {
+  return value && typeof value === 'object' && hasOwn(value, 'Value')
+    ? value.Value
+    : value;
+}
+
 function managedValue(value) {
   return typeof value === 'object' && value !== null && 'Value' in value
     ? Boolean(value.Value)
@@ -669,12 +713,12 @@ async function loadDetailedEntity(request, entity) {
   );
   const manyToOneRelationships = await requestCollection(
     request,
-    `${root}/ManyToOneRelationships?$select=SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,IsManaged`,
+    `${root}/ManyToOneRelationships?$select=SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,IsManaged,CascadeConfiguration`,
     `${logicalName} many-to-one relationships`,
   );
   const oneToManyRelationships = await requestCollection(
     request,
-    `${root}/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,IsManaged`,
+    `${root}/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,IsManaged,CascadeConfiguration`,
     `${logicalName} one-to-many relationships`,
   );
   const manyToManyRelationships = await requestCollection(
@@ -713,6 +757,26 @@ async function loadDetailedEntity(request, entity) {
       `${logicalName} lookup metadata`,
     );
     for (const item of lookupMetadata) lookups.set(item.LogicalName, item.Targets || []);
+  }
+
+  const ordinaryConstraints = new Map();
+  const ordinaryTypes = [...new Set(attributes.map(ordinaryMetadataType).filter(Boolean))];
+  for (const type of ordinaryTypes) {
+    const fields = ORDINARY_METADATA_FIELDS_BY_TYPE[type];
+    const metadata = await requestCollection(
+      request,
+      `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName,${fields.join(',')}`,
+      `${logicalName} ${type} ordinary metadata`,
+    );
+    for (const item of metadata) {
+      const constraints = {};
+      for (const field of fields) {
+        if (hasOwn(item, field)) {
+          constraints[lowerCamel(field)] = normalizeTypedConstraint(item[field]);
+        }
+      }
+      ordinaryConstraints.set(item.LogicalName, constraints);
+    }
   }
 
   const computedMetadata = new Map();
@@ -814,10 +878,26 @@ async function loadDetailedEntity(request, entity) {
     entitySetName: entity.EntitySetName,
     primaryIdAttribute: entity.PrimaryIdAttribute,
     primaryNameAttribute: entity.PrimaryNameAttribute,
+    ownershipType: entity.OwnershipType ?? null,
+    hasActivities: hasOwn(entity, 'HasActivities') ? Boolean(entity.HasActivities) : null,
+    hasNotes: hasOwn(entity, 'HasNotes') ? Boolean(entity.HasNotes) : null,
+    isAvailableOffline: hasOwn(entity, 'IsAvailableOffline')
+      ? Boolean(entity.IsAvailableOffline)
+      : null,
+    changeTrackingEnabled: hasOwn(entity, 'ChangeTrackingEnabled')
+      ? Boolean(entity.ChangeTrackingEnabled)
+      : null,
     customEntity: Boolean(entity.IsCustomEntity),
     managed: Boolean(entity.IsManaged),
     customizable: managedValue(entity.IsCustomizable),
     canCreateAttributes: managedValue(entity.CanCreateAttributes),
+    canBePrimaryEntityInRelationship: managedValue(
+      entity.CanBePrimaryEntityInRelationship,
+    ),
+    canBeRelatedEntityInRelationship: managedValue(
+      entity.CanBeRelatedEntityInRelationship,
+    ),
+    canBeInManyToMany: managedValue(entity.CanBeInManyToMany),
     columns: attributes.map((attribute) => {
       const computed = computedMetadata.get(attribute.LogicalName) || null;
       return {
@@ -825,6 +905,7 @@ async function loadDetailedEntity(request, entity) {
         schemaName: attribute.SchemaName,
         type: attribute.AttributeType,
         typeName: attribute.AttributeTypeName?.Value || null,
+        ...(ordinaryConstraints.get(attribute.LogicalName) || {}),
         requiredLevel: attribute.RequiredLevel?.Value || attribute.RequiredLevel || null,
         customAttribute: Boolean(attribute.IsCustomAttribute),
         managed: Boolean(attribute.IsManaged),
@@ -857,6 +938,9 @@ async function loadDetailedEntity(request, entity) {
       targetTable: relationship.ReferencedEntity,
       targetColumn: relationship.ReferencedAttribute,
       managed: Boolean(relationship.IsManaged),
+      cascadeConfiguration: relationship.CascadeConfiguration
+        ? { ...relationship.CascadeConfiguration }
+        : null,
     })),
     oneToManyRelationships: oneToManyRelationships.map((relationship) => ({
       schemaName: relationship.SchemaName,
@@ -864,6 +948,9 @@ async function loadDetailedEntity(request, entity) {
       childLookupColumn: relationship.ReferencingAttribute,
       parentColumn: relationship.ReferencedAttribute,
       managed: Boolean(relationship.IsManaged),
+      cascadeConfiguration: relationship.CascadeConfiguration
+        ? { ...relationship.CascadeConfiguration }
+        : null,
     })),
     manyToManyRelationships: manyToManyRelationships.map((relationship) => ({
       schemaName: relationship.SchemaName,
@@ -901,10 +988,26 @@ function normalizeInventoryEntity(entity) {
     entitySetName: entity.EntitySetName,
     primaryIdAttribute: entity.PrimaryIdAttribute,
     primaryNameAttribute: entity.PrimaryNameAttribute,
+    ownershipType: entity.OwnershipType ?? null,
+    hasActivities: hasOwn(entity, 'HasActivities') ? Boolean(entity.HasActivities) : null,
+    hasNotes: hasOwn(entity, 'HasNotes') ? Boolean(entity.HasNotes) : null,
+    isAvailableOffline: hasOwn(entity, 'IsAvailableOffline')
+      ? Boolean(entity.IsAvailableOffline)
+      : null,
+    changeTrackingEnabled: hasOwn(entity, 'ChangeTrackingEnabled')
+      ? Boolean(entity.ChangeTrackingEnabled)
+      : null,
     customEntity: Boolean(entity.IsCustomEntity),
     managed: Boolean(entity.IsManaged),
     customizable: managedValue(entity.IsCustomizable),
     canCreateAttributes: managedValue(entity.CanCreateAttributes),
+    canBePrimaryEntityInRelationship: managedValue(
+      entity.CanBePrimaryEntityInRelationship,
+    ),
+    canBeRelatedEntityInRelationship: managedValue(
+      entity.CanBeRelatedEntityInRelationship,
+    ),
+    canBeInManyToMany: managedValue(entity.CanBeInManyToMany),
   };
 }
 
@@ -1290,6 +1393,7 @@ async function createSnapshot({
 
   return {
     version: 3,
+    purpose: 'foreground-planning',
     environmentUrl: environmentUrl.replace(/\/+$/, ''),
     tenantId: tenantId || null,
     generatedAt: nowIso(),
@@ -1336,6 +1440,139 @@ async function createSnapshot({
   };
 }
 
+async function createReconciliationSnapshot({
+  environmentUrl,
+  tenantId,
+  tableNames = [],
+  proposedTableNames = [],
+  request,
+  nowMs = () => Date.now(),
+  nowIso = () => new Date().toISOString(),
+  onProgress = () => {},
+}) {
+  if (!environmentUrl) throw new Error('environmentUrl is required');
+  if (typeof request !== 'function') throw new Error('request is required');
+  const requiredNames = uniqueLogicalNames(tableNames);
+  const proposedNames = uniqueLogicalNames(proposedTableNames);
+  if (requiredNames.length === 0) {
+    throw new Error('fresh reconciliation requires at least one exact approved table');
+  }
+
+  const totalStartedAt = nowMs();
+  const exactResolution = await resolveExactNameEntities(
+    request,
+    [],
+    uniqueLogicalNames([...requiredNames, ...proposedNames]),
+  );
+  const inventoryCompletedAt = nowMs();
+  const inventoryByName = new Map(exactResolution.entities.map(
+    (entity) => [logicalNameOf(entity).toLowerCase(), entity],
+  ));
+  const unavailableTables = requiredNames.filter(
+    (logicalName) => !inventoryByName.has(logicalName.toLowerCase()),
+  );
+  const entitiesToLoad = requiredNames
+    .map((logicalName) => inventoryByName.get(logicalName.toLowerCase()))
+    .filter(Boolean);
+  const proposedNameChecks = analyzeProposedNames(
+    exactResolution.entities,
+    proposedNames,
+  );
+  onProgress({
+    milestoneId: 'reconciliation-exact-names-loaded',
+    requestedTables: requiredNames.length,
+    existingTables: entitiesToLoad.length,
+    unavailableTables: unavailableTables.length,
+    proposedCollisions: proposedNameChecks.collisions.length,
+    proposedMissing: proposedNameChecks.missing.length,
+    elapsedMs: inventoryCompletedAt - totalStartedAt,
+  });
+
+  const tables = [];
+  for (const entity of entitiesToLoad) {
+    tables.push(await loadDetailedEntity(request, entity));
+  }
+  const detailCompletedAt = nowMs();
+  onProgress({
+    milestoneId: 'reconciliation-details-loaded',
+    loadedTables: tables.length,
+    columns: tables.reduce((total, table) => total + table.facts.columnCount, 0),
+    relationships: tables.reduce((total, table) => total + table.facts.relationshipCount, 0),
+    keys: tables.reduce((total, table) => total + table.facts.keyCount, 0),
+    elapsedMs: detailCompletedAt - totalStartedAt,
+  });
+  const detailedByName = new Map(
+    tables.map((table) => [table.logicalName.toLowerCase(), table.logicalName]),
+  );
+  const selectedCandidateEvidence = tables.map((table) => ({
+    logicalName: table.logicalName,
+    reasons: ['fresh-exact-reconciliation'],
+    required: true,
+    detailStatus: 'loaded',
+    detailFailure: null,
+  }));
+
+  return {
+    version: 3,
+    purpose: 'execution-reconciliation',
+    environmentUrl: environmentUrl.replace(/\/+$/, ''),
+    tenantId: tenantId || null,
+    generatedAt: nowIso(),
+    inputs: {
+      concepts: [],
+      explicitTableNames: requiredNames,
+      proposedTableNames: proposedNames,
+    },
+    inventory: exactResolution.entities
+      .map(normalizeInventoryEntity)
+      .sort((left, right) => left.logicalName.localeCompare(right.logicalName)),
+    inventoryFacts: {
+      customizableTables: exactResolution.entities.filter(
+        (entity) => managedValue(entity.IsCustomizable),
+      ).length,
+      exactNameTables: exactResolution.discoveredTables.length,
+      requiredExactNameTables: entitiesToLoad.length,
+      proposedCollisionTables: proposedNameChecks.collisions.length,
+      totalTables: exactResolution.entities.length,
+    },
+    candidateRanking: [],
+    selectedCandidateEvidence,
+    tables,
+    detailLoadFailures: [],
+    detailLoadSummary: {
+      attemptedCandidates: entitiesToLoad.length,
+      loadedCandidates: tables.length,
+      failedCandidates: 0,
+      requiredCandidates: requiredNames.length,
+      advisoryCandidates: 0,
+      exactCoveredConcepts: 0,
+      unresolvedConcepts: 0,
+      advisoryLimit: 0,
+    },
+    proposedNameChecks,
+    missingProposedTables: proposedNameChecks.missing,
+    exactNameResolution: {
+      requestedTables: requiredNames,
+      loadedTables: requiredNames
+        .filter((logicalName) => detailedByName.has(logicalName.toLowerCase()))
+        .map((logicalName) => detailedByName.get(logicalName.toLowerCase())),
+      unavailableTables,
+    },
+    timings: {
+      inventoryRetrievalMs: inventoryCompletedAt - totalStartedAt,
+      candidateSelectionMs: 0,
+      detailLoadingMs: detailCompletedAt - inventoryCompletedAt,
+      totalDurationMs: detailCompletedAt - totalStartedAt,
+    },
+    reconciliation: {
+      boundedExactNames: true,
+      fullInventoryRead: false,
+      tables: requiredNames,
+      proposedNames,
+    },
+  };
+}
+
 function inventoryEntityToRaw(entity) {
   return {
     LogicalName: entity.logicalName,
@@ -1348,10 +1585,22 @@ function inventoryEntityToRaw(entity) {
     EntitySetName: entity.entitySetName,
     PrimaryIdAttribute: entity.primaryIdAttribute,
     PrimaryNameAttribute: entity.primaryNameAttribute,
+    OwnershipType: entity.ownershipType,
+    HasActivities: entity.hasActivities,
+    HasNotes: entity.hasNotes,
+    IsAvailableOffline: entity.isAvailableOffline,
+    ChangeTrackingEnabled: entity.changeTrackingEnabled,
     IsCustomEntity: entity.customEntity,
     IsManaged: entity.managed,
     IsCustomizable: { Value: entity.customizable },
     CanCreateAttributes: { Value: entity.canCreateAttributes },
+    CanBePrimaryEntityInRelationship: {
+      Value: entity.canBePrimaryEntityInRelationship,
+    },
+    CanBeRelatedEntityInRelationship: {
+      Value: entity.canBeRelatedEntityInRelationship,
+    },
+    CanBeInManyToMany: { Value: entity.canBeInManyToMany },
   };
 }
 
@@ -1589,7 +1838,7 @@ async function main() {
       'Usage: node create-dataverse-snapshot.js --env-url <url> --tenant-id <id> --output <json> '
       + '[--tables <logical-name,...>] [--proposed-tables <logical-name,...>] '
       + '[--concepts <domain-term,...>] [--solution <unique-name>] '
-      + '[--base-snapshot <existing-json>]\n',
+      + '[--base-snapshot <existing-json>] [--reconcile-exact]\n',
     );
     process.exit(1);
   }
@@ -1600,6 +1849,9 @@ async function main() {
   const baseSnapshot = args['base-snapshot']
     ? JSON.parse(fs.readFileSync(path.resolve(args['base-snapshot']), 'utf8'))
     : null;
+  if (baseSnapshot && args['reconcile-exact']) {
+    throw new Error('--base-snapshot and --reconcile-exact are mutually exclusive');
+  }
   if (baseSnapshot) {
     const validation = validateSnapshot(baseSnapshot, {
       environmentUrl: args['env-url'],
@@ -1609,7 +1861,16 @@ async function main() {
       throw new Error(`Base snapshot mismatch: ${validation.errors.join('; ')}`);
     }
   }
-  const snapshot = baseSnapshot
+  const snapshot = args['reconcile-exact']
+    ? await createReconciliationSnapshot({
+      environmentUrl: args['env-url'],
+      tenantId: args['tenant-id'],
+      tableNames: parseList(args.tables),
+      proposedTableNames: parseList(args['proposed-tables']),
+      request,
+      onProgress: progress,
+    })
+    : baseSnapshot
     ? await expandSnapshot({
       snapshot: baseSnapshot,
       tableNames: parseList(args.tables),
@@ -1667,6 +1928,7 @@ module.exports = {
   choiceMetadataType,
   conceptDescriptor,
   createCliRequest,
+  createReconciliationSnapshot,
   createSnapshot,
   expandSnapshot,
   inventoryEntityToRaw,

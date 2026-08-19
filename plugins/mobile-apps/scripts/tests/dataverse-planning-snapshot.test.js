@@ -9,6 +9,7 @@ const {
   analyzeProposedNames,
   atomicWriteFile,
   createCliRequest,
+  createReconciliationSnapshot,
   createSnapshot,
   expandSnapshot,
   loadDetailedEntity,
@@ -36,10 +37,18 @@ function entity(logicalName, displayName, overrides = {}) {
     Description: label(`${displayName} records`),
     PrimaryIdAttribute: `${logicalName}id`,
     PrimaryNameAttribute: `${logicalName}name`,
+    OwnershipType: 'UserOwned',
+    HasActivities: false,
+    HasNotes: false,
+    IsAvailableOffline: true,
+    ChangeTrackingEnabled: true,
     IsCustomEntity: true,
     IsManaged: false,
     IsCustomizable: { Value: true },
     CanCreateAttributes: { Value: true },
+    CanBePrimaryEntityInRelationship: { Value: true },
+    CanBeRelatedEntityInRelationship: { Value: true },
+    CanBeInManyToMany: { Value: true },
     ...overrides,
   };
 }
@@ -54,10 +63,18 @@ function normalizeInventoryForTest(value) {
     entitySetName: value.EntitySetName,
     primaryIdAttribute: value.PrimaryIdAttribute,
     primaryNameAttribute: value.PrimaryNameAttribute,
+    ownershipType: value.OwnershipType,
+    hasActivities: value.HasActivities,
+    hasNotes: value.HasNotes,
+    isAvailableOffline: value.IsAvailableOffline,
+    changeTrackingEnabled: value.ChangeTrackingEnabled,
     customEntity: value.IsCustomEntity,
     managed: value.IsManaged,
     customizable: value.IsCustomizable.Value,
     canCreateAttributes: value.CanCreateAttributes.Value,
+    canBePrimaryEntityInRelationship: value.CanBePrimaryEntityInRelationship.Value,
+    canBeRelatedEntityInRelationship: value.CanBeRelatedEntityInRelationship.Value,
+    canBeInManyToMany: value.CanBeInManyToMany.Value,
   };
 }
 
@@ -217,6 +234,102 @@ test('proposed logical-name checks distinguish collisions and missing names', ()
   assert.deepEqual(result.missing, ['new_inventoryreview']);
   assert.equal(result.checked[0].status, 'missing');
   assert.equal(result.checked[1].status, 'collision');
+});
+
+test('fresh reconciliation is bounded to exact approved names and reloads full metadata', async () => {
+  const calls = [];
+  const reconciliation = await createReconciliationSnapshot({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    tableNames: ['new_product', 'new_missing'],
+    proposedTableNames: ['new_missing'],
+    nowIso: () => '2026-08-19T00:00:00.000Z',
+    request: async (_method, apiPath) => {
+      calls.push(apiPath);
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [entity('new_product', 'Product')] } };
+      }
+      if (apiPath.includes('/Attributes?$select=')) {
+        return { status: 200, data: { value: [{
+          MetadataId: 'name-id',
+          LogicalName: 'new_name',
+          SchemaName: 'new_Name',
+          AttributeType: 'String',
+          AttributeTypeName: { Value: 'StringType' },
+          RequiredLevel: { Value: 'None' },
+          IsPrimaryName: true,
+          SourceType: 0,
+        }] } };
+      }
+      if (apiPath.includes('StringAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'new_name',
+          MaxLength: 200,
+          FormatName: { Value: 'Text' },
+        }] } };
+      }
+      if (apiPath.includes('/ManyToOneRelationships?')) {
+        return { status: 200, data: { value: [{
+          SchemaName: 'new_Category_Product',
+          ReferencingAttribute: 'new_categoryid',
+          ReferencedEntity: 'new_category',
+          ReferencedAttribute: 'new_categoryid',
+          IsManaged: false,
+          CascadeConfiguration: {
+            Assign: 'NoCascade',
+            Delete: 'RemoveLink',
+            Merge: 'NoCascade',
+            Reparent: 'NoCascade',
+            Share: 'NoCascade',
+            Unshare: 'NoCascade',
+            RollupView: 'NoCascade',
+          },
+        }] } };
+      }
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.equal(reconciliation.purpose, 'execution-reconciliation');
+  assert.deepEqual(reconciliation.reconciliation, {
+    boundedExactNames: true,
+    fullInventoryRead: false,
+    tables: ['new_missing', 'new_product'],
+    proposedNames: ['new_missing'],
+  });
+  assert.deepEqual(reconciliation.exactNameResolution, {
+    requestedTables: ['new_missing', 'new_product'],
+    loadedTables: ['new_product'],
+    unavailableTables: ['new_missing'],
+  });
+  assert.equal(
+    calls.some((apiPath) => apiPath.includes('IsCustomizable/Value eq true')),
+    false,
+  );
+  assert.equal(
+    calls.filter((apiPath) => apiPath.includes('/Attributes?$select=')).length,
+    1,
+  );
+  assert.match(calls[0], /CanBePrimaryEntityInRelationship/);
+  assert.match(calls[0], /CanBeRelatedEntityInRelationship/);
+  assert.match(calls[0], /CanBeInManyToMany/);
+  assert.match(calls[0], /OwnershipType/);
+  assert.match(calls[0], /HasActivities/);
+  assert.match(calls[0], /HasNotes/);
+  assert.match(calls[0], /IsAvailableOffline/);
+  assert.match(calls[0], /ChangeTrackingEnabled/);
+  assert.equal(reconciliation.tables[0].canBeRelatedEntityInRelationship, true);
+  assert.equal(reconciliation.tables[0].ownershipType, 'UserOwned');
+  assert.equal(reconciliation.tables[0].isAvailableOffline, true);
+  assert.match(
+    calls.find((apiPath) => apiPath.includes('/ManyToOneRelationships?')),
+    /CascadeConfiguration/,
+  );
+  assert.equal(
+    reconciliation.tables[0].manyToOneRelationships[0]
+      .cascadeConfiguration.Delete,
+    'RemoveLink',
+  );
 });
 
 test('proposed names are collision checks and stay out of required exact-name loading', async () => {
@@ -505,6 +618,22 @@ test('snapshot captures detailed metadata, evidence, and timing shape without ne
           Targets: ['new_category'],
         }] } };
       }
+      if (apiPath.includes('/Attributes/Microsoft.Dynamics.CRM.StringAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'new_name',
+          MaxLength: 160,
+          Format: 'Text',
+          FormatName: { Value: 'Text' },
+        }] } };
+      }
+      if (apiPath.includes('/Attributes/Microsoft.Dynamics.CRM.DecimalAttributeMetadata')) {
+        return { status: 200, data: { value: [{
+          LogicalName: 'new_total',
+          MinValue: -100000,
+          MaxValue: 100000,
+          Precision: 2,
+        }] } };
+      }
       if (apiPath.includes('Attributes(total-id)')) {
         return {
           status: 200,
@@ -537,6 +666,31 @@ test('snapshot captures detailed metadata, evidence, and timing shape without ne
   assert.deepEqual(snapshot.tables[0].columns.find(
     (column) => column.logicalName === 'new_status',
   ).choices, [{ value: 1, label: 'Active' }]);
+  assert.deepEqual(
+    {
+      maxLength: snapshot.tables[0].columns.find(
+        (column) => column.logicalName === 'new_name',
+      ).maxLength,
+      formatName: snapshot.tables[0].columns.find(
+        (column) => column.logicalName === 'new_name',
+      ).formatName,
+    },
+    { maxLength: 160, formatName: 'Text' },
+  );
+  assert.deepEqual(
+    {
+      minValue: snapshot.tables[0].columns.find(
+        (column) => column.logicalName === 'new_total',
+      ).minValue,
+      maxValue: snapshot.tables[0].columns.find(
+        (column) => column.logicalName === 'new_total',
+      ).maxValue,
+      precision: snapshot.tables[0].columns.find(
+        (column) => column.logicalName === 'new_total',
+      ).precision,
+    },
+    { minValue: -100000, maxValue: 100000, precision: 2 },
+  );
   assert.equal(snapshot.tables[0].columns.find(
     (column) => column.logicalName === 'new_total',
   ).computed.formula, 'new_quantity * new_price');

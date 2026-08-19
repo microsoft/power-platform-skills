@@ -22,10 +22,10 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
-- **Normalized Dataverse snapshot path (preferred)** — an absolute path to
-  `<working_dir>/.tmp/dataverse-metadata-snapshot.json`.
+- **Normalized Dataverse foreground planning snapshot path (preferred)** — an absolute path to
+  `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
-  Markdown appendix rendered from that same snapshot.
+  Markdown appendix rendered from that same foreground planning snapshot.
 - **Dataverse planning mode** — `required` or `connector-only`.
   `connector-only` intentionally has no snapshot/evidence paths.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
@@ -37,10 +37,10 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Use exact target metadata for every
   proposed table, including standard tables, and prefer reuse > extension >
-  new. In snapshot-only mode that evidence comes only from the validated
-  foreground snapshot. Don't propose a `cr123_customer` table if a verified
+  new. In planning-snapshot-only mode that evidence comes only from the validated
+  foreground planning snapshot. Don't propose a `cr123_customer` table if a verified
   target `contact` table fits.
-- **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so the user and `/add-dataverse` treat every decision as unverified — `/add-dataverse` re-reconciles against live metadata and adapts or defers anything that conflicts.
+- **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
 - **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
   Dataverse discovery. A Dataverse-required run with unreadable metadata is
   blocked by the foreground orchestrator before this agent is dispatched.
@@ -230,7 +230,7 @@ count and elapsed time.
 > "→ Reconciling every required table and column against verified target metadata…"
 
 In the validated snapshot-only path, interpret this line as "against the
-foreground snapshot", run no command, and use detailed `snapshot.tables`
+foreground planning snapshot", run no command, and use detailed `snapshot.tables`
 entries plus the deterministic appendix. Before assigning any decision on the
 legacy live path, resolve every required entity — including `contact`,
 `account`, `incident`, other standard tables, and managed-solution
@@ -467,6 +467,144 @@ relationships, dependency tiers, and risks. Reference the deterministic
 appendix for repetitive candidate rankings, table fact counts, collision
 checks, and timing evidence instead of copying them into `_dm_section.md`.
 
+### Structured Dataverse schema contract (required for `required` mode)
+
+Alongside `_dm_section.md`, write
+`<working_dir>/.tmp/dataverse-schema-contract.json`. This is the deterministic
+machine contract consumed after approval; `/add-dataverse` must not reconstruct
+metadata operations from Markdown when this sidecar is valid.
+Do not invent an `approvedPlanSha256` value here: Step 8 adds that content hash
+deterministically after the full plan has passed its existing approvals.
+
+Use schema version `1` and include every planned table, column, relationship,
+and alternate key exactly once. Decisions use only `reuse`, `extend`, `create`,
+`adapt`, `defer`, or `unverified`; `replace` and unresolved conflict text are
+forbidden. Adapt is fully specified, never inferred later:
+
+- adapted tables include both `adaptedLogicalName` and `adaptedSchemaName`;
+- adapted columns include both `adaptedLogicalName` and `adaptedSchemaName`;
+- adapted 1:N relationships include `adaptedSchemaName` plus both adapted
+  lookup names;
+- adapted M:N relationships include `adaptedSchemaName` and
+  `adaptedIntersectTable`;
+- adapted alternate keys include `adaptedSchemaName`.
+
+Every table/column `SchemaName` must resolve to its paired logical name by the
+Dataverse casing rule (for example `cr123_Inspection` →
+`cr123_inspection`), including adapted names. Relationship lookup definitions
+must resolve to and match the same original/adapted child-column identities.
+The lookup column's `requiredLevel` is authoritative; omit the duplicate
+relationship value or make it identical.
+
+Only explicit `create` or fully specified `adapt` items may become metadata
+writes. Preserve `unverified` as non-executable targeted-read work; never
+upgrade it to create. These approved values remain authoritative during Step
+8: the deterministic builder may mark verification `verified`, `unverified`,
+or `conflict`, but must not change `Reuse`, `Adapt`, or `Defer` into another
+architecture decision. Every table includes `dependencyTier` and
+`serviceRequired`, including reused tables needed by screens, hooks, lookups,
+or identity resolution. An M:N relationship whose generated intersect service
+is used by app code sets `serviceRequired: true` on that relationship.
+
+```json
+{
+  "schemaVersion": 1,
+  "publisherPrefix": "cr123",
+  "tables": [{
+    "logicalName": "cr123_inspection",
+    "schemaName": "cr123_inspection",
+    "displayName": "Inspection",
+    "displayCollectionName": "Inspections",
+    "plannedDecision": "create",
+    "dependencyTier": 1,
+    "serviceRequired": true,
+    "ownershipType": "UserOwned",
+    "columns": [{
+      "logicalName": "cr123_name",
+      "schemaName": "cr123_name",
+      "displayName": "Inspection Name",
+      "type": "string",
+      "plannedDecision": "create",
+      "primaryName": true,
+      "requiredLevel": "ApplicationRequired",
+      "maxLength": 200
+    }, {
+      "logicalName": "cr123_siteid",
+      "schemaName": "cr123_siteid",
+      "displayName": "Site",
+      "type": "lookup",
+      "lookupTarget": "cr123_site",
+      "plannedDecision": "create",
+      "requiredLevel": "None"
+    }],
+    "relationships": [{
+      "kind": "many-to-one",
+      "schemaName": "cr123_Site_Inspection",
+      "plannedDecision": "create",
+      "parentTable": "cr123_site",
+      "childTable": "cr123_inspection",
+      "lookup": {
+        "logicalName": "cr123_siteid",
+        "schemaName": "cr123_siteid",
+        "displayName": "Site",
+        "requiredLevel": "None"
+      }
+    }],
+    "alternateKeys": [{
+      "schemaName": "cr123_inspection_name_key",
+      "displayName": "Inspection Name Key",
+      "plannedDecision": "create",
+      "columns": ["cr123_name"]
+    }]
+  }, {
+    "logicalName": "cr123_site",
+    "schemaName": "cr123_site",
+    "displayName": "Site",
+    "displayCollectionName": "Sites",
+    "plannedDecision": "create",
+    "dependencyTier": 0,
+    "serviceRequired": true,
+    "ownershipType": "UserOwned",
+    "columns": [{
+      "logicalName": "cr123_name",
+      "schemaName": "cr123_name",
+      "displayName": "Site Name",
+      "type": "string",
+      "plannedDecision": "create",
+      "primaryName": true,
+      "requiredLevel": "ApplicationRequired",
+      "maxLength": 200
+    }],
+    "relationships": [],
+    "alternateKeys": []
+  }]
+}
+```
+
+Supported ordinary `type` values are `string`, `memo`, `integer`, `bigint`,
+`decimal`, `double`, `money`, `datetime`, `date`, `boolean`, `choice`,
+`multiselectchoice`, `image`, and `file`. Choice/Boolean columns include exact
+integer/label `options`. Existing computed dependencies use `computed` plus
+`attributeType`, `sourceType`, `sourceTypeMask`, and exact
+`formulaDefinition`; new calculated/rollup/formula columns are `defer` because
+this workflow does not synthesize them. Lookups are represented both as a
+column and as their relationship so coverage is mechanical.
+For BigInt, omit `minValue`/`maxValue` unless the plan explicitly needs safely
+representable integer bounds; never emit JavaScript-unsafe defaults.
+
+After writing the JSON, normalize and validate it in place:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
+  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+```
+
+If normalization fails, fix the exact schema error and rerun it. Do not return
+`DONE` with a malformed or incomplete sidecar. In `cross-entity-audit` mode,
+preserve this contract unchanged because that pass adds read-path guidance, not
+metadata schema.
+
 **ER column contract:** every relationship endpoint has an attribute block;
 each block includes its exact primary key (`PK`), primary name, every displayed
 or written business/status column needed by the app, and each shown lookup
@@ -476,10 +614,11 @@ endpoint has an empty block and that every relationship's FK path is visible.
 
 If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
-After `_dm_section.md` is written, atomically update milestone
+After `_dm_section.md` and the normalized schema contract are written,
+atomically update milestone
 `artifact-written` with `state: "completed"`, the final decision counts,
-elapsed time, and artifact paths. On a hard failure, write `state: "blocked"`
-with the current milestone before returning `BLOCKED`.
+elapsed time, and both artifact paths. On a hard failure, write
+`state: "blocked"` with the current milestone before returning `BLOCKED`.
 
 ## Return Status
 
@@ -501,6 +640,6 @@ You MUST return your final message with one of these four status codes as the **
 
 After the status line and a blank line, write:
 
-> Data Model section written to `<working_dir>/_dm_section.md`. Summary: <N reuse, M extend, K create, A adapt, D defer, U unverified across T tiers>. ER diagram includes <list of entities>.
+> Data Model section written to `<working_dir>/_dm_section.md`; normalized contract written to `<working_dir>/.tmp/dataverse-schema-contract.json`. Summary: <N reuse, M extend, K create, A adapt, D defer, U unverified across T tiers>. ER diagram includes <list of entities>.
 
 The planner reads the file and embeds the contents verbatim into `native-app-plan.md`.

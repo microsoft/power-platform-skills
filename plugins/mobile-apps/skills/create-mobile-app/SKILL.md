@@ -430,18 +430,18 @@ First, create the working and planning-artifact directories:
 mkdir -p <working_dir> <working_dir>/.tmp
 ```
 
-### Step 3.0 — Foreground Dataverse snapshot and evidence
+### Step 3.0 — Foreground Dataverse planning snapshot and evidence
 
 Planning stays read-only. Branch on `<dataverse_planning_mode>`:
 
 - `connector-only` — skip every command in this section. Set `SNAPSHOT_PATH`
   and `EVIDENCE_PATH` to empty/not supplied, print
-  `↷ Dataverse snapshot skipped — the confirmed brief is connector-only.`, and
+  `↷ Foreground planning snapshot skipped — the confirmed brief is connector-only.`, and
   continue to planner dispatch. Connector-only planning does not perform
   Dataverse metadata reads; the skill's existing global prerequisites remain
   unchanged.
 - `required` — resolve the already selected environment again in the
-  foreground and create one normalized snapshot as below. Do not make the
+  foreground and create one normalized foreground planning snapshot as below. Do not make the
   nested planner or architect rediscover the tenant.
 
 ```bash
@@ -449,7 +449,7 @@ PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.
 ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
 ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
 test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
-  echo "✗ Planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
+  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
 }
 echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
 ```
@@ -480,7 +480,7 @@ Detailed advisory discovery is quality-bounded:
   bounded exact-name expansion.
 
 ```bash
-SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-metadata-snapshot.json"
+SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 EVIDENCE_PATH="<working_dir>/.tmp/dataverse-planning-evidence.md"
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
@@ -503,7 +503,7 @@ node -e '
   console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed candidates (${d.requiredCandidates || 0} required, ${d.advisoryCandidates || 0} advisory, ${d.exactCoveredConcepts || 0} exact-covered concepts; ${t.candidateSelectionMs} ms)`);
   console.log(`✓ Detail loading: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
   console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
-  console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; snapshot total ${t.totalDurationMs} ms`);
+  console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
 ' "$SNAPSHOT_PATH"
 echo "✓ Planning evidence: $EVIDENCE_PATH"
 ```
@@ -559,8 +559,8 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
-- `required`: > "→ Spawning planner agent from the verified foreground snapshot. Gate 1/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
-- `connector-only`: > "→ Spawning planner agent in connector-only mode; Dataverse snapshot and data-model mutation are not required."
+- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 1/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
+- `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
 
@@ -582,8 +582,11 @@ Prompt:
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
   Dataverse planning mode: <required | connector-only>
   Dataverse planning failure reason: none
-  Normalized Dataverse snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
   Dataverse planning evidence: <absolute EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Structured schema contract: <absolute
+  `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
+  NOT SUPPLIED>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
   Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
@@ -614,6 +617,11 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
   **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
 
+  In `required`, also require the direct architect to write and normalize
+  `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
+  A draft Markdown section without that sidecar is not an executable Gate 1
+  result.
+
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
 3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
@@ -625,7 +633,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
+If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
 
 **Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
 
@@ -817,6 +825,22 @@ fi
 ```
 
 If mismatches are reported, sweep `native-app-plan.md` (and any auxiliary files like `.datamodel-manifest.json` if already written) replacing the wrong prefix with `${DETECTED_PUBLISHER_PREFIX}_` before Step 4. Do NOT proceed to Step 5 with a wrong-prefix plan — the sweep cost grows ~500 occurrences once services are generated.
+
+For `required`, apply the same prefix correction to
+`.tmp/dataverse-schema-contract.json`, then normalize it. Before Step 4, require
+both approved artifacts:
+
+```bash
+test -f "$WORKING_DIR/native-app-plan.md"
+test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+```
+
+Do not fall back to parsing the Markdown ER diagram when the sidecar is missing
+or malformed; route through the existing planner/direct-architect revision
+path.
 
 ### Step 4 — Auth & environment selection
 
@@ -1377,11 +1401,95 @@ skip Step 8.5 as well, and continue to Step 9. A non-empty Dataverse plan in
 this mode is a planning mismatch and must be corrected before continuing.
 
 **Print before starting:**
-> "→ [Step 8/13] Invoking /add-dataverse to create/extend tables and generate TypeScript services. This is the longest single phase — expect 2–5 minutes for a typical 4–6 table model."
+> "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
 
 **Environment pre-check (before invoking /add-dataverse):** Verify that `.resolved-environment.json` / `power.config.json` match the environment captured in Step 1. If they differ, warn the user immediately — creating tables in the wrong environment is the #1 silent breakage in this step. `/add-dataverse` Step 3a does its own check, but catching it here saves a failed attempt.
 
-Read the `## Data Model` section from `native-app-plan.md`. Invoke `/add-dataverse` with the working directory and a flag to skip its own planning (since the plan section is already approved):
+For the fast-v2 `required` path, keep the foreground planning snapshot as
+planning evidence only. It never authorizes a write. Without changing any
+approval gate, Step 8 must perform one fresh bounded reconciliation for every
+exact table in the approved structured schema; each existing table reloads
+ordinary typed columns, lookups, M:N/1:N relationships, and alternate keys.
+Create/adapt table reruns also reload and compare creation-significant table
+behavior: ownership, activities, notes, offline availability, change tracking,
+labels/schema identity, and primary-name identity.
+The exact/proposed scope also includes every effective M:N intersect entity
+name, and 1:N reuse requires complete matching `CascadeConfiguration`
+evidence. An absent or colliding intersect name, or missing/mismatched cascade
+evidence, is non-executable.
+Step 8 also binds the structured artifact to the current fully approved plan
+content hash. Use resolved context and the structured artifact, never values
+inferred from free-form Markdown:
+
+```bash
+SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
+FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
+EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
+OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
+PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
+ACTIVE_SOLUTION_UNIQUE_NAME="Default"
+
+test -f "$SCHEMA_CONTRACT" -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
+  -a -f "<working_dir>/native-app-plan.md"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --bind-plan "$SCHEMA_CONTRACT" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$SCHEMA_CONTRACT"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --reconciliation-scope "$SCHEMA_CONTRACT" \
+  --output "$RECONCILIATION_SCOPE"
+
+EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
+PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --tables "$EXACT_TABLES" \
+  --proposed-tables "$PROPOSED_TABLES" \
+  --reconcile-exact \
+  --output "$EXECUTION_RECONCILIATION"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --contract "$SCHEMA_CONTRACT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$OPERATION_MANIFEST" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT"
+```
+
+The manifest builder mechanically verifies the approved `Reuse`, `Extend`,
+`Create`, `Adapt`, `Defer`, and `Unverified` decisions. It must not invent or
+change architecture decisions. Any mismatch is a non-executable verification
+conflict and returns to the orchestrator; do not add another opportunistic read
+loop or fall back to agent reconciliation. No operation may execute until:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --validate "$OPERATION_MANIFEST" \
+  --contract "$SCHEMA_CONTRACT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT" \
+  --require-executable
+```
+
+Invoke `/add-dataverse` with the working directory, approved plan, and exact
+artifact paths:
 
 ```
 Invoke skill: /add-dataverse
@@ -1389,10 +1497,26 @@ Invoke skill: /add-dataverse
 Arguments:
   --working-dir <working_dir>
   --plan-section <native-app-plan.md#data-model>
+  --schema-contract <working_dir>/.tmp/dataverse-schema-contract.json
+  --execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json
+  --operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json
+  --publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json
   --skip-planning   (the planner already ran)
 ```
 
-`/add-dataverse` creates Tier 0 → N tables, applies extensions, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, type-checks, returns.
+`/add-dataverse` validates the bindings and consumes valid phases immediately.
+Any supplied artifact/binding failure returns to this orchestrator; it must
+not silently enter standalone reconciliation. A non-executable manifest
+authorizes no metadata writes.
+The publish checkpoint is retained across schema/PublishXml failure and
+deleted only after successful publish, so a rerun retries pending publication
+even when schema writes are already idempotent.
+It creates Tier 0 → N tables, applies extensions, runs
+`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
+--resource-name <name>` per service-required table from the app root,
+type-checks, and returns. Real matched A/B runs are still required to quantify
+the end-to-end time saved; do not present local manifest timing as a guaranteed
+1–3 minute Dataverse result.
 
 After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 

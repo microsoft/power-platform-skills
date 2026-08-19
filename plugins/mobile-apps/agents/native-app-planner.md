@@ -25,7 +25,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Wizard answers collected by the skill (target users + device, target platforms, aesthetic, features)
 - The working directory where `native-app-plan.md` should be written
 - The plugin root directory (`${PLUGIN_ROOT}`)
-- The foreground-generated normalized Dataverse snapshot path, when available
+- The foreground-generated normalized Dataverse planning snapshot path, when available
 - The deterministic Dataverse planning evidence appendix path, when available
 - Dataverse planning mode: `required` or `connector-only`
 
@@ -33,17 +33,22 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 - **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
-- **Single plan document.** Everything goes into `<working_dir>/native-app-plan.md`. No HTML, no separate per-domain files. Mermaid for diagrams.
+- **Single human plan document.** Everything user-reviewed goes into
+  `<working_dir>/native-app-plan.md`. The only machine sidecar is the
+  normalized
+  `<working_dir>/.tmp/dataverse-schema-contract.json` emitted by
+  `data-model-architect` for deterministic post-approval execution. No HTML or
+  other per-domain plan files. Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
 - **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
   default-mode `data-model-architect` dispatch and revision. In `required`,
-  pass both snapshot/evidence absolute paths unchanged. In `connector-only`,
+  pass both planning-snapshot/evidence absolute paths unchanged. In `connector-only`,
   state that both paths are not supplied. Never invent placeholder artifact
   paths. Do not
   resolve the environment, verify Dataverse access, run broad discovery, or
   issue any live Dataverse
-  query in this planner. The foreground orchestrator owns snapshot creation,
+  query in this planner. The foreground orchestrator owns planning-snapshot creation,
   degradation, and exact-name expansion.
 - **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
   rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
@@ -61,7 +66,7 @@ Required tool surface:
 - `AskUserQuestion` — industry-confirm and style-picker handoffs
 - `Read` / `Write` — read references, write `native-app-plan.md`
 - `Bash` / `Grep` / `Glob` — working-dir checks and legacy discovery only;
-  never use them for Dataverse discovery when snapshot/evidence paths are supplied
+  never use them for Dataverse discovery when planning-snapshot/evidence paths are supplied
 
 **Detection:** attempt a no-op call to `Task` (e.g. spawn nothing, just check the tool exists). If the host raises `tool not available`, `unknown tool`, or any equivalent before you can dispatch, you are running in a degraded shell. Same check for `EnterPlanMode` and `AskUserQuestion`.
 
@@ -106,30 +111,36 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
 > Target environment: use the foreground-resolved environment URL and tenant.
-> When snapshot/evidence paths are supplied, do not read `power.config.json` or
+> When planning-snapshot/evidence paths are supplied, do not read `power.config.json` or
 > call `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
 > Dataverse planning mode: [required | connector-only]
 > Dataverse planning failure reason: none
-> Normalized Dataverse snapshot: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Normalized Dataverse foreground planning snapshot: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
 > Dataverse planning evidence: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Structured schema contract output: [absolute
+> `<working_dir>/.tmp/dataverse-schema-contract.json` in required mode, or NOT
+> SUPPLIED in connector-only mode]
 >
-> Follow the instructions in your agent file. You are read-only — do NOT create tables. Return a markdown `## Data Model` section ready to embed in native-app-plan.md, including a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
+> Follow the instructions in your agent file. You are read-only — do NOT create tables. In required mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. Include a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
 
 After spawning, proceed immediately to Step 3 without waiting. Then, before writing the plan doc (Step 4), check the architect's result and parse its first line per AGENTS.md rule #10:
 
-- `DONE` → embed section, continue.
-- `DONE_WITH_CONCERNS: <list>` → embed section, propagate concerns.
+- `DONE` → in `required` mode, verify both `_dm_section.md` and the normalized
+  `.tmp/dataverse-schema-contract.json` exist; then embed the section and
+  continue. A missing sidecar is `BLOCKED`, not a Markdown-parsing fallback.
+- `DONE_WITH_CONCERNS: <list>` → apply the same sidecar check, embed section,
+  and propagate concerns.
 - `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → return that
-  exact first line to the foreground orchestrator. Do not expand the snapshot
+  exact first line to the foreground orchestrator. Do not expand the foreground planning snapshot
   or re-run discovery here.
 - `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>` → return that exact
   first line to the foreground orchestrator for collision-only expansion. Do
   not infer absence or rewrite the proposed names here.
 - `NEEDS_CONTEXT: <missing>` → re-spawn once with missing non-Dataverse context,
-  forwarding the same snapshot/evidence paths unchanged. If the second return
+  forwarding the same planning-snapshot/evidence paths unchanged. If the second return
   is also `NEEDS_CONTEXT`, return `BLOCKED`.
 - `BLOCKED: <reason>` → return `BLOCKED: data-model-architect returned BLOCKED: <reason>` to orchestrator.
 
@@ -361,9 +372,9 @@ Call `ExitPlanMode` to request approval.
 
 - **Approved:** mark `[x] Data model approved` in the plan doc, continue to Gate 2.
 - **Rejected:** re-spawn `data-model-architect` with the user's feedback and
-  the original snapshot/evidence paths verbatim, regenerate that section, and
-  re-enter plan mode. Loop until approved; do not run discovery during a
-  revision.
+  the original planning-snapshot/evidence paths verbatim, regenerate that section, and
+  regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
+  until approved; do not run discovery during a revision.
 
 ### Gate 2 — Native Capabilities + Connectors (combined)
 
@@ -541,7 +552,8 @@ Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen
 This step exists because the SDK has no `$expand`. It verifies that every
 cross-entity field uses a formatted lookup or bounded chained fetch, and flags
 hot-path fields that require an externally supplied projection. It never
-synthesizes calculated/formula metadata.
+synthesizes calculated/formula metadata and must preserve the already approved
+`.tmp/dataverse-schema-contract.json` unchanged.
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
@@ -601,6 +613,25 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
 
+In `required` mode, also validate the sidecar structurally one final time:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
+  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+```
+
+Do not add a plan hash in the planner. The create flow binds this normalized
+sidecar to the final approved `native-app-plan.md` content at Step 8 without
+adding or changing an approval gate.
+
+Do not return `DONE` if this fails. Connector-only mode must not create the
+sidecar. Treat every `unverified` contract row as non-executable; only explicit
+`create` or fully specified `adapt` rows may later become metadata operations.
+Adapt rows must carry all adapted logical/schema/intersect names required by
+the data-model-architect contract, rather than leaving names for the execution
+agent to invent.
+
 ## Step 7 — Return Status
 
 You MUST return your final message to `/create-mobile-app` with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The orchestrator parses the first line to decide what to do next. After the status line, leave a blank line, then write the structured summary below.
@@ -624,6 +655,7 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 Plan approved.
 
 Plan document: <absolute path to native-app-plan.md>
+Dataverse schema contract: <absolute path, or "not applicable">
 
 Sections approved:
   ✓ Data model      — <N tables: M reuse, K extend, L create>
