@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app or mock-backed prototype: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow. Routes prototype graduation to /prototype-to-real-app."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
@@ -12,7 +12,15 @@ model: opus
 
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 
-Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
+When the user explicitly asks to update planning docs without changing app
+code, invoke `/edit-plan` and stop. `--plan-only` is a backwards-compatible
+alias for that route; do not maintain a second plan-only implementation here.
+
+Use `--apply-plan` to consume an approved
+`.mobile-app/plan-change.json` written by `/edit-plan`. This path verifies the
+record's plan/contract hashes, skips intent discovery and re-approval, applies
+the recorded sections, runs one final `/sync-from-plan`, and archives the
+handoff only after success.
 
 ## When to use
 
@@ -30,13 +38,24 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
 - "Reorder screens — move profile out of tabs, into a modal from the home header"
+- "Add another entity and screen to this local prototype"
 
 ## When NOT to use
 
 - Brand-new project → `/create-mobile-app`
+- Brand-new mock-backed prototype → `/create-mobile-prototype`
+- Convert, graduate, or make a prototype real → `/prototype-to-real-app`
 - Just adding one connector with no screen changes → `/add-connector` directly
 - Just adding a single native wrapper with no screen changes → `/add-native` directly
 - The plan file is missing → re-run `/create-mobile-app` (don't try to reconstruct)
+
+## Inputs
+
+- `--working-dir <path>` - default current directory.
+- `--apply-plan` - apply the existing approved pending plan change without
+  re-planning or asking the user to repeat the request.
+- `--plan-only` - compatibility alias that invokes `/edit-plan`.
+- `--no-preview` - forward to the one final `/sync-from-plan` invocation.
 
 ## Workflow
 
@@ -80,6 +99,46 @@ test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
 test -f memory-bank.md && echo "OK: memory bank found" || echo "WARN: no memory bank"
 git status --short
 ```
+
+Read `.mobile-app/state.json` using
+[`lifecycle-state.md`](../../shared/references/lifecycle-state.md) before
+classifying the edit. If only the legacy `.code-apps-native/state.json` exists,
+migrate it as documented there.
+
+Route by lifecycle state before any mutation:
+
+| State / intent | Action |
+|---|---|
+| Request says convert, graduate, make real, connect prototype to an environment, or replace mock data with Dataverse | Invoke `/prototype-to-real-app --working-dir <app-root>` and STOP this workflow. |
+| `dataMode: transitioning` | STOP ordinary edits. Resume `/prototype-to-real-app`; its phase checkpoint owns recovery. |
+| `dataMode: prototype` | Use prototype mutation rules below. Never invoke Dataverse or real connector provisioning. |
+| `dataMode: dataverse` or safely inferred real app | Continue with the existing real-app workflow. |
+
+In prototype mode, a request to add a real environment, connection, or live
+Dataverse table is graduation intent even when the user did not use the word
+"convert".
+
+If `$ARGUMENTS` contains `--plan-only`, or the user explicitly asks to change
+only the plan and not the app, invoke `/edit-plan --working-dir <app-root>` with
+the same request and STOP.
+
+If `$ARGUMENTS` contains `--apply-plan`, require
+`.mobile-app/plan-change.json` and verify all of these before mutation:
+
+- `status === "approved-pending-apply"`;
+- record `dataMode` equals lifecycle state `dataMode`;
+- current `native-app-plan.md` SHA-256 equals `approvedPlanSha256`;
+- for a Data Model change, current structured schema contract SHA-256 equals
+  `structuredContractSha256`;
+- `previousPlanSha256` equals the lifecycle state's `lastSyncedPlanHash` when
+  that hash was present at edit time;
+- no uncommitted user changes overlap the specialist/screen targets without
+  explicit confirmation.
+
+On a valid handoff, set the edit brief from the record's `request`, `sections`,
+`affectedScreens`, and `sampleDataImpact`. Skip Steps 1, 1.5, 2, 3, and 4 and
+continue at Step 5. Do not ask for a second approval. A hash mismatch is
+`BLOCKED`, not permission to silently regenerate the plan.
 
 If `native-app-plan.md` is missing → STOP. Tell the user this skill edits an existing generated app; they should re-run `/create-mobile-app` on a fresh template or manually recreate the plan before using this editor.
 
@@ -380,6 +439,30 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
+**Prototype mode override:** replace real data/connector mutations in the list
+below with local contract regeneration:
+
+1. Data Model changes normally run `mobile-app:data-model-architect` with
+  `Dataverse planning mode: prototype`, update and re-approve both
+  `## Data Model` and `.tmp/dataverse-schema-contract.json`, and preserve
+  `planningMode: "prototype"` / `executionEligible: false`. Under
+  `--apply-plan`, reuse the already approved/hash-verified contract and do not
+  spawn or gate the architect again. Then run
+  `skills/create-mobile-prototype/scripts/gen-mock-services.js`; its
+  regeneration contract must preserve compatible existing seed rows and emit
+  a report for added/removed/type-changed fields.
+2. Connector changes update/re-approve `## Connectors`, then rerun the same
+  generator to add or remove explicit throw-stubs. Do not create a Power
+  Platform connection in prototype mode.
+3. Native and design changes use the normal allowlist/design paths.
+4. Continue to Step 6, which invokes `/sync-from-plan` exactly once so route,
+  screen, quality, preview, and lifecycle hashes are updated by their owning
+  workflow.
+
+Do not fall through to `/add-dataverse`, `/add-connector`, sample-data REST
+inserts, offline-profile mutation, or environment drift gates in prototype
+mode.
+
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
 1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
@@ -420,9 +503,35 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/offline-profile-delta.js"
 
 Branch on the JSON `status` per [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${CLAUDE_SKILL_DIR}/../add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${CLAUDE_SKILL_DIR}/../edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
 
-### Step 6 — Rebuild affected screens
+### Step 6 — Sync Affected Screens Once
 
-Use the plan diff plus the user's request to build the affected screen set:
+After every specialist and Step 5 sanity/offline gate passes, invoke the owning
+screen workflow exactly once:
+
+```text
+/sync-from-plan --working-dir <PROJECT_DIR> [--no-preview if supplied]
+```
+
+For `--apply-plan`, pass the verified pending record:
+
+```text
+/sync-from-plan --working-dir <PROJECT_DIR> \
+  --pending-plan-change <PROJECT_DIR>/.mobile-app/plan-change.json \
+  [--no-preview if supplied]
+```
+
+Parse its first-line status. `BLOCKED` stops and leaves a pending plan-change
+record untouched. `DONE_WITH_CONCERNS` is surfaced and recorded. `DONE`
+continues to Step 7 finalization.
+
+**Do not execute the inline builder/verification reference below after sync.**
+It documents the quality contract that `/sync-from-plan` owns; spawning these
+builders or running preview again would duplicate work and can apply stale
+intermediate state.
+
+#### Delegated screen-target reference (owned by `/sync-from-plan`)
+
+`/sync-from-plan` uses the plan diff plus the user's request to build the affected screen set:
 
 | Change type | Screens to rebuild |
 |---|---|
@@ -501,7 +610,10 @@ current_file: <paste current file content if the file exists>
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
 ```
 
-### Step 7 — Verify
+#### Delegated verification reference (owned by `/sync-from-plan`)
+
+The commands and repair policy below are requirements for `/sync-from-plan`.
+`/edit-app` must not execute them again after Step 6 returns.
 
 Run verification after mutations. Batch-fix root causes, then rerun the failed gate once. Verification is selected by what changed, but TypeScript is always required after an app mutation.
 
@@ -545,11 +657,11 @@ If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `mem
 
 If verification fails because the edit exposed stale generated services, rerun the relevant data-source regeneration once before changing screens by hand. If failures are unrelated pre-existing issues, report them separately and do not hide them as successful edit results.
 
-### Step 8 — Preview + memory-bank update
+### Step 7 — Finalize Sync Result + Memory-Bank Update
 
-Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
-
-If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
+Read validation, changed-screen, concern, and preview results from the Step 6
+`/sync-from-plan` return. Do not rerun TypeScript, route, style, contrast, or
+preview work unless sync explicitly returned a targeted retry instruction.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 
@@ -568,6 +680,14 @@ Append an edit entry to `memory-bank.md`:
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
 - Blocks/concerns: <none or list>
 ```
+
+After an `--apply-plan` run succeeds through final sync, update the pending
+record to `status: "applied"` with `appliedAt`, final plan hash, final
+Dataverse-manifest hash (or null in prototype mode), specialists run, and sync
+result. Move it to `.mobile-app/plan-history/<createdAt-safe>.json`, then remove
+`.mobile-app/plan-change.json`. If any specialist, generated-service, route,
+quality, preview, changed-file, or TypeScript gate fails, leave the pending
+record untouched so the same command resumes safely.
 
 Final summary must say what changed in the app, what verification ran, where the preview is, and whether a symptom-debug handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
 

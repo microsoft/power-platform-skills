@@ -2240,7 +2240,25 @@ If `tsc` fails, use the existing TypeScript batch-repair policy. If stylistic is
 DONE_WITH_CONCERNS: Step 11.4 left <N> stylistic issue(s) for review: <file:line rule summary>
 ```
 
-Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it may not leave the app in a broken TypeScript state.
+#### Step 11.5 — Automated Design Refinement (LLM Polish)
+
+After the script-based stylistic sweep catches the lowest-hanging fruit, apply the final layer of context-aware design polish to the generated screens.
+
+**Print before starting:**
+> "→ [Step 11.5/13] Running automated design refinement pass to polish UI, typography, RTL layouts, and accessibility..."
+
+Invoke the design skill against the project:
+```text
+/design-react-native-app
+```
+Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
+
+Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
+```bash
+npx tsc --noEmit
+```
+
+Then continue only if TypeScript is clean. Step 11.5 may leave remaining qualitative concerns, but it may not leave the app in a broken TypeScript state.
 
 #### Optional static preview
 

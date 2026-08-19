@@ -1069,16 +1069,51 @@ After all tables are verified, write the manifest to the project root using the 
 {
   "environmentUrl": "<envUrl>",
   "generatedAt": "<ISO timestamp>",
+  "aliases": {
+    "tables": { "<approved original logical name>": "<final logical name>" },
+    "columns": { "<final table logical name>": { "<approved original column>": "<final column>" } }
+  },
   "tables": [
     {
       "logicalName": "cr123_jobsite",
       "displayName": "Job Site",
       "status": "new",
+      "entitySetName": "cr123_jobsites",
+      "primaryIdAttribute": "cr123_jobsiteid",
+      "primaryNameAttribute": "cr123_sitename",
+      "dependencyTier": 0,
+      "customEntity": true,
+      "sharedSystemTable": false,
       "metadataId": "<server-assigned GUID from Step 5a re-GET>",
       "solution": "<solution unique name, e.g. PowerAppsDefault>",
       "columns": [
-        { "logicalName": "cr123_sitename", "type": "String" },
-        { "logicalName": "cr123_address",  "type": "String" }
+        {
+          "logicalName": "cr123_sitename",
+          "schemaName": "cr123_SiteName",
+          "displayName": "Site Name",
+          "type": "String",
+          "requiredLevel": "ApplicationRequired"
+        },
+        {
+          "logicalName": "cr123_status",
+          "schemaName": "cr123_Status",
+          "displayName": "Status",
+          "type": "Choice",
+          "requiredLevel": "None",
+          "options": [
+            { "value": 100000000, "label": "Draft" },
+            { "value": 100000001, "label": "Complete" }
+          ]
+        },
+        {
+          "logicalName": "cr123_regionid",
+          "schemaName": "cr123_Region",
+          "displayName": "Region",
+          "type": "Lookup",
+          "requiredLevel": "None",
+          "target": "cr123_region",
+          "targetEntitySetName": "cr123_regions"
+        }
       ]
     }
   ]
@@ -1087,7 +1122,40 @@ After all tables are verified, write the manifest to the project root using the 
 
 `metadataId` and `solution` are required for `status: "new"` or `"extended"` entries — they're how Step 5a distinguishes "we own this on a re-run" from "name collision." Reused tables can omit both.
 
-Include only tables confirmed in Step 6c. Do NOT include tables reused with no schema changes.
+The manifest is a machine handoff, not a creation log. Include **every
+non-deferred service-required table confirmed in Step 6c**, including tables
+reused with no schema changes. Reused rows use `status: "reused"`; adapted
+rows use `status: "adapted"` and their final names. This is required so
+screen binding, prototype conversion, sample data, and offline reconciliation
+see the same complete app data surface.
+
+Before writing, enrich every table and column from the live metadata already
+collected in Steps 4, 4a, and 6c:
+
+- exact `EntitySetName`, `PrimaryIdAttribute`, and `PrimaryNameAttribute`;
+- dependency tier from the approved model;
+- exact logical/schema/display names and Dataverse type;
+- Lookup target logical name and target `EntitySetName`;
+- Choice, MultiSelect Choice, and Boolean integer/label options;
+- File/Image limits and requiredness when present;
+- run-level table/column aliases created by Adapt/collision handling;
+- `customEntity` and `sharedSystemTable` so sample-data workflows can require
+  confirmation before writing shared standard tables.
+
+Never guess an entity-set plural or lookup navigation name. If any required
+fact is absent from the current cache, perform one bounded live metadata read
+for that table/derived column before writing the manifest.
+
+Validate the completed file before Step 7:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-datamodel-manifest.js" \
+  "<working_dir>/.datamodel-manifest.json"
+```
+
+Any validation error is blocking. Repair or enrich the manifest from live
+metadata; do not let screen generation, sample data, conversion cleanup, or
+offline reconciliation proceed from a partial manifest.
 
 ### Step 7 — Inspect generated files
 

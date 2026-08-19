@@ -28,22 +28,120 @@ Populate Dataverse tables with realistic sample records so a freshly-scaffolded 
 
 ## Prototype Seed Reuse
 
-`--from-seed` is used by `/prototype-to-real-app` after a mock prototype is converted to Dataverse. In this mode, prefer existing prototype seed files before generating new rows:
+`--from-seed` is used by `/prototype-to-real-app` after a mock prototype is
+converted to Dataverse. It is a distinct migration path, not a hint to the
+generic row generator.
+
+Require:
 
 ```text
-src/generated/services/*/*.seed.json
+src/generated/.prototype-manifest.json
 src/generated/services/*.seed.json
+.datamodel-manifest.json (or docs/plan-artifacts fallback)
+.tmp/prototype-plan-artifacts/live-name-map.json
 ```
 
-Map seed objects to Dataverse payloads using `.datamodel-manifest.json`:
+The live name map is approved during `/prototype-to-real-app` reconciliation.
+It maps every prototype table/column to its final Reuse/Extend/Create/Adapt or
+Defer outcome. Never infer an adapted name from suffix similarity.
+
+### Prototype migration Step P1 - Validate and prepare
+
+Run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-datamodel-manifest.js" \
+  "<resolved-manifest-path>"
+
+node "${CLAUDE_SKILL_DIR}/scripts/prepare-prototype-seed-migration.js" \
+  "$PROJECT_DIR"
+```
+
+The planner writes `.tmp/prototype-seed-migration.json` with deterministic
+table tiers, explicit primary IDs, mapped row bodies, lookup-bind metadata,
+media jobs, concerns, and blockers.
+
+If it exits `2`, STOP. Show every blocker and return to live reconciliation or
+manifest enrichment. **Do not fall back to generic rows.** Silent fallback
+would discard the scenarios the user approved in the prototype.
+
+The planner applies these rules:
 
 - Keep values only for real manifest columns.
-- Translate lookup references into exact `<schemaName>@odata.bind` keys from the manifest.
-- Keep picklist integers from the manifest; do not invent values from labels.
-- Skip local-only prototype fields that have no Dataverse column.
+- Include each prototype GUID as the real table's primary ID. This preserves
+  stable row identity and makes re-runs idempotent.
+- Translate lookups into exact `<schemaName>@odata.bind` metadata with the
+  target's live `EntitySetName`.
+- Remap Choice values by approved label when real integer values differ; never
+  carry prototype integers blindly into a reused/adapted option set.
+- Skip a field only when the approved live name map explicitly marks it
+  `defer`; an absent mapping is a blocker.
+- Separate File/Image jobs from JSON row bodies. URL/metadata-only prototype
+  values are concerns, not fake binary payloads.
 - Preserve dependency-tier insertion order.
 
-If a seed file cannot be mapped safely, fall back to generated contextual sample rows for that table and record `DONE_WITH_CONCERNS` in the summary. `--from-seed` is a preference, not permission to insert malformed data.
+Show a concise preview from the migration plan: table mapping, row counts,
+choice remaps, deferred fields, media concerns, and lookup counts. If any table
+has `requiresSharedTableConfirmation: true`, require explicit confirmation
+before inserting prototype rows into that reused standard/shared table. If the
+user declines, stop and let them revise the model/name map; do not orphan child
+rows or silently generate replacements.
+
+### Prototype migration Step P2 - Live idempotency probe
+
+For each table, query all deterministic seed IDs in bounded groups using the
+manifest's exact `entitySetName` and `primaryIdAttribute`. Never guess a plural:
+
+```text
+<entitySetName>?$select=<primaryIdAttribute>&$filter=
+  <primaryIdAttribute> eq <seed-guid-1> or
+  <primaryIdAttribute> eq <seed-guid-2> ...
+```
+
+Mark IDs returned by Dataverse as `existing`; do not POST them again. Mark
+missing IDs `planned`. The live query is authoritative on every run; a local
+journal is resume context, not existence proof.
+
+Write `.tmp/prototype-seed-migration-state.json` atomically with environment,
+manifest hash, migration-plan hash, and per-seed status
+(`existing|planned|inserted|failed|skipped`). Refuse to reuse a journal bound
+to a different environment or artifact hash.
+
+### Prototype migration Step P3 - Insert by tier
+
+For each dependency tier from 0 to N:
+
+1. Build operations only for `planned` rows.
+2. Add each lookup property from the migration plan as
+   `/<targetEntitySetName>(<targetSeedId>)` only after the parent ID is proven
+   `existing` or `inserted` in the current environment.
+3. If a required parent is not proven, mark the child `skipped`, stop dependent
+   tiers, and report the exact parent. Never emit a null/undefined bind.
+4. Insert the tier through `BATCH-RECORDS` with concurrency cap 5. Bodies
+   already contain deterministic primary IDs.
+5. Atomically journal each result. A duplicate response is success only after
+   a live GET proves that exact deterministic ID now exists.
+6. After the tier, live-query all expected IDs. Do not start child tiers until
+   every parent required by a child is confirmed.
+
+Transport uncertainty on a POST is not permission to replay it. Re-query the
+deterministic ID first; retry only when Dataverse proves it absent.
+
+### Prototype migration Step P4 - Media and summary
+
+Run media jobs only after their parent row is confirmed. Image data URIs may be
+normalized and uploaded through the supported generated helper. File metadata
+or remote image URLs without local bytes remain skipped concerns; never put a
+URL into a Dataverse File/Image column.
+
+Append inserted/existing counts per table to `memory-bank.md` under
+`## Seeded sample data`, including `source: prototype migration` and the
+migration-plan hash.
+
+Return `DONE_WITH_CONCERNS` when approved deferred fields or unavailable media
+bytes prevented exact transfer. Return `BLOCKED` for any table/column/choice/
+lookup mapping gap or required-row insertion failure. After this path finishes,
+skip generic Steps 3 and 4 and continue only to the common final summary.
 
 ---
 
@@ -104,7 +202,10 @@ All tables from the manifest are evaluated — including reused ones — because
 
 **Pre-seeding row-count check (HARD — runs for every table before generating any rows):**
 
-For each table, query its current record count using the entity set name from the manifest (or derive it by appending `s` to the logical name as a fallback):
+For each table, query its current record count using the exact entity set name
+from the validated manifest. If an older manifest lacks it, perform one bounded
+`EntityDefinitions(...)?$select=EntitySetName` read and update/validate the
+manifest before continuing. Never derive it by appending `s`:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> GET \

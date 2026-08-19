@@ -1,6 +1,6 @@
 ---
 name: data-model-architect
-description: Use when an orchestrator needs a Dataverse data model proposed (existing-table reuse, new tables in dependency-tier order, Mermaid ER diagram) for embedding in native-app-plan.md. Read-only — proposes, never mutates. Called by native-app-planner and /edit-app; not invoked directly by users.
+description: Use when an orchestrator needs a Dataverse-style data model proposed (existing-table reuse or environment-free prototype assumptions, dependency tiers, Mermaid ER diagram) for embedding in native-app-plan.md. Read-only — proposes, never mutates. Called by native-app-planner and /edit-app; not invoked directly by users.
 user-invocable: false
 color: cyan
 model: sonnet
@@ -26,8 +26,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
   Markdown appendix rendered from that same foreground planning snapshot.
-- **Dataverse planning mode** — `required` or `connector-only`.
+- **Dataverse planning mode** — `required`, `prototype`, or `connector-only`.
   `connector-only` intentionally has no snapshot/evidence paths.
+  `prototype` also has no snapshot/evidence paths: it designs a complete
+  Dataverse-style schema for local mocks, assumes net-new `cr_` names, and
+  records that every reuse/create/extend decision must be reconciled again by
+  `/prototype-to-real-app` before any real metadata write.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
 - **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
 
@@ -35,15 +39,20 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
-- **Reuse-first and target-grounded.** Use exact target metadata for every
+- **Reuse-first and target-grounded in `required` mode.** Use exact target metadata for every
   proposed table, including standard tables, and prefer reuse > extension >
   new. In planning-snapshot-only mode that evidence comes only from the validated
   foreground planning snapshot. Don't propose a `cr123_customer` table if a verified
-  target `contact` table fits.
+  target `contact` table fits. In `prototype` mode there is intentionally no
+  target: use app-owned placeholder `cr_` tables and never describe their
+  `create` decisions as verified or executable against a real environment.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
 - **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
   Dataverse discovery. A Dataverse-required run with unreadable metadata is
   blocked by the foreground orchestrator before this agent is dispatched.
+  `prototype` means a complete schema contract but zero environment
+  resolution, authentication, metadata discovery, collision checks, or API
+  calls. Prototype output exists only to generate local typed mocks.
 - **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or `Unverified` (target metadata could not be read). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
@@ -88,6 +97,39 @@ environment, read metadata, or request snapshot artifacts. Write
 summary counts zero, no ER entities or dependency tiers, and a note that the
 confirmed systems of record are the approved connectors), update the normal
 artifact milestone, and return `DONE`.
+
+When `Dataverse planning mode: prototype` is supplied, use this
+environment-free path:
+
+1. Skip Steps 1-3 and every live Dataverse command. Do not read
+  `power.config.json`, `.resolved-environment.json`, a planning snapshot, or a
+  planning evidence appendix.
+2. Run requirement/entity inference, dependency ordering, and relationship
+  design from the supplied brief only.
+3. Use publisher prefix `cr`. Model every required business entity as an
+  app-owned placeholder table with `plannedDecision: "create"`; do not
+  propose standard-table reuse because no target was inspected.
+4. Write `_dm_section.md` using the normal structure, but replace
+  `### Planning Evidence` with:
+
+  ```markdown
+  ### Prototype Assumptions
+
+  - Environment discovery intentionally skipped; this contract drives local mocks only.
+  - Placeholder `cr_` logical names and all reconciliation decisions must be re-evaluated by `/prototype-to-real-app` against the selected environment before metadata writes.
+  ```
+
+  In `### Target Reconciliation`, use `Prototype create assumption` as the
+  evidence and state that graduation may map the entity to Reuse, Extend,
+  Create, Adapt, or Defer.
+5. Write and normalize `.tmp/dataverse-schema-contract.json` with the same
+  complete table/column/relationship/choice/key shape as `required` mode so
+  `gen-mock-services.js` can consume it. Add top-level
+  `planningMode: "prototype"` and `executionEligible: false`. Those markers do
+  not replace the normal reconciliation taxonomy; they prevent downstream
+  orchestrators from mistaking an environment-free contract for live target
+  evidence.
+6. Return `DONE`. Prototype mode is intentional and is not itself a concern.
 
 ## Snapshot-only fast path
 
@@ -467,7 +509,7 @@ relationships, dependency tiers, and risks. Reference the deterministic
 appendix for repetitive candidate rankings, table fact counts, collision
 checks, and timing evidence instead of copying them into `_dm_section.md`.
 
-### Structured Dataverse schema contract (required for `required` mode)
+### Structured Dataverse schema contract (required for `required` and `prototype` modes)
 
 Alongside `_dm_section.md`, write
 `<working_dir>/.tmp/dataverse-schema-contract.json`. This is the deterministic
@@ -499,7 +541,8 @@ must resolve to and match the same original/adapted child-column identities.
 The lookup column's `requiredLevel` is authoritative; omit the duplicate
 relationship value or make it identical.
 
-Only explicit `create` or fully specified `adapt` items may become metadata
+Only explicit `create` or fully specified `adapt` items from a live
+`required`-mode reconciliation may become metadata
 writes. Preserve `unverified` as non-executable targeted-read work; never
 upgrade it to create. These approved values remain authoritative during Step
 8: the deterministic builder may mark verification `verified`, `unverified`,
@@ -595,7 +638,10 @@ column and as their relationship so coverage is mechanical.
 For BigInt, omit `minValue`/`maxValue` unless the plan explicitly needs safely
 representable integer bounds; never emit JavaScript-unsafe defaults.
 
-After writing the JSON, normalize and validate it in place:
+After writing the JSON, normalize and validate it in place. In `prototype`
+mode, restore/preserve the top-level `planningMode: "prototype"` and
+`executionEligible: false` markers if the normalizer retains only canonical
+contract fields:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \

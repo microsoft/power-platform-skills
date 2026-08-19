@@ -51,6 +51,18 @@ connector wiring.
     /create-mobile-app
     ```
 
+    For a local UX prototype with deterministic mock data and no Power
+    Platform environment yet, run this instead:
+
+    ```text
+    /create-mobile-prototype
+    ```
+
+    Both commands use the same installed template, planner, design system,
+    native wrappers, screen builders, and quality gates. The prototype path
+    writes no Dataverse metadata and can later be converted in place with
+    `/prototype-to-real-app`.
+
     The template includes this host package and the required Expo / React Native
     runtime dependencies. The skill updates the app in place as it designs and
     generates the mobile experience.
@@ -129,7 +141,30 @@ What happens:
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
 
-### 2. Add Dataverse tables to an existing app
+### 2. Prototype first, connect to Power Platform later
+
+```text
+> /create-mobile-prototype I want a warehouse inspection app with scan-first lookup, checklists, and photo evidence
+```
+
+The skill plans a Dataverse-style schema without selecting an environment,
+generates deterministic local CRUD services and realistic linked seed rows,
+builds the same production-quality screens, and starts Metro without requiring
+Microsoft sign-in. Planned external connectors are visible throw-stubs, so an
+unsupported interaction fails clearly instead of silently succeeding.
+
+When the model and UX are approved:
+
+```text
+> /prototype-to-real-app --environment <environment-id>
+```
+
+Graduation binds the existing project, reconciles placeholder entities against
+live Dataverse, replaces mocks/connectors, optionally carries seed scenarios
+into real tables, restores auth/schema generation, and rebinds affected screens.
+It does not scaffold another app.
+
+### 3. Add Dataverse tables to an existing app
 
 ```text
 > /add-dataverse I need an Asset table with name, serial number, and a lookup to an existing Account
@@ -137,7 +172,7 @@ End state: a working app you can iterate on with hot reload. ~5–12 minutes for
 
 Or paste an ER diagram (image / Mermaid / text). The data-model-architect agent discovers what already exists in your environment, scores reuse vs extend vs create, walks through approval, then creates the tables in dependency order and regenerates `src/generated/services/`.
 
-### 3. Add a native capability
+### 4. Add a native capability
 
 ```text
 > /add-native camera
@@ -155,7 +190,7 @@ For other capabilities (only those actually shipped by the template):
 
 Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present and not runtime-banned, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
 
-### 4. Add a connector
+### 5. Add a connector
 
 ```text
 > /add-sharepoint                # SharePoint Online lists / documents
@@ -164,7 +199,7 @@ Native modules are allowlist-bound by the current template `package.json`. If th
 
 Runs `npx power-apps add-data-source` under the hood, regenerates services, prints how to import in your screens.
 
-### 5. Iterate on the generated app after the fact
+### 6. Iterate on the generated app after the fact
 
 ```text
 > /edit-app "Improve the search screen to make it easier to use on mobile"
@@ -176,6 +211,11 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 ```
 
 Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+
+For a mock-backed prototype, `/edit-app` regenerates local schema/services and
+uses `/sync-from-plan`; it never creates real tables or connections. Requests
+such as "make this real", "connect this prototype to Dataverse", or "choose an
+environment" route to `/prototype-to-real-app`.
 
 Common follow-ups:
 
@@ -206,6 +246,9 @@ Example edit flows:
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. |
+| `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, rebases placeholder publisher names, live-reconciles and applies Dataverse, replaces connector stubs, optionally reuses seed scenarios, proves all mocks are gone, restores auth/runtime, and commits Dataverse state after one final sync. |
+| `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from `native-app-plan.md`; refreshes service/field bindings, routes, shared code, affected screens, quality gates, preview, and lifecycle hashes. Conversion uses its target-mode gate to commit `dataverse`. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
@@ -217,6 +260,7 @@ Example edit flows:
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
+| `/design-react-native-app` | ✅ v0 | Automated LLM design refinement agent. Reviews generated screens for visual coherence, RTL support, accessibility, and Unsplash imagery usage, applying direct stylistic improvements. Often invoked automatically after deterministic styling sweeps. |
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |

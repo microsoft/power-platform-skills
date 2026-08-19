@@ -148,6 +148,19 @@ const customConfig = {
 
 Hard rule: never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3xl`, `4xl`) onto Tamagui numeric keys (`1`, `2`, `3`, `4`, `0.25`, etc.). Screen-builder and Tamagui components rely on the default numeric scale. If a comment says `Map brand space names to Tamagui numeric token keys`, delete that override block.
 
+If `src/tokens/index.ts` exposes gradients or other app-owned semantic colors,
+rewrite those values during integration to import and derive from
+`brand/tokens.ts`. Do not leave the scaffold's Fluent-blue sample gradient in a
+blue-and-coral, green, purple, or otherwise branded app. `brand/tokens.ts`
+remains the only raw-color source; `src/tokens/index.ts` may transform those
+values into gradients/shadows but must not introduce a second palette.
+
+The generated typography object is not automatically consumed by
+`createTokens` above. Shared branded primitives must explicitly map its
+family/size/weight/tracking roles, or the integration must report typography
+as not yet applied. Never report the design system fully integrated when only
+colors, spacing, sizes, and radii are wired.
+
 ## Root Provider Wiring
 
 Current templates pass design values through `PowerAppsProvider`:

@@ -15,9 +15,10 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> --file <path> [--file <path> ...] [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--file <path> [--file <path> ...] | --all-source) [--approved-js-dependency <name>@<exact-version> ...]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
+    '--all-source validates every .ts/.tsx file under app/ and non-generated src/.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
   ].join('\n');
 }
@@ -34,7 +35,13 @@ function parseApprovedJsDependency(value) {
 }
 
 function parseArgs(argv) {
-  const parsed = { approvedJsDependencies: [], errors: [], projectRoot: null, targets: [] };
+  const parsed = {
+    allSource: false,
+    approvedJsDependencies: [],
+    errors: [],
+    projectRoot: null,
+    targets: [],
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -52,14 +59,39 @@ function parseArgs(argv) {
         parsed.errors.push(`Invalid --approved-js-dependency value: ${argv[index + 1] || '<missing>'}`);
       }
       index += 1;
+    } else if (arg === '--all-source') {
+      parsed.allSource = true;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     } else {
       parsed.targets.push(arg);
     }
+
   }
 
   return parsed;
+}
+
+function collectSourceFiles(projectRoot) {
+  const files = [];
+  const roots = ['app', 'src'];
+
+  function visit(directory) {
+    if (!fs.existsSync(directory)) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (entryPath === path.join(projectRoot, 'src', 'generated')) continue;
+        visit(entryPath);
+      } else if (entry.isFile() && /\.(?:ts|tsx)$/i.test(entry.name)) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  for (const root of roots) visit(path.join(projectRoot, root));
+  return files.sort();
 }
 
 function isWithinRoot(filePath, projectRoot) {
@@ -94,7 +126,14 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
 }
 
 function main(argv) {
-  const { approvedJsDependencies, errors, help, projectRoot: projectRootArg, targets } = parseArgs(argv);
+  const {
+    allSource,
+    approvedJsDependencies,
+    errors,
+    help,
+    projectRoot: projectRootArg,
+    targets,
+  } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
     return 0;
@@ -103,7 +142,7 @@ function main(argv) {
     process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
     return 1;
   }
-  if (!projectRootArg || targets.length === 0 || targets.some((target) => !target)) {
+  if (!projectRootArg || (!allSource && targets.length === 0) || targets.some((target) => !target)) {
     process.stderr.write(`${usage()}\n`);
     return 1;
   }
@@ -117,6 +156,10 @@ function main(argv) {
 
   const files = new Set();
   let blocked = false;
+
+  if (allSource) {
+    for (const sourceFile of collectSourceFiles(projectRoot)) files.add(sourceFile);
+  }
 
   for (const target of targets) {
     const requestedTargetPath = path.resolve(projectRoot, target);
@@ -187,6 +230,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  collectSourceFiles,
   isWithinRoot,
   main,
   parseArgs,

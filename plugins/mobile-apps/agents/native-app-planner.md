@@ -1,6 +1,6 @@
 ---
 name: native-app-planner
-description: Use when the orchestrator needs a full plan + four approval gates (data model → native capabilities → connectors → screens) for a Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app; not invoked directly by users.
+description: Use when the orchestrator needs a full plan + approval gates (data model → native capabilities/connectors → screens) for a real or mock-backed Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app and /create-mobile-prototype; not invoked directly by users.
 user-invocable: false
 color: cyan
 tools:
@@ -27,7 +27,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - The plugin root directory (`${PLUGIN_ROOT}`)
 - The foreground-generated normalized Dataverse planning snapshot path, when available
 - The deterministic Dataverse planning evidence appendix path, when available
-- Dataverse planning mode: `required` or `connector-only`
+- Dataverse planning mode: `required`, `prototype`, or `connector-only`
 
 ## Hard Rules
 
@@ -45,12 +45,19 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
   default-mode `data-model-architect` dispatch and revision. In `required`,
   pass both planning-snapshot/evidence absolute paths unchanged. In `connector-only`,
-  state that both paths are not supplied. Never invent placeholder artifact
+  state that both paths are not supplied. In `prototype`, also state that both
+  paths and the target environment are not supplied, use placeholder publisher
+  prefix `cr`, and require a normalized schema contract marked
+  `planningMode: "prototype"` and `executionEligible: false`. Never invent placeholder artifact
   paths. Do not
   resolve the environment, verify Dataverse access, run broad discovery, or
   issue any live Dataverse
   query in this planner. The foreground orchestrator owns planning-snapshot creation,
   degradation, and exact-name expansion.
+- **Prototype plans are not execution approvals.** A prototype schema contract
+  exists to generate mocks and preserve screen/data intent. It must never be
+  passed to the real operation-manifest fast path. `/prototype-to-real-app`
+  archives it and runs live environment reconciliation before `/add-dataverse`.
 - **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
   rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
@@ -93,6 +100,10 @@ From the planner prompt extract:
 - **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
 - **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
+- **Planning mode** — in `prototype`, plan the same rich data/native/connector/
+  screen contract but do not resolve an environment or request target metadata.
+  Connector rows remain requirements; `/create-mobile-prototype` generates
+  throw-stubs and `/prototype-to-real-app` provisions the real connectors.
 
 Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
 
@@ -111,25 +122,25 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 >
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
-> Target environment: use the foreground-resolved environment URL and tenant.
+> Target environment: use the foreground-resolved environment URL and tenant in `required` mode; NOT SUPPLIED in `prototype` or `connector-only` mode.
 > When planning-snapshot/evidence paths are supplied, do not read `power.config.json` or
 > call `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
-> Dataverse planning mode: [required | connector-only]
+> Dataverse planning mode: [required | prototype | connector-only]
 > Dataverse planning failure reason: none
 > Normalized Dataverse foreground planning snapshot: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
 > Dataverse planning evidence: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
 > Structured schema contract output: [absolute
-> `<working_dir>/.tmp/dataverse-schema-contract.json` in required mode, or NOT
-> SUPPLIED in connector-only mode]
+> `<working_dir>/.tmp/dataverse-schema-contract.json` in required or prototype
+> mode, or NOT SUPPLIED in connector-only mode]
 >
-> Follow the instructions in your agent file. You are read-only — do NOT create tables. In required mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. Include a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
+> Follow the instructions in your agent file. You are read-only — do NOT create tables. In required or prototype mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. In prototype mode, perform no environment discovery, mark the contract `planningMode: "prototype"` and `executionEligible: false`, and use placeholder `cr_` names solely for local mocks. Include a Mermaid ER diagram, a reconciliation/assumption table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
 
 After spawning, proceed immediately to Step 3 without waiting. Then, before writing the plan doc (Step 4), check the architect's result and parse its first line per AGENTS.md rule #10:
 
-- `DONE` → in `required` mode, verify both `_dm_section.md` and the normalized
+- `DONE` → in `required` or `prototype` mode, verify both `_dm_section.md` and the normalized
   `.tmp/dataverse-schema-contract.json` exist; then embed the section and
   continue. A missing sidecar is `BLOCKED`, not a Markdown-parsing fallback.
 - `DONE_WITH_CONCERNS: <list>` → apply the same sidecar check, embed section,
@@ -618,7 +629,7 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
 
-In `required` mode, also validate the schema sidecar structurally one final
+In `required` and `prototype` modes, also validate the schema sidecar structurally one final
 time:
 
 ```bash
@@ -626,6 +637,10 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"
 ```
+
+In `prototype` mode, verify after normalization that the contract still has
+`planningMode: "prototype"` and `executionEligible: false`; restore those
+top-level markers deterministically if normalization removed extension fields.
 
 The gate-owning planner must now finalize the pre-existing
 `<working_dir>/.tmp/mobile-plan-status.json` receipt from the approved
@@ -635,7 +650,7 @@ deterministic shape:
 ```json
 {
   "schemaVersion": 1,
-  "workflow": "create-mobile-app",
+  "workflow": "<create-mobile-app|create-mobile-prototype>",
   "approvals": {
     "dataModel": {
       "status": "approved",
@@ -684,9 +699,13 @@ filesystem trust model is non-adversarial: integrity hashes detect accidental
 or out-of-workflow replacement, not a malicious process that can rewrite every
 project artifact. Step 8 only consumes and verifies the completed receipt.
 
-Do not return `DONE` if this fails. Connector-only mode must not create the
+Use `workflow: "create-mobile-prototype"` when planning mode is `prototype`;
+otherwise use `create-mobile-app`. Do not return `DONE` if this fails.
+Connector-only mode must not create the
 sidecar. Treat every `unverified` contract row as non-executable; only explicit
-`create` or fully specified `adapt` rows may later become metadata operations.
+`create` or fully specified `adapt` rows from live `required` mode may later
+become metadata operations. Prototype rows remain non-executable regardless of
+their reconciliation labels.
 Adapt rows must carry all adapted logical/schema/intersect names required by
 the data-model-architect contract, rather than leaving names for the execution
 agent to invent.

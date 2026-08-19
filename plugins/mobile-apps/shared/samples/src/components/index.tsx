@@ -5,12 +5,12 @@
  * Usage:
  *   import { LoadingState, ErrorState, EmptyState, ScreenHeader,
  *            ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick,
- *            StatusPill, StatTile, Hero, SectionHeader,
+ *            StatusPill, StatTile, Hero, SectionHeader, EntityImage,
  *            AvatarInitials, InfoRow, ActionRow, Gradient } from '@/components';
  */
 
 import React from 'react';
-import { ScrollView } from 'react-native';
+import { ScrollView, Image as RNImage } from 'react-native';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -589,5 +589,47 @@ export function RowPick({
       </YStack>
       {selected && <Ionicons name="checkmark-circle" size={20} color="white" />}
     </XStack>
+  );
+}
+
+/**
+ * Renders an image safely from either a Dataverse base64 string or a CDN URL
+ * (used frequently in mock-backed prototypes for realistic visual data).
+ */
+export function EntityImage({
+  source,
+  width,
+  height,
+  borderRadius = 0,
+  fallbackIcon = 'image-outline',
+}: {
+  source?: string | null;
+  width: number | string;
+  height: number | string;
+  borderRadius?: number;
+  fallbackIcon?: IoniconName;
+}) {
+  const theme = useTheme();
+  
+  if (!source) {
+    return (
+      <YStack width={width} height={height} borderRadius={borderRadius} bg="$surface2" items="center" justify="center" overflow="hidden">
+        <Ionicons name={fallbackIcon} size={24} color={theme.text3.val} />
+      </YStack>
+    );
+  }
+
+  // Handle CDN mockup urls and Dataverse base64 safely.
+  const uri = source.startsWith('http') || source.startsWith('data:') ? source : `data:image/jpeg;base64,${source}`;
+
+  return (
+    <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$surface2">
+      <RNImage
+        source={{ uri }}
+        style={{ width: '100%', height: '100%', resizeMode: 'cover' }}
+        accessible={true}
+        accessibilityRole="image"
+      />
+    </YStack>
   );
 }

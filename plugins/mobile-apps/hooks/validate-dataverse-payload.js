@@ -6,12 +6,11 @@
  * Fires after Write / Edit / MultiEdit on TS/TSX files. Reads the resulting
  * file content and blocks the write if either:
  *
- *   A1 — `$select` contains a virtual `*name` shadow column on a lookup or
- *        state field. Adding `cr3e9_projectidname`, `statename`,
- *        `statecodename`, or `statuscodename` to a `select: [...]` array
- *        returns HTTP 400 from the Dataverse Web API on every list read.
- *        The correct read is `_<lookup>_value` + the formatted-value
- *        annotation (use `lookupName(record, ...)` from `@/utils`).
+ *   A1 — `$select` contains either a virtual `*name` shadow column or a lookup
+ *        navigation property. Adding `cr3e9_projectidname`, `statename`, or
+ *        the lookup logical name `cr3e9_projectid` returns HTTP 400 or omits
+ *        the lookup GUID. The correct read is `_<lookup>_value` plus the
+ *        formatted-value annotation (use `lookupName(record, ...)`).
  *
  *   A2 — `*Service.create({...})` or `*Service.update(..., {...})` includes
  *        a server-managed column. The Dataverse server owns these fields;
@@ -20,9 +19,9 @@
  *        satisfy the type with `as any` at the call site — never emit junk
  *        like `ownerid: ''` or `statecode: 0` to silence the type checker.
  *
- * Both checks fire for any TS/TSX file under `src/` — they are runtime
- * correctness checks, not stylistic ones, so they fire even when other
- * style hooks are deferred.
+ * Both checks fire for any TS/TSX file under `app/` or non-generated `src/`.
+ * They are runtime correctness checks, not stylistic ones, so they fire even
+ * when other style hooks are deferred.
  *
  * Exit codes:
  *   0 = pass (no violations, or not a write tool, or not a watched file)
@@ -59,12 +58,46 @@ const SERVER_MANAGED_COLUMNS = new Set([
 function isWatchedFile(filePath) {
   if (typeof filePath !== 'string') return false;
   if (!/\.(tsx|ts)$/i.test(filePath)) return false;
-  // Only screens/components/services under the project — skip plugin files,
-  // generated scaffolding helpers, and anything outside an `src/` tree.
-  if (!/[\\/]src[\\/]/.test(filePath)) return false;
+  // Dataverse calls live in both Expo routes and shared source helpers.
+  if (!/[\\/](?:app|src)[\\/]/.test(filePath)) return false;
   // Skip the generated layer itself — npx power-apps owns those files.
   if (/[\\/]src[\\/]generated[\\/]/.test(filePath)) return false;
   return true;
+}
+
+function isLookupType(type) {
+  return typeof type === 'string' && /lookup/i.test(type);
+}
+
+/**
+ * Resolve lookup logical names from the real Dataverse manifest. A lookup's
+ * logical name is a navigation property for writes/expands, not a scalar
+ * `$select` column. Reads must request `_<logicalName>_value`.
+ */
+function loadLookupColumns(projectRoot) {
+  const candidates = [
+    path.join(projectRoot, '.datamodel-manifest.json'),
+    path.join(projectRoot, 'docs', 'plan-artifacts', '.datamodel-manifest.json'),
+  ];
+  const manifestPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!manifestPath) return new Set();
+
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const lookups = new Set();
+    for (const table of Array.isArray(manifest.tables) ? manifest.tables : []) {
+      for (const column of Array.isArray(table.columns) ? table.columns : []) {
+        if (isLookupType(column.type) && typeof column.logicalName === 'string') {
+          lookups.add(column.logicalName.toLowerCase());
+        }
+      }
+    }
+    return lookups;
+  } catch {
+    // Manifest validity is enforced separately. A malformed manifest must not
+    // make this write hook crash and hide its existing syntax checks.
+    return new Set();
+  }
 }
 
 function isWriteTool(toolName) {
@@ -167,7 +200,7 @@ function findMatchingBrace(content, startIdx) {
  * collect any string entries whose unquoted value matches the A1 forbidden
  * suffix list. Returns an array of { line, column, snippet }.
  */
-function findForbiddenSelectColumns(content) {
+function findForbiddenSelectColumns(content, lookupColumns = new Set()) {
   const violations = [];
   const re = /\bselect\s*:\s*\[([\s\S]*?)\]/g;
   let m;
@@ -177,10 +210,16 @@ function findForbiddenSelectColumns(content) {
     let s;
     while ((s = stringRe.exec(arrayBody)) !== null) {
       const col = s[1];
-      if (SELECT_FORBIDDEN_SUFFIX_RE.test(col)) {
+      const isShadow = SELECT_FORBIDDEN_SUFFIX_RE.test(col);
+      const isLookupNavigation = lookupColumns.has(col.toLowerCase());
+      if (isShadow || isLookupNavigation) {
         const upto = content.slice(0, m.index + m[0].indexOf(s[0])); // approx
         const line = upto.split('\n').length;
-        violations.push({ line, column: col });
+        violations.push({
+          line,
+          column: col,
+          kind: isLookupNavigation ? 'lookup-navigation' : 'virtual-shadow',
+        });
       }
     }
   }
@@ -327,18 +366,18 @@ function buildBlockMessage(filePath, selectViolations, payloadViolations) {
   lines.push('');
 
   if (selectViolations.length > 0) {
-    lines.push('A1 — Forbidden virtual `*name` columns in `$select`:');
+    lines.push('A1 — Forbidden lookup/navigation or virtual columns in `$select`:');
     for (const v of selectViolations) {
       lines.push(`  - line ${v.line}: "${v.column}"`);
     }
     lines.push('');
     lines.push(
-      '  Virtual `*idname` / `statename` / `statecodename` / `statuscodename` columns are NOT queryable on custom entities. The Dataverse Web API rejects the entire request with HTTP 400.'
+      '  Lookup navigation properties and virtual `*idname` / `statename` / `statecodename` / `statuscodename` columns are not scalar `$select` fields. Dataverse rejects the request or omits the required lookup GUID.'
     );
     lines.push('');
     lines.push('  Required fix:');
     lines.push(
-      '    1. Remove the `*name` entries from the `select` array. Add `_<lookup>_value` instead.'
+      '    1. Remove lookup logical names and `*name` entries from the `select` array. Add the exact generated `_<lookup>_value` read property instead.'
     );
     lines.push(
       "    2. Read the display label with `lookupName(record, '<lookupLogicalName>')` from `@/utils`."
@@ -408,7 +447,8 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  const selectViolations = findForbiddenSelectColumns(content);
+  const projectRoot = typeof input.cwd === 'string' ? input.cwd : process.cwd();
+  const selectViolations = findForbiddenSelectColumns(content, loadLookupColumns(projectRoot));
   const payloadViolations = findServerManagedCreatePayload(content);
 
   if (selectViolations.length === 0 && payloadViolations.length === 0) {
@@ -423,6 +463,8 @@ process.stdin.on('end', () => {
 module.exports = {
   findForbiddenSelectColumns,
   findServerManagedCreatePayload,
+  isWatchedFile,
+  loadLookupColumns,
   topLevelKeys,
   SERVER_MANAGED_COLUMNS,
   SELECT_FORBIDDEN_SUFFIX_RE,

@@ -1,6 +1,10 @@
 # Memory Bank — Power Apps Native Code App
 
-This file is the per-project notebook the agent maintains across `/create-mobile-app`, `/add-*`, `/edit-app`, `/list-connections`, and `/deploy` invocations. Treat it as the single source of truth for "what has been done in this project so far."
+This file is the per-project notebook the agent maintains across
+`/create-mobile-app`, `/create-mobile-prototype`, `/prototype-to-real-app`,
+`/sync-from-plan`, `/add-*`, `/edit-app`, `/list-connections`, and `/deploy`
+invocations. Treat it as the human-readable record of what has been done;
+`.mobile-app/state.json` is authoritative for lifecycle mode and sync hashes.
 
 > **For agents:** Read this file at the start of any skill invocation. Update the relevant section after any successful action. Never delete entries — append, mark superseded.
 
@@ -10,8 +14,9 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 
 | Key | Value |
 |---|---|
-| Display name | _<set by /create-mobile-app>_ |
+| Display name | _<set by the owning creation skill>_ |
 | Slug | |
+| Data mode | _prototype / transitioning / dataverse; mirror `.mobile-app/state.json`_ |
 | Scheme | |
 | iOS bundle id | |
 | Android bundle id | |
@@ -25,16 +30,19 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 
 | Key | Value |
 |---|---|
-| Active environment ID | |
+| Active environment ID | _empty in prototype mode_ |
 | Active environment name | |
 | Environment URL | _e.g. https://orgXXXX.crm.dynamics.com — captured at /add-dataverse Step 1_ |
 | Power Apps CLI identity | |
-| App registration (Entra) | _clientId pasted during /create-mobile-app or manual /set-app-registration-native_ |
+| App registration (Entra) | _clientId pasted during /create-mobile-app, /prototype-to-real-app, or manual /set-app-registration-native; empty in prototype mode_ |
 | Solution unique name | _e.g. `Default` or `<AppNameSolution>` — captured at /add-dataverse Step 3b. Required for the `--solution` flag on every metadata POST so artifacts land in our solution._ |
 | Publisher prefix | _e.g. `cr3e9` — from the solution's publisher's `customizationprefix`. All schema names use this prefix._ |
 | `playerConfig.ts` last modified by | |
 
 ## Data model
+
+### Prototype assumptions
+_<placeholder logical name - local mock service - seed file; archived/reconciled by /prototype-to-real-app>_
 
 ### Reused tables
 _<table name — when added — generated service file>_
@@ -85,10 +93,10 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Route | Archetype | Source of truth | Last built by | Notes |
 |---|---|---|---|---|
-| `app/index.tsx` | Auth redirect | template | — | do not modify |
+| `app/index.tsx` | Auth / prototype redirect | template + lifecycle runtime | — | only creation/graduation auth-runtime workflows modify the data-mode branch |
 | `app/login.tsx` | Auth | template | — | do not modify unless an explicit auth skill requires it |
 | `app/oauth-callback.tsx` | Auth | template | — | do not modify |
-| `app/(app)/_layout.tsx` | Layout | template | — | |
+| `app/(app)/_layout.tsx` | Layout + auth guard | template + lifecycle runtime | — | prototype mode bypasses only the guard; graduation re-enables it |
 | `app/(app)/home.tsx` | Tab-root | template / replaced | _<agent>_ | |
 
 ## Design system

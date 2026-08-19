@@ -17,6 +17,7 @@
         "expo",
         "react-native",
         "native",
+        "prototype",
         "connectors",
         "microsoft"
     ]

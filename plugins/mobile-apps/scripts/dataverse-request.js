@@ -494,7 +494,14 @@ async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
 
 // Runs a single record-create POST with full retry semantics (matches the single-op main() loop).
 // Returns { index, status, recordId?, error? }.
-async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
+async function runOneOperation(
+  envUrl,
+  op,
+  initialToken,
+  solution,
+  tenantId,
+  { sendRequest = doRequest, getToken = getAuthToken } = {},
+) {
   const { index, entitySet, body } = op;
   if (!entitySet || !body) {
     return { index, status: 0, error: 'Operation missing entitySet or body' };
@@ -510,15 +517,17 @@ async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await doRequest(envUrl, 'POST', entitySet, bodyStr, token, true, solution);
+    const res = await sendRequest(envUrl, 'POST', entitySet, bodyStr, token, true, solution);
 
     if (res.error) {
-      if (attempt < maxRetries) continue;
-      return { index, status: 0, error: res.error };
+      // A transport failure after a POST may mean Dataverse committed the row
+      // but the response was lost. Replaying can duplicate generic sample data;
+      // deterministic prototype migrations must re-query their seed ID first.
+      return { index, status: 0, error: res.error, uncertain: true };
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getAuthToken(envUrl, tenantId);
+      const refreshed = await getToken(envUrl, tenantId);
       if (refreshed) {
         token = refreshed;
         continue;
@@ -532,9 +541,13 @@ async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
       continue;
     }
 
-    if ([500, 502, 503].includes(res.statusCode) && attempt < maxRetries) {
-      await new Promise((r) => setTimeout(r, 2000));
-      continue;
+    if ([500, 502, 503].includes(res.statusCode)) {
+      return {
+        index,
+        status: res.statusCode,
+        error: `HTTP ${res.statusCode} after record-create POST`,
+        uncertain: true,
+      };
     }
 
     let data = null;
@@ -1071,6 +1084,7 @@ module.exports = {
   retryAfterDelayMs,
   runBatch,
   runMetadataBatch,
+  runOneOperation,
   runOneMetadataOperation,
   validateManifestExecutionBinding,
   validateJournalOperations,
