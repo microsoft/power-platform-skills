@@ -69,7 +69,7 @@ Verify `dist/` exists with `index.html` before continuing.
 **Print before starting:**
 > "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android via `npm run package:android` + `npm run package:ios`. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
 
-**Node version gate (required).** The native `expo export` crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
+**Node version gate (required).** The native export crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
 
 ```bash
 node -v
@@ -83,7 +83,7 @@ npm run package:android
 npm run package:ios
 ```
 
-Each command runs `expo export` for that platform and writes, next to `dist/index.html`:
+Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
 
 - `dist/index.android.bundle.hbc` / `dist/main.jsbundle.hbc` — the Hermes bytecode bundle.
 - `dist/powerapps-customer-assets-android/` and `dist/powerapps-customer-assets-ios/` — `manifest.json` plus `assets/<fileHash>.<type>` for every image/font.
@@ -96,7 +96,7 @@ These sit alongside `index.html` under the same container SAS, so the wrap pipel
 # Hermes magic bytes on both bundles (expect c61fbc03)
 for f in dist/index.android.bundle.hbc dist/main.jsbundle.hbc; do
   test -f "$f" || { echo "MISSING $f"; exit 1; }
-  test "$(xxd -p -l4 "$f")" = "c61fbc03" || { echo "$f is not Hermes bytecode"; exit 1; }
+  node -e 'const b=require("fs").readFileSync(process.argv[1]);process.exit(b.subarray(0,4).toString("hex")==="c61fbc03"?0:1)' "$f" || { echo "$f is not Hermes bytecode"; exit 1; }
 done
 # both asset manifests present
 test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
