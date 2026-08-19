@@ -90,13 +90,8 @@ Read
 [`shared/references/four-gate-planning.md`](../shared/references/four-gate-planning.md)
 before planning. It is authoritative for all approval ownership.
 
-Also read these contracts before classifying or designing anything:
-
-- [`shared/references/product-experience-contract.md`](../shared/references/product-experience-contract.md)
-- [`shared/references/product-archetypes.md`](../shared/references/product-archetypes.md)
-- [`shared/references/visual-personalities.md`](../shared/references/visual-personalities.md)
-- [`shared/references/home-compositions.md`](../shared/references/home-compositions.md)
-- [`shared/references/reference-fidelity.md`](../shared/references/reference-fidelity.md)
+Also read this constraint document before designing anything:
+- [`shared/references/mobile-ux-boundaries.md`](../shared/references/mobile-ux-boundaries.md)
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
 
@@ -320,14 +315,10 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 **Print before starting:**
 > "→ Resolving product experience, composition, and design direction for Gate 3…"
 
-Follow `product-experience-contract.md`, `product-archetypes.md`,
-`visual-personalities.md`, `home-compositions.md`, `reference-fidelity.md`, and
-[`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md)
-exactly. Resolve these independent axes:
+Read the user's prompt. Organically define the Product Experience that best serves this workflow.
+Resolve these independent axes without being constrained to a hardcoded list:
 
-1. **Validate product structure** — retain the Gate 1 industry, archetype,
-  evidence, confidence, workflows, and operating context. Inspection or QR
-  scanning remains a capability when another lifecycle is primary.
+1. **Define product structure** — retain the Gate 1 industry, intelligently deduce the optimal product archetype, workflow capabilities, and operating context based on the true intent of the application prompt.
 2. **Process references** — when a reference source exists, extract hierarchy,
   measured relative geometry, typography ratios, surface treatment,
   navigation silhouette, required motifs, and forbidden drift into
@@ -339,14 +330,8 @@ exactly. Resolve these independent axes:
   fallback, and reference fidelity. Explicit visual/reference signals outrank
   recommendations. If absent, draft `polished-operational` + `tailored`, then
   show it at Gate 3.
-4. **Define geometry** — write a First Viewport Contract with signature
-  component, viewport share, minimum height, media requirement, headline
-  minimum, metric maximum, action placement, next-section visibility, and
-  duplicate-action policy.
-5. **Materialize direction** — produce a complete `## Design Direction` bundle
-  and a full `## Design` block for palette, typography, component geometry,
-  surfaces, motion, and Tamagui execution. Never collapse the result into an
-  industry label or token color.
+4. **Define strict geometry** — output a layout contract including: signature component width/height boundaries, required media, placement rules, and strict cross-screen composition consistency rules.
+5. **Materialize direction** — generate custom palette, typography, and component styling organically based on the Product Experience. Do not rely on markdown bundles.
 
 Store the Product Experience, Design Direction, and Design blocks. Pass all
 three to `screen-planner` in Step 5b.

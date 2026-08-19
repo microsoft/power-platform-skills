@@ -80,13 +80,9 @@ If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.
 
 Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (orchestrator's Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
 
-Read these references before the workflow:
+Read these constraints before the workflow:
 
-- `${PLUGIN_ROOT}/shared/references/product-experience-contract.md`
-- `${PLUGIN_ROOT}/shared/references/product-archetypes.md`
-- `${PLUGIN_ROOT}/shared/references/visual-personalities.md`
-- `${PLUGIN_ROOT}/shared/references/home-compositions.md`
-- `${PLUGIN_ROOT}/shared/references/reference-fidelity.md`
+- [`${PLUGIN_ROOT}/shared/references/mobile-ux-boundaries.md`]
 
 ## Workflow
 
@@ -116,11 +112,7 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ### Step 0 — Load Product and Workflow Patterns
 
-Read `## Product Experience` first. Use product archetype and workflow
-capabilities to choose content and interaction patterns from
-`${PLUGIN_ROOT}/shared/references/universal-patterns.md`. Industry contributes
-vocabulary only. It must not select palette, typography, density, surface,
-personality, or Home composition.
+Read `## Product Experience` first. Use the defined product archetype and workflow capabilities to organically deduce the best content structure. Industry contributes vocabulary only.
 
 ### Step 0b — Load Experience and Design Contracts
 
@@ -413,20 +405,6 @@ Calendar management is one example, not a special ownership path. Full month/wee
    _Examples:_ `Status color bleeds into left border of every row, not just a pill.` · `Form groups fields into Required (top) and Optional (collapsed under "More details").` · `Empty state shows a domain-specific illustration prompt.`
 
 Write these three answers as a `**Domain layout decisions:**` block at the top of each screen's spec — the screen-builder reads this block first. Concise sentences only; no bullet lists, no sub-paragraphs.
-
----
-
-### Catalogue keys (resolve in the screen-templates reference, do NOT inline descriptions)
-
-The full descriptions for row styles, hero types, and operational patterns live in [`${PLUGIN_ROOT}/shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Catalogue keys". Per-screen specs reference them by key only — never paste the description into the plan. Both you AND the screen-builder resolve the description from the reference at read time.
-
-- **Row style keys** (List screens): `status-stripe-card` · `avatar-row` · `stat-card` · `media-tile` · `sentence-row` · `timeline-row` · `checklist-row`
-- **Hero type keys** (Detail screens): `status-header-band` · `stat-grid` · `image-hero` · `identity-block` · `summary-card` · `timeline-header` · `minimal-header`
-- **Home composition keys**: `asset-command` · `media-command` · `object-command` · `relationship-command` · `data-command` · `scan-command` · `queue-first` · `timeline-first` · `narrative-home` · `personalized-feed` · `operational-dashboard`
-- **Operational pattern keys** (workflow screens): `assignment-dashboard` · `walkaround-stepper` · `wizard-progress-stepper` · `floating-action-menu` · `scan-geofence-gate` · `severity-filtered-queue` · `dispatch-signoff-queue` · `audit-timeline`
-- **Control pattern keys** (fields/rows): `checkbox-field` · `numeric-stepper` · `line-item-stepper-row` · `searchable-lookup-sheet` · `segmented-control` · `recurrence-rule-editor`
-
-**Hard rule:** if you find yourself writing more than the key + a one-clause reason, stop — that means the description belongs in `screen-templates.md` instead. Add new keys to the reference; never inline a one-off description into a per-screen spec.
 
 **Hard rule — NO sub-section wrappers.** Emit the bullets below FLAT under the screen heading. Do NOT group them under sub-headings like `**Header block**`, `**Data flow**`, `**UI structure**`, `**Component shapes**`, etc. Those wrappers add ~7 lines per screen of pure formatting overhead and obscure what the builder actually reads. Bold-as-bullet-prefix only (`- **Field name** — value`), never bold-as-heading.
 
