@@ -1277,5 +1277,6 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  isSafeHttpUrl,
   CHART_TYPES,
 };

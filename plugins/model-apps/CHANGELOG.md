@@ -33,6 +33,16 @@ smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **`download-model-app.js` no longer fails hard on a sitemap subarea that targets a
+  custom web resource** ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
+  The Site Map Designer writes `$webresource:<name>` into a URL subarea; the App Spec has
+  no `webresource` kind and the validator requires http(s), so the token failed validation
+  and **no spec file was written at all** — blocking the whole download → edit → rebuild
+  flow for the app over a single unrelated nav entry. The subarea is now dropped like
+  `CustomPage` and counted in `droppedSubareas`, so the maker is told which nav entry will
+  be missing and `--allow-lossy-download` writes the rest of the app. The drop reuses the
+  validator's own `isSafeHttpUrl` rule, so any scheme it would reject is dropped rather
+  than failing the download.
 - **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
   and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
   (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona

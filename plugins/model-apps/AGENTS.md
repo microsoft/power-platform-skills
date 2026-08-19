@@ -262,6 +262,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   (every tile carries the deployed view/chart ids), so a rebuild recreates the dashboard against the
   existing views/charts without re-declaring them (genpage/entity/URL subareas round-trip losslessly). A
   dashboard whose tiles cannot be reconstructed is dropped and surfaced in `droppedSubareas`.
+  **A URL subarea carrying a WEB-RESOURCE TOKEN is dropped, not emitted.** The Site Map Designer's
+  "custom page backed by an HTML web resource" writes `$webresource:<name>` into a URL subarea; the App
+  Spec has no `webresource` subarea kind and the validator requires http(s) (a deliberate guard — a
+  `javascript:`/`file:` nav entry in a shipped app is an injection / exfil vector). Passing the token
+  through made the WHOLE download fail validation and write no spec at all, blocking download → edit →
+  rebuild for the entire app over one unrelated nav entry (issue #430). It is now dropped like
+  `CustomPage` and counted in `droppedSubareas`, so the maker is told which nav entry will be missing and
+  `--allow-lossy-download` writes the rest. The drop is keyed off the **shared `isSafeHttpUrl`** rule, so
+  any scheme the validator would reject is dropped rather than failing the download, and the two cannot
+  drift. Supporting such a subarea end-to-end is a real feature (schema + build + the web resource's own
+  content, which download does not capture) — not done.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by

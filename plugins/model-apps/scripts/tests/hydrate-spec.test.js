@@ -155,3 +155,66 @@ test('hydrateSpec strips the transient solution.prefixResolved flag from the per
   assert.strictEqual(spec.app.uniqueName, 'crba3_realapp', 'the app real uniquename round-trips into spec.app.uniqueName (identity survives a rebuild)');
 });
 
+
+// -- issue #430: a sitemap URL subarea carrying a web-resource token ----------------------------
+// The Site Map Designer's "custom page backed by an HTML web resource" writes `$webresource:<name>`
+// into a URL subarea. Passing it through made validateAppSpec reject the whole spec, so
+// download-model-app.js wrote NO spec at all and the entire download -> edit -> rebuild flow was
+// blocked for the app over one unrelated nav entry.
+
+function appWithUrl(url) {
+  return {
+    app: async () => ({
+      name: 'Ops',
+      description: '',
+      siteMap: {
+        areas: [{
+          title: 'Main',
+          groups: [{
+            title: 'G',
+            subAreas: [
+              { type: 'Entity', entity: 'new_order', title: 'Orders' },
+              { type: 'URL', url, title: 'Home' },
+            ],
+          }],
+        }],
+      },
+    }),
+    pages: async () => [],
+    entities: async () => [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    webResources: async () => [],
+    solution: async () => ({ uniqueName: 'Ops', publisherPrefix: 'new' }),
+  };
+}
+
+test('hydrateSpec DROPS a $webresource: URL subarea instead of emitting an invalid spec (#430)', async () => {
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html'));
+  const subs = spec.appShell.areas[0].groups[0].subAreas;
+  assert.strictEqual(subs.some((s) => s.title === 'Home'), false, 'the token subarea must be dropped');
+  assert.ok(subs.some((s) => s.entity === 'new_order'), 'the rest of the nav must survive');
+  assert.strictEqual(spec.droppedSubareas, 1, 'the drop must be COUNTED so the maker is told');
+});
+
+test('hydrateSpec still emits a real http(s) URL subarea (#430 must not over-drop)', async () => {
+  const spec = await hydrateSpec(appWithUrl('https://contoso.example/help'));
+  const subs = spec.appShell.areas[0].groups[0].subAreas;
+  assert.ok(subs.some((s) => s.url === 'https://contoso.example/help'), 'a real link must round-trip');
+  assert.strictEqual(spec.droppedSubareas, 0);
+});
+
+test('hydrateSpec drops any scheme the validator would reject, not just $webresource (#430)', async () => {
+  // Tested against the shared isSafeHttpUrl rule, so a javascript:/file: nav entry cannot fail the
+  // whole download either — and the drop rule cannot drift from the validation rule.
+  for (const url of ['$webresource:x.html', '/WebResources/x.html', 'javascript:alert(1)', 'file:///etc/passwd', 'not a url']) {
+    const spec = await hydrateSpec(appWithUrl(url));
+    const subs = spec.appShell.areas[0].groups[0].subAreas;
+    assert.strictEqual(subs.some((s) => s.title === 'Home'), false, url + ' should be dropped');
+  }
+});
+
+test('a spec hydrated from an app with a web-resource subarea PASSES validation (#430 end to end)', async () => {
+  // The actual reported symptom: validateAppSpec rejected the downloaded spec, so no file was written.
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html'));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
+});
