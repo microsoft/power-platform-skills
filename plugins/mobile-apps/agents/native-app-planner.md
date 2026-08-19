@@ -34,11 +34,12 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Single human plan document.** Everything user-reviewed goes into
-  `<working_dir>/native-app-plan.md`. The only machine sidecar is the
-  normalized
-  `<working_dir>/.tmp/dataverse-schema-contract.json` emitted by
-  `data-model-architect` for deterministic post-approval execution. No HTML or
-  other per-domain plan files. Mermaid for diagrams.
+  `<working_dir>/native-app-plan.md`. Deterministic execution uses the
+  normalized schema contract plus the gate-owned
+  `<working_dir>/.tmp/mobile-plan-status.json` receipt; neither is a second
+  human plan or a source
+  for free-form Markdown parsing. No HTML or other per-domain plan files.
+  Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
 - **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
@@ -370,7 +371,11 @@ Approve? (Reject → revise data model only)
 
 Call `ExitPlanMode` to request approval.
 
-- **Approved:** mark `[x] Data model approved` in the plan doc, continue to Gate 2.
+- **Approved:** mark `[x] Data model approved` in the plan doc and immediately
+  initialize/update `<working_dir>/.tmp/mobile-plan-status.json` with the
+  normalized contract's exact content/hash and a `dataModel` approval record.
+  This receipt is written by this gate-owning planner, never by the Step 8
+  manifest builder. Continue to Gate 2.
 - **Rejected:** re-spawn `data-model-architect` with the user's feedback and
   the original planning-snapshot/evidence paths verbatim, regenerate that section, and
   regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
@@ -613,7 +618,8 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
 
-In `required` mode, also validate the sidecar structurally one final time:
+In `required` mode, also validate the schema sidecar structurally one final
+time:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
@@ -621,9 +627,62 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"
 ```
 
-Do not add a plan hash in the planner. The create flow binds this normalized
-sidecar to the final approved `native-app-plan.md` content at Step 8 without
-adding or changing an approval gate.
+The gate-owning planner must now finalize the pre-existing
+`<working_dir>/.tmp/mobile-plan-status.json` receipt from the approved
+screen/hook/identity/lookup service requirements. The receipt has this
+deterministic shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "workflow": "create-mobile-app",
+  "approvals": {
+    "dataModel": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp from Gate 1 acceptance>",
+      "approvedContractSha256": "<sha256 of stable normalized contract content>"
+    },
+    "nativeCapabilities": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    },
+    "connectors": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    },
+    "screenPlan": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    }
+  },
+  "approvedPlanSha256": "<sha256 of final native-app-plan.md bytes>",
+  "approvedContractSha256": "<same contract hash as dataModel approval>",
+  "approvedContract": { "<exact normalized contract content>": "..." },
+  "serviceRequiredTables": [
+    {
+      "logicalName": "cr123_inspection",
+      "consumers": ["screen:Inspections", "screen:Inspection detail"]
+    }
+  ],
+  "integritySha256": "<sha256 of stable receipt JSON without this field>"
+}
+```
+
+Every row requires at least one deterministic consumer identifier. Its exact
+logical-name set must equal the non-deferred `serviceRequired` table and M:N
+intersect declarations in the normalized schema contract. If the final screen
+plan introduces a service not present there, revise and re-approve the affected
+earlier section rather than silently changing the contract.
+
+Initialize the receipt when Gate 1 is accepted, then advance its other approval
+records, current plan hash, and final service dependencies only when this same
+planner accepts the corresponding existing gates. Before revising an approved
+section, mark that section and dependent later sections non-approved; refresh
+the receipt only after the existing approval loop accepts the revision.
+Do not call the manifest builder to create or restamp this receipt. The local
+filesystem trust model is non-adversarial: integrity hashes detect accidental
+or out-of-workflow replacement, not a malicious process that can rewrite every
+project artifact. Step 8 only consumes and verifies the completed receipt.
 
 Do not return `DONE` if this fails. Connector-only mode must not create the
 sidecar. Treat every `unverified` contract row as non-executable; only explicit
@@ -656,6 +715,7 @@ Plan approved.
 
 Plan document: <absolute path to native-app-plan.md>
 Dataverse schema contract: <absolute path, or "not applicable">
+Mobile plan approval receipt: <absolute path, or "not applicable">
 
 Sections approved:
   ✓ Data model      — <N tables: M reuse, K extend, L create>

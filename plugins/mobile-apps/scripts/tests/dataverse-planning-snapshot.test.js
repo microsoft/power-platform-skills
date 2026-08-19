@@ -8,6 +8,7 @@ const test = require('node:test');
 const {
   analyzeProposedNames,
   atomicWriteFile,
+  canonicalAttributeType,
   createCliRequest,
   createReconciliationSnapshot,
   createSnapshot,
@@ -26,6 +27,13 @@ const { renderPlanningEvidence } = require('../render-dataverse-planning-evidenc
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
 }
+
+test('canonicalizes Dataverse virtual File and Image attribute types', () => {
+  assert.equal(canonicalAttributeType('Virtual', { Value: 'FileType' }), 'File');
+  assert.equal(canonicalAttributeType('Virtual', { Value: 'ImageType' }), 'Image');
+  assert.equal(canonicalAttributeType('Virtual', { Value: 'StringType' }), 'Virtual');
+  assert.equal(canonicalAttributeType('String', { Value: 'StringType' }), 'String');
+});
 
 function entity(logicalName, displayName, overrides = {}) {
   return {

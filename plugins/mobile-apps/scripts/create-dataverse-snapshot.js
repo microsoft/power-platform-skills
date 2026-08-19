@@ -671,6 +671,16 @@ function ordinaryMetadataType(attribute) {
   return hasOwn(ORDINARY_METADATA_FIELDS_BY_TYPE, candidate) ? candidate : null;
 }
 
+function canonicalAttributeType(attributeType, attributeTypeName) {
+  const type = String(attributeType || '');
+  const typeName = typeof attributeTypeName === 'object'
+    ? attributeTypeName?.Value
+    : attributeTypeName;
+  if (type === 'Virtual' && typeName === 'FileType') return 'File';
+  if (type === 'Virtual' && typeName === 'ImageType') return 'Image';
+  return type;
+}
+
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object || {}, key);
 }
@@ -903,7 +913,10 @@ async function loadDetailedEntity(request, entity) {
       return {
         logicalName: attribute.LogicalName,
         schemaName: attribute.SchemaName,
-        type: attribute.AttributeType,
+        type: canonicalAttributeType(
+          attribute.AttributeType,
+          attribute.AttributeTypeName,
+        ),
         typeName: attribute.AttributeTypeName?.Value || null,
         ...(ordinaryConstraints.get(attribute.LogicalName) || {}),
         requiredLevel: attribute.RequiredLevel?.Value || attribute.RequiredLevel || null,
@@ -1924,6 +1937,7 @@ module.exports = {
   analyzeProposedNames,
   atomicWriteFile,
   atomicWriteJson,
+  canonicalAttributeType,
   compact,
   choiceMetadataType,
   conceptDescriptor,

@@ -593,6 +593,10 @@ Prompt:
 ```
 
 The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
+On a successful `required` return, require both
+`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
+before continuing. If the receipt is missing, STOP as `BLOCKED`; this
+orchestrator must not synthesize it after the planner has returned.
 
 #### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
 
@@ -632,6 +636,17 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
+
+5. **Record the same structured approval receipt as the planner path.** At
+   data-model acceptance, initialize
+   `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
+   contract content/hash. After each later gate is accepted, update only that
+   gate's approval record and the current plan hash; after Gate 4b, record the
+   final structured service dependencies and integrity hash. Follow
+   `agents/native-app-planner.md` Step 6 exactly. Never call the operation
+   manifest builder to create or restamp this receipt. A changed approved
+   section invalidates its record until the existing inline gate approves it
+   again.
 
 If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
 
@@ -1418,11 +1433,14 @@ name, and 1:N reuse requires complete matching `CascadeConfiguration`
 evidence. An absent or colliding intersect name, or missing/mismatched cascade
 evidence, is non-executable.
 Step 8 also binds the structured artifact to the current fully approved plan
-content hash. Use resolved context and the structured artifact, never values
-inferred from free-form Markdown:
+content hash and the gate-owned approval receipt's exact contract hash and
+service dependencies. Step 8 cannot create or refresh this receipt. Use
+resolved context and these structured artifacts, never values inferred from
+free-form Markdown:
 
 ```bash
 SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
+APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
 FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
 RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
 EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
@@ -1430,11 +1448,13 @@ OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
 PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
 ACTIVE_SOLUTION_UNIQUE_NAME="Default"
 
-test -f "$SCHEMA_CONTRACT" -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
+test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
+  -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
   -a -f "<working_dir>/native-app-plan.md"
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
   --plan "<working_dir>/native-app-plan.md" \
   --output "$SCHEMA_CONTRACT"
 
@@ -1456,6 +1476,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
   --plan "<working_dir>/native-app-plan.md" \
   --output "$OPERATION_MANIFEST" \
@@ -1477,6 +1498,7 @@ loop or fall back to agent reconciliation. No operation may execute until:
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --validate "$OPERATION_MANIFEST" \
   --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
   --plan "<working_dir>/native-app-plan.md" \
   --environment-id "$ACTIVE_ENV_ID" \
@@ -1498,6 +1520,7 @@ Arguments:
   --working-dir <working_dir>
   --plan-section <native-app-plan.md#data-model>
   --schema-contract <working_dir>/.tmp/dataverse-schema-contract.json
+  --approval-receipt <working_dir>/.tmp/mobile-plan-status.json
   --execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json
   --operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json
   --publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json

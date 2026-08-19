@@ -7,7 +7,9 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  bindContractToPlan,
   buildManifest,
+  contractApprovalContent,
   normalizedContract,
   reconciliationScope,
   rollForwardPublishCheckpoint,
@@ -295,11 +297,58 @@ function createContract() {
 
 function buildInputs(contract, reconciliation, plan = '# Plan\n') {
   const planBytes = Buffer.from(plan);
-  const normalized = normalizedContract({
-    ...contract,
+  const normalized = normalizedContract(contract);
+  const serviceRequiredTables = [];
+  for (const tableValue of normalized.tables) {
+    if (tableValue.serviceRequired && tableValue.plannedDecision !== 'defer') {
+      serviceRequiredTables.push({
+        logicalName: tableValue.plannedDecision === 'adapt'
+          ? tableValue.adaptedLogicalName
+          : tableValue.logicalName,
+        consumers: [`test:${tableValue.logicalName}`],
+      });
+    }
+    for (const relationship of tableValue.relationships) {
+      if (relationship.kind !== 'many-to-many'
+        || !relationship.serviceRequired
+        || relationship.plannedDecision === 'defer') continue;
+      serviceRequiredTables.push({
+        logicalName: relationship.plannedDecision === 'adapt'
+          ? relationship.adaptedIntersectTable
+          : relationship.intersectTable,
+        consumers: [`test:${relationship.schemaName}`],
+      });
+    }
+  }
+  const serviceDependencies = {
+    schemaVersion: 1,
+    serviceRequiredTables: [...new Map(serviceRequiredTables.map((item) => [
+      item.logicalName,
+      item,
+    ])).values()],
+  };
+  const approvedContract = contractApprovalContent(normalized);
+  const approvalReceipt = {
+    schemaVersion: 1,
+    workflow: 'create-mobile-app',
+    approvals: {
+      dataModel: {
+        status: 'approved',
+        approvedAt: NOW,
+        approvedContractSha256: sha256(stableJson(approvedContract)),
+      },
+      nativeCapabilities: { status: 'approved', approvedAt: NOW },
+      connectors: { status: 'approved', approvedAt: NOW },
+      screenPlan: { status: 'approved', approvedAt: NOW },
+    },
     approvedPlanSha256: sha256(planBytes),
-  });
-  const scope = reconciliationScope(normalized);
+    approvedContractSha256: sha256(stableJson(approvedContract)),
+    approvedContract,
+    serviceRequiredTables: serviceDependencies.serviceRequiredTables,
+  };
+  approvalReceipt.integritySha256 = sha256(stableJson(approvalReceipt));
+  const bound = bindContractToPlan(normalized, planBytes, approvalReceipt);
+  const scope = reconciliationScope(bound);
   const scopedReconciliation = structuredClone(reconciliation);
   const tableByName = new Map(
     (scopedReconciliation.tables || []).map((item) => [item.logicalName, item]),
@@ -331,10 +380,11 @@ function buildInputs(contract, reconciliation, plan = '# Plan\n') {
     tables: scope.exactTables,
     proposedNames: scope.proposedTables,
   };
-  const contractBytes = Buffer.from(stableJson(normalized));
+  const contractBytes = Buffer.from(stableJson(bound));
   const reconciliationBytes = Buffer.from(JSON.stringify(scopedReconciliation, null, 2));
   return {
-    contract: normalized,
+    contract: bound,
+    approvalReceipt,
     reconciliation: scopedReconciliation,
     contractBytes,
     reconciliationBytes,
@@ -868,7 +918,7 @@ test('validation rejects environment, plan, and reconciliation mismatches', () =
       ...inputs,
       planBytes: Buffer.from('# Changed plan\n'),
     }),
-    /approvedPlanSha256 does not match/,
+    /mobile plan approval receipt plan hash does not match/,
   );
 
   const changedSnapshot = {
@@ -958,6 +1008,143 @@ test('a fully applied rerun produces zero metadata POST operations', () => {
       .filter((item) => item.decision === 'create')
       .every((item) => item.operation === 'none' && item.verificationStatus === 'verified'),
   );
+});
+
+test('mobile plan approval receipt binds exact contract and service dependencies', () => {
+  const contract = createContract();
+  const inputs = buildInputs(contract, basePlanningSnapshot(), '# Approved plan\n');
+  const manifest = buildManifest(inputs);
+
+  assert.equal(
+    manifest.binding.approvedContractSha256,
+    inputs.approvalReceipt.approvedContractSha256,
+  );
+  assert.equal(
+    manifest.binding.approvalReceiptSha256,
+    inputs.approvalReceipt.integritySha256,
+  );
+  assert.deepEqual(
+    manifest.service.requiredTables.map((item) => ({
+      logicalName: item.logicalName,
+      consumers: item.consumers,
+    })),
+    inputs.approvalReceipt.serviceRequiredTables,
+  );
+
+  const addedTable = createContract();
+  addedTable.tables.push(contractTable('cr1_unapproved', 'create', 0, [
+    contractColumn('cr1_name', 'string', 'create', { primaryName: true }),
+  ]));
+  assert.throws(
+    () => bindContractToPlan(
+      addedTable,
+      inputs.planBytes,
+      inputs.approvalReceipt,
+    ),
+    /structured contract content does not match the approved contract/,
+  );
+
+  const alteredBoundContract = structuredClone(inputs.contract);
+  alteredBoundContract.tables.find(
+    (tableValue) => tableValue.logicalName === 'cr1_item',
+  ).columns.push(contractColumn('cr1_unapprovedcolumn', 'string', 'create'));
+  assert.throws(
+    () => buildManifest({
+      ...inputs,
+      contract: alteredBoundContract,
+      contractBytes: Buffer.from(stableJson(alteredBoundContract)),
+    }),
+    /structured contract content does not match the approved contract/,
+  );
+
+  const missingServiceReceipt = structuredClone(inputs.approvalReceipt);
+  missingServiceReceipt.serviceRequiredTables =
+    missingServiceReceipt.serviceRequiredTables.filter(
+      (item) => item.logicalName !== 'contact',
+    );
+  delete missingServiceReceipt.integritySha256;
+  missingServiceReceipt.integritySha256 = sha256(stableJson(missingServiceReceipt));
+  assert.throws(
+    () => bindContractToPlan(
+      contract,
+      inputs.planBytes,
+      missingServiceReceipt,
+    ),
+    /approved service dependencies do not exactly match contract serviceRequired declarations/,
+  );
+
+  const pendingReceipt = structuredClone(inputs.approvalReceipt);
+  pendingReceipt.approvals.screenPlan.status = 'pending';
+  delete pendingReceipt.integritySha256;
+  pendingReceipt.integritySha256 = sha256(stableJson(pendingReceipt));
+  assert.throws(
+    () => bindContractToPlan(contract, inputs.planBytes, pendingReceipt),
+    /screenPlan status must be approved/,
+  );
+  assert.throws(
+    () => bindContractToPlan(contract, inputs.planBytes, null),
+    /mobile plan approval receipt must be an object/,
+  );
+});
+
+test('existing Dataverse File and Image virtual attributes are zero-write compatible', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [
+      contractTable('cr1_item', 'extend', 0, [
+        contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+        contractColumn('cr1_document', 'file', 'create', { maxSizeInKB: 32768 }),
+        contractColumn('cr1_photo', 'image', 'create', {
+          maxHeight: 1440,
+          maxWidth: 1440,
+        }),
+      ]),
+    ],
+  };
+  const existing = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+    column('cr1_document', 'Virtual', {
+      typeName: 'FileType',
+      maxSizeInKB: 32768,
+    }),
+    column('cr1_photo', 'Virtual', {
+      typeName: 'ImageType',
+      maxHeight: 1440,
+      maxWidth: 1440,
+    }),
+  ]);
+  const manifest = buildManifest(buildInputs(contract, snapshot({
+    tables: [existing],
+  })));
+  assert.equal(manifest.summary.metadataOperationCount, 0);
+  for (const logicalName of ['cr1_document', 'cr1_photo']) {
+    const decision = manifest.decisions.find(
+      (item) => item.itemId === `column:cr1_item:${logicalName}`,
+    );
+    assert.equal(decision.decision, 'create');
+    assert.equal(decision.observedOutcome, 'reuse');
+    assert.equal(decision.verificationStatus, 'verified');
+  }
+
+  for (const [logicalName, typeName] of [
+    ['cr1_document', 'ImageType'],
+    ['cr1_photo', 'FileType'],
+  ]) {
+    const incompatible = structuredClone(existing);
+    incompatible.columns.find(
+      (item) => item.logicalName === logicalName,
+    ).typeName = typeName;
+    const mismatch = buildManifest(buildInputs(contract, snapshot({
+      tables: [incompatible],
+    })));
+    const decision = mismatch.decisions.find(
+      (item) => item.itemId === `column:cr1_item:${logicalName}`,
+    );
+    assert.notEqual(decision.verificationStatus, 'verified');
+    assert.equal(mismatch.executable, false);
+    assert.equal(mismatch.summary.metadataOperationCount, 0);
+  }
 });
 
 test('mechanical reconciliation never changes approved architecture decisions', () => {
@@ -1295,6 +1482,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     skill,
     /structured schema[\s\S]*regenerate the complete aliases[\s\S]*service-required names/,
   );
+  assert.match(skill, /--approval-receipt <working_dir>\/\.tmp\/mobile-plan-status\.json/);
   const createSkill = fs.readFileSync(path.join(
     __dirname,
     '../../skills/create-mobile-app/SKILL.md',
@@ -1309,6 +1497,23 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /one fresh bounded reconciliation[\s\S]*ordinary typed columns[\s\S]*relationships[\s\S]*alternate keys/,
   );
   assert.match(createSkill, /--bind-plan "\$SCHEMA_CONTRACT"/);
+  assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
+  assert.match(
+    createSkill,
+    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+  );
+  const planner = fs.readFileSync(path.join(
+    __dirname,
+    '../../agents/native-app-planner.md',
+  ), 'utf8');
+  assert.match(
+    planner,
+    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+  );
+  assert.match(
+    planner,
+    /Do not call the manifest builder to create or restamp this receipt/,
+  );
 });
 
 test('publish checkpoint retries PublishXml after schema writes become idempotent', () => {
@@ -1414,6 +1619,7 @@ test('collision checkpoint roll-forward preserves prior writes and rebinds revis
     previousManifest: priorManifest,
     journal,
     contract: revisedInputs.contract,
+    approvalReceipt: revisedInputs.approvalReceipt,
     contractBytes: revisedInputs.contractBytes,
     planBytes: revisedInputs.planBytes,
     context: CONTEXT,
@@ -1477,15 +1683,20 @@ test('collision checkpoint roll-forward preserves prior writes and rebinds revis
     (columnValue) => columnValue.logicalName !== 'cr1_categoryid',
   );
   unsafeItem.relationships = [];
-  const unsafeContractBytes = Buffer.from(stableJson(unsafeContract));
+  const unsafeInputs = buildInputs(
+    unsafeContract,
+    revisedSnapshot,
+    '# Revised plan\n',
+  );
   assert.throws(
     () => rollForwardPublishCheckpoint({
       checkpoint: priorManifest.publishCheckpoint,
       previousManifest: priorManifest,
       journal,
-      contract: unsafeContract,
-      contractBytes: unsafeContractBytes,
-      planBytes: revisedInputs.planBytes,
+      contract: unsafeInputs.contract,
+      approvalReceipt: unsafeInputs.approvalReceipt,
+      contractBytes: unsafeInputs.contractBytes,
+      planBytes: unsafeInputs.planBytes,
       context: CONTEXT,
       rolledAt: NOW,
     }),
@@ -1545,6 +1756,7 @@ test('checkpoint roll-forward rejects removed completed columns, relationships, 
         previousManifest: priorManifest,
         journal,
         contract: revisedInputs.contract,
+        approvalReceipt: revisedInputs.approvalReceipt,
         contractBytes: revisedInputs.contractBytes,
         planBytes: revisedInputs.planBytes,
         context: CONTEXT,
@@ -1679,26 +1891,44 @@ test('checkpoint roll-forward rejects removed completed columns, relationships, 
   });
 });
 
-test('CLI persists and requires the publish-pending checkpoint before validation', (t) => {
+test('CLI cannot self-mint approval receipts and still enforces publish checkpoints', (t) => {
   const directory = fs.mkdtempSync(path.join(__dirname, '.manifest-scratch-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const planContent = '# Plan\n';
   const contract = normalizedContract(createContract());
-  const reconciliation = buildInputs(contract, basePlanningSnapshot()).reconciliation;
+  const prepared = buildInputs(contract, basePlanningSnapshot(), planContent);
+  const reconciliation = prepared.reconciliation;
   const files = {
     contract: path.join(directory, 'contract.json'),
+    approvalReceipt: path.join(directory, 'mobile-plan-status.json'),
+    selfMintedReceipt: path.join(directory, 'self-minted-receipt.json'),
     reconciliation: path.join(directory, 'reconciliation.json'),
     plan: path.join(directory, 'plan.md'),
     manifest: path.join(directory, 'manifest.json'),
     checkpoint: path.join(directory, 'publish.json'),
   };
   fs.writeFileSync(files.contract, stableJson(contract));
+  fs.writeFileSync(files.approvalReceipt, stableJson(prepared.approvalReceipt));
   fs.writeFileSync(files.reconciliation, JSON.stringify(reconciliation, null, 2));
   fs.writeFileSync(files.plan, planContent);
   const script = path.join(__dirname, '../build-dataverse-operation-manifest.js');
+  assert.equal(
+    require('../build-dataverse-operation-manifest').createApprovalEnvelope,
+    undefined,
+  );
+  const selfMint = spawnSync(process.execPath, [
+    script,
+    '--create-approval-envelope', files.contract,
+    '--plan', files.plan,
+    '--output', files.selfMintedReceipt,
+  ], { encoding: 'utf8' });
+  assert.equal(selfMint.status, 1);
+  assert.equal(fs.existsSync(files.selfMintedReceipt), false);
+  assert.doesNotMatch(selfMint.stderr, /create approval receipt|create approval envelope/i);
   const bound = spawnSync(process.execPath, [
     script,
     '--bind-plan', files.contract,
+    '--approval-receipt', files.approvalReceipt,
     '--plan', files.plan,
     '--output', files.contract,
   ], { encoding: 'utf8' });
@@ -1709,6 +1939,7 @@ test('CLI persists and requires the publish-pending checkpoint before validation
   );
   const commonArgs = [
     '--contract', files.contract,
+    '--approval-receipt', files.approvalReceipt,
     '--reconciliation', files.reconciliation,
     '--plan', files.plan,
     '--environment-id', CONTEXT.environmentId,

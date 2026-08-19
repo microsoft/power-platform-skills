@@ -474,7 +474,10 @@ Alongside `_dm_section.md`, write
 machine contract consumed after approval; `/add-dataverse` must not reconstruct
 metadata operations from Markdown when this sidecar is valid.
 Do not invent an `approvedPlanSha256` value here: Step 8 adds that content hash
-deterministically after the full plan has passed its existing approvals.
+deterministically only after verifying the gate-owned
+`.tmp/mobile-plan-status.json` receipt. That
+receipt binds the final plan hash to this exact normalized contract content/hash
+and its final structured service dependencies; Step 8 cannot create it.
 
 Use schema version `1` and include every planned table, column, relationship,
 and alternate key exactly once. Decisions use only `reuse`, `extend`, `create`,

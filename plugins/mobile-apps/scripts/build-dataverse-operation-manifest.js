@@ -9,10 +9,14 @@ const {
   normalizeOptions,
   validateOptions,
 } = require('./lib/derived-metadata');
-const { validateSnapshot } = require('./create-dataverse-snapshot');
+const {
+  canonicalAttributeType,
+  validateSnapshot,
+} = require('./create-dataverse-snapshot');
 const { operationFingerprint } = require('./dataverse-request');
 
 const CONTRACT_SCHEMA_VERSION = 1;
+const APPROVAL_RECEIPT_SCHEMA_VERSION = 1;
 const MANIFEST_SCHEMA_VERSION = 2;
 const PUBLISH_CHECKPOINT_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_RECONCILIATION_AGE_MS = 10 * 60 * 1000;
@@ -232,6 +236,14 @@ function validateContract(contract) {
   if (contract.approvedPlanSha256 !== undefined
     && !/^[a-f0-9]{64}$/i.test(String(contract.approvedPlanSha256))) {
     errors.push('contract.approvedPlanSha256 must be a SHA-256 hex value when supplied');
+  }
+  if (contract.approvedContractSha256 !== undefined
+    && !/^[a-f0-9]{64}$/i.test(String(contract.approvedContractSha256))) {
+    errors.push('contract.approvedContractSha256 must be a SHA-256 hex value when supplied');
+  }
+  if (contract.approvalReceiptSha256 !== undefined
+    && !/^[a-f0-9]{64}$/i.test(String(contract.approvalReceiptSha256))) {
+    errors.push('contract.approvalReceiptSha256 must be a SHA-256 hex value when supplied');
   }
   if (errors.length > 0 || !Array.isArray(contract.tables)) {
     return { valid: false, errors };
@@ -600,6 +612,12 @@ function normalizedContract(contract) {
     ...(contract.approvedPlanSha256
       ? { approvedPlanSha256: String(contract.approvedPlanSha256).toLowerCase() }
       : {}),
+    ...(contract.approvedContractSha256
+      ? { approvedContractSha256: String(contract.approvedContractSha256).toLowerCase() }
+      : {}),
+    ...(contract.approvalReceiptSha256
+      ? { approvalReceiptSha256: String(contract.approvalReceiptSha256).toLowerCase() }
+      : {}),
     tables: contract.tables.map((table) => ({
       ...table,
       logicalName: normalizeName(table.logicalName),
@@ -695,15 +713,193 @@ function normalizedContract(contract) {
   return JSON.parse(JSON.stringify(normalized));
 }
 
-function bindContractToPlan(contract, planBytes) {
+function contractApprovalContent(contract) {
+  const content = normalizedContract(contract);
+  delete content.approvedPlanSha256;
+  delete content.approvedContractSha256;
+  delete content.approvalReceiptSha256;
+  return content;
+}
+
+function declaredServiceRequiredTableNames(contract) {
+  const normalized = contractApprovalContent(contract);
+  const names = [];
+  for (const table of normalized.tables) {
+    if (table.serviceRequired && table.plannedDecision !== 'defer') {
+      names.push(
+        table.plannedDecision === 'adapt'
+          ? table.adaptedLogicalName
+          : table.logicalName,
+      );
+    }
+    for (const relationship of table.relationships) {
+      if (relationship.kind !== 'many-to-many'
+        || !relationship.serviceRequired
+        || relationship.plannedDecision === 'defer') continue;
+      names.push(
+        relationship.plannedDecision === 'adapt'
+          ? relationship.adaptedIntersectTable
+          : relationship.intersectTable,
+      );
+    }
+  }
+  return [...new Set(names.map(normalizeName))]
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function normalizeServiceDependencies(serviceDependencies) {
+  const errors = [];
+  if (!serviceDependencies
+    || typeof serviceDependencies !== 'object'
+    || Array.isArray(serviceDependencies)) {
+    return { valid: false, errors: ['service dependencies must be an object'] };
+  }
+  if (serviceDependencies.schemaVersion !== APPROVAL_RECEIPT_SCHEMA_VERSION) {
+    errors.push(
+      `service dependencies schemaVersion must equal ${APPROVAL_RECEIPT_SCHEMA_VERSION}`,
+    );
+  }
+  if (!Array.isArray(serviceDependencies.serviceRequiredTables)) {
+    errors.push('service dependencies serviceRequiredTables must be an array');
+    return { valid: false, errors };
+  }
+  const tables = [];
+  const seen = new Set();
+  for (const [index, item] of serviceDependencies.serviceRequiredTables.entries()) {
+    const prefix = `serviceRequiredTables[${index}]`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      errors.push(`${prefix} must be an object`);
+      continue;
+    }
+    const logicalName = normalizeName(item.logicalName);
+    validateLogicalName(logicalName, `${prefix}.logicalName`, errors);
+    if (seen.has(logicalName)) errors.push(`${prefix}.logicalName must be unique`);
+    seen.add(logicalName);
+    if (!Array.isArray(item.consumers)
+      || item.consumers.length === 0
+      || item.consumers.some(
+        (consumer) => typeof consumer !== 'string' || !consumer.trim(),
+      )) {
+      errors.push(`${prefix}.consumers must be a non-empty string array`);
+    }
+    tables.push({
+      logicalName,
+      consumers: [...new Set((item.consumers || [])
+        .map((consumer) => String(consumer).trim())
+        .filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right)),
+    });
+  }
+  tables.sort((left, right) => left.logicalName.localeCompare(right.logicalName));
+  return { valid: errors.length === 0, errors, tables };
+}
+
+function validateApprovalReceipt(approvalReceipt, {
+  contract,
+  planBytes,
+}) {
+  const errors = [];
+  if (!approvalReceipt
+    || typeof approvalReceipt !== 'object'
+    || Array.isArray(approvalReceipt)) {
+    return { valid: false, errors: ['mobile plan approval receipt must be an object'] };
+  }
+  if (approvalReceipt.schemaVersion !== APPROVAL_RECEIPT_SCHEMA_VERSION) {
+    errors.push(
+      `mobile plan approval receipt schemaVersion must equal ${APPROVAL_RECEIPT_SCHEMA_VERSION}`,
+    );
+  }
+  if (approvalReceipt.workflow !== 'create-mobile-app') {
+    errors.push('mobile plan approval receipt workflow must equal create-mobile-app');
+  }
+  const requiredApprovals = [
+    'dataModel',
+    'nativeCapabilities',
+    'connectors',
+    'screenPlan',
+  ];
+  for (const approval of requiredApprovals) {
+    const record = approvalReceipt.approvals?.[approval];
+    if (record?.status !== 'approved') {
+      errors.push(`mobile plan approval receipt ${approval} status must be approved`);
+    }
+    if (!record?.approvedAt || !Number.isFinite(Date.parse(record.approvedAt))) {
+      errors.push(`mobile plan approval receipt ${approval} approvedAt is invalid`);
+    }
+  }
+  const withoutIntegrity = { ...approvalReceipt };
+  delete withoutIntegrity.integritySha256;
+  if (approvalReceipt.integritySha256 !== sha256(stableJson(withoutIntegrity))) {
+    errors.push('mobile plan approval receipt integrity hash does not match');
+  }
+  if (!planBytes?.length) {
+    errors.push('native-app-plan.md is required');
+  } else if (approvalReceipt.approvedPlanSha256 !== sha256(planBytes)) {
+    errors.push('mobile plan approval receipt plan hash does not match native-app-plan.md');
+  }
+  const contractValidation = validateContract(contract);
+  if (!contractValidation.valid) {
+    errors.push(...contractValidation.errors.map((error) => `contract: ${error}`));
+    return { valid: false, errors };
+  }
+  const approvedContractValidation = validateContract(approvalReceipt.approvedContract);
+  if (!approvedContractValidation.valid) {
+    errors.push(...approvedContractValidation.errors.map(
+      (error) => `approved contract: ${error}`,
+    ));
+  }
+  const contractContent = contractApprovalContent(contract);
+  if (approvalReceipt.approvedContractSha256
+    !== sha256(stableJson(approvalReceipt.approvedContract))) {
+    errors.push('mobile plan approval receipt contract hash does not match its content');
+  }
+  if (stableJson(approvalReceipt.approvedContract) !== stableJson(contractContent)) {
+    errors.push('structured contract content does not match the approved contract');
+  }
+  if (approvalReceipt.approvedContractSha256 !== sha256(stableJson(contractContent))) {
+    errors.push('structured contract hash does not match the approved contract hash');
+  }
+  if (approvalReceipt.approvals?.dataModel?.approvedContractSha256
+    !== approvalReceipt.approvedContractSha256) {
+    errors.push(
+      'data-model approval record does not match the approved contract hash',
+    );
+  }
+  const dependencyValidation = normalizeServiceDependencies({
+    schemaVersion: approvalReceipt.schemaVersion,
+    serviceRequiredTables: approvalReceipt.serviceRequiredTables,
+  });
+  if (!dependencyValidation.valid) {
+    errors.push(...dependencyValidation.errors.map(
+      (error) => `mobile plan approval receipt: ${error}`,
+    ));
+  } else {
+    const declaredServices = declaredServiceRequiredTableNames(contractContent);
+    const approvedServices = dependencyValidation.tables.map((item) => item.logicalName);
+    if (stableJson(declaredServices) !== stableJson(approvedServices)) {
+      errors.push(
+        'approved service dependencies do not exactly match contract '
+        + 'serviceRequired declarations',
+      );
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+function bindContractToPlan(contract, planBytes, approvalReceipt) {
   if (!planBytes?.length) throw new Error('native-app-plan.md is required');
-  const validation = validateContract(contract);
+  const validation = validateApprovalReceipt(approvalReceipt, {
+    contract,
+    planBytes,
+  });
   if (!validation.valid) {
-    throw new Error(`Invalid schema contract: ${validation.errors.join('; ')}`);
+    throw new Error(`Invalid mobile plan approval receipt: ${validation.errors.join('; ')}`);
   }
   return normalizedContract({
     ...contract,
     approvedPlanSha256: sha256(planBytes),
+    approvedContractSha256: approvalReceipt.approvedContractSha256,
+    approvalReceiptSha256: approvalReceipt.integritySha256,
   });
 }
 
@@ -900,8 +1096,9 @@ function baseColumnCompatibility(column, liveColumn) {
   if (!liveColumn) return { compatible: false, reasons: ['column is absent'] };
   const reasons = [];
   const expectedType = dataverseType(column);
-  if (liveColumn.type !== expectedType) {
-    reasons.push(`type mismatch: expected ${expectedType}, got ${liveColumn.type || '<missing>'}`);
+  const liveType = canonicalAttributeType(liveColumn.type, liveColumn.typeName);
+  if (liveType !== expectedType) {
+    reasons.push(`type mismatch: expected ${expectedType}, got ${liveType || '<missing>'}`);
   }
   const expectedTypeName = typeName(column);
   if (expectedTypeName) {
@@ -1721,6 +1918,7 @@ function rollForwardPublishCheckpoint({
   previousManifest,
   journal,
   contract,
+  approvalReceipt,
   contractBytes,
   planBytes,
   context,
@@ -1736,10 +1934,25 @@ function rollForwardPublishCheckpoint({
   const normalized = normalizedContract(contract);
   const planSha256 = sha256(planBytes);
   const structuredSchemaSha256 = sha256(contractBytes);
+  const approvalValidation = validateApprovalReceipt(approvalReceipt, {
+    contract,
+    planBytes,
+  });
+  if (!approvalValidation.valid) {
+    throw new Error(
+      `Invalid revised mobile plan approval receipt: ${approvalValidation.errors.join('; ')}`,
+    );
+  }
   if (normalized.approvedPlanSha256 !== planSha256) {
     throw new Error(
       'revised structured schema approvedPlanSha256 does not match native-app-plan.md',
     );
+  }
+  if (normalized.approvedContractSha256
+      !== approvalReceipt.approvedContractSha256
+    || normalized.approvalReceiptSha256
+      !== approvalReceipt.integritySha256) {
+    throw new Error('revised structured schema approval binding does not match receipt');
   }
   if (normalizeName(normalized.publisherPrefix) !== normalizeName(context.publisherPrefix)) {
     throw new Error('revised publisherPrefix does not match execution context');
@@ -1916,6 +2129,7 @@ function rollForwardPublishCheckpoint({
 
 function buildManifest({
   contract,
+  approvalReceipt,
   reconciliation,
   planBytes,
   contractBytes,
@@ -1973,9 +2187,30 @@ function buildManifest({
   }
   const planHash = sha256(planBytes);
   const contractHash = sha256(contractBytes);
+  const approvalValidation = validateApprovalReceipt(approvalReceipt, {
+    contract,
+    planBytes,
+  });
+  if (!approvalValidation.valid) {
+    throw new Error(
+      `Invalid mobile plan approval receipt: ${approvalValidation.errors.join('; ')}`,
+    );
+  }
   if (normalized.approvedPlanSha256 !== planHash) {
     throw new Error(
       'structured schema approvedPlanSha256 does not match native-app-plan.md',
+    );
+  }
+  if (normalized.approvedContractSha256
+    !== approvalReceipt.approvedContractSha256) {
+    throw new Error(
+      'structured schema approvedContractSha256 does not match approval receipt',
+    );
+  }
+  if (normalized.approvalReceiptSha256
+    !== approvalReceipt.integritySha256) {
+    throw new Error(
+      'structured schema approvalReceiptSha256 does not match approval receipt',
     );
   }
 
@@ -3005,6 +3240,25 @@ function buildManifest({
       .sort((left, right) => left.logicalName.localeCompare(right.logicalName))
       .map((table) => [table.logicalName, table]),
   ).values()];
+  const approvedServiceDependencies = new Map(
+    approvalReceipt.serviceRequiredTables.map((item) => [
+      normalizeName(item.logicalName),
+      item.consumers,
+    ]),
+  );
+  const manifestServiceNames = uniqueServiceRequiredTables
+    .map((item) => normalizeName(item.logicalName))
+    .sort((left, right) => left.localeCompare(right));
+  const approvedServiceNames = [...approvedServiceDependencies.keys()]
+    .sort((left, right) => left.localeCompare(right));
+  if (stableJson(manifestServiceNames) !== stableJson(approvedServiceNames)) {
+    throw new Error(
+      'manifest serviceRequiredTables do not exactly match approved screen/service dependencies',
+    );
+  }
+  for (const item of uniqueServiceRequiredTables) {
+    item.consumers = approvedServiceDependencies.get(normalizeName(item.logicalName));
+  }
   let orderedIndex = 0;
   for (const phase of PHASE_ORDER) {
     for (const item of phaseOperations[phase]) item.index = orderedIndex++;
@@ -3032,6 +3286,8 @@ function buildManifest({
       publisherPrefix: normalizeName(context.publisherPrefix),
       solutionUniqueName: context.solutionUniqueName,
       planSha256: planHash,
+      approvedContractSha256: approvalReceipt.approvedContractSha256,
+      approvalReceiptSha256: approvalReceipt.integritySha256,
       structuredSchemaSha256: contractHash,
       reconciliationSha256: sha256(reconciliationBytes),
       reconciliationGeneratedAt: reconciliation.generatedAt,
@@ -3088,6 +3344,7 @@ function validateManifest(manifest, {
   contractBytes,
   reconciliationBytes,
   contract,
+  approvalReceipt,
   reconciliation,
   context,
   publishCheckpoint = null,
@@ -3129,6 +3386,27 @@ function validateManifest(manifest, {
     }
   }
   if (planBytes && binding.planSha256 !== sha256(planBytes)) errors.push('plan hash mismatch');
+  if (approvalReceipt) {
+    const approvalValidation = validateApprovalReceipt(approvalReceipt, {
+      contract,
+      planBytes,
+    });
+    if (!approvalValidation.valid) {
+      errors.push(...approvalValidation.errors.map(
+        (error) => `mobile plan approval receipt: ${error}`,
+      ));
+    }
+    if (binding.approvedContractSha256
+      !== approvalReceipt.approvedContractSha256) {
+      errors.push('approved contract hash mismatch');
+    }
+    if (binding.approvalReceiptSha256
+      !== approvalReceipt.integritySha256) {
+      errors.push('mobile plan approval receipt hash mismatch');
+    }
+  } else {
+    errors.push('mobile plan approval receipt is required for execution validation');
+  }
   if (contractBytes && binding.structuredSchemaSha256 !== sha256(contractBytes)) {
     errors.push('structured schema hash mismatch');
   }
@@ -3248,11 +3526,12 @@ function validateManifest(manifest, {
   if (requireExecutable && !manifest.executable) {
     errors.push('manifest is not executable; approved schema revision is required');
   }
-  if (contract && reconciliation && context && planBytes
+  if (contract && approvalReceipt && reconciliation && context && planBytes
     && contractBytes && reconciliationBytes) {
     try {
       const expectedManifest = buildManifest({
         contract,
+        approvalReceipt,
         reconciliation,
         planBytes,
         contractBytes,
@@ -3274,7 +3553,7 @@ function validateManifest(manifest, {
   } else {
     errors.push(
       'manifest semantic validation requires bound structured schema, '
-      + 'execution reconciliation, plan, and context',
+      + 'mobile plan approval receipt, execution reconciliation, plan, and context',
     );
   }
   return { valid: errors.length === 0, errors };
@@ -3301,21 +3580,21 @@ function contextFromArgs(args) {
 function usage() {
   return [
     'Build:',
-    '  node build-dataverse-operation-manifest.js --contract <json> --reconciliation <json> --plan <md> --output <json> \\',
+    '  node build-dataverse-operation-manifest.js --contract <json> --approval-receipt <json> --reconciliation <json> --plan <md> --output <json> \\',
     '    --environment-id <id> --env-url <url> [--tenant-id <id>] --publisher-prefix <prefix> --solution <unique-name> \\',
     '    [--publish-checkpoint <json>]',
     'Normalize a planner sidecar:',
     '  node build-dataverse-operation-manifest.js --normalize-contract <json> --output <json>',
     'Bind a normalized sidecar to the fully approved plan:',
-    '  node build-dataverse-operation-manifest.js --bind-plan <json> --plan <md> --output <json>',
+    '  node build-dataverse-operation-manifest.js --bind-plan <json> --approval-receipt <json> --plan <md> --output <json>',
     'Roll a collision checkpoint into a revised approved contract:',
     '  node build-dataverse-operation-manifest.js --roll-forward-checkpoint <json> --previous-manifest <json> \\',
-    '    --journal <json> --contract <json> --plan <md> --output <json> --environment-id <id> \\',
+    '    --journal <json> --contract <json> --approval-receipt <json> --plan <md> --output <json> --environment-id <id> \\',
     '    --env-url <url> [--tenant-id <id>] --publisher-prefix <prefix> --solution <unique-name>',
     'Write fresh reconciliation scope:',
     '  node build-dataverse-operation-manifest.js --reconciliation-scope <json> --output <json>',
     'Validate before execution:',
-    '  node build-dataverse-operation-manifest.js --validate <manifest> --contract <json> --reconciliation <json> --plan <md> \\',
+    '  node build-dataverse-operation-manifest.js --validate <manifest> --contract <json> --approval-receipt <json> --reconciliation <json> --plan <md> \\',
     '    --environment-id <id> --env-url <url> [--tenant-id <id>] --publisher-prefix <prefix> --solution <unique-name> \\',
     '    [--publish-checkpoint <json>] --require-executable',
   ].join('\n');
@@ -3342,10 +3621,13 @@ function main() {
       return;
     }
     if (args['bind-plan']) {
-      if (!args.output || !args.plan) throw new Error('--plan and --output are required');
+      if (!args.output || !args.plan || !args['approval-receipt']) {
+        throw new Error('--plan, --approval-receipt, and --output are required');
+      }
       const bound = bindContractToPlan(
         readJson(args['bind-plan']),
         readBytes(args.plan),
+        readJson(args['approval-receipt']),
       );
       atomicWriteJson(path.resolve(args.output), bound);
       process.stdout.write(`${JSON.stringify({
@@ -3353,6 +3635,7 @@ function main() {
         mode: 'bind-plan',
         output: path.resolve(args.output),
         approvedPlanSha256: bound.approvedPlanSha256,
+        approvedContractSha256: bound.approvedContractSha256,
       })}\n`);
       return;
     }
@@ -3374,6 +3657,7 @@ function main() {
         'previous-manifest',
         'journal',
         'contract',
+        'approval-receipt',
         'plan',
         'output',
         'environment-id',
@@ -3394,6 +3678,7 @@ function main() {
         previousManifest: readJson(args['previous-manifest']),
         journal: readJson(args.journal),
         contract: JSON.parse(contractBytes.toString('utf8')),
+        approvalReceipt: readJson(args['approval-receipt']),
         contractBytes,
         planBytes,
         context: contextFromArgs(args),
@@ -3410,7 +3695,8 @@ function main() {
       return;
     }
 
-    const required = ['contract', 'reconciliation', 'plan', 'environment-id', 'env-url',
+    const required = ['contract', 'approval-receipt', 'reconciliation', 'plan',
+      'environment-id', 'env-url',
       'publisher-prefix', 'solution'];
     const missing = required.filter((key) => !args[key]);
     if (missing.length > 0) throw new Error(`Missing required args: ${missing.join(', ')}`);
@@ -3418,6 +3704,7 @@ function main() {
     const reconciliationBytes = readBytes(args.reconciliation);
     const planBytes = readBytes(args.plan);
     const contract = JSON.parse(contractBytes.toString('utf8'));
+    const approvalReceipt = readJson(args['approval-receipt']);
     const reconciliation = JSON.parse(reconciliationBytes.toString('utf8'));
     const context = contextFromArgs(args);
     const now = args.now || new Date().toISOString();
@@ -3445,6 +3732,7 @@ function main() {
         contractBytes,
         reconciliationBytes,
         contract,
+        approvalReceipt,
         reconciliation,
         context,
         publishCheckpoint,
@@ -3467,6 +3755,7 @@ function main() {
     if (!args.output) throw new Error('--output is required');
     const manifest = buildManifest({
       contract,
+      approvalReceipt,
       reconciliation,
       planBytes,
       contractBytes,
@@ -3506,6 +3795,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  APPROVAL_RECEIPT_SCHEMA_VERSION,
   CONTRACT_SCHEMA_VERSION,
   DEFAULT_MAX_RECONCILIATION_AGE_MS,
   MANIFEST_SCHEMA_VERSION,
@@ -3513,7 +3803,9 @@ module.exports = {
   atomicWriteJson,
   bindContractToPlan,
   buildManifest,
+  contractApprovalContent,
   createPublishCheckpoint,
+  declaredServiceRequiredTableNames,
   normalizeColumnType,
   normalizedContract,
   parseArgs,
@@ -3522,6 +3814,7 @@ module.exports = {
   sha256,
   stableJson,
   validateContract,
+  validateApprovalReceipt,
   validateManifest,
   validatePublishCheckpoint,
 };

@@ -10,13 +10,24 @@ schema contract against a fresh bounded execution reconciliation performed in
 Step 8. The foreground planning snapshot is evidence only and never authorizes
 writes. The manifest is bound to the environment, tenant when available,
 publisher, solution, plan hash, structured-schema hash, reconciliation
-hash/timestamp, and manifest version. Validate it with
+hash/timestamp, approved-contract hash, gate-owned approval-receipt hash, and
+manifest version. The planner/orchestrator initializes
+`.tmp/mobile-plan-status.json` when data-model approval is accepted and
+advances it only as the existing later gates approve the final plan and
+screen/service dependencies. Step 8 can only consume and verify this receipt;
+the manifest tool exposes no receipt-creation/restamping mode. Any changed plan
+or contract must return through the affected existing approval gate before the
+orchestrator refreshes the receipt. Validate it with
 `--require-executable` immediately before writes. Validation deterministically
 rebuilds the expected manifest and compares all decisions, services, aliases,
 phases, API paths, and bodies; a recomputed integrity hash cannot legitimize
-tampering. Step 8 first records the fully approved plan content hash as
-`approvedPlanSha256` in the normalized schema artifact, and the builder rejects
-any later plan/artifact mismatch.
+tampering. Step 8 verifies both the fully approved plan content hash and
+approved contract content hash before recording their binding in the
+normalized schema artifact; no free-form Markdown semantic parser is used.
+This assumes the existing non-adversarial local-filesystem workflow trust
+model: hashes detect stale, accidental, or out-of-workflow replacement, but
+are not signatures against a malicious local process able to rewrite every
+artifact.
 
 Its phases are fixed and sequential: table creates with ordinary columns
 inline → extensions → relationships/lookups → alternate keys → publish.
@@ -31,6 +42,10 @@ operations. Calculated/rollup/formula creation remains unsupported.
 Lookup/1:N and M:N creation also requires fresh managed-property evidence for
 the relevant endpoint relationship capabilities; missing evidence is not
 treated as permission to write.
+File and Image attributes are canonicalized from Dataverse's base
+`AttributeType=Virtual` plus `AttributeTypeName=FileType|ImageType` before
+compatibility checks. Their typed size/dimension evidence must still match;
+another virtual type remains incompatible.
 
 Before schema writes, persist the manifest's bound
 `.tmp/dataverse-publish-pending.json`. Keep it on any failure and delete it

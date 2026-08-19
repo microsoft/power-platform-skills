@@ -40,7 +40,7 @@ Look for `native-app-plan.md` in the project root:
 test -f native-app-plan.md
 ```
 
-Before reading plan content, inspect `$ARGUMENTS` for the four fast-path
+Before reading plan content, inspect `$ARGUMENTS` for the five fast-path
 artifact flags in Step 2a. When all are present, only confirm
 `native-app-plan.md` exists for hash validation; do not parse its Data Model
 section or build operations/service lists from Markdown.
@@ -76,18 +76,20 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
 
 #### Step 2a — Approved operation-manifest fast path
 
-When `$ARGUMENTS` supplies all four paths below, record
+When `$ARGUMENTS` supplies all five paths below, record
 `<operation_manifest_mode> = candidate`:
 
 - `--schema-contract <working_dir>/.tmp/dataverse-schema-contract.json`
+- `--approval-receipt <working_dir>/.tmp/mobile-plan-status.json`
 - `--execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json`
 - `--operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json`
 - `--publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json`
 
 Do not reconstruct tables, columns, relationships, keys, payloads, tiers, or
-service requirements from Markdown on this path. The sidecar is the structured
-approved contract; `native-app-plan.md` remains the human review artifact and
-hash binding.
+service requirements from Markdown on this path. The gate-owned approval receipt binds
+the exact structured contract content/hash, final plan hash, and final
+screen/service dependency list; `native-app-plan.md` remains the human review
+artifact.
 
 An entirely absent fast-path handoff means
 `<operation_manifest_mode> = fallback` and preserves the standalone workflow
@@ -221,6 +223,7 @@ plan bytes, structured-schema bytes, and fresh reconciliation bytes:
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --validate "<operation-manifest-path>" \
   --contract "<schema-contract-path>" \
+  --approval-receipt "<approval-receipt-path>" \
   --reconciliation "<execution-reconciliation-path>" \
   --plan "<working_dir>/native-app-plan.md" \
   --environment-id "<environmentId>" \
@@ -464,8 +467,11 @@ array after a rename. Any non-collision failure stops the metadata path with
 its exact result.
 
 Before overwriting the old manifest, preserve its path. After the revised plan
-and structured schema are approved and plan-bound, roll the existing publish
-checkpoint forward:
+and structured schema are approved through the existing flow, the top-level
+planner/orchestrator must refresh the structured service dependencies and
+`mobile-plan-status.json` receipt. This skill cannot create or restamp it.
+Bind the contract through that pre-existing receipt, then roll the existing
+publish checkpoint forward:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
@@ -473,6 +479,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --previous-manifest "$OPERATION_MANIFEST" \
   --journal "$EXECUTION_JOURNAL" \
   --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
   --plan "<working_dir>/native-app-plan.md" \
   --output "$PUBLISH_CHECKPOINT" \
   --environment-id "<environmentId>" \
