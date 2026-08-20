@@ -143,6 +143,11 @@ test('language resolution falls back cleanly when the provision stub has no quer
   assert.strictEqual(lc, 1033);
 });
 
+test('language resolution ignores an invalid override and still honors a valid spec languageCode', async () => {
+  const lc = await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, languageCode: 0 });
+  assert.strictEqual(lc, 1031);
+});
+
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;

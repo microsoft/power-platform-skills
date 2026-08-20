@@ -38,8 +38,11 @@ function normalizeLanguageCode(value) {
 // base `organization.languagecode` when the caller doesn't override it, and only fall back to 1033
 // if discovery itself fails so an unrelated read error does not block the whole build.
 async function resolveLanguageCode({ provision, spec, languageCode }) {
-  const explicit = normalizeLanguageCode(languageCode ?? spec?.languageCode);
+  const explicit = normalizeLanguageCode(languageCode);
   if (explicit) return explicit;
+
+  const specLanguage = normalizeLanguageCode(spec?.languageCode);
+  if (specLanguage) return specLanguage;
 
   if (!provision || typeof provision.queryRecords !== 'function') {
     return DEFAULT_LANGUAGE_CODE;
