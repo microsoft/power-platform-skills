@@ -7,6 +7,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
 const { buildModelApp, isTransientHalt, discoverOpDiffState } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -135,6 +136,11 @@ test('languageCode option overrides the org base language', async () => {
   assert.strictEqual(r.ok, true);
   assert.ok(calls.some((c) => c[0] === 'createTable' && c[1] && c[1].languageCode === 3082), 'table create uses the override');
   assert.ok(calls.some((c) => c[0] === 'createColumn' && c[2] && c[2].languageCode === 3082), 'column create uses the override');
+});
+
+test('language resolution falls back cleanly when the provision stub has no queryRecords', async () => {
+  const lc = await resolveLanguageCode({ provision: {}, spec: {} });
+  assert.strictEqual(lc, 1033);
 });
 
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {

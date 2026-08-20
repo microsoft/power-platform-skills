@@ -387,6 +387,15 @@ function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
+function parseLanguageCode(value) {
+  if (value === undefined) return undefined;
+  const lc = Number(value);
+  if (!Number.isInteger(lc) || lc <= 0) {
+    throw new Error(`--language-code must be a positive integer LCID (got '${value}')`);
+  }
+  return lc;
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
@@ -421,7 +430,7 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
-  const languageCode = flags['language-code'] ?? flags.languageCode;
+  const languageCode = parseLanguageCode(flags['language-code'] ?? flags.languageCode);
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,

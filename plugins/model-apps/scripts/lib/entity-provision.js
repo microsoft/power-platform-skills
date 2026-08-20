@@ -41,6 +41,10 @@ async function resolveLanguageCode({ provision, spec, languageCode }) {
   const explicit = normalizeLanguageCode(languageCode ?? spec?.languageCode);
   if (explicit) return explicit;
 
+  if (!provision || typeof provision.queryRecords !== 'function') {
+    return DEFAULT_LANGUAGE_CODE;
+  }
+
   try {
     const rows = await provision.queryRecords('organization', { select: ['languagecode'], top: 1 });
     const orgLanguage = normalizeLanguageCode(rows && rows[0] && rows[0].languagecode);
@@ -295,7 +299,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     // already-exists error is treated as a skip (not a halt) via skipIf.
     for (const k of e.alternateKeys || []) {
       await runner.run('data-model', `alt key ${e.schemaName}.${k.schemaName}`,
-        () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }),
+        () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()), languageCode: resolvedLanguageCode }),
         { recoverable: true, skipIf: isAlreadyExists });
     }
   }
@@ -470,4 +474,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, resolveLanguageCode, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
