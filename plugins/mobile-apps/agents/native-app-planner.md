@@ -144,6 +144,7 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `video` | `expo-video` | `/add-native video` |
 | `sensors` | `expo-sensors` | `/add-native sensors` |
 | `screen-orientation` | `expo-screen-orientation` | `/add-native screen-orientation` |
+| `haptics` | `expo-haptics` | `/add-native haptics` |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-builder form component rule |
 
 Do not propose `native-pdf-viewer` or `pen-input` unless the exact extension package is present in the template allowlist output (`@microsoft/power-apps-native-pdf-viewer` and `@microsoft/power-apps-native-pen-input`). Do not propose `geolocation` unless `@microsoft/power-apps-native-bglocation` is present, and only for continuous/background tracking or durable Dataverse upload — use one-shot `location` (`expo-location`) for a single foreground coordinate read. When proposing `geolocation`, record that its Dataverse target table must already exist and must be verified by `/add-native geolocation` (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). Do not propose `pdf-report` unless `expo-print` is present. Do not propose local sharing for generated PDFs unless `expo-sharing` is present. If neither package path is present, drop the PDF capability and add a transparency note.
@@ -167,9 +168,10 @@ PDF/pen inference rules:
 - `native-pdf-viewer` means opening an HTTPS PDF URL or local `file://` URI with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+. It does not support `content://`, `blob:`, or `http://`.
 - `pen-input` means signature/ink capture with `@microsoft/power-apps-native-pen-input`. It returns PNG data URI and needs a Dataverse Image/File/child-row target when persisted.
 - `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
+- `haptics` means supplemental tactile feedback through `expo-haptics`. Record the interaction and feedback kind in the screen spec: impact (`light`, `medium`, `heavy`, `soft`, or `rigid`) for deliberate actions, selection for changed selections, or notification (`success`, `warning`, or `error`) after a completed outcome. Every haptic must accompany visible UI feedback.
 - The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
 
-**Capabilities not present or runtime-banned** — do not propose: anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
+**Capabilities not present** — do not propose anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, or Bluetooth/NFC/BLE/AR without a shipped package.
 
 ### Pure-JavaScript dependency handoff
 
