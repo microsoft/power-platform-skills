@@ -408,7 +408,7 @@ When the plan's `## Design` specifies a copy tone (e.g., `Copy tone: Warm`), use
 
 Apply these to every screen. They are the difference between an app that feels cheap and one that feels polished.
 
-> **Haptics:** When the approved screen spec includes tactile feedback, call `triggerImpact`, `triggerSelection`, or `triggerNotification` from `src/native/haptics.ts`. Use light/medium impact for deliberate presses, selection feedback for changed choices, and notification feedback only after the final success/warning/error outcome. Haptics are supplemental: retain visual feedback such as `pressStyle={{ scale: 0.98 }}`, banners, inline errors, and visible selected/switch state.
+> **Note:** `expo-haptics` is BANNED — it crashes at runtime in the current rewrap binary. Use visual-only feedback (`pressStyle={{ scale: 0.98 }}` for press, green pill / banner / snackbar for success, inline error text for error, Switch's visible state change for toggle). See `agents/screen-builder.md` HARD RULE for details.
 
 ---
 

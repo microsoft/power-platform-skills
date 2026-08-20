@@ -9,7 +9,6 @@ const { spawnSync } = require('node:child_process');
 
 const DISPATCHER = path.resolve(__dirname, '..', 'validate-mobile-files.js');
 const VALIDATOR = path.resolve(__dirname, '..', '..', 'hooks', 'validate-package-deps.js');
-const TEMPLATE_PACKAGE = path.resolve(__dirname, '..', '..', 'template', 'package.json');
 
 function makeProject(packageName, version = '1.0.0') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-package-deps-'));
@@ -74,19 +73,6 @@ test('does not let plan approval bypass a known native package block', (t) => {
 
   assert.strictEqual(result.status, 2);
   assert.match(result.stderr, /Native\/runtime dependency `expo-notifications`/);
-});
-
-test('allows the template-shipped expo-haptics version', (t) => {
-  const templatePackage = JSON.parse(fs.readFileSync(TEMPLATE_PACKAGE, 'utf8'));
-  const hapticsVersion = templatePackage.dependencies?.['expo-haptics'];
-  assert.strictEqual(hapticsVersion, '55.0.14');
-
-  const projectRoot = makeProject('expo-haptics', hapticsVersion);
-  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
-
-  const result = validate(projectRoot);
-
-  assert.strictEqual(result.status, 0, result.stderr);
 });
 
 test('continues to allow ordinary JavaScript packages without an exception', (t) => {
