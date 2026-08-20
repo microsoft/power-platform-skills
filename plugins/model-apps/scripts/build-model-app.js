@@ -391,7 +391,7 @@ function parseLanguageCode(value) {
   if (value === undefined) return undefined;
   const lc = Number(value);
   if (!Number.isInteger(lc) || lc <= 0) {
-    throw new Error(`--language-code must be a positive integer LCID (got '${value}')`);
+    throw new Error(`--language-code / --languageCode must be a positive integer LCID (got '${value}')`);
   }
   return lc;
 }
