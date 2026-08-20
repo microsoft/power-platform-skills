@@ -111,6 +111,32 @@ test('apply threads through to the SDK engine (solution + tables created)', asyn
 });
 
 // R3 — auto-verify after a successful --apply (opt-in; deps.verify injected)
+test('data-model languageCode defaults to the org base language and reaches table/column labels', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') return [{ languagecode: 1031 }];
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk });
+  assert.strictEqual(r.ok, true);
+  assert.ok(calls.some((c) => c[0] === 'createTable' && c[1] && c[1].languageCode === 1031), 'table create carries the org language');
+  assert.ok(calls.some((c) => c[0] === 'createColumn' && c[2] && c[2].languageCode === 1031), 'column create carries the org language');
+});
+
+test('languageCode option overrides the org base language', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') return [{ languagecode: 1031 }];
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', languageCode: 3082 }, { sdk });
+  assert.strictEqual(r.ok, true);
+  assert.ok(calls.some((c) => c[0] === 'createTable' && c[1] && c[1].languageCode === 3082), 'table create uses the override');
+  assert.ok(calls.some((c) => c[0] === 'createColumn' && c[2] && c[2].languageCode === 3082), 'column create uses the override');
+});
+
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;

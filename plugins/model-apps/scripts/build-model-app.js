@@ -264,6 +264,7 @@ async function buildModelApp(spec, opts, deps) {
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        languageCode: opts.languageCode,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
@@ -397,14 +398,14 @@ async function main() {
   const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
   // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
   // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
   // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace'].find((k) => flags[k] === true);
+  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace', 'language-code', 'languageCode'].find((k) => flags[k] === true);
   if (valuelessFlag) {
     process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
     process.exit(1);
@@ -420,6 +421,7 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const languageCode = flags['language-code'] ?? flags.languageCode;
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
@@ -429,6 +431,7 @@ async function main() {
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
+    languageCode,
     appDir: path.dirname(specPath),
     env,
     workspaceDir,

@@ -427,6 +427,12 @@ function validateAppSpec(spec, opts = {}) {
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
   }
+  if (spec.languageCode !== undefined) {
+    const lc = Number(spec.languageCode);
+    if (!Number.isInteger(lc) || lc <= 0) {
+      errors.push('languageCode must be a positive integer LCID');
+    }
+  }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
   for (const e of spec.entities || []) {
