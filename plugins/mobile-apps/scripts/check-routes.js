@@ -248,11 +248,14 @@ function main() {
   for (const file of screenFiles) {
     const relative = path.relative(appRoot, file).replace(/\\/g, '/');
     const base = relative.replace(/\.tsx$/, '');
-    const children = screenFiles.filter(other => {
+    const children = screenFiles.filter((other) => {
       const otherRelative = path.relative(appRoot, other).replace(/\\/g, '/');
       return otherRelative.startsWith(`${base}/`);
     });
-    if (children.length > 0) {
+    const hasIndex = children.some(
+      (child) => path.relative(appRoot, child).replace(/\\/g, '/') === `${base}/index.tsx`,
+    );
+    if (children.length > 0 && !hasIndex) {
       fileFolderCollisionFindings.push({
         route: fileToRoute(file, appRoot),
         file,
