@@ -112,6 +112,17 @@ Define exact implementation inputs rather than descriptive color/type names alon
 | Border / elevation | |
 | Icon sizes | |
 
+#### Depth Roles
+
+Use only this cross-platform hierarchy. Theme-token surfaces and borders must preserve separation where platform shadows are weak or increased contrast is active.
+
+| Depth role | Tamagui elevation | Intended surfaces | Border/surface fallback | Theme and stacking checks |
+|---|---|---|---|---|
+| flat | `0` | Page sections, rows, grouped fields, banners, empty states | Divider or semantic border only when needed | No decorative lift |
+| raised | `$1` | Selectable or repeated cards | Semantic border and contrasting surface | Clear in light/dark/increased contrast |
+| floating | `$2` | Popovers, menus, detached fixed action docks | Semantic border and opaque surface | Above scrolling content; not clipped |
+| modal | `$3` | Dialogs, sheets, drawers | Semantic border, opaque surface, overlay | Clearly above overlay and underlying content |
+
 ### Responsive Viewport Contract
 
 Use the live Tamagui media keys. These are validation viewports and composition boundaries, not device-specific pixel positioning.
@@ -233,10 +244,10 @@ Complete for every field, filter, selection, or command input. Use `Not applicab
 
 ### Component Map
 
-Consolidate reusable contracts from every screen. Do not include one-off page hierarchy or section geometry. Classify framework-owned composition such as Expo Router `Tabs` as `framework primitive`, not as a Stage 3 component. Every `shared component` ID cited by a Screen Contract must appear exactly once here and name at least one required usage Screen ID.
+Resolve every Stage 1 candidate before consolidating reusable contracts. Do not include one-off page hierarchy or section geometry. Classify framework-owned composition such as Expo Router `Tabs` as `framework primitive`, not as a Stage 3 component. Every `shared component` ID cited by a Screen Contract must appear exactly once here and name at least one required usage Screen ID.
 
-| Component ID | Implementation owner | Category | Required usage Screen IDs | Typed props/events/slots | Variants/states | Token dependencies | Accessibility/layout invariant | Preferred primitive or scaffold ID |
-|---|---|---|---|---|---|---|---|---|
+| Component ID | Disposition + rationale | Implementation owner | Shared tier | Required usage Screen IDs | Shared anatomy + composed IDs | Typed variation props/events/slots | Variants/states | Token dependencies | Depth role | Accessibility/layout invariant | Preferred primitive or scaffold ID + screen-local remainder |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 
 ### Screen Shell And Inset Ownership Matrix
 
@@ -296,6 +307,13 @@ Record `Not used` with a reason for plausible capabilities that were evaluated b
 
 | Component family | Tamagui primitive/composition | Variants and states | Responsive behavior | Accessibility contract |
 |---|---|---|---|---|
+
+### Shared Component Candidate Inventory
+
+Stage 1 records candidates; Stage 2 resolves every row as promoted or screen-specific.
+
+| Candidate ID | Screen IDs | Common anatomy and behavior | Stable semantic/accessibility/layout/platform boundary | Expected variation | Preferred scaffold ID or `custom` + fit/gaps/dependencies | Intended depth role | Stage 2 disposition and rationale |
+|---|---|---|---|---|---|---|---|
 
 ### Media And Assets
 

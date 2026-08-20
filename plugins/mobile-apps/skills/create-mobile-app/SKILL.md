@@ -26,7 +26,7 @@ Invoke these skills in this exact order:
 |---|---|---|
 | 1 | `plan` | Confirmed requirements and complete plan plus validated starter app |
 | 2 | `screen-design` | Build-ready functional requirements and layouts per screen |
-| 3 | `component-library` | Reusable React Native components with a review gallery |
+| 3 | `component-library` | Reusable React Native components with a validated production handoff |
 | 4 | `app-builder` | Complete polished mock-backed app |
 | 5 | `native-capabilities` | Native workflows with permission and fallback states |
 | 6 | `connections` | Non-Dataverse connector workflows with mock fallback |
@@ -45,7 +45,7 @@ All eight stages are mandatory invocations. Native Capabilities or Connections m
 	```text
 	npm install > /dev/null 2>&1 &
 	```
-3. Stages 1-2 do not run dependency-dependent commands. Stage 3 runs `npm run type-check` before editing and blocks if dependencies are unavailable.
+3. Stages 1-2 do not run dependency-dependent commands. Before Stage 3's baseline type-check, create `src/` and the scaffold manifest's workspace-relative target root with their parents. Recover other missing stage-owned directories under the shared stage contract; unavailable dependencies or remaining substantive errors block Stage 3.
 4. Read `.stages/mobile-app-state.md`, `.stages/mobile-app-plan.md`, and the latest handoff from the target when present. Resume at the first stage that is neither `complete` nor `not-required`; reconcile only that stage's direct inputs and previous-stage changed files with live state rather than rescanning the template.
 5. Before invocation, verify the preceding stage's handoff has `Status: complete` or `not-required`, a passing validation entry, and every listed next-stage precondition. Stage 1 instead verifies the dependency-independent baseline workspace.
 6. Pass the original request, workspace path, existing state/plan paths, and the exact preceding handoff record to the stage skill. Do not rely on chat history or re-ask answers already persisted.

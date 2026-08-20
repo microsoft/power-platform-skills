@@ -5,6 +5,9 @@ export type BannerSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export type InlineBannerProps = {
   action?: ReactNode;
+  dismissAccessibilityLabel?: string;
+  dismissIcon?: ReactNode;
+  dismissLabel?: string;
   icon?: ReactNode;
   message: string;
   onDismiss?: () => void;
@@ -12,7 +15,7 @@ export type InlineBannerProps = {
   title?: string;
 };
 
-export function InlineBanner({ action, icon, message, onDismiss, severity = 'info', title }: InlineBannerProps) {
+export function InlineBanner({ action, dismissAccessibilityLabel = 'Dismiss message', dismissIcon, dismissLabel = 'Close', icon, message, onDismiss, severity = 'info', title }: InlineBannerProps) {
   const assertive = severity === 'error';
 
   return (
@@ -23,7 +26,7 @@ export function InlineBanner({ action, icon, message, onDismiss, severity = 'inf
       backgroundColor="$backgroundStrong"
       borderColor="$borderColor"
       borderWidth={1}
-      gap="$3"
+      gap="$2"
       padding="$3"
       radius="$4"
       items="center"
@@ -34,7 +37,11 @@ export function InlineBanner({ action, icon, message, onDismiss, severity = 'inf
         <Text>{message}</Text>
       </YStack>
       {action}
-      {onDismiss ? <Button chromeless onPress={onDismiss}>Close</Button> : null}
+      {onDismiss && dismissIcon ? (
+        <Button accessibilityLabel={dismissAccessibilityLabel} chromeless circular minHeight={44} minWidth={44} onPress={onDismiss}>{dismissIcon}</Button>
+      ) : onDismiss ? (
+        <Button accessibilityLabel={dismissAccessibilityLabel} chromeless minHeight={44} onPress={onDismiss}>{dismissLabel}</Button>
+      ) : null}
     </XStack>
   );
 }

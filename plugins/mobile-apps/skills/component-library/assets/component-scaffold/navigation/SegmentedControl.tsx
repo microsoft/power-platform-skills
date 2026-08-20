@@ -19,10 +19,11 @@ export type SegmentedControlProps = {
 export function SegmentedControl({ accessibilityLabel = 'View selection', onValueChange, segments, value }: SegmentedControlProps) {
   return (
     <Tabs value={value} onValueChange={onValueChange} orientation="horizontal">
-      <Tabs.List flex={1} aria-label={accessibilityLabel}>
+      <Tabs.List backgroundColor="$backgroundStrong" borderColor="$borderColor" borderRadius="$4" borderWidth={1} flex={1} padding="$1" aria-label={accessibilityLabel}>
         {segments.map((segment) => (
           <Tabs.Tab
             accessibilityLabel={segment.badge === undefined ? segment.label : `${segment.label}, ${segment.badge}`}
+            borderRadius="$3"
             disabled={segment.disabled}
             flex={1}
             key={segment.value}

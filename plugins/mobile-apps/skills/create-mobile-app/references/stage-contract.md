@@ -15,6 +15,8 @@ Read the plan, state, and immediately preceding handoff before asking questions.
 
 Before work, verify the immediately preceding stage's handoff record. Do not infer missing outputs from chat history. If a required artifact, plan section, validation result, or safety approval is absent or stale, return `BLOCKED` or `NEEDS_INPUT` instead of reconstructing it silently.
 
+A missing stage-owned output directory inside the workspace is recoverable setup, not a blocker. Create it and its parents, then retry the operation or validation. Missing required artifacts still block; do not create placeholders. When a generated directory such as `src/generated/` is required, run its supported generator rather than creating or editing generated output manually. Block only if creation or generation fails, the path is an incompatible file, or a substantive error remains after retry.
+
 Stage 1 reads `template-contract.md`, performs the initial anchor inspection, and records the full compatibility snapshot. Later stages reuse that persisted snapshot and inspect only the previous handoff's changed files that affect them, their direct input/ownership surfaces, and explicit next-stage preconditions. Carry the snapshot forward unchanged when those targeted checks find no drift; refresh only affected fields and record why. Perform a full template reinspection only when the snapshot is missing/stale, relevant external drift is detected, or a required invariant fails. Never inspect `src/generated/`.
 
 ## Stage Output Artifact
@@ -85,7 +87,7 @@ Before success:
 
 1. preserve the last approved data mode and fallback;
 2. for Stages 1-2, review the package manifest, template anchors, and owned plan/specification artifacts with normal file reads/search and the stage's semantic completion checklist; do not run dependency-dependent commands or manufacture an executable validator. Exclude `src/generated/` from direct inspection;
-3. for Stages 3-8, run `npm run type-check` unless the workspace exposes a narrower authoritative check first; a dependency-related failure blocks the stage;
+3. for Stages 3-8, create missing stage-owned output directories, then run `npm run type-check` unless a narrower authoritative check exists. Recover a missing-directory diagnostic and rerun; remaining dependency or compiler errors block the stage;
 4. before App Builder has assembled every approved screen and workflow, use type-check and static/semantic checks only; do not run `npm run web`, `npm run dev`, any `bundle:*`/`build:*` script, or another command that builds or launches the complete app;
 5. at App Builder's final complete-app gate and in later implementation stages, run the relevant existing test when the change affects runtime integration and use only `bundle:web`/`npm run web` for complete-app runtime feedback; never run Android/iOS bundles, native launch commands, simulators, or dev clients;
 6. provide a review target: running web-server URL, static preview, or exact web route and launch command;

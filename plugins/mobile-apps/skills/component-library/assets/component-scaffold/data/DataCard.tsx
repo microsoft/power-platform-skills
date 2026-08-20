@@ -1,29 +1,42 @@
 import type { ReactNode } from 'react';
 import { Pressable } from 'react-native';
-import { Text, XStack, YStack } from 'tamagui';
+import { Button, Card, Text, XStack, YStack } from 'tamagui';
 import { AppImage, type AppImageProps } from '../media/AppImage';
+
+export type DataCardAction = {
+  accessibilityLabel?: string;
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+};
 
 export type DataCardProps = {
   actions?: ReactNode;
+  icon?: ReactNode;
   imageAccessibilityLabel?: string;
   imageSource?: AppImageProps['source'];
   metadata?: ReactNode;
   onPress?: () => void;
+  primaryAction?: DataCardAction;
+  secondaryAction?: DataCardAction;
   subtitle?: string;
   title: string;
 };
 
-export function DataCard({ actions, imageAccessibilityLabel, imageSource, metadata, onPress, subtitle, title }: DataCardProps) {
+export function DataCard({ actions, icon, imageAccessibilityLabel, imageSource, metadata, onPress, primaryAction, secondaryAction, subtitle, title }: DataCardProps) {
   const content = (
-    <YStack gap="$2" padding="$4">
-      <Text fontWeight="700" size="$6">{title}</Text>
-      {subtitle ? <Text color="$color10">{subtitle}</Text> : null}
-      {metadata}
-    </YStack>
+    <XStack gap="$2" items="flex-start" p="$3">
+      {icon}
+      <YStack flex={1} gap="$1.5">
+        <Text fontSize="$6" fontWeight="700">{title}</Text>
+        {subtitle ? <Text color="$color10">{subtitle}</Text> : null}
+        {metadata}
+      </YStack>
+    </XStack>
   );
 
   return (
-    <YStack backgroundColor="$background" borderColor="$borderColor" borderRadius="$4" borderWidth={1} overflow="hidden">
+    <Card bg="$background" borderColor="$borderColor" borderWidth={1} elevation="$1" overflow="hidden" rounded="$4">
       {imageSource ? (
         <AppImage accessibilityLabel={imageAccessibilityLabel ?? title} source={imageSource} />
       ) : null}
@@ -32,7 +45,21 @@ export function DataCard({ actions, imageAccessibilityLabel, imageSource, metada
           {content}
         </Pressable>
       ) : content}
-      {actions ? <XStack gap="$2" padding="$4" paddingTop="$0">{actions}</XStack> : null}
-    </YStack>
+      {actions || primaryAction || secondaryAction ? (
+        <XStack bg="$backgroundHover" borderTopColor="$borderColor" borderTopWidth={1} gap="$2" p="$3">
+          {actions}
+          {secondaryAction ? (
+            <Button accessibilityLabel={secondaryAction.accessibilityLabel} chromeless disabled={secondaryAction.disabled} onPress={secondaryAction.onPress}>
+              {secondaryAction.label}
+            </Button>
+          ) : null}
+          {primaryAction ? (
+            <Button accessibilityLabel={primaryAction.accessibilityLabel} disabled={primaryAction.disabled} onPress={primaryAction.onPress}>
+              {primaryAction.label}
+            </Button>
+          ) : null}
+        </XStack>
+      ) : null}
+    </Card>
   );
 }

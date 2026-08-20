@@ -28,7 +28,7 @@ The user enters through `/create-mobile-app`. Dependency installation starts in 
 
 ## Stage 3: Component Library
 
-**Optional review target:** reusable React Native components and their visual, interaction, responsive, and accessibility variants.
+**Optional review target:** reusable React Native component contracts and their visual, interaction, responsive, and accessibility variants in the Screen Design checkpoint.
 
 **Built:** typed, business-agnostic React Native and Tamagui components required by the approved screen designs. No complete feature screens or data workflows are implemented.
 
@@ -36,7 +36,7 @@ The user enters through `/create-mobile-app`. Dependency installation starts in 
 
 **Optional validation target:** interactive variants, reusability, visual coherence, and layout coverage.
 
-**Passes forward:** component inventory, typed props/events/variants, theme/token usage, responsive and accessibility contracts, overlay/provider requirements, gallery target, validation, and explicitly deferred screen-specific UI.
+**Passes forward:** component inventory, typed props/events/variants, theme/token usage, responsive and accessibility contracts, overlay/provider requirements, representative state evidence, validation, and explicitly deferred screen-specific UI. Stage 3 does not add a gallery or demonstration component to customer runtime code.
 
 ## Stage 4: End-To-End App Builder
 

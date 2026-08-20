@@ -26,7 +26,7 @@ export function AdaptiveSheet({ children, header, onBeforeClose, onOpenChange, o
       <Dialog modal open={open} onOpenChange={handleOpenChange}>
         <Dialog.Portal>
           <Dialog.Overlay opacity={0.5} />
-          <Dialog.Content gap="$4" maxWidth={size === 'sm' ? 420 : size === 'md' ? 640 : 880}>
+          <Dialog.Content borderColor="$borderColor" borderWidth={1} elevation="$3" gap="$3" maxW={size === 'sm' ? 420 : size === 'md' ? 640 : 880} p="$4" rounded="$5">
             <Dialog.Title>{title}</Dialog.Title>
             {header}
             {children}
@@ -39,10 +39,10 @@ export function AdaptiveSheet({ children, header, onBeforeClose, onOpenChange, o
   return (
     <Sheet modal open={open} onOpenChange={handleOpenChange} dismissOnSnapToBottom snapPoints={[...snapPoints[size]]}>
       <Sheet.Overlay opacity={0.5} />
-      <Sheet.Frame padding="$4">
+      <Sheet.Frame elevation="$3" p="$4" rounded="$5">
         <Sheet.Handle />
         {header}
-        <YStack flex={1}>{children}</YStack>
+        <YStack flex={1} gap="$3">{children}</YStack>
       </Sheet.Frame>
     </Sheet>
   );

@@ -27,13 +27,13 @@ export function ConfirmDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay key="overlay" opacity={0.5} />
-        <AlertDialog.Content key="content" gap="$4" maxWidth={440}>
+        <AlertDialog.Content borderColor="$borderColor" borderWidth={1} elevation="$3" key="content" gap="$3" maxW={440} p="$4" rounded="$5">
           <AlertDialog.Title>{title}</AlertDialog.Title>
           <AlertDialog.Description>{description}</AlertDialog.Description>
-          <XStack gap="$3" justify="flex-end">
+          <XStack gap="$2" justify="flex-end">
             <AlertDialog.Cancel asChild><Button disabled={loading}>{cancelLabel}</Button></AlertDialog.Cancel>
             <AlertDialog.Action asChild>
-              <Button accessibilityState={{ busy: loading }} backgroundColor={destructive ? '$red9' : undefined} disabled={loading} onPress={onConfirm}>
+              <Button accessibilityState={{ busy: loading }} bg={destructive ? '$red9' : undefined} disabled={loading} onPress={onConfirm}>
                 {loading ? 'Working...' : confirmLabel}
               </Button>
             </AlertDialog.Action>

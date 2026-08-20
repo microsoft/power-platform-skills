@@ -15,7 +15,7 @@ export type RecordRowProps = {
 export function RecordRow({ leading, metadata, onLongPress, onPress, subtitle, title, trailing }: RecordRowProps) {
   return (
     <Pressable accessibilityRole={onPress || onLongPress ? 'button' : undefined} onLongPress={onLongPress} onPress={onPress}>
-      <XStack minHeight={64} items="center" gap="$3" paddingVertical="$3">
+      <XStack backgroundColor="$background" borderColor="$borderColor" borderRadius="$4" borderWidth={1} minHeight={56} items="center" gap="$3" paddingHorizontal="$3" paddingVertical="$2">
         {leading}
         <YStack flex={1} gap="$1">
           <Text fontWeight="600">{title}</Text>

@@ -15,9 +15,9 @@ export type EmptyStateProps = {
   title: string;
 };
 
-export function EmptyState({ actionLabel, actions, children, description, icon, maxWidth = 480, minHeight = 220, onAction, onSecondaryAction, secondaryActionLabel, title }: EmptyStateProps) {
+export function EmptyState({ actionLabel, actions, children, description, icon, maxWidth = 480, minHeight = 200, onAction, onSecondaryAction, secondaryActionLabel, title }: EmptyStateProps) {
   return (
-    <YStack items="center" justify="center" gap="$3" minHeight={minHeight} padding="$5">
+    <YStack backgroundColor="$backgroundStrong" borderColor="$borderColor" borderRadius="$4" borderWidth={1} items="center" justify="center" gap="$2" minHeight={minHeight} padding="$4">
       {icon}
       <Heading size="$6" textAlign="center">{title}</Heading>
       <Text color="$color10" maxWidth={maxWidth} textAlign="center">{description}</Text>

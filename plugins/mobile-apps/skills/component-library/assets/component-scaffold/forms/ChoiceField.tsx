@@ -14,11 +14,20 @@ export function ChoiceField({ label, onValueChange, options, value }: ChoiceFiel
   return (
     <YStack gap="$2">
       <Label>{label}</Label>
-      <RadioGroup value={value} onValueChange={onValueChange} gap="$2">
-        {options.map((option) => {
+      <RadioGroup backgroundColor="$background" borderColor="$borderColor" borderRadius="$4" borderWidth={1} overflow="hidden" value={value} onValueChange={onValueChange}>
+        {options.map((option, optionIndex) => {
           const id = `choice-${option.value}`;
           return (
-            <XStack key={option.value} minHeight={44} items="center" gap="$3">
+            <XStack
+              borderBottomColor="$borderColor"
+              borderBottomWidth={optionIndex < options.length - 1 ? 1 : 0}
+              key={option.value}
+              minHeight={48}
+              items="center"
+              gap="$3"
+              paddingHorizontal="$3"
+              paddingVertical="$2"
+            >
               <RadioGroup.Item disabled={option.disabled} id={id} value={option.value}><RadioGroup.Indicator /></RadioGroup.Item>
               <YStack flex={1} opacity={option.disabled ? 0.5 : 1}>
                 <Label htmlFor={id}>{option.label}</Label>

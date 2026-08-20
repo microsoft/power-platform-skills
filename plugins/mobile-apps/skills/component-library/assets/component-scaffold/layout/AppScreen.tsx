@@ -16,7 +16,7 @@ export type AppScreenProps = {
 
 export function AppScreen({ children, footer, header, maxWidth = 1200, padding = 16, safeAreaEdges = ['top', 'right', 'bottom', 'left'], scroll = true, scrollHorizontal = false }: AppScreenProps) {
   const content = (
-    <YStack width="100%" maxWidth={maxWidth} alignSelf="center" padding={padding} gap="$4" flex={1}>
+    <YStack width="100%" maxW={maxWidth} self="center" p={padding} flex={1}>
       {children}
     </YStack>
   );

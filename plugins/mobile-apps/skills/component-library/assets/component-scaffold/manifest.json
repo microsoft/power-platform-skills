@@ -4,13 +4,21 @@
   "defaults": {
     "platforms": ["ios", "android", "web"],
     "providers": [],
-    "theme": "inherit"
+    "theme": "inherit",
+    "depthRole": "flat",
+    "spacing": {
+      "externalOwner": "parent",
+      "internalOwner": "component",
+      "pairedEdges": "symmetric-by-default",
+      "minimumInternalPadding": 12,
+      "minimumElementGap": 8
+    }
   },
   "components": [
     { "id": "async-button", "export": "AsyncButton", "category": "actions", "source": "actions/AsyncButton.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "chip", "export": "Chip", "category": "actions", "source": "actions/Chip.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "icon-button", "export": "IconButton", "category": "actions", "source": "actions/IconButton.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "data-card", "export": "DataCard", "category": "data", "source": "data/DataCard.tsx", "packages": ["react-native", "tamagui"], "requires": ["app-image"] },
+    { "id": "data-card", "export": "DataCard", "category": "data", "source": "data/DataCard.tsx", "packages": ["react-native", "tamagui"], "requires": ["app-image"], "depthRole": "raised" },
     { "id": "numeric-badge", "export": "NumericBadge", "category": "data", "source": "data/NumericBadge.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "record-row", "export": "RecordRow", "category": "data", "source": "data/RecordRow.tsx", "packages": ["react-native", "tamagui"], "requires": [] },
     { "id": "status-badge", "export": "StatusBadge", "category": "data", "source": "data/StatusBadge.tsx", "packages": ["tamagui"], "requires": [] },
@@ -25,12 +33,12 @@
     { "id": "date-time-field", "export": "DateTimeField", "category": "forms", "source": "forms/DateTimeField.tsx", "files": ["forms/DateTimeField.native.tsx", "forms/DateTimeField.types.ts"], "packages": ["@react-native-community/datetimepicker", "tamagui"], "requires": ["form-field"] },
     { "id": "form-field", "export": "FormField", "category": "forms", "source": "forms/FormField.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "range-slider", "export": "RangeSlider", "category": "forms", "source": "forms/RangeSlider.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "search-field", "export": "SearchField", "category": "forms", "source": "forms/SearchField.tsx", "packages": ["react", "tamagui"], "requires": [] },
+    { "id": "search-field", "export": "SearchField", "category": "forms", "source": "forms/SearchField.tsx", "packages": ["react", "tamagui"], "requires": [], "overlayDepthRole": "floating" },
     { "id": "text-area-field", "export": "TextAreaField", "category": "forms", "source": "forms/TextAreaField.tsx", "packages": ["tamagui"], "requires": ["form-field"] },
     { "id": "text-field", "export": "TextField", "category": "forms", "source": "forms/TextField.tsx", "packages": ["tamagui"], "requires": ["form-field"] },
     { "id": "toggle-field", "export": "ToggleField", "category": "forms", "source": "forms/ToggleField.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "app-screen", "export": "AppScreen", "category": "layout", "source": "layout/AppScreen.tsx", "packages": ["react-native", "react-native-safe-area-context", "tamagui"], "providers": ["SafeAreaProvider"], "requires": [] },
-    { "id": "bottom-action-bar", "export": "BottomActionBar", "category": "layout", "source": "layout/BottomActionBar.tsx", "packages": ["react-native-safe-area-context", "tamagui"], "providers": ["SafeAreaProvider"], "requires": [] },
+    { "id": "app-screen", "export": "AppScreen", "category": "layout", "source": "layout/AppScreen.tsx", "packages": ["react-native", "react-native-safe-area-context", "tamagui"], "providers": ["SafeAreaProvider"], "requires": [], "spacingRole": "screen-shell" },
+    { "id": "bottom-action-bar", "export": "BottomActionBar", "category": "layout", "source": "layout/BottomActionBar.tsx", "packages": ["react-native-safe-area-context", "tamagui"], "providers": ["SafeAreaProvider"], "requires": [], "depthRole": "floating", "spacingRole": "fixed-action-owner" },
     { "id": "gradient-surface", "export": "GradientSurface", "category": "layout", "source": "layout/GradientSurface.tsx", "packages": ["expo-linear-gradient", "tamagui"], "requires": [] },
     { "id": "responsive-pane", "export": "ResponsivePane", "category": "layout", "source": "layout/ResponsivePane.tsx", "packages": ["react-native", "tamagui"], "requires": [] },
     { "id": "app-avatar", "export": "AppAvatar", "category": "media", "source": "media/AppAvatar.tsx", "packages": ["tamagui"], "requires": [] },
@@ -39,9 +47,9 @@
     { "id": "app-header", "export": "AppHeader", "category": "navigation", "source": "navigation/AppHeader.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "segmented-control", "export": "SegmentedControl", "category": "navigation", "source": "navigation/SegmentedControl.tsx", "packages": ["tamagui"], "requires": [] },
     { "id": "accordion", "export": "Accordion", "category": "overlays", "source": "overlays/Accordion.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "adaptive-sheet", "export": "AdaptiveSheet", "category": "overlays", "source": "overlays/AdaptiveSheet.tsx", "packages": ["react-native", "tamagui"], "requires": [] },
-    { "id": "confirm-dialog", "export": "ConfirmDialog", "category": "overlays", "source": "overlays/ConfirmDialog.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "context-menu", "export": "ContextMenu", "category": "overlays", "source": "overlays/ContextMenu.tsx", "packages": ["tamagui"], "requires": [] },
-    { "id": "drawer", "export": "Drawer", "category": "overlays", "source": "overlays/Drawer.tsx", "packages": ["tamagui"], "requires": [] }
+    { "id": "adaptive-sheet", "export": "AdaptiveSheet", "category": "overlays", "source": "overlays/AdaptiveSheet.tsx", "packages": ["react-native", "tamagui"], "requires": [], "depthRole": "modal" },
+    { "id": "confirm-dialog", "export": "ConfirmDialog", "category": "overlays", "source": "overlays/ConfirmDialog.tsx", "packages": ["tamagui"], "requires": [], "depthRole": "modal" },
+    { "id": "context-menu", "export": "ContextMenu", "category": "overlays", "source": "overlays/ContextMenu.tsx", "packages": ["tamagui"], "requires": [], "depthRole": "floating" },
+    { "id": "drawer", "export": "Drawer", "category": "overlays", "source": "overlays/Drawer.tsx", "packages": ["tamagui"], "requires": [], "depthRole": "modal" }
   ]
 }
