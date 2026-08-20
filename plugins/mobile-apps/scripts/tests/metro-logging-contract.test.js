@@ -5,6 +5,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
+function caretVersionAtLeast(value, minimum) {
+  const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  assert.ok(match, `expected a caret semver range, received ${value}`);
+  const actual = match.slice(1).map(Number);
+  for (let index = 0; index < minimum.length; index += 1) {
+    if (actual[index] !== minimum[index]) return actual[index] > minimum[index];
+  }
+  return true;
+}
+
 test('template imports the host Metro logger at config startup', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const workflow = fs.readFileSync(
@@ -20,7 +30,10 @@ test('template imports the host Metro logger at config startup', () => {
     /const \{ withPowerNativeMetroLogging \} = require\('@microsoft\/power-apps-native-host\/metro-logger'\);/,
   );
   assert.doesNotMatch(metroConfig, /SENSITIVE_LINE_PATTERN|appendMetroLog|process\.stdout\.write/);
-  assert.equal(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.2.26');
+  assert.ok(
+    caretVersionAtLeast(packageJson.dependencies['@microsoft/power-apps-native-host'], [0, 2, 26]),
+    'the host package must include the Metro logger introduced in 0.2.26',
+  );
   assert.match(gitignore, /^\.powernative\//m);
   assert.match(workflow, /plugins\/mobile-apps\/template\/metro\.config\.js/);
   assert.match(workflow, /plugins\/mobile-apps\/template\/package\.json/);
