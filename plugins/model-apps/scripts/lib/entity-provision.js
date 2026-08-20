@@ -34,10 +34,11 @@ function normalizeLanguageCode(value) {
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
-// Dataverse label payloads must use an LCID the org actually has provisioned. Default to the org's
-// base `organization.languagecode` when the caller doesn't override it, and only fall back to 1033
-// if discovery itself fails so an unrelated read error does not block the whole build.
-async function resolveLanguageCode({ provision, spec, languageCode }) {
+// Dataverse label payloads must use an LCID the org actually has provisioned. Resolve an explicit
+// CLI override first, then an App Spec override, then the org's base `organization.languagecode`,
+// and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
+// the whole build.
+async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
   const explicit = normalizeLanguageCode(languageCode);
   if (explicit) return explicit;
 
@@ -52,8 +53,10 @@ async function resolveLanguageCode({ provision, spec, languageCode }) {
     const rows = await provision.queryRecords('organization', { select: ['languagecode'], top: 1 });
     const orgLanguage = normalizeLanguageCode(rows && rows[0] && rows[0].languagecode);
     if (orgLanguage) return orgLanguage;
-  } catch {
-    // Intentionally fall through to the historical default.
+  } catch (err) {
+    if (typeof warn === 'function') {
+      warn(`language-code discovery failed; using ${DEFAULT_LANGUAGE_CODE} (${(err && err.message) || err})`);
+    }
   }
 
   return DEFAULT_LANGUAGE_CODE;
@@ -193,9 +196,9 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
-  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode });
+  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode, warn });
   
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;

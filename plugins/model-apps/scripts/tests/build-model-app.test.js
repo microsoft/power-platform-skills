@@ -148,6 +148,17 @@ test('language resolution ignores an invalid override and still honors a valid s
   assert.strictEqual(lc, 1031);
 });
 
+test('language resolution warns when org-language discovery fails but still falls back', async () => {
+  const warnings = [];
+  const lc = await resolveLanguageCode({
+    provision: { queryRecords: async () => { throw new Error('boom'); } },
+    spec: {},
+    warn: (msg) => warnings.push(msg),
+  });
+  assert.strictEqual(lc, 1033);
+  assert.ok(warnings.some((w) => /language-code discovery failed/.test(w)));
+});
+
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;

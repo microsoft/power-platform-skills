@@ -265,6 +265,7 @@ async function buildModelApp(spec, opts, deps) {
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
         languageCode: opts.languageCode,
+        warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
@@ -499,6 +500,7 @@ async function main() {
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal,
       // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
       // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
