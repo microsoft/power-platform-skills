@@ -757,11 +757,42 @@ test('collectSitemap collects the web resource a URL subarea TARGETS, so its con
       }],
     },
   };
-  const { customRefs } = collectSitemap(app);
-  assert.ok(customRefs.includes('new_homepage.html'), '$webresource: token must be collected');
-  assert.ok(customRefs.includes('new_second.html'), '/WebResources/ form must be collected');
+  const { customRefs, navRefs } = collectSitemap(app);
+  assert.ok(navRefs.includes('new_homepage.html'), '$webresource: token must be collected as a NAV ref');
+  assert.ok(navRefs.includes('new_second.html'), '/WebResources/ form must be collected as a NAV ref');
   assert.strictEqual(
-    customRefs.some((r) => /contoso\.example|https/.test(r)), false,
+    navRefs.some((r) => /contoso\.example|https/.test(r)), false,
     'a real http(s) link is not a web resource and must NOT be collected',
   );
+});
+
+test('iconWebResources re-declares a NON-IMAGE web resource a URL subarea targets (#430)', async () => {
+  // The icon path gates on IMAGE_WR_TYPES by design, and a "custom page backed by an HTML web
+  // resource" is html (type 1). Without a separate nav-ref policy the page is never re-declared, so a
+  // rebuild's nav entry points at a resource the spec cannot recreate -- the fix would look complete
+  // and still be broken.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'crba3_homepage.html') return [{ name, webresourcetype: 1, content: 'PGh0bWw+', ismanaged: false }];
+    if (name === 'crba3_nav.svg') return [{ name, webresourcetype: 11, content: 'c3Zn', ismanaged: false }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], ['crba3_nav.svg'], 'crba3', true, ['crba3_homepage.html']);
+  const byName = Object.fromEntries(webResources.map((w) => [w.name, w]));
+  assert.ok(byName['crba3_homepage.html'], 'the html nav page must be re-declared');
+  assert.strictEqual(byName['crba3_homepage.html'].type, 'html');
+  assert.strictEqual(byName['crba3_homepage.html'].external, true, 'external:true so teardown never deletes it');
+  assert.ok(byName['crba3_nav.svg'], 'the icon path must still work');
+});
+
+test('a MANAGED nav web resource is left as a bare reference, not re-declared (#430)', async () => {
+  // It exists in every environment; re-creating it would be wrong, and failing the download over it
+  // is what issue #430 was.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'crba3_managed.html') return [{ name, webresourcetype: 1, content: 'eA==', ismanaged: true }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['crba3_managed.html']);
+  assert.strictEqual(webResources.length, 0, 'a managed nav resource must not be re-declared');
 });

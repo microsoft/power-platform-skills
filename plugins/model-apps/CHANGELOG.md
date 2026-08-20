@@ -38,12 +38,13 @@ smoke-eval assertion that could never pass live.
   The Site Map Designer writes `$webresource:<name>` into a URL subarea; the http(s)
   guard rejected it, so the downloaded spec failed validation and **no spec file was
   written at all** — blocking the whole download → edit → rebuild flow for the app over
-  a single unrelated nav entry. `download-model-app.js` now collects the referenced web
-  resource so its **content** is fetched and re-declared into `webResources[]`, and the
-  validator accepts the token provided that resource is declared — the same rule a
-  dashboard `webresource` tile already uses. The http(s) guard is unchanged for real
-  links: an *undeclared* token is a hard error, and a `javascript:`/`file:`/malformed
-  url is still dropped and counted in `droppedSubareas`.
+  a single unrelated nav entry. The reference now passes validation as-is (the same
+  policy platform icon refs already use), and `download-model-app.js` additionally
+  captures the page's **content** into `webResources[]` when it can safely do so — as
+  `navRefs`, kept separate from icon refs because the icon path is image-only by design
+  and such a page is `html`. A managed or foreign resource stays a bare reference; it
+  exists in the target environment. A `javascript:`/`file:`/malformed url is still
+  rejected and dropped.
 - **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
   and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
   (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona

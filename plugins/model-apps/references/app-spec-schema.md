@@ -413,10 +413,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   — surfaced as a `GenPage` sitemap subarea).
 - **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
   the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
-  `/WebResources/<name>` path. A web-resource reference **must name a declared `webResources[]` entry**,
-  the same rule a dashboard `webresource` tile uses, so the app stays self-contained on export/import;
-  an undeclared one is an error. Any other scheme is rejected: a `javascript:` or `file:` nav entry in
-  a shipped app is a script-injection / local-file-exfil vector.
+  `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon
+  ref: it is a live/OOB value a downloaded app carries, and the resource is frequently managed or owned
+  by another publisher, so requiring it to be declared would break the download→build round-trip.
+  Download captures its content into `webResources[]` when it can safely do so (own prefix, unmanaged).
+  Any other scheme is rejected: a `javascript:` or `file:` nav entry in a shipped app is a
+  script-injection / local-file-exfil vector.
 - Any area or subarea may set **`icon`**. This is either a declared image `webResources[]` NAME
   (png/jpg/gif/svg/ico — validated against `webResources[]`) OR a **platform icon reference** — a path
   (`/WebResources/…`, `/_imgs/…`) or a `$webresource:<name>` — which a **downloaded** app carries verbatim

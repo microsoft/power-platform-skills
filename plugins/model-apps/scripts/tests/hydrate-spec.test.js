@@ -208,16 +208,20 @@ test('a spec with a declared web-resource subarea PASSES validation (#430 end to
   assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
 });
 
-test('an UNDECLARED web-resource subarea is a hard validation error, not a dangling link (#430)', async () => {
-  // Rebuilding a nav entry that points at a resource the spec cannot recreate would leave a broken
-  // link in the target environment, so the reference must be self-contained.
-  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', []));
+test('an UNDECLARED web-resource subarea still validates — it is a live/OOB reference (#430)', () => {
+  // Deliberately NOT a hard error. The referenced resource is often managed or owned by another
+  // publisher, which download leaves as a bare reference because re-creating a foreign prefix would
+  // hard-fail a fresh build. The icon path already learned this: "a platform reference is a live/OOB
+  // value a downloaded app carries and is valid AS-IS (rejecting it broke the download→build
+  // round-trip on real apps)". Requiring declaration here would re-make that mistake.
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_o', displayName: 'O', primaryAttribute: { schemaName: 'new_name', displayName: 'N' }, columns: [] }],
+    appShell: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
+  };
   const v = validateAppSpec(spec, { profile: 'plan' });
-  assert.strictEqual(v.ok, false);
-  assert.ok(
-    (v.errors || []).some((e) => /undeclared web resource/.test(e)),
-    'expected an undeclared-web-resource error, got ' + JSON.stringify(v.errors),
-  );
+  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
 });
 
 test('the /WebResources/<name> form round-trips too (#430)', async () => {

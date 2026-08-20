@@ -266,18 +266,23 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   backed by an HTML web resource" writes `$webresource:<name>` (Dataverse also serves it at
   `/WebResources/<name>`) into a URL subarea. Passing that token through used to fail the WHOLE
   download on validation — the http(s) guard rejected it — so no spec was written at all and download
-  → edit → rebuild was blocked for the entire app over one nav entry (issue #430). It is now a real
-  round-trip: `collectSitemap` adds the referenced name to `customRefs` so the resource's CONTENT is
-  fetched and re-declared into `webResources[]` (the same path a token-referenced nav ICON already
-  took), and the validator accepts the token **provided the web resource is declared** — the identical
-  rule a dashboard `webresource` tile already uses. The build needed no change: it already passes a
-  subarea `url` straight through to the sitemap.
+  → edit → rebuild was blocked for the entire app over one nav entry (issue #430). The reference now
+  **passes validation as-is**, exactly like a platform icon ref and for the reason recorded there: it
+  is a live/OOB value a downloaded app carries, and rejecting it broke the round-trip on real apps.
+  Requiring it to be *declared* would re-make that mistake, because such a page is frequently managed
+  or owned by another publisher.
+  Download additionally captures the page's CONTENT when it can safely do so. `collectSitemap` returns
+  these as **`navRefs`, separate from icon `customRefs`**, because the type policy differs: the icon
+  path gates on `IMAGE_WR_TYPES` by design and such a page is `html` (type 1), so routing it through
+  the icon rules silently declared nothing and left a rebuild pointing at a resource the spec could
+  not recreate. A nav ref takes the same safety gates as an icon — own prefix, unmanaged, has content,
+  `external: true` so teardown never deletes it — minus the image-type gate. A managed/foreign one is
+  left as a bare reference (it exists in the target env). The build needed no change: it already
+  passes a subarea `url` straight through to the sitemap.
   This does **not** weaken the http(s) guard, which exists to stop an *arbitrary* scheme
-  (`javascript:`, `file:`) becoming a nav entry in a shipped app. A token is not arbitrary — it names
-  a resource inside the solution, and requiring it to be declared keeps the app self-contained on
-  export/import. An **undeclared** token is a hard validation error rather than a dangling link, and a
-  genuinely unexpressible url (`javascript:`, malformed) is still dropped and counted in
-  `droppedSubareas`.
+  (`javascript:`, `file:`) becoming a nav entry in a shipped app — a web-resource reference names a
+  resource inside Dataverse, not a script or a local file. A genuinely unexpressible url is still
+  dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
