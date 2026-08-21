@@ -16,14 +16,19 @@ smoke-eval assertion that could never pass live.
   resolves `organization.languagecode` once per run and threads it into every
   label-emitting call (tables, columns, customer columns, global choices, status
   reasons, alternate keys, relationships), and warns whenever it has to fall back.
-  Optional overrides: App Spec `languageCode`, or `--language-code` / `--languageCode`
-  on `build-model-app.js` and `provision-entities.js`.
 
-  Worth knowing if you hit this: the failure is **not** all-or-nothing. Dataverse
-  accepts an unprovisioned LCID on `EntityMetadata` and `PicklistAttributeMetadata`
-  but rejects it on `DateTime` and `Memo` — so the table and its Choice columns are
-  created and the build fails a few steps later, which reads like an environment
-  problem rather than a defect.
+  Precedence: `--language-code` / `--languageCode` → App Spec `languageCode` (or
+  `languageCode` in the `provision-entities.js` input JSON) → the organization's
+  base language → 1033. Both CLIs accept the flag.
+
+  Two things worth knowing if you hit this. The failure is **not** all-or-nothing:
+  Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
+  `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table
+  and its Choice columns are created and the build fails a few steps later — which
+  reads like an environment problem rather than a defect. And this covers the
+  **data-model phase only**; form, dashboard and sitemap labels still come from SDK
+  serializers that hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership

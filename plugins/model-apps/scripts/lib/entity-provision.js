@@ -35,11 +35,25 @@ const DEFAULT_LANGUAGE_CODE = 1033;
 // and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
 // the whole build.
 async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
+  // A supplied-but-invalid value is DISCARDED, not honoured — but it must not be discarded in
+  // silence. "You gave me nothing" and "you gave me something I could not use" are different facts,
+  // and only the second means the caller believes they pinned a language and is wrong. The CLI flags
+  // hard-error before reaching here; this covers the programmatic seam and any caller that skips the
+  // validation gate. Nobody's build breaks by being told their explicit input was rejected.
+  const rejected = (label, value) => {
+    if (typeof warn === 'function') {
+      warn(`ignoring ${label} '${value}' — not a valid LCID (expected a positive integer up to 65535); `
+        + 'falling back to the next source.');
+    }
+  };
+
   const explicit = normalizeLanguageCode(languageCode);
   if (explicit) return explicit;
+  if (languageCode !== undefined && languageCode !== null) rejected('--language-code', languageCode);
 
   const specLanguage = normalizeLanguageCode(spec?.languageCode);
   if (specLanguage) return specLanguage;
+  if (spec && spec.languageCode !== undefined && spec.languageCode !== null) rejected('languageCode', spec.languageCode);
 
   // EVERY fallback to the default is announced, not just the read-threw case. 1033 is precisely the
   // value that breaks a non-English organization (#447), so a build that silently lands here fails

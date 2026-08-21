@@ -394,7 +394,7 @@ function parseLanguageCode(value) {
   // disagree about which LCIDs are valid.
   const lc = normalizeLanguageCode(value);
   if (lc === null) {
-    throw new Error(`--language-code / --languageCode must be a positive integer LCID (got '${value}')`);
+    throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${value}')`);
   }
   return lc;
 }

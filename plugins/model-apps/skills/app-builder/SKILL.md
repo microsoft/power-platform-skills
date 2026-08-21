@@ -284,13 +284,15 @@ before applying.)
 other stages and the legacy `--from/--to/--only/--skip` selectors are dry-run inspection only —
 their phase ranges are not dependency-closed and are rejected on `--apply`.
 
-**Language (`--language-code <lcid>`)** — you normally do **not** pass this. Dataverse labels are
+**Language (`--language-code <lcid>`)** — you normally do **not** pass this. Data-model labels are
 stamped with the organization's own base language, read once per build. Pass it only to author
 labels in a different **provisioned** language, or if the build warns that it could not determine
 the base language and fell back to 1033. If a build fails with *"The language code N is not a valid
 language for this organization"*, that is this setting — re-run with `--language-code <an LCID the
-org actually has>` (check with `RetrieveProvisionedLanguages`). The App Spec field `languageCode`
-pins the same value across runs.
+org actually has>`, listing them with
+`node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`.
+The App Spec field `languageCode` pins the same value across runs. Note this covers the data-model
+phase only; form and sitemap labels still carry 1033 (SDK limitation, issue #455).
 
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a

@@ -372,14 +372,15 @@ const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 //   Number('1e3')  === 1000  -> exponent notation is never a real LCID
 // Each of those passes a naive positive-integer check and then fails deep inside the data-model phase
 // with an opaque Dataverse 400, instead of a clear spec/CLI error up front. Accept only a real number
-// or an all-digits string.
+// or an all-digits string, and bound it: an LCID is a 16-bit value, so anything above 0xFFFF cannot be
+// one and would fail the same opaque way (65536, 1e20 and MAX_SAFE_INTEGER all cleared an unbounded
+// positive-integer check).
 // LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+const MAX_LCID = 0xFFFF;
 function normalizeLanguageCode(value) {
-  if (typeof value === 'number') return Number.isInteger(value) && value > 0 ? value : null;
-  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
-    const n = Number(value.trim());
-    return n > 0 ? n : null;
-  }
+  const ok = (n) => (n > 0 && n <= MAX_LCID ? n : null);
+  if (typeof value === 'number') return Number.isInteger(value) ? ok(value) : null;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return ok(Number(value.trim()));
   return null;
 }
 

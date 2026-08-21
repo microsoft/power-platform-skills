@@ -4,7 +4,7 @@
 // a structured JSON result. Dry-run by default; --apply writes. --sample-data opt-in.
 //
 // Usage:
-//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data]
+//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code <lcid>]
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -299,7 +299,7 @@ async function main() {
   if (rawLang !== undefined) {
     languageCode = normalizeLanguageCode(rawLang);
     if (languageCode === null) {
-      process.stderr.write(`✗ --language-code / --languageCode must be a positive integer LCID (got '${rawLang}')\n`);
+      process.stderr.write(`✗ --language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${rawLang}')\n`);
       process.exit(1);
     }
   }

@@ -8,7 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
-const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -679,4 +679,33 @@ test('a healthy org language read produces no warning through the CLI path', asy
   assert.strictEqual(r.ok, true);
   assert.deepStrictEqual(warnings, [], 'the happy path must not warn');
   assert.ok(calls.some((c) => c[0] === 'createColumn' && c[2] && c[2].languageCode === 1031));
+});
+
+// An LCID is a 16-bit value, so anything above 0xFFFF cannot be one. Without an upper bound these
+// cleared the positive-integer check and reached the wire, failing in exactly the opaque way the
+// normalizer's own comment claims it prevents.
+test('normalizeLanguageCode bounds the LCID to 16 bits', () => {
+  for (const bad of [65536, 1e20, Number.MAX_SAFE_INTEGER, '65536', '99999']) {
+    assert.strictEqual(normalizeLanguageCode(bad), null, `${bad} is above 0xFFFF and must be rejected`);
+  }
+  assert.strictEqual(normalizeLanguageCode(65535), 65535, 'the boundary itself is valid');
+  assert.strictEqual(normalizeLanguageCode(1033), 1033);
+});
+
+// "You gave me nothing" and "you gave me something I could not use" are different facts. Only the
+// second means the caller believes they pinned a language and is wrong, so it must not be silent.
+test('a supplied-but-invalid language override is reported, not silently discarded', async () => {
+  const warnings = [];
+  const lc = await resolveLanguageCode({ provision: {}, spec: {}, languageCode: 'de-DE', warn: (m) => warnings.push(m) });
+  assert.strictEqual(lc, 1033, 'still falls through rather than failing the build');
+  assert.ok(warnings.some((w) => /ignoring --language-code 'de-DE'/.test(w)), 'the discarded value is named: ' + JSON.stringify(warnings));
+
+  const w2 = [];
+  await resolveLanguageCode({ provision: {}, spec: { languageCode: '1O33' }, warn: (m) => w2.push(m) });
+  assert.ok(w2.some((w) => /ignoring languageCode '1O33'/.test(w)), 'a bad spec value is named too: ' + JSON.stringify(w2));
+
+  // Absent must stay silent — only the org-discovery fallback warning applies there.
+  const w3 = [];
+  await resolveLanguageCode({ provision: { queryRecords: async () => [{ languagecode: 1031 }] }, spec: {}, warn: (m) => w3.push(m) });
+  assert.deepStrictEqual(w3, [], 'omitting the override is not a problem and must not warn');
 });

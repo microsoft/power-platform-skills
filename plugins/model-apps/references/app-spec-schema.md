@@ -74,12 +74,17 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
-  stamped on every Dataverse label the build creates (table, column, choice, status reason,
-  relationship and alternate-key display names). **Normally omit it**: the build reads the
-  organization's base language (`organization.languagecode`) and uses that, which is always a
-  language the org has provisioned. Set it only to deliberately author labels in a *different*
-  provisioned language than the org default; `--language-code <lcid>` overrides it for a single run.
-  Must be a positive integer — `1031`, not `"de-DE"` and not `true`.
+  stamped on the Dataverse labels the **data-model phase** creates (table, column, choice, status
+  reason, relationship and alternate-key display names). It does **not** reach form, dashboard or
+  sitemap labels — those go through SDK serializers that hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+  **Normally omit it**: the build reads the organization's base language
+  (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
+  Set it only to deliberately author labels in a *different* provisioned language than the org
+  default; `--language-code <lcid>` overrides it for a single run.
+  Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
+  value is rejected by validation, and a caller that bypasses validation gets a warning naming the
+  discarded value rather than a silent fall-through.
   **Not emitted by `download-model-app.js`**, and that is deliberate: an LCID copied out of the
   source org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly
   how a spec starts failing in an org that lacks that language. Leaving it absent lets every target
