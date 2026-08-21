@@ -211,6 +211,7 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
 > /list-connections              # diagnostic when a service call returns 401
+> /update-dependencies           # ordered dependency updates
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
@@ -252,6 +253,7 @@ Example edit flows:
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
+| `/update-dependencies` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |

@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 23 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 24 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -73,7 +73,6 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-
 ## Decisions made
 
 - ✅ Markdown plan with Mermaid (no HTML rendering)
