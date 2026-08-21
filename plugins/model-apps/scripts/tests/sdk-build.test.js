@@ -2537,3 +2537,25 @@ test('pages: a single-app env passes the shared-page check (reads no other sitem
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+test('a by-value publish failure reaches the warn channel through the whole build', async () => {
+  // The unit tests pin reportPartialPush; this pins that the ENGINE is wired to it. Before the fix a
+  // build in which every publish failed reported ok:true with zero warnings and zero error events —
+  // proven by probe — because all nine call sites discarded the result. A wiring break would restore
+  // exactly that, and no unit test can see it.
+  const { sdk, calls } = mockSdk();
+  sdk.publishArtifact = async (type, id) => {
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    return { type, id, shipped: false, publish: { kind: 'failed', error: new Error('PublishXml 503') } };
+  };
+  const warnings = [];
+  const spec = makeSpec();
+  const result = await runSdkBuild(spec, { sdk, apply: true, publish: true, warn: (m) => warnings.push(m) });
+
+  assert.ok(result.ok, 'a failed publish does not fail the build — the writes committed');
+  assert.ok(calls.some((c) => c.name === 'publishArtifact'), 'the publish phase actually ran');
+  assert.ok(
+    warnings.some((w) => /publish .* FAILED/.test(w) && /PublishXml 503/.test(w)),
+    'the failure must surface with its cause; got: ' + JSON.stringify(warnings)
+  );
+});

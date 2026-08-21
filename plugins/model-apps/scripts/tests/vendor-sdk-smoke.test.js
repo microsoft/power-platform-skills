@@ -626,3 +626,43 @@ test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — ap
   await sdk.pushArtifact('app', art.id);
   assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="Grid"/, 'the bundle serializes a bare token when handed one — so the plugin must not hand it one');
 });
+
+test('CONTRACT: vendored publishArtifact RESOLVES with publish.kind on failure — it does NOT throw', async () => {
+  // This is the contract whose change slipped through unnoticed. The SDK moved publishArtifact from
+  // throwing to reporting by value; the engine discarded the result at all nine call sites, so every
+  // publish failure became invisible and `ok: true` was reported anyway. There was a method-PRESENCE
+  // guard for publishArtifact but no BEHAVIOURAL one, which is exactly the gap that let it land.
+  //
+  // A throw would also silently re-arm the transient-retry path, and a by-value failure would silently
+  // disarm it, so which one the bundle does is load-bearing and must be pinned rather than assumed.
+  const client = {
+    get: async (url) => {
+      if (/EntityDefinitions\(LogicalName=/i.test(url)) {
+        const ln = (url.match(/LogicalName='([^']+)'/) || [])[1] || 'x';
+        return { status: 200, headers: {}, body: { MetadataId: '33333333-3333-3333-3333-333333333333', EntitySetName: `${ln}s`, LogicalName: ln, PrimaryIdAttribute: `${ln}id`, PrimaryNameAttribute: 'name', SchemaName: ln, IsCustomEntity: true, ObjectTypeCode: 10001 } };
+      }
+      if (/\/systemforms\(/.test(url)) return { status: 200, headers: {}, body: { '@odata.etag': 'W/"1"', formid: FID, formxml: '<form/>', name: 'F', objecttypecode: 'account', type: 2 } };
+      return { status: 200, headers: {}, body: { value: [] } };
+    },
+    // Only PublishXml fails; everything else succeeds, so this isolates the publish half.
+    post: async (url) => (/PublishXml/i.test(url)
+      ? { status: 500, headers: {}, body: { error: { message: 'PublishXml exploded' } } }
+      : { status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    postRaw: async () => ({ status: 200, headers: {}, body: '' }),
+  };
+  const FID = '11111111-1111-1111-1111-111111111111';
+  const sdk = sdkWith(client);
+  await sdk.fetchArtifact('form', FID);
+
+  let threw = null;
+  let result = null;
+  try { result = await sdk.publishArtifact('form', FID); } catch (e) { threw = e; }
+
+  assert.strictEqual(threw, null, 'publishArtifact must RESOLVE on a failed publish, not throw — the engine reads the result');
+  assert.ok(result && typeof result === 'object', 'it returns a structured result');
+  assert.ok(result.publish && result.publish.kind === 'failed', `publish.kind must be 'failed'; got ${JSON.stringify(result.publish)}`);
+  assert.strictEqual(result.shipped, false, 'a failed publish is not shipped');
+});
