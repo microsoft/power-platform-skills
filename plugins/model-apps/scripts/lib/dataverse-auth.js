@@ -223,6 +223,22 @@ function parseArgs(argv) {
   return { positional, flags };
 }
 
+/**
+ * Read a flag that has both kebab-case and camelCase spellings, rejecting a conflicting pair.
+ *
+ * `flags[kebab] ?? flags[camel]` silently prefers one and discards the other, which is the wrong
+ * answer when the two disagree — the user passed both and believes one is in effect, so guessing
+ * either way produces a build they did not ask for with no indication why.
+ */
+function readAliasedFlag(flags, kebab, camel) {
+  const a = flags[kebab];
+  const b = flags[camel];
+  if (a !== undefined && b !== undefined && String(a) !== String(b)) {
+    throw new Error(`--${kebab} '${a}' and --${camel} '${b}' disagree — pass only one`);
+  }
+  return a !== undefined ? a : b;
+}
+
 /** Reads a JSON value either inline or from a file via @path syntax. */
 function readJsonArg(raw) {
   if (raw == null) return null;
@@ -271,6 +287,7 @@ module.exports = {
   requiredLevel,
   getDefaultPublisherPrefix,
   parseArgs,
+  readAliasedFlag,
   readJsonArg,
   emitResult,
 };

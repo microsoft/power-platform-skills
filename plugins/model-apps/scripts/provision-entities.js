@@ -12,7 +12,7 @@ const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -294,7 +294,7 @@ async function main() {
   const inputPath = path.resolve(typeof inputArg === 'string' && inputArg.startsWith('@') ? inputArg.slice(1) : inputArg);
   const input = readJsonArg('@' + inputPath);
   
-  const rawLang = flags['language-code'] ?? flags.languageCode;
+  const rawLang = readAliasedFlag(flags, 'language-code', 'languageCode');
   let languageCode;
   if (rawLang !== undefined) {
     languageCode = normalizeLanguageCode(rawLang);

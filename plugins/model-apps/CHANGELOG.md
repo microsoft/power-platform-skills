@@ -2,33 +2,22 @@
 
 All notable changes to the **model-apps** plugin.
 
-## [Unreleased] — 2.4.4
+## [Unreleased] — 2.5.0
 
-Adds plugin update notices, proves what persona roles actually grant, makes
-jobs-to-be-done surfaces checkable, fixes four crash paths, and corrects a
-smoke-eval assertion that could never pass live.
+Takes up the current maker SDK, labels Dataverse metadata in the organization's own
+language instead of a hardcoded 1033, proves what persona roles actually grant, makes
+jobs-to-be-done surfaces checkable, adds plugin update notices, fixes four crash paths,
+and corrects a smoke-eval assertion that could never pass live.
 
 ### Added
-- **Dataverse labels now use the organization's own language instead of a hardcoded
-  `1033`** ([#447](https://github.com/microsoft/power-platform-skills/issues/447)).
-  In an organization that has not provisioned 1033, `data-model` halted with
-  `The language code 1033 is not a valid language for this organization`. The build
-  resolves `organization.languagecode` once per run and threads it into every
-  label-emitting call (tables, columns, customer columns, global choices, status
-  reasons, alternate keys, relationships), and warns whenever it has to fall back.
-
-  Precedence: `--language-code` / `--languageCode` → App Spec `languageCode` (or
-  `languageCode` in the `provision-entities.js` input JSON) → the organization's
-  base language → 1033. Both CLIs accept the flag.
-
-  Two things worth knowing if you hit this. The failure is **not** all-or-nothing:
-  Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
-  `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table
-  and its Choice columns are created and the build fails a few steps later — which
-  reads like an environment problem rather than a defect. And this covers the
-  **data-model phase only**; form, dashboard and sitemap labels still come from SDK
-  serializers that hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+- **`languageCode` (App Spec) and `--language-code` / `--languageCode` (CLI)** — pin the
+  LCID used for the Dataverse labels the data-model phase creates, overriding the
+  organization's base language. Accepted by `build-model-app.js` and by
+  `provision-entities.js` (which also reads `languageCode` from its input JSON).
+  Validated as a positive integer LCID up to 65535 at every entry point through one
+  shared normalizer, so a JSON `true` — which `Number()` would coerce to the invalid
+  LCID `1` — is rejected up front rather than failing deep in the build. Normally you
+  do not need this: see the fix below.
 
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
@@ -54,6 +43,36 @@ smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **Dataverse labels no longer use a hardcoded `1033`**
+  ([#447](https://github.com/microsoft/power-platform-skills/issues/447)). In an
+  organization that has not provisioned 1033, `data-model` halted with
+  `The language code 1033 is not a valid language for this organization`. The build now
+  resolves `organization.languagecode` once per run and threads it into every
+  label-emitting call — tables, columns, customer columns, global choices, status
+  reasons, alternate keys and relationships — and warns whenever it has to fall back,
+  or has to discard an LCID you supplied.
+
+  Precedence: `--language-code` / `--languageCode` → App Spec `languageCode` (or
+  `languageCode` in the `provision-entities.js` input JSON) → the organization's base
+  language → 1033.
+
+  Two things worth knowing if you hit this. The failure is **not** all-or-nothing:
+  Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
+  `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table and
+  its Choice columns are created and the build fails a few steps later — which reads
+  like an environment problem rather than a defect. And this covers the **data-model
+  phase only**; form, dashboard and sitemap labels still come from SDK serializers that
+  hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+
+- **A 412 version conflict on an artifact push could have been silently swallowed.**
+  The maker SDK renamed `PushResult.success` to `saved`; the guard that turns a 412 into
+  a build halt still checked `success === false`, which against the new shape reads
+  `undefined === false` and simply stops firing — dropping a concurrent Maker edit with
+  no error and no log. The guard now reads either spelling and fails closed. Found while
+  taking up the current SDK
+  ([#457](https://github.com/microsoft/power-platform-skills/issues/457)).
+
 - **A sitemap subarea that targets a custom web resource now round-trips**
   ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
   The Site Map Designer writes `$webresource:<name>` into a URL subarea; the http(s)

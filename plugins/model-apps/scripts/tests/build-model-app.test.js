@@ -709,3 +709,20 @@ test('a supplied-but-invalid language override is reported, not silently discard
   await resolveLanguageCode({ provision: { queryRecords: async () => [{ languagecode: 1031 }] }, spec: {}, warn: (m) => w3.push(m) });
   assert.deepStrictEqual(w3, [], 'omitting the override is not a problem and must not warn');
 });
+
+// #456: the two flag spellings are aliases, so passing both with DIFFERENT values means the user
+// believes one is in effect and is wrong about which. `a ?? b` silently prefers the kebab form and
+// discards the other, producing a build nobody asked for with no indication why.
+test('a conflicting --language-code / --languageCode pair is rejected, not silently resolved', () => {
+  const { readAliasedFlag } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  assert.throws(
+    () => readAliasedFlag({ 'language-code': '1031', languageCode: '1036' }, 'language-code', 'languageCode'),
+    /disagree/,
+    'two different values must be an error'
+  );
+  // Agreeing duplicates are harmless, and either alone is fine.
+  assert.strictEqual(readAliasedFlag({ 'language-code': '1031', languageCode: '1031' }, 'language-code', 'languageCode'), '1031');
+  assert.strictEqual(readAliasedFlag({ 'language-code': '1031' }, 'language-code', 'languageCode'), '1031');
+  assert.strictEqual(readAliasedFlag({ languageCode: '1036' }, 'language-code', 'languageCode'), '1036');
+  assert.strictEqual(readAliasedFlag({}, 'language-code', 'languageCode'), undefined);
+});

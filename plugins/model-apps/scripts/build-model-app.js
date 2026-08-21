@@ -17,7 +17,7 @@ const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageC
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -388,6 +388,10 @@ function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
+// Read the language flag from either spelling, rejecting a conflicting pair rather than silently
+// preferring one.
+const readLanguageFlag = (flags) => readAliasedFlag(flags, 'language-code', 'languageCode');
+
 function parseLanguageCode(value) {
   if (value === undefined) return undefined;
   // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
@@ -433,13 +437,20 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
-  const languageCode = parseLanguageCode(flags['language-code'] ?? flags.languageCode);
+  const languageCode = parseLanguageCode(readLanguageFlag(flags));
+  const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
+  // The LCID is only consumed by the data-model phase, so a selector that excludes it makes the flag
+  // a no-op. Say so rather than accept it silently: a user who passed --language-code believes their
+  // labels are being pinned, and finding out otherwise means re-running the whole build.
+  if (languageCode !== undefined && Array.isArray(phases) && !phases.includes('data-model')) {
+    process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — only the data-model phase creates labels.\n`);
+  }
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
     publish: flags.publish === true,
     verify: flags.verify === true,
-    phases: stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to }),
+    phases,
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
