@@ -825,6 +825,21 @@ test('a hand-pinned languageCode survives a download (#456)', () => {
   assert.strictEqual(spec.languageCode, 1031, 'the author-pinned LCID is restored');
 });
 
+test('the preserved value is CANONICAL, not the author\'s raw formatting', () => {
+  // A downloaded spec is a generated artifact. `"1031"` and `" 1031 "` both validate, but writing
+  // the string form back out makes the file's diff noisy and its type inconsistent with every other
+  // numeric field the download emits.
+  for (const raw of ['1031', ' 1031 ', '01031']) {
+    const spec = { app: { name: 'A' } };
+    preserveAuthoredLanguageCode(spec, 'app-spec.json', {
+      existsSync: () => true,
+      readFileSync: () => JSON.stringify({ languageCode: raw }),
+    });
+    assert.strictEqual(spec.languageCode, 1031, `${JSON.stringify(raw)} must normalize to the number 1031`);
+    assert.strictEqual(typeof spec.languageCode, 'number');
+  }
+});
+
 test('preserving never invents a languageCode where the author had none', () => {
   const spec = { app: { name: 'A' }, entities: [] };
   const deps = { existsSync: () => true, readFileSync: () => JSON.stringify({ app: { name: 'A' } }) };

@@ -827,7 +827,9 @@ async function main() {
 // previous spec at this path — the author's own file — and never synthesized from the environment.
 //
 // Best-effort by design: a missing, unreadable or malformed previous spec just means there is nothing
-// to preserve. Failing the download over it would be worse than the wart this fixes.
+// to preserve. Failing the download over it would be worse than the wart this fixes. Only a value that
+// would itself pass validation is restored — carrying a broken one forward would fail the next build
+// for a reason the operator did not cause on this run.
 // Exported for tests.
 function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync;
@@ -836,9 +838,12 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   try {
     if (!existsSync(specPath)) return spec;
     const prior = JSON.parse(readFileSync(specPath, 'utf8'));
-    // Only a value that would itself pass validation is worth restoring; carrying a broken one
-    // forward would fail the next build for a reason the operator did not cause on this run.
-    if (prior && normalizeLanguageCode(prior.languageCode) !== null) spec.languageCode = prior.languageCode;
+    // Assign the NORMALIZED value, not the raw one. `"1031"` and `" 1031 "` both validate, but a
+    // downloaded spec is a generated artifact and should be canonical — writing the author's
+    // whitespace or string form back out makes the file's diff noisy and its type inconsistent with
+    // every other numeric field the download emits.
+    const lcid = prior ? normalizeLanguageCode(prior.languageCode) : null;
+    if (lcid !== null) spec.languageCode = lcid;
   } catch { /* no previous spec, or not parseable — nothing to preserve */ }
   return spec;
 }
