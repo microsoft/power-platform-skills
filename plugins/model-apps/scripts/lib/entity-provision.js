@@ -12,6 +12,7 @@ const {
   relationshipSchemaName,
   manyToManySchemaName,
   quickCreateEnabledFor,
+  normalizeLanguageCode,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -29,11 +30,6 @@ const SDK_COLUMN_TYPE = {
 const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
 const DEFAULT_LANGUAGE_CODE = 1033;
 
-function normalizeLanguageCode(value) {
-  const n = Number(value);
-  return Number.isInteger(n) && n > 0 ? n : null;
-}
-
 // Dataverse label payloads must use an LCID the org actually has provisioned. Resolve an explicit
 // CLI override first, then an App Spec override, then the org's base `organization.languagecode`,
 // and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
@@ -45,21 +41,32 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
   const specLanguage = normalizeLanguageCode(spec?.languageCode);
   if (specLanguage) return specLanguage;
 
-  if (!provision || typeof provision.queryRecords !== 'function') {
+  // EVERY fallback to the default is announced, not just the read-threw case. 1033 is precisely the
+  // value that breaks a non-English organization (#447), so a build that silently lands here fails
+  // later in the data-model phase with an opaque "The language code 1033 is not a valid language for
+  // this organization" and nothing connecting it back to language resolution — which is exactly the
+  // confusing failure this change exists to remove.
+  const fallback = (reason) => {
+    if (typeof warn === 'function') {
+      warn(`could not determine the organization's base language (${reason}); using ${DEFAULT_LANGUAGE_CODE}. `
+        + `If this organization does not have ${DEFAULT_LANGUAGE_CODE} provisioned, pass --language-code <lcid> `
+        + 'or set "languageCode" in the App Spec.');
+    }
     return DEFAULT_LANGUAGE_CODE;
+  };
+
+  if (!provision || typeof provision.queryRecords !== 'function') {
+    return fallback('no Dataverse reader was supplied');
   }
 
   try {
     const rows = await provision.queryRecords('organization', { select: ['languagecode'], top: 1 });
     const orgLanguage = normalizeLanguageCode(rows && rows[0] && rows[0].languagecode);
     if (orgLanguage) return orgLanguage;
+    return fallback('organization.languagecode was missing or not a valid LCID');
   } catch (err) {
-    if (typeof warn === 'function') {
-      warn(`language-code discovery failed; using ${DEFAULT_LANGUAGE_CODE} (${(err && err.message) || err})`);
-    }
+    return fallback(`the organization read failed: ${(err && err.message) || err}`);
   }
-
-  return DEFAULT_LANGUAGE_CODE;
 }
 
 // Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice

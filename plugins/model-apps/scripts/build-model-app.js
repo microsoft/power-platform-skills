@@ -13,7 +13,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -390,8 +390,10 @@ function list(v) {
 
 function parseLanguageCode(value) {
   if (value === undefined) return undefined;
-  const lc = Number(value);
-  if (!Number.isInteger(lc) || lc <= 0) {
+  // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
+  // disagree about which LCIDs are valid.
+  const lc = normalizeLanguageCode(value);
+  if (lc === null) {
     throw new Error(`--language-code / --languageCode must be a positive integer LCID (got '${value}')`);
   }
   return lc;
@@ -569,4 +571,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode };

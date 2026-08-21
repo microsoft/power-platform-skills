@@ -6,8 +6,9 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -156,7 +157,8 @@ test('language resolution warns when org-language discovery fails but still fall
     warn: (msg) => warnings.push(msg),
   });
   assert.strictEqual(lc, 1033);
-  assert.ok(warnings.some((w) => /language-code discovery failed/.test(w)));
+  // The warning must carry the underlying cause, not just announce that a fallback happened.
+  assert.ok(warnings.some((w) => /base language/i.test(w) && /boom/.test(w)));
 });
 
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
@@ -558,4 +560,88 @@ test('makeSdk returns the httpClient so the caller can wire verify', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   assert.match(src, /return \{ sdk, provisionSdk, httpClient, cleanup \}/, 'makeSdk must expose httpClient');
   assert.match(src, /const \{ sdk, provisionSdk, httpClient, cleanup \} = makeSdk\(/, 'main must destructure it');
+});
+
+// #447 follow-up: an LCID reaches Dataverse as a label LanguageCode, so a value that merely SURVIVES
+// a `Number()` cast is not good enough. `Number(true) === 1` and `Number([1033]) === 1033` both pass
+// a naive positive-integer check, so a spec containing `"languageCode": true` would have built every
+// label with the invalid LCID 1 and failed deep in the data-model phase with an opaque Dataverse 400.
+test('languageCode rejects non-numeric JSON types instead of coercing them to a bogus LCID', () => {
+  const base = { app: { name: 'A' }, entities: [], solution: { uniqueName: 'x', publisherPrefix: 'new' } };
+  const bad = [true, [1033], '1e3', '12.5', {}, 1033.5, -1, 0];
+  for (const v of bad) {
+    const r = validateAppSpec({ ...base, languageCode: v });
+    assert.ok(
+      (r.errors || []).some((e) => /languageCode must be a positive integer LCID/.test(e)),
+      `languageCode=${JSON.stringify(v)} must be REJECTED (Number() would coerce it to ${Number(v)})`
+    );
+  }
+  // A real number and the string form the CLI always produces must still be accepted.
+  for (const v of [1033, 1031, '1031', ' 1033 ']) {
+    const r = validateAppSpec({ ...base, languageCode: v });
+    assert.ok(!(r.errors || []).some((e) => /languageCode/.test(e)), `languageCode=${JSON.stringify(v)} must be accepted`);
+  }
+});
+
+test('resolveLanguageCode does not accept a coerced non-numeric override', async () => {
+  // `true` must NOT win over a valid spec value; it is not a language.
+  const lc = await resolveLanguageCode({ provision: {}, spec: { languageCode: 1031 }, languageCode: true });
+  assert.strictEqual(lc, 1031, 'a boolean override must be ignored, not coerced to LCID 1');
+  const lc2 = await resolveLanguageCode({ provision: {}, spec: { languageCode: true } });
+  assert.strictEqual(lc2, 1033, 'a boolean spec value must fall through to the default, not become LCID 1');
+});
+
+test('parseLanguageCode (CLI) rejects the same coercible values', () => {
+  for (const v of ['abc', '0', '-1', '1e3', '12.5']) {
+    assert.throws(() => parseLanguageCode(v), /positive integer LCID/, `--language-code ${v} must throw`);
+  }
+  assert.strictEqual(parseLanguageCode('1031'), 1031);
+  assert.strictEqual(parseLanguageCode(undefined), undefined);
+});
+
+// #447 follow-up: 1033 is the exact value that breaks a non-English org, so EVERY path that falls
+// back to it must say so. Previously only the read-threw path warned; an empty result set or a null
+// languagecode returned 1033 silently and the build then died on a DateTime/Memo column with an
+// opaque Dataverse 400 that pointed nowhere near language resolution.
+test('every fallback to the default LCID warns, not just the read-threw path', async () => {
+  const cases = [
+    ['no reader supplied', {}],
+    ['empty result set', { queryRecords: async () => [] }],
+    ['null languagecode', { queryRecords: async () => [{ languagecode: null }] }],
+    ['non-LCID languagecode', { queryRecords: async () => [{ languagecode: 'de-DE' }] }],
+    ['read threw', { queryRecords: async () => { throw new Error('boom'); } }],
+  ];
+  for (const [name, provision] of cases) {
+    const warnings = [];
+    const lc = await resolveLanguageCode({ provision, spec: {}, warn: (m) => warnings.push(m) });
+    assert.strictEqual(lc, 1033, name + ': falls back to the default');
+    assert.strictEqual(warnings.length, 1, name + ': must emit exactly one warning');
+    assert.match(warnings[0], /base language/i, name + ': warning explains what could not be determined');
+    assert.match(warnings[0], /--language-code/, name + ': warning names the escape hatch');
+  }
+});
+
+test('a successful org read does NOT warn', async () => {
+  const warnings = [];
+  const lc = await resolveLanguageCode({
+    provision: { queryRecords: async () => [{ languagecode: 1031 }] },
+    spec: {},
+    warn: (m) => warnings.push(m),
+  });
+  assert.strictEqual(lc, 1031);
+  assert.deepStrictEqual(warnings, [], 'the happy path must be silent');
+});
+
+test('the org language read asks for the right column and a single row', async () => {
+  // Pins the query itself, not just its result. The read is wrapped in try/catch and degrades to
+  // 1033, so a wrong $select would surface live as an HTTP 400 swallowed into a warning -- a
+  // regression a result-only assertion cannot see.
+  let seen = null;
+  await resolveLanguageCode({
+    provision: { queryRecords: async (set, opts) => { seen = { set, opts }; return [{ languagecode: 1031 }]; } },
+    spec: {},
+  });
+  assert.strictEqual(seen.set, 'organization', 'logical name (the SDK resolves the entity set itself)');
+  assert.deepStrictEqual(seen.opts.select, ['languagecode']);
+  assert.strictEqual(seen.opts.top, 1);
 });
