@@ -85,7 +85,7 @@ function mockSdk() {
     addElement: (t, id, ptr, el) => { calls.push({ name: 'addElement', args: [t, id, ptr, el] }); return {}; },
     updateElement: (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
     removeElement: (t, id, ptr) => { calls.push({ name: 'removeElement', args: [t, id, ptr] }); return {}; },
-    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
+    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
   };

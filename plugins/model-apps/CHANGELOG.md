@@ -88,9 +88,25 @@ and corrects a smoke-eval assertion that could never pass live.
   The maker SDK renamed `PushResult.success` to `saved`; the guard that turns a 412 into
   a build halt still checked `success === false`, which against the new shape reads
   `undefined === false` and simply stops firing — dropping a concurrent Maker edit with
-  no error and no log. The guard now reads either spelling and fails closed. Found while
-  taking up the current SDK
-  ([#457](https://github.com/microsoft/power-platform-skills/issues/457)).
+  no error and no log. The guard now reads either spelling and fails closed. It also
+  distinguishes an `ARTIFACT_ALREADY_EXISTS` collision (adopt the existing row) from a
+  concurrent edit (re-download) instead of reporting both as the latter.
+
+- **Every publish failure was silent, and the build still reported success.** The same SDK
+  refactor moved `publishArtifact` from throwing to reporting by value, and all nine call
+  sites discarded the result — so a failed `PublishXml` produced `ok: true` with nothing in
+  the log. Worse, it is not gated on `--publish` (reconciling an existing form or view
+  publishes on every `--apply`), and because those failures no longer throw, the existing
+  transient-retry path for 429 / 503 / customization-lock had become unreachable for them.
+  A publish that fails, or that cannot be verified, is now reported against the artifact it
+  belongs to.
+
+- **A push that committed but was partially wrong read as a clean success.** `PushResult`
+  carries `warnings[]` precisely so that an app whose components could not all be pinned, or
+  whose system-administrator role assignment failed — which yields an app nobody can open —
+  is not mistaken for a good build. They were dropped at all eleven push sites; they are now
+  surfaced. This is also the case where the save succeeds and the publish inside the SDK does
+  not, which the push check alone cannot see.
 
 - **A sitemap subarea that targets a custom web resource now round-trips**
   ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
@@ -139,6 +155,19 @@ and corrects a smoke-eval assertion that could never pass live.
   icon makes the eval FAIL rather than silently invert into an absence check.
 
 ### Changed
+- **Vendored maker SDK updated.** Three contract changes are user-visible and worth knowing before
+  you upgrade:
+  - **`deleteAppCascade` no longer deletes generative pages.** A `uxagentproject` is *referenced* by
+    an app, not owned by one — another app's sitemap, or a form's `UxAgentControl`, can point at the
+    same row — so the SDK now reports it in `retained[]` and leaves the decision to the caller.
+    Teardown already handled this: it deletes only the pages this build's own page manifest records
+    as authored, and lets Dataverse's dependency graph reject anything still referenced.
+  - **Unconditional artifact writes are refused** (`ARTIFACT_UPDATE_NO_ETAG`). A push with no
+    concurrency token in hand now fails rather than risk overwriting a concurrent Maker edit. This
+    only affects callers that push an artifact they never fetched.
+  - **`publishArtifact` and `pushArtifact` report failure by value instead of throwing.** Both are
+    now checked (see *Fixed*); a publish failure no longer disappears.
+
 - **`download-model-app.js --app` now accepts a display name**, not just an id or `uniquename`. It
   resolves in identity order (id → `uniquename` → display name) and **fails closed** when a display
   name matches more than one app, listing the candidate unique names instead of guessing. A display

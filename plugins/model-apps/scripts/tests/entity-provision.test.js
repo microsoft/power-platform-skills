@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, requireSuccessfulPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, reportPartialPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -548,5 +548,70 @@ test('EVERY label-emitting SDK call carries the resolved language code (#447)', 
   assert.deepStrictEqual(
     missing.map((c) => c.name), [],
     'these label-emitting calls did not carry the resolved LCID: ' + JSON.stringify(missing.map((c) => c.name))
+  );
+});
+
+// The SDK moved publishArtifact from THROWING to reporting by value, exactly as it did for
+// pushArtifact. Nothing in the engine read the result, so every publish failure vanished into a
+// build that reported ok:true -- and because those failures no longer throw, the transient-retry
+// path (429 / 503 / customization-lock, which is the everyday PublishXml failure in a real tenant)
+// became unreachable for them. These pin the reporting so it cannot silently regress again.
+test('a FAILED publish is reported, not swallowed', () => {
+  const warnings = [];
+  const result = { type: 'form', id: 'f1', shipped: false, publish: { kind: 'failed', error: new Error('PublishXml 503') } };
+  reportPartialPush(result, 'form Contact Main', (m) => warnings.push(m));
+  assert.strictEqual(warnings.length, 1, 'a failed publish must produce exactly one warning');
+  assert.match(warnings[0], /publish form Contact Main FAILED/);
+  assert.match(warnings[0], /PublishXml 503/, 'the underlying cause is named');
+  assert.match(warnings[0], /SAVED but/, 'it must say the write survived — this is not a lost edit');
+});
+
+test('an UNVERIFIABLE publish is reported as unproven rather than as success', () => {
+  const warnings = [];
+  reportPartialPush({ type: 'app', id: 'a1', shipped: false, publish: { kind: 'unverifiable', reason: 'projection not readable' } }, 'app Contoso', (m) => warnings.push(m));
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /could not be CONFIRMED/);
+  assert.match(warnings[0], /projection not readable/);
+});
+
+test('a verified publish and a not-requested publish are both silent', () => {
+  const warnings = [];
+  reportPartialPush({ type: 'view', id: 'v1', shipped: true, publish: { kind: 'verified' } }, 'view V', (m) => warnings.push(m));
+  reportPartialPush({ type: 'view', id: 'v2', shipped: false, publish: { kind: 'notRequested' } }, 'view V2', (m) => warnings.push(m));
+  assert.deepStrictEqual(warnings, [], 'success and no-publish-requested must not warn');
+});
+
+// PushResult.warnings exists specifically so a partial success is not read as a clean one. The SDK's
+// own comment on the app path says a failed system-admin role assignment "must not fail app creation,
+// but it is reported so a create that produced an UNOPENABLE app is not read as a clean success".
+test('a push that COMMITTED but carries warnings surfaces them (an unopenable app is not a clean success)', () => {
+  const warnings = [];
+  const result = {
+    type: 'app', id: 'a2', saved: true, shipped: false, publish: { kind: 'notRequested' },
+    warnings: ['one or more components were not pinned', 'system administrator role could not be assigned'],
+  };
+  assert.strictEqual(requireSuccessfulPush(result, 'app Contoso', (m) => warnings.push(m)), result, 'it still passes — the write committed');
+  assert.strictEqual(warnings.length, 2, 'both warnings surface: ' + JSON.stringify(warnings));
+  assert.ok(warnings.every((w) => /^app Contoso: /.test(w)), 'each names the artifact');
+});
+
+test('a saved push whose publish failed is reported even though the push itself passes', () => {
+  // App CREATE publishes inside the SDK, so this arrives as saved:true + publish:failed with no
+  // top-level error — the shape the push guard alone would wave straight through.
+  const warnings = [];
+  const result = { type: 'app', id: 'a3', saved: true, shipped: false, publish: { kind: 'failed', error: new Error('saved, but publishing failed') } };
+  requireSuccessfulPush(result, 'app Contoso', (m) => warnings.push(m));
+  assert.ok(warnings.some((w) => /publish app Contoso FAILED/.test(w)), JSON.stringify(warnings));
+});
+
+test('requireSuccessfulPush distinguishes an already-exists collision from a version conflict', () => {
+  // Both are by-value failures, but the remedies are opposite: re-download for a concurrent edit,
+  // adopt-the-existing-row for a replayed create. Reporting one as the other sends the operator
+  // to re-download when nothing changed under them.
+  const err = new Error('a record already exists at that id');
+  err.code = 'ARTIFACT_ALREADY_EXISTS';
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'view', id: 'v9', saved: false, error: err }, 'view V9'),
+    (e) => e.name === 'BuildHalt' && e.code === 'already-exists' && /adopt it/.test(e.message) && !/re-download the app/.test(e.message)
   );
 });

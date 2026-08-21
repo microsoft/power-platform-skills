@@ -442,7 +442,7 @@ async function main() {
   // The LCID is only consumed by the data-model phase, so a selector that excludes it makes the flag
   // a no-op. Say so rather than accept it silently: a user who passed --language-code believes their
   // labels are being pinned, and finding out otherwise means re-running the whole build.
-  if (languageCode !== undefined && Array.isArray(phases) && !phases.includes('data-model')) {
+  if (languageCode !== undefined && Array.isArray(phases) && phases.length && !phases.includes('data-model')) {
     process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — only the data-model phase creates labels.\n`);
   }
   const opts = {

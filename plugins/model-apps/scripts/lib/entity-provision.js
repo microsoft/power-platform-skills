@@ -185,12 +185,12 @@ function makeRunner({ emit, total }) {
 }
 
 // Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
-// pushArtifact RESOLVES (it does NOT throw) with a failed PushResult carrying a
-// `VersionConflictError` on a 412 — the artifact changed in Maker since our last fetch. The engine
-// previously ignored push results, so a conflict silently reported success while DROPPING the edit.
-// Halt loudly and require a fresh download instead of auto refetch-and-overlay (which would clobber
-// a concurrent Maker edit and violates the SDK's rebuild-from-model tenet, architecture-spec T6). A
-// 412 is the only failure pushArtifact signals by return value; every other failure still throws.
+// pushArtifact RESOLVES (it does NOT throw) with a failed PushResult on a 412 — the artifact changed
+// in Maker since our last fetch — and on an ARTIFACT_ALREADY_EXISTS collision. The engine previously
+// ignored push results, so a conflict silently reported success while DROPPING the edit. Halt loudly
+// and require a fresh download instead of auto refetch-and-overlay (which would clobber a concurrent
+// Maker edit and violates the SDK's rebuild-from-model tenet, architecture-spec T6). Those two are
+// the failures signalled by return value; every other failure still throws.
 //
 // The SDK renamed `PushResult.success` to `saved`, DELIBERATELY, to force every call site to be
 // re-read once: `saved` means the write committed, NOT that the runtime serves it (that is
@@ -199,16 +199,44 @@ function makeRunner({ emit, total }) {
 // a `saved === false` check, and a bundle that returns `saved` sails past a `success === false`
 // check. Either mismatch silently disarms this guard, which is the one thing it must never do, so
 // the check is written to fail CLOSED against both bundle generations rather than assume one.
-function requireSuccessfulPush(result, what) {
+function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
   const committed = result.saved !== undefined ? result.saved : result.success;
   if (committed === false || (committed === undefined && result.error)) {
+    // Two DIFFERENT by-value failures reach here, and they need different remedies. Reporting an
+    // already-exists collision as a concurrent edit tells the operator to re-download when nothing
+    // changed under them, and hides the actual cause.
+    const alreadyExists = result.error && result.error.code === 'ARTIFACT_ALREADY_EXISTS';
     const detail = (result.error && result.error.message) || 'version conflict (412)';
     throw new BuildHalt(
-      `push ${what || result.type || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
-      { phase: 'push', code: 'version-conflict', recoverable: true, cause: result.error }
+      alreadyExists
+        ? `push ${what || result.type || 'artifact'} failed: ${detail} — a row already exists at that id and no duplicate was created; adopt it (fetchArtifact) instead of re-creating it`
+        : `push ${what || result.type || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
+      { phase: 'push', code: alreadyExists ? 'already-exists' : 'version-conflict', recoverable: true, cause: result.error }
     );
   }
+  // A push can COMMIT and still be partially wrong, and the SDK reports that by value rather than
+  // failing: an app whose components could not all be pinned, whose system-admin role assignment
+  // failed (which yields an app nobody can open), or which saved but did not publish. The SDK's own
+  // comment says these exist "so a create that produced an UNOPENABLE app is not read as a clean
+  // success" — which is precisely what dropping them on the floor does.
+  reportPartialPush(result, what, warn);
+  return result;
+}
+
+// Surface the non-fatal half of a push/publish outcome. Never throws and never halts: the primary
+// write committed, so the build should continue — but silence here turns a partial success into a
+// reported clean one.
+function reportPartialPush(result, what, warn) {
+  if (!result || typeof warn !== 'function') return result;
+  const label = what || result.type || 'artifact';
+  const st = result.publish;
+  if (st && st.kind === 'failed') {
+    warn(`publish ${label} FAILED: ${(st.error && st.error.message) || 'unknown error'} — the change is SAVED but the runtime still serves the previously published copy; re-run with --publish once the cause is cleared`);
+  } else if (st && st.kind === 'unverifiable') {
+    warn(`publish ${label} could not be CONFIRMED (${st.reason}) — the publish call succeeded but the published projection was not read back, so treat "live" as unproven`);
+  }
+  for (const w of result.warnings || []) warn(`${label}: ${w}`);
   return result;
 }
 
@@ -511,4 +539,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, resolveLanguageCode, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };

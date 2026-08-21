@@ -57,8 +57,8 @@ function harness() {
     getArtifact: (t, id) => store[`${t}:${id}`] || { id },
     addElement: () => ({}), updateElement: (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); },
     removeElement: () => ({}),
-    pushArtifact: async (t, id) => ({ type: t, id, success: true }),
-    addSolutionComponent: async () => {}, publishArtifact: async () => {},
+    pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
+    addSolutionComponent: async () => {}, publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
   };
   const genpageCli = {
     uploads: [],
