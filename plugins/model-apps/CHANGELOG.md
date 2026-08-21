@@ -84,6 +84,15 @@ and corrects a smoke-eval assertion that could never pass live.
   hardcode 1033 with no caller override
   ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
+- **A hand-pinned `languageCode` is no longer lost on download**
+  ([#456](https://github.com/microsoft/power-platform-skills/issues/456)). Download
+  still never reads the LCID from Dataverse — copying the source org's language into a
+  portable spec is how it starts failing in an org that lacks that language — but a value
+  the author wrote is now carried over from the previous `app-spec.json` at that path.
+  Losing it was quiet and costly: the next build resolved the org default, so newly
+  created columns got one language while the ones from the pinned build kept another,
+  with no error anywhere.
+
 - **A 412 version conflict on an artifact push could have been silently swallowed.**
   The maker SDK renamed `PushResult.success` to `saved`; the guard that turns a 412 into
   a build halt still checked `success === false`, which against the new shape reads

@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -809,12 +809,42 @@ async function main() {
     return;
   }
   const specPath = path.join(outDir, 'app-spec.json');
+  preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
   emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas });
+}
+
+// Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
+//
+// Download deliberately does not read `languageCode` from Dataverse. An LCID copied out of the source
+// org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly how a
+// spec starts failing in an org that has not provisioned that language (#447) — leaving it absent lets
+// every target org resolve its own base language, which is the right default.
+//
+// But silently dropping a value the author WROTE is its own bug, and a quiet one: the next build
+// resolves the org default, so newly created columns get one language while the ones from the pinned
+// build keep another. A mixed-language app, no error anywhere. So the value is restored from the
+// previous spec at this path — the author's own file — and never synthesized from the environment.
+//
+// Best-effort by design: a missing, unreadable or malformed previous spec just means there is nothing
+// to preserve. Failing the download over it would be worse than the wart this fixes.
+// Exported for tests.
+function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
+  const readFileSync = deps.readFileSync || fs.readFileSync;
+  const existsSync = deps.existsSync || fs.existsSync;
+  if (!spec || spec.languageCode !== undefined) return spec;
+  try {
+    if (!existsSync(specPath)) return spec;
+    const prior = JSON.parse(readFileSync(specPath, 'utf8'));
+    // Only a value that would itself pass validation is worth restoring; carrying a broken one
+    // forward would fail the next build for a reason the operator did not cause on this run.
+    if (prior && normalizeLanguageCode(prior.languageCode) !== null) spec.languageCode = prior.languageCode;
+  } catch { /* no previous spec, or not parseable — nothing to preserve */ }
+  return spec;
 }
 
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
