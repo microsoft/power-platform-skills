@@ -44,7 +44,7 @@ Guide the user through a comprehensive migration of an existing Power Pages site
 Throughout this skill, progress is mirrored to two files inside `<OUTPUT_DIR>`:
 
 - `migration-state.json` — single source of truth for current state
-- `sdm-to-edm-migration-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
+- `datamodel-migration-report.html` — auto-regenerated from state after every update; user opens in browser to watch progress
 
 **Init point.** As soon as `<OUTPUT_DIR>` is resolved (end of step 1.2) AND WebSiteId is known (from `$ARGUMENTS=GUID`, `website.yml`, or step 1.3 site discovery), run once:
 
@@ -78,7 +78,7 @@ The skill **opens the live report in the user's default browser exactly once** �
 
 ```
 📄 Live execution report updated:
-   <ABSOLUTE_PATH_TO>\sdm-to-edm-migration-report.html
+   <ABSOLUTE_PATH_TO>\datamodel-migration-report.html
 
 Refresh the browser tab opened in Checkpoint 1 to review the plan/results before approving the next phase. (If you closed it, re-open the path above in your browser.)
 ```
@@ -87,13 +87,13 @@ Surface that callout at these **7 checkpoints**:
 
 | # | Checkpoint | Files to point at |
 |---|---|---|
-| 1 | After `--init` runs (end of step 1.3) | `sdm-to-edm-migration-report.html` (initialized state) |
-| 2 | End of Phase 1, before Phase 2 approval | `sdm-to-edm-migration-report.html` (shows full Phase 1 outcomes + plan for next phase) |
+| 1 | After `--init` runs (end of step 1.3) | `datamodel-migration-report.html` (initialized state) |
+| 2 | End of Phase 1, before Phase 2 approval | `datamodel-migration-report.html` (shows full Phase 1 outcomes + plan for next phase) |
 | 3 | After step 2.3 (Authoring Track) — customization CSV parsed | `customization-report.html` (findings catalog) |
 | 4 | Mid-step 2.4 (Authoring Track) — after auto-rewrites are staged, before apply+upload approval | `remediation-diff.json` + `remediation-staged/` tree, augmented prompt files (review the **Remediation Diff** card in the live report) |
-| 5 | End of Phase 2, before Phase 3 approval | `sdm-to-edm-migration-report.html` (shows Phase 2 outcomes) |
-| 6 | End of Phase 3, before Phase 4 approval | `sdm-to-edm-migration-report.html` (shows EDM activation status) |
-| 7 | Phase 3.1 (Data Diff Validation — pre-refs gate) | `migration-data-diff.json` + `sdm-to-edm-migration-report.html` (Pages & Components card now shows SDM↔EDM per-category pills) |
+| 5 | End of Phase 2, before Phase 3 approval | `datamodel-migration-report.html` (shows Phase 2 outcomes) |
+| 6 | End of Phase 3, before Phase 4 approval | `datamodel-migration-report.html` (shows EDM activation status) |
+| 7 | Phase 3.1 (Data Diff Validation — pre-refs gate) | `migration-data-diff.json` + `datamodel-migration-report.html` (Pages & Components card now shows SDM↔EDM per-category pills) |
 
 The skill-level approval prompt that follows (via AskUserQuestion) is for the **user's substantive approval to proceed** — not Claude Code's standard command-execution permission prompt. Always print the file paths in chat first so the user knows where to look.
 
@@ -313,7 +313,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 >   --slug "<URL_SLUG>"
 > ```
 >
-> The command creates a per-migration subfolder `<PARENT_OUTPUT_DIR>/<sanitized-env>--<sanitized-slug>/` and writes `migration-state.json` + `sdm-to-edm-migration-report.html` inside it. It prints the resolved subfolder path on stdout — **capture that path as `<MIGRATION_OUTPUT_DIR>` and use it as `--output-dir` for every subsequent `update-state.js` call and as the artifacts directory throughout the rest of the skill.** Pass `--force` only if you intentionally want to wipe an existing migration in the same subfolder.
+> The command creates a per-migration subfolder `<PARENT_OUTPUT_DIR>/<sanitized-env>--<sanitized-slug>/` and writes `migration-state.json` + `datamodel-migration-report.html` inside it. It prints the resolved subfolder path on stdout — **capture that path as `<MIGRATION_OUTPUT_DIR>` and use it as `--output-dir` for every subsequent `update-state.js` call and as the artifacts directory throughout the rest of the skill.** Pass `--force` only if you intentionally want to wipe an existing migration in the same subfolder.
 >
 > Then batch-update the steps that ran before init:
 >
@@ -324,13 +324,13 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 > --set-step 1.3 --status completed --output "Site <NAME> · ModelVersion=Standard · template <TEMPLATE>"
 > ```
 >
-> **📄 Checkpoint 1 — Open the live report in the user's default browser, then tell them.** After `--init` succeeds, open `<MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html` in the user's default browser using the platform-appropriate file opener for the current environment. For example, use `open` on macOS, `xdg-open` on Linux, or the equivalent default-browser opener available on Windows (PowerShell: `Start-Process <path>`).
+> **📄 Checkpoint 1 — Open the live report in the user's default browser, then tell them.** After `--init` succeeds, open `<MIGRATION_OUTPUT_DIR>\datamodel-migration-report.html` in the user's default browser using the platform-appropriate file opener for the current environment. For example, use `open` on macOS, `xdg-open` on Linux, or the equivalent default-browser opener available on Windows (PowerShell: `Start-Process <path>`).
 >
 > Then print this in chat so the user knows where the tab they just saw came from and what to do next:
 >
 > ```
 > 📄 SDM → EDM migration report initialized and opened in your default browser:
->    <MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <MIGRATION_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > Keep this tab open and refresh it as the migration progresses — the file is
 > regenerated in place after every sub-step. (If the tab didn't open, paste the
@@ -642,7 +642,7 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 >
 > ```
 > 📄 Phase 1 complete. Review the plan in your browser before approving Phase 2:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > The report now shows: site context, env type, migration mode, derived track, and
 > the Phase 2 sub-steps that will run if you approve.
@@ -921,7 +921,7 @@ The script in step 3/4 also emits:
 >
 > ```
 > 📄 Auto-rewriters staged proposed changes. Review them in the live report:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > Open the "Migration & Review" tab — the Remediation Diff card shows one
 > expandable row per touched file with inline hunks. Click "Open staged file"
@@ -1000,7 +1000,7 @@ After auto-rewrites are uploaded (or skipped due to zero findings) and any manua
 >
 > ```
 > 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > The report shows: customization findings handled, SDM snapshot captured, and the
 > Phase 3 sub-steps that will run if you approve.
@@ -1134,7 +1134,7 @@ After whichever option, loop back to **step 2.1** to re-verify the site is now p
 >
 > ```
 > 📄 Phase 2 complete. Review the outcomes in your browser before approving Phase 3:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > The report shows: customization findings handled, SDM snapshot captured, and the
 > Phase 3 sub-steps that will run if you approve.
@@ -1213,7 +1213,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
    > ```
    > 📄 Metadata diff complete. Review:
    >    <OUTPUT_DIR>\migration-data-diff.json
-   >    <MIGRATION_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+   >    <MIGRATION_OUTPUT_DIR>\datamodel-migration-report.html
    >
    > Status: <PASS | WARN | FAIL>
    >    <N> records missing in EDM
@@ -1282,6 +1282,9 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
      #   runs          — array of { name, chunkTotal, completed, succeeded,
      #                   chunks: [{ name, runStatus, outcome, errorType, errorDetails }] }
      #                   parsed from the "Migration Run N" + "Chunk Details" blocks
+     #   error         — (step-level failures only) the top-level error message when the
+     #                   command aborts or the tracker reports Failed for a reason not tied
+     #                   to a specific chunk. Omit on success. Renders as an error banner.
      #
      # Build the object in a hashtable, then ConvertTo-Json -Compress -Depth 10.
      # IMPORTANT: pass the resulting JSON string — NOT the literal text
@@ -1294,6 +1297,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
        modifiedAt  = '<ISO_FROM_OUTPUT>'
        stepHistory = @( <ARRAY_OF_OBJECTS_FROM_OUTPUT> )
        runs        = @( <ARRAY_OF_RUN_OBJECTS_FROM_OUTPUT> )
+       # On a step-level failure only, also add:  error = '<TOP_LEVEL_ERROR_MESSAGE>'
      } | ConvertTo-Json -Compress -Depth 10
      $finalPayload = $refsPayload
 
@@ -1317,7 +1321,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 
    - **Completed**: clear activity, proceed to step 3.3. The card now shows status=Completed.
    - **In Progress (loop exited at i=30 without status change)**: surface 30-min timeout, ask user (retry / reset / exit) — same handling pattern as 1.4 in-flight branch. The card shows the last captured running state.
-   - **Failed / Reverted**: surface error, ask user (retry / reset / exit). The card shows the failed status and chunk-level error details from the last poll.
+   - **Failed / Reverted**: surface error, ask user (retry / reset / exit). Add the top-level failure message to the `--set-refs-migration` payload's `error` field so the card logs it as an error banner (the card also shows chunk-level error details from the last poll).
 
    > **Chunk-level generic SQL errors — auto-retry before escalating.** When individual chunks fail with a **Generic SQL error** (e.g., `1205` deadlock victim, `3732` type still referenced), these come from the **Dataverse SQL backend, not PAC/client-side**. Under chunked migration most are transient — `1205` is always a deadlock retry, and `3732` ("type still referenced") is frequently a concurrency side-effect from parallel chunk processing that clears on a fresh pass. **The refs migration is resumable**: re-running `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --mode configurationDataReferences` re-processes only the still-unmigrated chunks, so a retry is cheap and non-destructive. **Automatically retry the command up to 3 times** (30–60s backoff between attempts, re-entering the poll loop each time) whenever the only failures are chunk-level generic SQL errors — **do this even when the tracker labels a chunk `Non Retriable`**, because that label reflects PAC's in-run retry classification, not whether a fresh command invocation can succeed. Only escalate if the **same** chunks still fail with the **same** generic SQL error after the retries: capture the failing chunk IDs, error numbers, `pac --version`, WebSiteId, and environment URL for a Microsoft support ticket. Do **not** proceed to step 3.3 (Activate EDM) until refs migration reports `Completed`.
 
@@ -1439,7 +1443,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
 >
 > ```
 > 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
 > baseline to verify every record migrated.
@@ -1559,6 +1563,7 @@ Phase 3 has **two different shapes** depending on the migration track. The Autho
        modifiedAt  = '<ISO_FROM_OUTPUT>'
        stepHistory = @( <ARRAY_OF_OBJECTS_FROM_OUTPUT> )
        runs        = @( <ARRAY_OF_RUN_OBJECTS_FROM_OUTPUT> )
+       # On a step-level failure only, also add:  error = '<TOP_LEVEL_ERROR_MESSAGE>'
      } | ConvertTo-Json -Compress -Depth 10
      $finalPayload = $refsPayload
 
@@ -1694,7 +1699,7 @@ Identical to the Authoring Track's step 3.4 — print restart instructions, wait
 >
 > ```
 > 📄 Phase 3 complete. The site is on EDM and restarted. Review before approving Phase 4:
->    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\sdm-to-edm-migration-report.html
+>    <ABSOLUTE_PATH_TO_OUTPUT_DIR>\datamodel-migration-report.html
 >
 > Phase 4 will re-download the site as EDM, snapshot it, and diff against the SDM
 > baseline to verify every record migrated.
@@ -1814,7 +1819,7 @@ Identical to the Authoring Track's step 3.4 — print restart instructions, wait
 
    Reports in <OUTPUT_DIR>:
      migration-state.json          — single source of truth for state
-     sdm-to-edm-migration-report.html   — live execution timeline (this run)
+     datamodel-migration-report.html   — live execution timeline (this run)
      customization-report.html     — findings catalog (if any)
      sdm-snapshot.json             — SDM baseline
      edm-snapshot.json             — EDM result

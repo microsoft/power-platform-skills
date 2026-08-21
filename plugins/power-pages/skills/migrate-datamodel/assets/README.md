@@ -2,7 +2,7 @@
 
 This directory contains the boilerplate HTML template for the **customization report** shown during the SDM to EDM migration.
 
-> The execution/progress report (`sdm-to-edm-migration-report.html`) is **not** a static template. It is the live report rendered from `migration-state.json` by `scripts/lib/render-live-report.js` (driven by `scripts/update-state.js`), and is intentionally not generated from a template here.
+> The execution/progress report (`datamodel-migration-report.html`) is **not** a static template. It is the live report rendered from `migration-state.json` by `scripts/lib/render-live-report.js` (driven by `scripts/update-state.js`), and is intentionally not generated from a template here.
 
 ## Template
 

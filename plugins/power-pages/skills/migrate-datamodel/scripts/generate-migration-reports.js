@@ -7,7 +7,7 @@
  * FetchXML/Liquid remediation rewrites, and writes the augmented remediation
  * prompts (plugin + DME).
  *
- * It does NOT write the execution/progress report (sdm-to-edm-migration-report.html) —
+ * It does NOT write the execution/progress report (datamodel-migration-report.html) —
  * that is the live report, owned by update-state.js + lib/render-live-report.js, which
  * re-render it from migration-state.json after every step.
  *
@@ -1435,7 +1435,7 @@ async function main() {
     fs.writeFileSync(customizationPath, customizationHtml, 'utf-8');
     console.log(`✓ Customization report generated: ${customizationPath}`);
 
-    // This script intentionally does NOT write sdm-to-edm-migration-report.html.
+    // This script intentionally does NOT write datamodel-migration-report.html.
     // That file is the LIVE execution report, owned exclusively by update-state.js +
     // lib/render-live-report.js, which re-render it from migration-state.json after every
     // step. Writing it here (from a static template with generic/hardcoded content) would

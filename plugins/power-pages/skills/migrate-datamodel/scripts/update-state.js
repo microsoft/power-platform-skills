@@ -2,13 +2,13 @@
 /**
  * update-state.js
  *
- * CLI for managing migration-state.json and re-rendering sdm-to-edm-migration-report.html.
+ * CLI for managing migration-state.json and re-rendering datamodel-migration-report.html.
  * Every mutating command (a) loads state.json, (b) applies the change, (c) bumps
  * lastUpdatedAt, (d) writes state.json back, and (e) re-renders the HTML report.
  *
  * USAGE
  *   # initialize a fresh state inside a per-migration subfolder
- *   # (writes migration-state.json + sdm-to-edm-migration-report.html into
+ *   # (writes migration-state.json + datamodel-migration-report.html into
  *   #  <PARENT_DIR>/<sanitized-env>--<sanitized-slug>/)
  *   node update-state.js --init --output-dir <PARENT_DIR> \
  *       --website-id <GUID> --env-name "<NAME>" --slug "<SLUG>"
@@ -51,6 +51,11 @@
  *   # set transactional refs migration tracker card (call once after `pac pages migrate-datamodel -s -v` returns)
  *   node update-state.js --output-dir <DIR> --set-refs-migration \
  *       '{"status":"Completed","currentStep":"StatusUpdated","createdAt":"2026-06-22T07:20:16Z","modifiedAt":"2026-06-22T07:29:19Z","stepHistory":[{"step":"ConfigurationDataReferencesStarted","at":"2026-06-22T07:27:21Z"},{"step":"ConfigurationDataReferencesCompleted","at":"2026-06-22T07:29:17Z"}],"runs":[{"name":"Run on 6/22/2026 7:27:27 AM","chunkTotal":3,"completed":3,"succeeded":3,"chunks":[{"name":"adx_blog_webrole...","runStatus":1,"outcome":1,"errorType":null,"errorDetails":null}]}]}'
+ *   # On a step-level failure (the command aborted, or the tracker reports Failed with a
+ *   # top-level reason not tied to a specific chunk), include an "error" field — it renders
+ *   # as an error banner on the card. Chunk-level errors still go on runs[].chunks[].
+ *   node update-state.js --output-dir <DIR> --set-refs-migration \
+ *       '{"status":"Failed","currentStep":"ConfigurationDataReferencesStarted","error":"pac pages migrate-datamodel exited 1: migration could not be started ..."}'
  *
  *   # free-text current-activity pointer (used during long-running steps)
  *   node update-state.js --output-dir <DIR> --set-activity "Polling migration status (attempt 3/30)"
@@ -105,7 +110,7 @@ function statePathFor(outputDir) {
 }
 
 function reportPathFor(outputDir) {
-  return path.join(outputDir, 'sdm-to-edm-migration-report.html');
+  return path.join(outputDir, 'datamodel-migration-report.html');
 }
 
 // Sanitize a free-text segment (env name or website slug) into a safe path component.
@@ -433,7 +438,7 @@ function cmdSetRefsMigration(args) {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error('--set-refs-migration expects a JSON object');
   }
-  const allowed = ['status', 'currentStep', 'createdAt', 'modifiedAt', 'stepHistory', 'runs', 'capturedAt'];
+  const allowed = ['status', 'currentStep', 'createdAt', 'modifiedAt', 'stepHistory', 'runs', 'capturedAt', 'error'];
   for (const k of Object.keys(payload)) {
     if (!allowed.includes(k)) {
       throw new Error(`--set-refs-migration: unknown field '${k}'. Allowed: ${allowed.join(', ')}`);
@@ -448,6 +453,9 @@ function cmdSetRefsMigration(args) {
   if (payload.runs !== undefined && !Array.isArray(payload.runs)) {
     throw new Error('--set-refs-migration: runs must be an array');
   }
+  if (payload.error !== undefined && payload.error !== null && typeof payload.error !== 'string') {
+    throw new Error('--set-refs-migration: error must be a string');
+  }
   const state = loadState(outputDir);
   state.refsMigration = {
     status: typeof payload.status === 'string' ? payload.status : 'Unknown',
@@ -456,13 +464,18 @@ function cmdSetRefsMigration(args) {
     modifiedAt: typeof payload.modifiedAt === 'string' ? payload.modifiedAt : null,
     stepHistory: Array.isArray(payload.stepHistory) ? payload.stepHistory : [],
     runs: Array.isArray(payload.runs) ? payload.runs : [],
+    // Step-level (non-chunk) failure detail — the pac command's error text or the tracker's
+    // top-level failure reason. Chunk-level errors live on runs[].chunks[]; this captures a
+    // failure not tied to a specific chunk (command aborted, auth/network failure, or the
+    // tracker reporting Failed with a message). Rendered as an error banner in the report.
+    error: typeof payload.error === 'string' ? payload.error : null,
     capturedAt: typeof payload.capturedAt === 'string' ? payload.capturedAt : new Date().toISOString(),
   };
   persist(state, outputDir);
   const r = state.refsMigration;
   const totalChunks = r.runs.reduce((a, run) => a + (Number.isFinite(run.chunkTotal) ? run.chunkTotal : 0), 0);
   const totalSucceeded = r.runs.reduce((a, run) => a + (Number.isFinite(run.succeeded) ? run.succeeded : 0), 0);
-  console.log(`✓ Refs migration → status=${r.status} · step=${r.currentStep || '?'} · chunks ${totalSucceeded}/${totalChunks}`);
+  console.log(`✓ Refs migration → status=${r.status} · step=${r.currentStep || '?'} · chunks ${totalSucceeded}/${totalChunks}${r.error ? ` · error: ${r.error.slice(0, 120)}` : ''}`);
 }
 
 function cmdSetActivity(args) {

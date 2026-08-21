@@ -295,8 +295,8 @@ function renderConfidenceStat(sdmSnapshot, edmSnapshot) {
   </div>
   <div class="confidence-label">${
     isMatch
-      ? 'All ' + sdmTotal + ' components migrated from SDM to EDM. Open Pages &amp; Components for the per-category breakdown.'
-      : Math.abs(diff) + ' component difference — open Pages &amp; Components for the per-category breakdown.'
+      ? 'All ' + sdmTotal + ' components migrated from SDM to EDM. Open <strong>Pages &amp; Components</strong> for the per-category breakdown.'
+      : Math.abs(diff) + ' component difference — open <strong>Pages &amp; Components</strong> for the per-category breakdown.'
   }</div>
 </div>`;
 }
@@ -1120,6 +1120,15 @@ function renderRefsMigrationCard(state) {
 
   const runRows = (r.runs || []).map(renderRunRows).join('\n');
   const capturedAt = r.capturedAt ? formatTimestamp(r.capturedAt) : '';
+  // Step-level failure detail (refsMigration.error) — distinct from the per-chunk errors on
+  // runs[].chunks[]. Shown when the migration step/command itself failed (command aborted,
+  // auth/network failure, or the tracker reported Failed with a top-level message).
+  const errorBlock = r.error
+    ? `\n  <div class="refs-error">
+    <div class="refs-error-title">Migration step error</div>
+    <div class="refs-error-detail">${escapeHtml(r.error)}</div>
+  </div>`
+    : '';
 
   return `<div class="card refs-card ${meta.cls}">
   <div class="card-title">Transactional References Migration <span class="refs-card-subtitle">— chunk-level tracker from <code>pac pages migrate-datamodel -s -v</code></span></div>
@@ -1130,7 +1139,7 @@ function renderRefsMigrationCard(state) {
       ${totalChunks > 0 ? `<div class="refs-kv"><div class="refs-kv-label">Chunks</div><div class="refs-kv-value"><span class="refs-chunks-ok">${totalSucceeded}</span> / ${totalChunks}${totalFailed > 0 ? ` <span class="refs-chunks-fail">(${totalFailed} failed)</span>` : ''}</div></div>` : ''}
       ${duration ? `<div class="refs-kv"><div class="refs-kv-label">Duration</div><div class="refs-kv-value">${escapeHtml(duration)}</div></div>` : ''}
     </div>
-  </div>
+  </div>${errorBlock}
 
   ${stepHistoryRows ? `<details class="refs-steps">
     <summary>Step history (${(r.stepHistory || []).length})</summary>
@@ -1741,6 +1750,9 @@ details[open] > summary { margin-bottom:6px; }
 .refs-chunk-err { display:flex; flex-direction:column; gap:2px; font-size:11px; min-width:0; }
 .refs-chunk-err-type { color:var(--critical); font-weight:700; }
 .refs-chunk-err-detail { color:var(--text-dim); }
+.refs-error { margin:2px 0 12px; padding:10px 12px; background:var(--critical-bg); border:1px solid var(--border); border-left:3px solid var(--critical); border-radius:4px; }
+.refs-error-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--critical); margin-bottom:4px; }
+.refs-error-detail { font-size:12px; color:var(--text-bright); white-space:pre-wrap; word-break:break-word; }
 .refs-meta { font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:10px; }
 
 /* Footer */
