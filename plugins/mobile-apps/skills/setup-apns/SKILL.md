@@ -22,7 +22,10 @@ APNs setup extends the exact Firebase iOS app already configured by
 
 1. Verify iOS is a target and the Firebase Messaging modules are runtime-shipped.
 2. Read the non-secret Firebase handoff from `memory-bank.md`: Firebase project
-   ID, iOS Firebase app ID, iOS bundle identifier, and evaluated plist path.
+   ID, the immutable selected iOS Firebase app ID, iOS bundle identifier, and
+   evaluated plist path. The app ID is the exact selection made by `/setup-fcm`,
+   including when multiple Firebase apps safely shared the same bundle ID.
+   STOP if any field is absent; do not reconstruct or replace the selection.
    The expected default is `firebase/GoogleService-Info.plist`, but a validated
    project-relative override recorded by `/setup-fcm` is also supported.
 3. Independently evaluate Expo config and resolve the final iOS bundle
@@ -34,10 +37,14 @@ APNs setup extends the exact Firebase iOS app already configured by
    a newly supplied path or identity as a substitute for `/setup-fcm` output.
 5. Reuse the Google account route confirmed by `/setup-fcm`. If that route is
    not available in the current session, repeat the read-only identity preflight
-   from `firebase-cli-provisioning.md` and require the user-intended identity to
-   see the recorded project; do not infer or switch accounts. List iOS apps in
-   that project and match by the evaluated bundle identifier using the same
-   deterministic resolver:
+   from `firebase-cli-provisioning.md`; do not infer or switch accounts. With
+   either route, rerun `projects:list --json` and require the user-intended
+   identity to see the exact recorded project ID in that fresh machine-readable
+   result. STOP on a missing project or project/account drift.
+
+   List iOS apps in that exact project and revalidate the recorded immutable app
+   selection against the evaluated bundle identifier using the same
+   deterministic resolver as `/setup-fcm`:
 
    ```bash
    IOS_MATCH="$(
@@ -45,15 +52,23 @@ APNs setup extends the exact Firebase iOS app already configured by
        --account "<EMAIL>" |
        node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
          --project-root . --match-platform ios \
-         --identifier "<IOS_BUNDLE_ID>"
+         --identifier "<IOS_BUNDLE_ID>" \
+         --selected-app-id "<IOS_APP_ID>"
    )"
    ```
 
    Omit `--account` only when `/setup-fcm` recorded the confirmed ADC route.
-   Require `status == "match"` and require `.app.appId` to equal the recorded
-   iOS Firebase app ID exactly. A preconfigured matching app is the expected
-   success path: reuse it without calling `apps:create`. STOP on `no-match`,
-   `ambiguous`, `error`, project mismatch, or app-ID mismatch.
+   Require `status == "match"`, `.selectedExplicitly == true`,
+   `.app.appId == "<IOS_APP_ID>"`, `.app.platform == "IOS"`, and
+   `.app.bundleId == "<IOS_BUNDLE_ID>"`. This remains deterministic when other
+   safe registrations have the same bundle ID: only the app ID selected by
+   `/setup-fcm` may continue, without a new selection prompt or `apps:create`.
+   STOP on `selection-required`, `no-match`, `ambiguous`, `error`, project
+   mismatch, or any selected app-ID/platform/bundle drift. In particular,
+   `selected-app-id-not-found` means the recorded selection disappeared and
+   `selected-app-identity-mismatch` means it now resolves to a different
+   platform or identity. Direct the user back to `/setup-fcm`; never fall back
+   to another exact-bundle candidate or register a replacement app.
 6. Validate the installed plist against all three identities without printing
    its contents. The shared validator expects distinct candidate/destination
    paths, so make a short-lived project-local byte copy, validate it, then
@@ -80,10 +95,11 @@ APNs setup extends the exact Firebase iOS app already configured by
    rm -- "$PLIST_CHECK"
    ```
 
-   Require `status == "reuse"`. Any `invalid`, `conflict`, or `error` means the
-   project, Firebase app, bundle identifier, or file is not the exact
-   `/setup-fcm` pairing. STOP and direct the user back to `/setup-fcm`; never
-   replace the plist or continue to APNs upload.
+   Require `status == "reuse"`. Together with the selected-app resolver result,
+   this proves one consistent recorded project/app/platform/bundle/plist
+   pairing. Any `invalid`, `conflict`, or `error` means the file is not the
+   exact `/setup-fcm` pairing. STOP and direct the user back to `/setup-fcm`;
+   never replace the plist or continue to APNs upload.
 
 ## Phase 2 — Guided APNs key handoff
 
@@ -122,7 +138,14 @@ skill must not automate either action.
 3. Record APNs setup status in `memory-bank.md` using only the verified Firebase
    project/app/bundle identity, Key ID, Team ID, and manual-upload confirmation.
 
-Do not claim success without a physical-device iOS notification test using a
-matching native build. A simulator, Expo Go, config validation, or successful
-Firebase Console upload is not a substitute. Test foreground, background, and
-notification-tap delivery on a physical device before marking APNs complete.
+End this workflow with the exact status **configured, device verification
+pending** after the manual upload is confirmed and static validation passes.
+Do not mark APNs complete here. Route the user to `/build-ios` for a matching
+registered-device `development` or `ad-hoc` IPA, then to `/verify-ios-push` for
+the physical delivery matrix. Do not duplicate either workflow.
+
+Only `/verify-ios-push` may change the status to physically verified after its
+entire physical-device matrix passes. A simulator, Expo Go, Metro, config
+validation, successful Firebase Console upload, accepted FCM request, or
+foreground-only receipt is not a substitute. Any partial or failed device run
+keeps the APNs status **configured, device verification pending**.

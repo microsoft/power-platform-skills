@@ -16,16 +16,23 @@ Orchestrate the app-side notification integration. Treat these as independent,
 resumable tracks:
 
 1. **Native client:** Firebase client config, APNs handoff, permission UX,
-   topic lifecycle, and deep links.
+   consent-first iOS registration, topic lifecycle, background delivery, and
+   deep links.
 2. **Sender authentication:** `/setup-push-wif` (preferred) or
    `/setup-push-service-account` for a compatible existing service-account
    integration.
 3. **Power Automate flows:** `/create-push-notification-flow`.
+4. **Wrapped iOS build:** `/build-ios` creates a registered-device
+   `development` or `ad-hoc` IPA.
+5. **Physical iOS delivery verification:** `/verify-ios-push` proves the exact
+   IPA, published flows, APNs/FCM delivery, app states, topic transitions, and
+   deep links on a registered physical device.
 
 This skill owns track 1 only. Never redo a proven client integration merely
 because sender authentication or flow authoring is incomplete. Conversely,
 client completion does not prove that sender authentication or delivery flows
-exist.
+exist. Do not build an IPA or execute physical delivery cases here; route those
+stages to their owner skills.
 
 ## Workflow
 
@@ -97,24 +104,68 @@ When iOS is selected, inspect `memory-bank.md` for a completed APNs/Firebase
 Console handoff for the same Firebase project and iOS app ID. Invoke
 `/setup-apns --working-dir <root>` when iOS client setup is new, the app ID or
 project changed, or APNs completion cannot be proven. Android-only work skips
-this step. Propagate blockers without downgrading them.
+this step. Propagate blockers without downgrading them. A successful manual
+handoff means **configured, device verification pending**; it is not physical
+delivery success.
 
 ### 5. Write the wrapper
 
 Create `src/native/pushNotifications.ts` using the required surface and result
 types from the push contract. It must:
 
-- keep Firebase auto-init off until consent
+- use the stable generated imports `import * as Notifications from
+  'expo-notifications'` and `import messaging from
+  '@react-native-firebase/messaging'`; strict validation follows those imports
+  into concrete reachable calls in each required function and does not accept
+  markers, export names, hardcoded result objects, constant-false branches, or
+  calls placed after an unconditional return as implementation proof
+- preserve the template `firebase.json` settings that disable native Messaging
+  auto-init and iOS automatic remote-message registration before consent
 - create the Android channel before requesting permission
-- listen for token refresh
+- on iOS, sequence granted permission -> remote-message registration when
+  required -> enable auto-init -> token acquisition -> exact topic sync
+- treat permission denial and missing remote-message registration as explicit,
+  non-throwing outcomes; never call `getToken` before registration
+- listen for token refresh and re-run exact topic sync from current auth state
 - implement the exact `allUsers`/OID transitions
-- persist consent + last topic only
-- install foreground/background/response listeners once
+- persist consent + last topic only; never persist an FCM registration token
+- keep foreground/token-refresh/response listeners idempotent in the single
+  React provider and clean up every subscription exactly once
+- export a non-throwing `handleBackgroundNotification` for the early entry
+  point; it validates data and never navigates
 - validate every deep link before returning it
 - never throw into a screen
 
+Assign and await every value-returning native operation, then use that value in
+a later branch or returned validated outcome. In particular, inspect permission
+results before continuing, reject an empty `getToken()` result before topic
+sync, and pass the assigned cold-start response into the shared deep-link
+validator. Await side-effecting native calls inside `try` and return a failure
+discriminant from `catch`; an ignored call followed by `{ ok: true }`, an
+always-success catch, a throw-only body, or a canned result is invalid.
+
+Keep the permission query in `getPushPermissionState`, the consent/register/
+auto-init/token sequence in `requestPushPermission`, topic subscribe and
+unsubscribe calls in `syncPushTopic`, listener registration in
+`registerNotificationHandlers`, background validation in
+`handleBackgroundNotification`, and cold-start response consumption in
+`consumeInitialNotificationDeepLink`. Each native-facing operation catches
+package failures and returns the documented discriminated result. Do not
+replace these paths with empty functions, hardcoded results, comments, or
+implementation markers.
+
 If the wrapper already exists, inspect and update it idempotently; do not append
 duplicate listeners.
+
+Update the package entry point (the template uses `index.js`) so
+`setBackgroundMessageHandler` is registered before
+`require('expo-router/entry')`. Replace the template's
+`unconfiguredBackgroundHandler` no-op with a direct project-local require of
+`handleBackgroundNotification` from `src/native/pushNotifications.ts`, then pass
+that exported function to `setBackgroundMessageHandler`. The generated wrapper,
+not `index.js`, owns the implemented handler body. The entry point must not
+import React state or require auth/router readiness. Never move registration into
+`app/_layout.tsx`, a provider, or a hook.
 
 ### 6. Add permission UX
 
@@ -126,13 +177,23 @@ with current permission status and enable/open-settings actions.
 
 Add one provider/hook under `src/hooks/` that observes auth readiness,
 sign-in/OID changes, sign-out, consent, and token refresh. Mount it once inside
-`app/_layout.tsx` under `PowerAppsProvider`. Preserve provider ordering.
+`app/_layout.tsx` under `PowerAppsProvider`. Preserve provider ordering. The
+provider owns foreground, token-refresh, and response subscriptions only;
+background registration remains in the early entry point.
+
+The generated lifecycle owner must call both `registerNotificationHandlers()`
+and `syncPushTopic(...)`, export a named push/notification hook or Provider,
+and be mounted exactly once under `app/`. Strict validation rejects direct
+layout-only listener registration, missing lifecycle topic sync, and duplicate
+mounts.
 
 ### 8. Wire deep links
 
-Register response listeners and cold-start response consumption once. Use Expo
-Router only after payload validation and auth readiness. Add a safe fallback
-route when the app does not already have one.
+Register one warm response listener and consume the Expo Notifications
+cold-start response once. Funnel both through the same payload validator and
+pending-destination guard. Use Expo Router only after payload validation and
+auth readiness; never navigate from the background message handler. Add a safe
+fallback route when the app does not already have one.
 
 ### 9. Validate
 
@@ -140,7 +201,8 @@ Run:
 
 ```bash
 npx tsc --noEmit
-node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" --project-root .
+node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
+  --project-root . --strict-client-integration
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root . \
   --file src/native/pushNotifications.ts \
   --file app/_layout.tsx \
@@ -149,17 +211,28 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root . \
 
 Add every other changed file explicitly to the final validator call.
 
-### 10. Update memory bank and report track status
+### 10. Update memory bank and report orchestration status
 
 Update `memory-bank.md` with packages, Firebase project ID (not credentials),
 permission UX, topic policy, deep-link schema version, and validation status.
 
-Report the three track states separately:
+Report these states independently, even when several are pending:
 
-- native client integration and selected Android/iOS Firebase app IDs;
-- sender-auth handoff (`sender-auth.json`) status, without creating or
-  validating it here;
-- Power Automate producer/sender flow status.
+| State | What to report | Owner / next route |
+|---|---|---|
+| Native client | integrated / incomplete / blocked, selected Android/iOS Firebase app IDs, and static validation | This skill; `/setup-fcm` for missing or drifted client identity |
+| APNs | not applicable / incomplete / **configured, device verification pending** / physically verified | `/setup-apns` configures; only `/verify-ios-push` can mark physical verification complete |
+| Sender authentication | missing / valid handoff present / stale or blocked, based only on existing `sender-auth.json` and memory metadata | `/setup-push-wif` preferred, or `/setup-push-service-account` for the supported compatibility path |
+| Power Automate flows | missing / recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow` |
+| Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; never run Wrap/Xcode or inspect signing assets here |
+| Physical iOS delivery | not applicable / pending / partial / failed / verified | `/verify-ios-push`; never substitute config validation, Firebase acceptance, simulator, Expo Go, or Metro evidence |
+
+When iOS is selected and the client plus APNs handoff are configured, route to
+`/build-ios` if no fresh matching registered-device IPA is recorded. Route to
+`/verify-ios-push` only after the build, sender authentication, and exact
+producer/sender flows are ready. These are handoffs, not substeps: do not copy
+their signing, build, FlowAgent read-back, or physical-device procedures into
+this workflow.
 
 For an already integrated native client, the user may run
 `/create-push-notification-flow` directly. That skill validates the active

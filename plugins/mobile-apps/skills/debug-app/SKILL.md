@@ -446,6 +446,7 @@ Read the relevant source file(s). Identify:
 | Dataverse schema (column/table missing) | **Hand-off:** route user to `/add-dataverse`. Do not auto-edit. Read [skills/add-dataverse/references/dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) before suggesting changes. |
 | Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
+| iOS notification runtime/delivery failure in a wrapped physical-device build (missing foreground/background receipt, notification tap/cold-start route failure, topic transition, opt-out, or re-registration recovery) | **Hand-off:** route user to `/verify-ios-push`. Preserve Metro findings as diagnostic context, but do not claim end-to-end push verification or recreate its physical-device/flow evidence matrix here. |
 | Native module, `app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle` | **Inform the user.** Do NOT auto-edit native config — print the error + suggested action and skip to next issue. |
 | Unrecognized error pattern | **Best-effort autonomous fix** — see D3.2 below. The skill attempts a single named hypothesis instead of stopping; the existing 2-attempt escalation rule is the safety net. |
 
@@ -456,6 +457,19 @@ PDF/pen/geolocation-specific routing:
 - For `geolocation`, debug the actual failure dimension: can tracking start (`startTracking`, permissions, native module), are rows reaching Dataverse (default `msdyn_locationrecords` exists, native upload/auth errors, no JS upload path), and does behavior match the user expectation (background, restart persistence, breadcrumb/route continuity). Fix visible screen handling inline; if the native module/table is missing, block use and route to the relevant geolocation setup path, not `/add-dataverse`.
 - `USER_CANCELLED` from pen input is not a bug unless the screen renders it as an error. Inline fix screens that show cancellation as failure.
 - Dataverse artifact writes are local app fixes only when the schema/service already exists. If File/Image columns are missing, route to `/add-dataverse`.
+
+iOS push-specific routing:
+- Keep general Metro diagnostics here for JavaScript exceptions, bundle errors,
+  missing imports, and local wrapper/provider defects. Apply a minimal inline
+  fix when the failure is proven entirely in editable JS/TS source.
+- Route wrapped-runtime delivery symptoms to `/verify-ios-push`, including no
+  receipt despite a `Sent` row, foreground/background/terminated differences,
+  tap/deep-link behavior, `allUsers`/lowercase-OID transitions, opt-out, and
+  token re-registration recovery.
+- If Metro evidence identifies stale/mismatched IPA or signing/build identity,
+  `/verify-ios-push` will route to `/build-ios`; if it identifies APNs
+  configuration drift, it will route to `/setup-apns`. Do not duplicate those
+  gates in `/debug-app`.
 
 For inline edits, keep the change minimal and surgical. Do not refactor surrounding code, rename symbols, or change component contracts.
 

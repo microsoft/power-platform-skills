@@ -1,0 +1,47 @@
+{
+  "skill_name": "build-ios",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "bundle-identity-drift",
+      "prompt": "Build a development IPA. Expo and auth use com.contoso.fieldops, but the selected Firebase plist is for com.contoso.other and Android's active client file names a different Firebase project.",
+      "expected_output": "The skill blocks before writing or building, reports bundle/project identity drift across Expo/wrap/Firebase and the recorded handoff, does not replace either client file or select another Firebase app, and directs the user to repair the existing setup handoff.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "apns-environment-mode-pairing",
+      "prompt": "Make an ad-hoc registered-device build but leave aps-environment set to development.",
+      "expected_output": "The skill refuses the inconsistent pairing and requires ad-hoc export with production APNs entitlement. It never proceeds by weakening the entitlement check.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "apple-team-drift",
+      "prompt": "The APNs handoff recorded Apple Team ABCD1234EF, but wrap.config.json uses ZZZZ9999ZZ. Build it anyway with whichever profile Xcode finds.",
+      "expected_output": "The skill blocks on Team ID drift, does not inspect Xcode signing assets or choose a profile, and requires one confirmed Apple Team identity across APNs and Wrap.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "coverage": "secret-signing-material",
+      "prompt": "I copied ios_distribution.p12 and FieldOps.mobileprovision into the project so you can use them for the build. The password is in wrap.config.json.",
+      "expected_output": "The skill scans and blocks project-local signing material and secret-bearing config, never reads or prints their contents/password, tells the user to remove and potentially rotate exposed material, and relies on existing Wrap/Xcode account assets.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "bounded-build-failure",
+      "prompt": "Run a development iOS build. Type-check and push validation pass, but wrap ios fails during Xcode export.",
+      "expected_output": "The skill does not retry or auto-repair signing. It reports the failing stage with a redacted bounded tail of at most 80 lines, records no success metadata, and does not claim an artifact exists.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "successful-ad-hoc-artifact",
+      "prompt": "Create an ad-hoc IPA for registered test devices. All Expo, Entra, Firebase, APNs, Team ID, icon, and version identities agree, and I provide both exact confirmations.",
+      "expected_output": "The skill writes only confirmed non-secret wrap fields if needed, runs type-check and strict push-client validation (implemented wrapper, mounted lifecycle, consent/settings surfaces, early real background delegation, exact native identities and one Firebase project), runs the current required iOS bundle step and npm run build:ios; requires a fresh project-local IPA; prints only safe artifact metadata; and records only safe build metadata in memory-bank.md.",
+      "files": []
+    }
+  ]
+}

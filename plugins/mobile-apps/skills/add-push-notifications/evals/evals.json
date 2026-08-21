@@ -22,7 +22,7 @@
     {
       "id": 4,
       "prompt": "Resume push setup. Android and iOS already have active validated Firebase client files for the same project, but sender authentication and the Power Automate flows have not been created.",
-      "expected_output": "The skill reuses the proven client integration without rerunning setup-fcm or setup-apns, completes only missing app-side work, and reports sender authentication and flow creation as independent resumable next tracks.",
+      "expected_output": "The skill parses the active Android and iOS client files, proves exact Expo package/bundle identity, immutable app IDs and one shared Firebase project (plus memory handoff agreement when recorded), reuses that client integration, completes only missing app-side work, and reports sender authentication and flow creation as independent resumable next tracks.",
       "files": []
     },
     {
@@ -35,6 +35,54 @@
       "id": 6,
       "prompt": "The native Firebase client is already integrated. We use an existing Firebase service-account sender and want to create the Power Automate flows without WIF.",
       "expected_output": "The skill allows direct create-push-notification-flow setup without redoing the native client, prefers WIF for new senders, and routes the existing service-account integration only through setup-push-service-account's Key Vault, managed-identity, Entra-protected Azure Function compatibility path.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "The user taps Not now and iOS reports notification permission denied. Finish push setup without breaking login or creating notification registrations.",
+      "expected_output": "The skill returns a non-throwing permission-denied state, preserves sign-in and the Open Settings recovery path, and does not register for remote messages, enable Messaging auto-init, acquire a token, or sync a topic.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "On iOS, notification permission is granted but Firebase getToken fails because the device has not registered for remote messages.",
+      "expected_output": "The skill checks isDeviceRegisteredForRemoteMessages, awaits registerDeviceForRemoteMessages when false, then enables auto-init, acquires the token, and performs exact topic sync; it never calls getToken before registration.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "An opted-in signed-in user's FCM registration token refreshes while the app is running.",
+      "expected_output": "The single idempotent provider listener re-runs exact lowercase OID topic sync from current consent/auth state without persisting either the old or refreshed token.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "A data-only iOS notification arrives while the app is backgrounded or terminated before the React tree mounts.",
+      "expected_output": "The package entry point replaces the fresh-template no-op, imports the generated wrapper's implemented handleBackgroundNotification, registers it before expo-router/entry, and strict final validation proves the lifecycle owner plus consent/settings surfaces without duplicating background registration.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "The user launches the terminated iOS app by tapping a notification that deep-links to a protected work item.",
+      "expected_output": "The provider consumes the Expo Notifications cold-start response once after router/auth readiness, validates it through the shared deep-link path, retains at most one pending destination through sign-in, and never navigates from the background handler or twice from duplicate response paths.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "Push client code and the selected iOS Firebase app are valid, APNs was uploaded manually, sender-auth.json is missing, no flows exist, and no IPA has been built. Tell me exactly where setup stands and continue.",
+      "expected_output": "The skill reports six independent states: native client integrated; APNs configured, device verification pending; sender auth missing; flows missing; wrapped iOS build missing; physical delivery pending. It routes sender auth to setup-push-wif or the compatibility skill, flow authoring to create-push-notification-flow, then build to build-ios and delivery to verify-ios-push without performing those workflows itself.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "Everything for iOS push is configured and the flows are published. Please make the signed IPA and prove background and terminated delivery as part of /add-push-notifications.",
+      "expected_output": "The skill does not duplicate signing, build, FlowAgent read-back, or physical test procedures. It reports the existing states, routes the registered-device development/ad-hoc IPA to /build-ios, and routes physical delivery to /verify-ios-push after the exact build is ready.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Firebase accepted our iOS message and the outbox row says Sent, so mark APNs and iOS delivery complete even though we only tested in Metro.",
+      "expected_output": "The skill refuses to treat Firebase acceptance, Sent state, or Metro as device proof; keeps APNs configured, device verification pending and physical delivery pending; and routes the exact wrapped physical-device verification to /verify-ios-push.",
       "files": []
     }
   ]

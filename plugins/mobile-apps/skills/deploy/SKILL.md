@@ -14,9 +14,13 @@ Builds the mobile app in the current directory and pushes it to the Power Platfo
 
 This skill uses the standard 4-step deployment flow for this plugin: check memory bank, build, deploy, then update memory bank.
 
-## Out of scope (deliberately)
+## Scope boundary
 
-- `expo run:ios` / `expo run:android` — local native compile is the user's choice; run your platform-specific native command directly when ready.
+- This workflow remains the Power Platform **web bundle deployment**:
+  `npm run build` then `npx power-apps push`.
+- iOS registered-device native builds are owned by `/build-ios`, using the
+  supported `npm run build:ios` Wrap path for `development` or `ad-hoc`.
+- `expo run:ios` / `expo run:android` are not deployment steps.
 - OTA updates and store distribution — out of scope for v0.
 - Starting Metro for local dev — run `npm run dev` (= `expo start`) directly.
 
@@ -189,7 +193,12 @@ This launches Metro and prints a QR code. They can:
 
 Runtime debugging for this plugin uses `/debug-app` with native dev-client sessions and Metro terminal logs. Do not use React Native Web, browser automation, direct Metro/localhost HTTP probes, or screen-by-screen runtime checks.
 
-If they want to compile a native binary locally, they run the platform-specific native command directly. Local native compile and manual device testing are user-owned and are not deployment gates for this skill.
+If they need a registered-device iOS binary, route to `/build-ios`; do not tell
+them to run an arbitrary platform-specific compile directly. `/build-ios`
+supports development and ad-hoc IPA export only, preserves Apple credential
+boundaries, and hands physical push testing to `/verify-ios-push`. Android
+native builds, OTA updates, TestFlight, App Store, and other distribution modes
+remain outside this deployment workflow.
 
 ## Reference
 

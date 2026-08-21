@@ -7,6 +7,10 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 - Node.js 24 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
+- For wrapped iOS push delivery: macOS with the installed Wrap/Xcode toolchain,
+  Apple Developer team access, and a physical iPhone or iPad registered to that
+  team. The preview supports registered-device `development` and `ad-hoc`
+  builds only—not simulator, TestFlight, App Store, or enterprise distribution.
 
 ## Setup
 
@@ -196,9 +200,11 @@ Native modules are allowlist-bound by the current template `package.json`. Push 
 
 Notification delivery must be tested on matching wrapped physical-device
 builds. Native client setup, sender authentication, and Power Automate flow
-authoring are independent resumable stages. An already integrated client can
-run `/create-push-notification-flow` directly; a new or newly added native
-platform still runs `/setup-fcm` and, for iOS, `/setup-apns`.
+authoring are independent resumable stages. iOS adds two more independent
+stages: a wrapped registered-device build and physical delivery verification.
+An already integrated client can run `/create-push-notification-flow` directly;
+a new or newly added native platform still runs `/setup-fcm` and, for iOS,
+`/setup-apns`.
 
 Run `/setup-fcm` to list accessible Firebase projects, select one, create a new
 project, or add Firebase to an existing Google Cloud project. The workflow keeps
@@ -217,7 +223,24 @@ to be committed, and the template discovers them automatically; project-relative
 environment overrides remain available when needed. For iOS, `/setup-apns`
 guides the user through manually uploading the Apple APNs `.p8` key in Firebase
 Console. The key stays outside the project and is never read or uploaded by the
-agent.
+agent. Static completion is recorded as **configured, device verification
+pending**. It remains pending until `/verify-ios-push` passes on a matching
+physical-device build.
+
+After APNs configuration, run `/build-ios` to create either a `development`
+IPA (`aps-environment=development`) or a registered-device `ad-hoc` IPA
+(`aps-environment=production`) through the template's `npm run build:ios`
+Wrap path. The skill reconciles only non-secret app identity and records the
+fresh artifact; certificates, private keys, provisioning profiles, device
+UDIDs, keychain data, and signing secrets remain in the user's Apple/Xcode/Wrap
+accounts and are never requested or inspected.
+
+Run `/verify-ios-push` only after the exact IPA is installed and sender auth
+plus both Power Automate flows are ready. It verifies the physical-device
+foreground, background, terminated/cold-start deep-link, signed-out
+`allUsers`, signed-in lowercase-OID, sign-out, opt-out, and re-registration
+cases. Firebase acceptance, a `Sent` outbox row, simulator, Expo Go, Metro, or
+configuration checks alone do not prove delivery.
 
 Run `/setup-push-wif` before flow authoring when the Google trust is not already
 verified. WIF is the preferred sender mode: it inspects a real Entra app-only
@@ -253,7 +276,11 @@ row-created trigger and resolves the row owner to a lowercase Entra OID topic.
   an Entra-authenticated premium connector/connection usable by Power
   Automate. Azure hosting charges and Power Platform premium licensing may
   apply.
-- **iOS:** Apple Developer access and manual APNs `.p8` upload to Firebase.
+- **iOS configuration:** Apple Developer access and manual APNs `.p8` upload
+  to Firebase. The agent never handles the key or its local path.
+- **iOS build and verification:** macOS Wrap/Xcode tooling, a registered
+  physical device, and existing Apple signing assets outside the repository.
+  Only development and ad-hoc registered-device IPA workflows are supported.
 
 ### 4. Add a connector
 
@@ -315,13 +342,16 @@ Example edit flows:
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
 | `/setup-fcm` | 🟡 preview | List/select/create Firebase projects with `npx firebase-tools` after `gcloud` ADC identity checks; idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. |
 | `/setup-apns` | 🟡 preview | Validate the existing Firebase iOS identity and guide manual APNs `.p8` upload in Firebase Console; the key is never read, copied, or uploaded by the agent. |
+| `/build-ios` | 🟡 preview | Build a registered-device development or ad-hoc IPA through `npm run build:ios` (`wrap ios`), with exact Firebase/APNs/team/export identity gates and strict Apple signing-credential boundaries. Not for simulator, TestFlight, App Store, or enterprise distribution. |
+| `/verify-ios-push` | 🟡 preview | Verify the exact fresh wrapped IPA and published producer/sender flows on a registered physical iPhone/iPad across permission, foreground/background/terminated delivery, deep links, topic transitions, opt-out, and re-registration recovery. |
 | `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation with `gcloud`, then prove the complete exchange and write the non-secret sender-auth handoff. |
 | `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: validate/reuse or deploy an Entra-protected Azure Function that reads the existing JSON from Key Vault through managed identity. Never creates or downloads a Firebase Admin key. |
 | `/create-push-notification-flow` | 🟡 preview | Resume directly from an already integrated Firebase client, validate one sender-auth mode, then create the Dataverse outbox sender and row-created producer through FlowAgent. User notifications use lowercase Entra OID topics; broadcasts use exact `allUsers`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
-| `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
+| `/deploy` | ✅ v0 | Power Platform web deployment — `npm run build` then `npx power-apps push` to the env in `power.config.json`. Routes registered-device iOS native builds to `/build-ios`; it does not run `expo run:ios` or `expo run:android`. |
+| `/debug-app` | ✅ v0 | Diagnose Metro/dev-client runtime and silent failures. Keeps general JS/bundle diagnostics local, but routes wrapped iOS notification delivery/runtime verification to `/verify-ios-push`. |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |

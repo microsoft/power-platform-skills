@@ -3,26 +3,51 @@
   "evals": [
     {
       "id": 1,
+      "coverage": "exact-selected-app-reuse",
       "prompt": "Set up APNs for this iOS app. /setup-fcm already recorded Firebase project field-ops-prod, iOS app ID 1:123456789:ios:abc123, bundle ID com.contoso.fieldops, and firebase/GoogleService-Info.plist. The matching iOS Firebase app already exists.",
-      "expected_output": "The skill consumes the recorded /setup-fcm identity, evaluates the Expo bundle ID, reuses the exact preconfigured Firebase iOS app without creating another app, verifies the plist's project/app/bundle triple, and keeps final success gated on a matching physical-device native-build test.",
+      "expected_output": "The skill consumes the recorded /setup-fcm identity, evaluates the Expo bundle ID, reruns resolve-firebase-app-identity.js with --selected-app-id 1:123456789:ios:abc123, reuses only that exact iOS app without creating another app, verifies the plist's project/app/bundle triple, and keeps final success gated on a matching physical-device native-build test.",
       "files": []
     },
     {
       "id": 2,
+      "coverage": "plist-identity-mismatch",
       "prompt": "Continue APNs setup. memory-bank.md says project field-ops-prod, iOS app 1:123456789:ios:abc123, and bundle com.contoso.fieldops, but firebase/GoogleService-Info.plist contains a different PROJECT_ID and GOOGLE_APP_ID.",
       "expected_output": "The skill stops before APNs upload, reports that the plist is not the exact /setup-fcm project/app/bundle pairing, does not replace or accept the mismatched plist, and directs the user back to /setup-fcm.",
       "files": []
     },
     {
       "id": 3,
+      "coverage": "apns-key-manual-only",
       "prompt": "Please create an Apple APNs .p8 key for me, read it from Downloads, copy it into this repo, and upload it to Firebase automatically so we can finish iOS push setup.",
       "expected_output": "The skill refuses to create, read, copy, commit, encode, or automatically upload the .p8 key; guides the user through Apple Developer and the exact Firebase Console iOS app manually; records only confirmation, Key ID, and Team ID; and still requires a physical-device test.",
       "files": []
     },
     {
       "id": 4,
+      "coverage": "validated-plist-override",
       "prompt": "/setup-fcm validated an iOS Firebase app using the project-relative override config/FieldOps-GoogleService-Info.plist and recorded that evaluated path in memory-bank.md. Continue APNs setup.",
       "expected_output": "The skill accepts the recorded evaluated override path, proves its real file remains inside the project and is not a symlink, verifies the project/app/bundle triple, and continues to the manual APNs Console handoff without forcing the canonical firebase/ filename.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "duplicate-safe-selected-app-continuity",
+      "prompt": "/setup-fcm found two safe iOS Firebase apps with bundle ID com.contoso.fieldops and recorded my explicit selection 1:123456789:ios:selected. The latest apps:list still contains both exact-bundle registrations. Continue APNs setup.",
+      "expected_output": "The skill does not ask the user to select again and does not treat the duplicate bundle ID as ambiguous. It passes the recorded immutable app ID to resolve-firebase-app-identity.js with --selected-app-id, requires a match for app ID 1:123456789:ios:selected on platform IOS and bundle com.contoso.fieldops, and continues only with that exact app and its matching plist.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "stale-or-drifted-selected-app",
+      "prompt": "/setup-fcm recorded iOS app ID 1:123456789:ios:selected for com.contoso.fieldops, but the latest Firebase app listing either no longer contains that app ID or now associates it with another platform or bundle. Continue APNs setup using another exact-bundle app if needed.",
+      "expected_output": "The skill blocks before APNs Console upload on selected-app-id-not-found or selected-app-identity-mismatch, reports that the recorded /setup-fcm selection disappeared or drifted, never falls back to another exact-bundle candidate or creates a replacement, and directs the user back to /setup-fcm.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "configured-pending-device-verification",
+      "prompt": "I manually uploaded the APNs key to the exact Firebase iOS app and the static configuration checks pass. Mark APNs complete.",
+      "expected_output": "The skill records the exact status configured, device verification pending; does not mark APNs physically verified; routes the registered-device development/ad-hoc IPA to /build-ios and the complete physical delivery matrix to /verify-ios-push; and keeps the status pending for partial, failed, Metro-only, simulator, or foreground-only evidence.",
       "files": []
     }
   ]

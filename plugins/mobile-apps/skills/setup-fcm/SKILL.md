@@ -425,6 +425,11 @@ may overwrite it before its project/app identity can be checked.
    file contents. Also record the exact topic policy (`allUsers` and the
    validated lowercase Entra OID) and the accepted client-subscription security
    risk.
+   Use stable `Firebase push handoff` table keys so downstream strict validation
+   can compare active files without guessing prose: `Firebase project ID`,
+   `Android Firebase app ID`, `Android package`, `Android client config path`,
+   `iOS Firebase app ID`, `iOS bundle ID`, and `iOS client config path`. Omit
+   rows for unselected platforms; never place config contents in the table.
 10. Run `npx expo config --type public`, `npx tsc --noEmit`, the push config
     validator, and changed-file validation.
 

@@ -168,35 +168,56 @@ function parseJson(buffer) {
   }
 }
 
-function validateAndroidConfig(buffer, expected) {
+function parseAndroidClientIdentities(buffer) {
   const config = parseJson(buffer);
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
-    return [issue('config-not-object', 'config', 'Android client config must be a JSON object.')];
+    throw new SafeError('config-not-object', 'Android client config must be a JSON object.');
   }
   if (hasAdminCredentialShape(config)) {
-    return [issue(
+    throw new SafeError(
       'admin-service-account-forbidden',
-      'config',
       'Firebase Admin service-account JSON is forbidden; use only apps:sdkconfig client output.',
-    )];
+    );
+  }
+  if (!Array.isArray(config.client)) {
+    throw new SafeError('clients-missing', 'Android client config has no client array.');
+  }
+  return {
+    projectId: typeof config.project_info?.project_id === 'string'
+      ? config.project_info.project_id
+      : null,
+    clients: config.client.map((client) => ({
+      appId: typeof client?.client_info?.mobilesdk_app_id === 'string'
+        ? client.client_info.mobilesdk_app_id
+        : null,
+      identifier: typeof client?.client_info?.android_client_info?.package_name === 'string'
+        ? client.client_info.android_client_info.package_name
+        : null,
+    })),
+  };
+}
+
+function validateAndroidConfig(buffer, expected) {
+  let identity;
+  try {
+    identity = parseAndroidClientIdentities(buffer);
+  } catch (error) {
+    if (error instanceof SafeError) return [issue(error.code, 'config', error.message)];
+    throw error;
   }
 
   const issues = [];
-  if (config.project_info?.project_id !== expected.projectId) {
+  if (identity.projectId !== expected.projectId) {
     issues.push(issue('project-id-mismatch', 'project_info.project_id', 'Firebase project ID does not match.'));
-  }
-  if (!Array.isArray(config.client)) {
-    issues.push(issue('clients-missing', 'client', 'Android client config has no client array.'));
-    return issues;
   }
 
   // google-services.json stores identity on the same client record:
   // client_info.mobilesdk_app_id + client_info.android_client_info.package_name.
   // Requiring one record to match both prevents accepting an app ID from one package
   // and a package name from another client in a multi-app Firebase project.
-  const matches = config.client.filter((client) => (
-    client?.client_info?.mobilesdk_app_id === expected.appId
-    && client?.client_info?.android_client_info?.package_name === expected.identifier
+  const matches = identity.clients.filter((client) => (
+    client.appId === expected.appId
+    && client.identifier === expected.identifier
   ));
   if (matches.length === 0) {
     issues.push(issue(
@@ -406,6 +427,7 @@ module.exports = {
   inspectFiles,
   isWithinRoot,
   parseArgs,
+  parseAndroidClientIdentities,
   parsePlistStrings,
   validateAndroidConfig,
   validateConfig,

@@ -15,6 +15,7 @@ const {
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const EVAL_PATH = path.join(PLUGIN_ROOT, 'skills/setup-fcm/evals/evals.json');
+const APNS_EVAL_PATH = path.join(PLUGIN_ROOT, 'skills/setup-apns/evals/evals.json');
 const FIXTURE_ROOT = path.join(PLUGIN_ROOT, 'skills/setup-fcm/evals/fixtures');
 const EXPECTED_COVERAGE = [
   'missing-adc',
@@ -41,6 +42,15 @@ const EXPECTED_COVERAGE = [
   'auto-discovery-explicit-override',
   'firebase-admin-key-forbidden',
   'apns-manual-handoff',
+].sort();
+const EXPECTED_APNS_COVERAGE = [
+  'exact-selected-app-reuse',
+  'plist-identity-mismatch',
+  'apns-key-manual-only',
+  'validated-plist-override',
+  'duplicate-safe-selected-app-continuity',
+  'stale-or-drifted-selected-app',
+  'configured-pending-device-verification',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -80,6 +90,29 @@ test('every planned setup-fcm scenario is traceable exactly once', () => {
       );
       assert.ok(fs.statSync(fixturePath).isFile(), `${relativePath} must be a fixture file`);
     }
+  }
+});
+
+test('every planned setup-apns scenario is traceable exactly once', () => {
+  const document = JSON.parse(fs.readFileSync(APNS_EVAL_PATH, 'utf8'));
+  assert.strictEqual(document.skill_name, 'setup-apns');
+  assert.deepStrictEqual(
+    document.evals.map(({ coverage }) => coverage).sort(),
+    EXPECTED_APNS_COVERAGE,
+  );
+  assert.deepStrictEqual(
+    document.evals.map(({ id }) => id),
+    Array.from({ length: EXPECTED_APNS_COVERAGE.length }, (_, index) => index + 1),
+  );
+
+  for (const evaluation of document.evals) {
+    assert.ok(evaluation.prompt.trim(), `${evaluation.coverage} needs a prompt`);
+    assert.ok(evaluation.expected_output.trim(), `${evaluation.coverage} needs expected output`);
+    assert.deepStrictEqual(
+      evaluation.files,
+      [],
+      `${evaluation.coverage} must remain a fixture-free guidance scenario`,
+    );
   }
 });
 
@@ -138,6 +171,59 @@ test('sanitized identity and app-list fixtures drive deterministic offline branc
     ).status,
     'ambiguous',
   );
+});
+
+test('APNs continuity preserves the recorded iOS app across safe duplicates and blocks drift', () => {
+  const apps = {
+    status: 'success',
+    result: [
+      {
+        appId: '1:123456789:ios:first',
+        platform: 'IOS',
+        bundleId: EXPECTED.identifier,
+      },
+      {
+        appId: EXPECTED.iosAppId,
+        platform: 'IOS',
+        bundleId: EXPECTED.identifier,
+      },
+      {
+        appId: '1:123456789:ios:other',
+        platform: 'IOS',
+        bundleId: 'com.contoso.other',
+      },
+    ],
+  };
+
+  const selected = matchFirebaseApp(
+    apps,
+    'ios',
+    EXPECTED.identifier,
+    EXPECTED.iosAppId,
+  );
+  assert.strictEqual(selected.status, 'match');
+  assert.strictEqual(selected.selectedExplicitly, true);
+  assert.strictEqual(selected.app.appId, EXPECTED.iosAppId);
+  assert.strictEqual(selected.app.platform, 'IOS');
+  assert.strictEqual(selected.app.bundleId, EXPECTED.identifier);
+
+  const disappeared = matchFirebaseApp(
+    apps,
+    'ios',
+    EXPECTED.identifier,
+    '1:123456789:ios:missing',
+  );
+  assert.strictEqual(disappeared.status, 'ambiguous');
+  assert.strictEqual(disappeared.conflicts[0].code, 'selected-app-id-not-found');
+
+  const drifted = matchFirebaseApp(
+    apps,
+    'ios',
+    EXPECTED.identifier,
+    '1:123456789:ios:other',
+  );
+  assert.strictEqual(drifted.status, 'ambiguous');
+  assert.strictEqual(drifted.conflicts[0].code, 'selected-app-identity-mismatch');
 });
 
 test('sanitized SDK fixtures cover exact project, app, package, and bundle validation', () => {
@@ -230,4 +316,14 @@ test('fixtures and workflow remain sanitized and require no network or Admin key
   assert.match(skill, /\/setup-apns/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
   assert.doesNotMatch(skill, /firebase-tools\s+(?:login|login:add|logout)(?:\s|`)/);
+
+  const apnsSkill = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'), 'utf8');
+  assert.match(apnsSkill, /--selected-app-id "<IOS_APP_ID>"/);
+  assert.match(apnsSkill, /selected-app-id-not-found/);
+  assert.match(apnsSkill, /selected-app-identity-mismatch/);
+  assert.match(apnsSkill, /never fall back[\s\S]*exact-bundle candidate/i);
+  assert.match(apnsSkill, /configured, device verification\s+pending/i);
+  assert.match(apnsSkill, /Only `\/verify-ios-push` may change the status to physically verified/);
+  assert.match(apnsSkill, /Route the user to `\/build-ios`/);
+  assert.doesNotMatch(apnsSkill, /apps:create IOS/);
 });

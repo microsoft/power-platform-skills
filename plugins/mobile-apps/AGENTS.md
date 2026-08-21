@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 31 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 33 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -89,7 +89,9 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Markdown plan with Mermaid (no HTML rendering)
 - ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
-- ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0
+- ✅ `/deploy` remains the Power Platform web-bundle path (`npm run build` +
+  `npx power-apps push`). Registered-device iOS native builds route to
+  `/build-ios`; `/deploy` does not run `expo run:ios`/`expo run:android`.
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
@@ -98,6 +100,22 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Firebase provisioning is automated but identity-explicit: `gcloud` verifies the active account and ADC, while on-demand `npx firebase-tools` lists/selects/creates Firebase projects and performs app operations without a global install.
 - ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config; APNs `.p8` upload remains a manual Firebase Console step and the agent never handles the key.
 - ✅ Push setup has three independently resumable tracks: native client integration (`/add-push-notifications`, `/setup-fcm`, `/setup-apns`), sender authentication, and Power Automate flow authoring. Existing active client integrations may proceed directly to `/create-push-notification-flow`; new platforms still use the client setup skills.
+- ✅ iOS push orchestration adds two independently resumable stages after
+  configuration: `/build-ios` creates an exact registered-device
+  `development` or `ad-hoc` IPA through `npm run build:ios`, and
+  `/verify-ios-push` proves physical delivery. `/add-push-notifications`
+  reports native client, APNs, sender auth, flows, wrapped build, and delivery
+  verification separately without duplicating their owner workflows.
+- ✅ `/setup-apns` ends at **configured, device verification pending** after
+  the manual Firebase Console upload and static checks. Only a complete
+  `/verify-ios-push` physical-device matrix may mark APNs physically verified.
+- ✅ `/build-ios` supports registered-device development/ad-hoc scope only.
+  Apple certificates, private keys, `.p8`/`.p12` files, provisioning profiles,
+  device UDIDs, keychain data, passwords, and signing secrets remain
+  user-owned outside the repository and are never requested or inspected.
+- ✅ `/debug-app` retains Metro and editable JS/TS diagnostics, but wrapped iOS
+  notification runtime/delivery failures route to `/verify-ios-push`; stale
+  build or APNs ownership then routes onward to `/build-ios` or `/setup-apns`.
 - ✅ WIF is the preferred sender authentication: Power Automate exchanges a dedicated Entra app token through Google Workload Identity Federation, impersonates a least-privilege Firebase sender service account, and calls FCM HTTP v1. `/setup-push-wif` validates/reuses, repairs, or provisions resources, derives trust from observed `iss` plus `appid`/`azp`, proves the full exchange, and writes a non-secret `sender-auth.json`.
 - ✅ Existing service-account integrations use `/setup-push-service-account` only. It validates/reuses or deploys an Entra-protected Azure Function whose managed identity reads the existing Firebase JSON from Azure Key Vault and mints short-lived Google tokens. The workflow never creates/downloads a Firebase Admin key or places it in the flow/repository; this compatibility path requires Azure/Entra/Key Vault/Function permissions and a suitable premium Power Automate connector/license.
 - ✅ `/create-push-notification-flow` consumes exactly one fresh validated sender-auth mode and uses FlowAgent for connector discovery and every flow mutation. It creates a queued-outbox sender plus a Dataverse row-created producer by default, resolves `ownerid` through `systemusers.azureactivedirectoryobjectid`, and verifies each mutation by reading the live definition back. WIF and Function action trees must never coexist as fallbacks.

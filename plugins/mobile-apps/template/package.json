@@ -1,7 +1,7 @@
 {
   "name": "powerapps-standalone-app",
   "version": "1.0.0",
-  "main": "expo-router/entry",
+  "main": "index.js",
   "scripts": {
     "postinstall": "node scripts/patch-native-host-auth.js",
     "dev": "expo start",
