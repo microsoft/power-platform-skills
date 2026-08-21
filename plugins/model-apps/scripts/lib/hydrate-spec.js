@@ -146,6 +146,7 @@ async function hydrateSpec(read) {
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
+      ...(p.directEntry !== undefined ? { directEntry: p.directEntry } : {}),
           ...(p.prompt ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }

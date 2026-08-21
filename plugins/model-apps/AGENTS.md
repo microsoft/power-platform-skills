@@ -118,7 +118,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   MEMBERSHIP (the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` in
   `scripts/lib/sitemap-pages.js` — drives placement, download enumeration, and verify; a read failure
   HALTs). All page matching is by id. Every `pages[]` entry must be sitemap-placed (validation rejects
-  headless pages). The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
+  headless pages) — because the sitemap is download's ONLY membership oracle, so a page reached only
+  by `navigatesTo` is invisible to download and gets re-created as a duplicate on the next build.
+  The corollary is that a detail page is reachable from the nav with **no input**, so a page
+  declaring `pageInput` must also declare **`directEntry`** (`selector` | `emptyState`) saying what
+  that renders; `page-plan` passes it to the generator and the page manifest carries it through
+  download. Every `pageInput.data` key must also be produced by an incoming `navigatesTo[].data`
+  edge. See `references/app-spec-schema.md` → *the input contract*.
+  The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
   identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) enumerates every app via the vendored SDK's
   `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still

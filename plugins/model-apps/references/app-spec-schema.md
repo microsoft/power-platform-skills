@@ -349,13 +349,34 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     "dataSources": ["new_order", "new_customer"],
     "source": { "kind": "intent" },                // design-time; generate-pages fills the .tsx
     "navigatesTo": [{ "targetKey": "detail", "data": { "orderId": "string" } }],
-    "pageInput": { "data": { "orderId": "string" } } } ]
+    "pageInput": { "data": { "orderId": "string" } },
+    "directEntry": { "behavior": "selector" } } ]
 // after generate-pages: "source": { "kind": "tsx", "codeFile": "overview.tsx" }
 ```
 - **Genpage-first policy** is unchanged. A page's implementation state is an explicit discriminated
   `source`: `{ "kind": "intent" }` (declared but not yet coded) or `{ "kind": "tsx", "codeFile": "…" }`
   (the `.tsx` the build uploads). A **legacy** top-level `"codeFile"` (no `schemaVersion`) is still
   accepted and treated as an implemented tsx page.
+- **`pageInput` + `directEntry` — the input contract.** These two rules used to conflict with no way
+  for an author to satisfy both, so this spells out the resolution:
+  - Every page **must** be a sitemap subarea (see the membership invariant below). The sitemap is the
+    download's only membership oracle, so a page reached *only* by `navigatesTo` is invisible to
+    download and gets re-created as a **duplicate** on the next build.
+  - A detail page therefore lives in the app navigation, which means a user can open it **with no
+    input at all** — the `orderId` its `pageInput` declares simply is not there.
+  - So a page that declares `pageInput` must also declare **`directEntry`**, which is what that state
+    renders: `{ "behavior": "selector" }` (show a picker, then the record) or
+    `{ "behavior": "emptyState" }` (explain, and render nothing broken). An optional `note` is passed
+    to the generator verbatim. Without this the generated page read `undefined` context on a path a
+    user reaches by clicking the nav entry.
+  - Every key in `pageInput.data` must be **produced by an incoming `navigatesTo[].data`** edge. An
+    input nothing supplies is either a typo or a page that can only ever be entered directly; both
+    generate a page reading a key no caller ever sets.
+
+  The alternative — allowing navigation-only pages — was rejected: it would need the sitemap to stop
+  being the membership oracle, and the duplicate-page bug it prevents is worse than the extra nav
+  entry. `directEntry` also survives download (it is carried in the page manifest), because a spec
+  that lost it would fail its own validation on the next build.
 - Validation is **profile-scoped**: `design`/`plan` accept intent pages; a `deploy` build (the default)
   requires every page implemented.
 - **`key`** (schemaVersion 2, required, unique) is the page's **single stable identity** — used by

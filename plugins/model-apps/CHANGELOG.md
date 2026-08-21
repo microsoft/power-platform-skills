@@ -10,6 +10,25 @@ jobs-to-be-done surfaces checkable, adds plugin update notices, fixes four crash
 and corrects a smoke-eval assertion that could never pass live.
 
 ### Added
+- **`directEntry` on `pages[]` — resolves a policy conflict authors could not satisfy.** Every page
+  must be a sitemap subarea (the sitemap is download's only membership oracle, so a nav-only page is
+  invisible to download and gets re-created as a duplicate). But that also means a **detail** page is
+  reachable from the app navigation with **no input**, and nothing made the author account for it —
+  so a generated page read `undefined` context on a path a user reaches by clicking.
+
+  A page declaring `pageInput` must now declare `directEntry`:
+  `{ "behavior": "selector" }` (show a picker, then the record) or `{ "behavior": "emptyState" }`
+  (explain, render nothing broken). `page-plan` passes it to the generator, and it survives download
+  via the page manifest — a spec that lost it would fail its own validation on the next build.
+
+  Related: every key in `pageInput.data` must be produced by an incoming `navigatesTo[].data` edge.
+  An input no caller supplies is either a typo or a page that can only be entered directly; both
+  generate a page reading a key nothing sets.
+
+  Allowing navigation-only pages was considered and rejected — it would require the sitemap to stop
+  being the membership oracle, and the duplicate-page bug that prevents is worse than an extra nav
+  entry.
+
 - **`languageCode` (App Spec) and `--language-code` / `--languageCode` (CLI)** — pin the
   LCID used for the Dataverse labels the data-model phase creates, overriding the
   organization's base language. Accepted by `build-model-app.js` and by

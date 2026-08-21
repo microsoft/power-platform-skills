@@ -358,6 +358,13 @@ function resolveChoiceValue(byLabel, v, isMulti) {
 // See docs/app-builder-design.md §7.1.
 const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 
+// What a page does when a user opens it straight from the app navigation with no caller input.
+// Every page is sitemap-placed, so this state is always reachable for a page that declares
+// `pageInput`; these are the two honest answers.
+//   selector   — render a picker/list so the user can choose the record the page needs.
+//   emptyState — render an explanatory empty state ("open a row from X to see its detail").
+const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -830,6 +837,48 @@ function validateAppSpec(spec, opts = {}) {
       }
       if (p.pageInput !== undefined) {
         if (typeof p.pageInput !== 'object' || p.pageInput === null || Array.isArray(p.pageInput)) errors.push(`page '${p.key || p.name}': pageInput must be an object`);
+      }
+    }
+    // INPUT CONTRACT. These two rules together resolve a policy conflict that was previously left
+    // implicit, and that a page author had no way to satisfy:
+    //
+    //   - Every page MUST be sitemap-placed (the MEMBERSHIP invariant above): the sitemap is the
+    //     download's only membership oracle, so a page reached only by navigation is invisible to
+    //     download and gets re-created as a duplicate on the next build.
+    //   - But a DETAIL page declares `pageInput` (e.g. `{ data: { orderId: 'string' } }`) because it
+    //     is opened from a list with a row id.
+    //
+    // Being sitemap-placed means the page is ALSO reachable straight from the app's navigation, with
+    // NO input at all. That is a real, user-reachable state — it is what a user gets by clicking the
+    // nav entry — and previously nothing made the author account for it, so the generated page would
+    // render against `undefined` context. Rather than weaken the membership invariant (which would
+    // reintroduce duplicate pages on every rebuild), require the author to say what direct entry
+    // does. `directEntry` is that answer, and page-plan feeds it to the generator.
+    for (const p of spec.pages || []) {
+      const key = p.key || p.name;
+      const inputKeys = Object.keys((p.pageInput && p.pageInput.data) || {});
+      if (!inputKeys.length) continue;
+
+      if (p.directEntry === undefined) {
+        errors.push(`page '${key}' declares pageInput (${inputKeys.join(', ')}) but no directEntry — every page is sitemap-placed, so a user can open it from the app navigation with no input. Declare directEntry: { "behavior": "selector" | "emptyState", "note": "…" } to say what that shows.`);
+      } else if (typeof p.directEntry !== 'object' || p.directEntry === null || Array.isArray(p.directEntry)) {
+        errors.push(`page '${key}': directEntry must be an object`);
+      } else if (!DIRECT_ENTRY_BEHAVIORS.includes(p.directEntry.behavior)) {
+        errors.push(`page '${key}': directEntry.behavior must be one of ${DIRECT_ENTRY_BEHAVIORS.join('|')}`);
+      }
+
+      // Trace each declared input back to a navigation edge that actually produces it. An input no
+      // caller supplies is either a typo or a page that can ONLY ever be entered directly — both are
+      // worth failing on, because the generated page would read a key nothing ever sets.
+      const produced = new Set();
+      for (const other of spec.pages || []) {
+        for (const nav of other.navigatesTo || []) {
+          if (nav && nav.targetKey === key) for (const k of Object.keys((nav.data) || {})) produced.add(k);
+        }
+      }
+      const orphaned = inputKeys.filter((k) => !produced.has(k));
+      if (orphaned.length) {
+        errors.push(`page '${key}': pageInput declares ${orphaned.map((k) => `'${k}'`).join(', ')} but no page navigates to it with that data — add it to the producing page's navigatesTo[].data, or drop it from pageInput.`);
       }
     }
   }

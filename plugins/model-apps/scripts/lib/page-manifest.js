@@ -38,6 +38,10 @@ function buildManifest(spec, keyToId) {
     if (p.dataSources && p.dataSources.length) entry.dataSources = p.dataSources;
     if (p.navigatesTo && p.navigatesTo.length) entry.navigatesTo = p.navigatesTo;
     if (p.pageInput !== undefined) entry.pageInput = p.pageInput;
+    // Carried with pageInput, not separately: a page that declares an input is REQUIRED to declare
+    // what direct entry renders (validation rejects one without the other), so dropping it here
+    // would make a downloaded spec fail its own validation on the next build.
+    if (p.directEntry !== undefined) entry.directEntry = p.directEntry;
     // Carry the source discriminant so the download round-trip can reconstruct the full spec shape
     // (§7.3): intent pages stay intent, tsx pages remember their codeFile. Omit when absent.
     if (p.source !== undefined) entry.source = p.source;
@@ -145,6 +149,12 @@ function parseManifest(text) {
     // pageInput — when present, must be a plain non-null, non-array object
     if (p.pageInput !== undefined) {
       if (!p.pageInput || typeof p.pageInput !== 'object' || Array.isArray(p.pageInput)) return null;
+    }
+
+    // directEntry — same shape rule. Validated here too so a corrupt manifest is rejected whole
+    // rather than round-tripping a value that would then fail App Spec validation on rebuild.
+    if (p.directEntry !== undefined) {
+      if (!p.directEntry || typeof p.directEntry !== 'object' || Array.isArray(p.directEntry)) return null;
     }
 
     // source — when present, must be a valid discriminated intent|tsx shape
