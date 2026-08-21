@@ -185,18 +185,28 @@ function makeRunner({ emit, total }) {
 }
 
 // Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
-// pushArtifact RESOLVES (it does NOT throw) with { success:false, error:VersionConflictError } on a
-// 412 — the artifact changed in Maker since our last fetch. The engine previously ignored push
-// results, so a conflict silently reported success while DROPPING the edit. Halt loudly and require
-// a fresh download instead of auto refetch-and-overlay (which would clobber a concurrent Maker edit
-// and violates the SDK's rebuild-from-model tenet, architecture-spec T6). A 412 is the only failure
-// pushArtifact signals by return value; every other failure still throws. See MakerSdk.pushArtifact.
+// pushArtifact RESOLVES (it does NOT throw) with a failed PushResult carrying a
+// `VersionConflictError` on a 412 — the artifact changed in Maker since our last fetch. The engine
+// previously ignored push results, so a conflict silently reported success while DROPPING the edit.
+// Halt loudly and require a fresh download instead of auto refetch-and-overlay (which would clobber
+// a concurrent Maker edit and violates the SDK's rebuild-from-model tenet, architecture-spec T6). A
+// 412 is the only failure pushArtifact signals by return value; every other failure still throws.
+//
+// The SDK renamed `PushResult.success` to `saved`, DELIBERATELY, to force every call site to be
+// re-read once: `saved` means the write committed, NOT that the runtime serves it (that is
+// `shipped`, true only when the publish was verified). Both spellings are accepted here because the
+// rename is invisible at runtime — a bundle that still returns `success` would otherwise sail past
+// a `saved === false` check, and a bundle that returns `saved` sails past a `success === false`
+// check. Either mismatch silently disarms this guard, which is the one thing it must never do, so
+// the check is written to fail CLOSED against both bundle generations rather than assume one.
 function requireSuccessfulPush(result, what) {
-  if (result && result.success === false) {
+  if (!result) return result;
+  const committed = result.saved !== undefined ? result.saved : result.success;
+  if (committed === false || (committed === undefined && result.error)) {
     const detail = (result.error && result.error.message) || 'version conflict (412)';
     throw new BuildHalt(
-      `push ${what || (result && result.type) || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
-      { phase: 'push', code: 'version-conflict', recoverable: true, cause: result && result.error }
+      `push ${what || result.type || 'artifact'} failed: ${detail} — the artifact changed in Maker since it was fetched; re-download the app and rebuild (never overwrite a concurrent edit)`,
+      { phase: 'push', code: 'version-conflict', recoverable: true, cause: result.error }
     );
   }
   return result;

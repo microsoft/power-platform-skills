@@ -439,6 +439,37 @@ test('requireSuccessfulPush halts (BuildHalt) on a 412 version-conflict result',
   );
 });
 
+// The SDK renamed `PushResult.success` to `saved` deliberately — its own type comment says the
+// rename exists to "force every existing call site to be looked at once". This guard is such a call
+// site, and it is the ONLY thing standing between a 412 and a silently dropped Maker edit.
+//
+// The danger is that the rename is invisible at runtime: a `success === false` check against a
+// bundle that returns `saved` reads `undefined === false` -> false, so the guard just stops firing.
+// Nothing fails, nothing logs, and a concurrent edit is overwritten. These pin BOTH spellings so the
+// guard cannot be silently disarmed by a re-vendor in either direction.
+test('requireSuccessfulPush halts on the RENAMED PushResult shape (saved:false), not just success:false', () => {
+  const conflict = { type: 'form', id: 'f9', saved: false, shipped: false, error: new Error('Version conflict (412)') };
+  assert.throws(
+    () => requireSuccessfulPush(conflict, 'form f9'),
+    (err) => err.name === 'BuildHalt' && err.code === 'version-conflict' && /Version conflict \(412\)/.test(err.message),
+    'a saved:false result MUST halt — otherwise a 412 silently drops the edit'
+  );
+});
+
+test('requireSuccessfulPush accepts a saved:true result and does not confuse saved with shipped', () => {
+  // `shipped:false` is normal — it means the change is committed but the runtime still serves the
+  // previously published copy. That is NOT a push failure and must not halt the build; the publish
+  // phase is what makes it live.
+  const saved = { type: 'view', id: 'v1', saved: true, shipped: false, publish: { kind: 'notRequested' } };
+  assert.strictEqual(requireSuccessfulPush(saved, 'view v1'), saved);
+});
+
+test('requireSuccessfulPush halts on a result that carries an error but neither flag', () => {
+  // Fail closed: an unrecognised shape that still reports an error must not be treated as success.
+  const odd = { type: 'chart', id: 'c1', error: new Error('boom') };
+  assert.throws(() => requireSuccessfulPush(odd, 'chart c1'), (err) => err.name === 'BuildHalt');
+});
+
 // #447 regression net. The bug this fixes was a SINGLE label-emitting call that forgot to pass a
 // language, and it stayed invisible until a user in a German org filed a bug — CI runs offline mocks
 // and nobody's CI runs against a non-1033 org. So pinning only the two call sites that happened to be

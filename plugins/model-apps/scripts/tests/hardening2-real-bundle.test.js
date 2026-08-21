@@ -221,6 +221,8 @@ test('412 conflict: pushArtifact resolves to { success:false, error } (the signa
   await sdk.fetchArtifact('form', FID);
   sdk.updateElement('form', FID, '/tabs/0', { expanded: false });
   const result = await sdk.pushArtifact('form', FID);
-  assert.strictEqual(result.success, false, 'a 412 is signalled by a failed PushResult, NOT a thrown error');
+  // `saved` is the renamed `success`; accept either so this pins the contract, not the bundle.
+  assert.strictEqual(result.saved !== undefined ? result.saved : result.success, false, 'a 412 is signalled by a failed PushResult, NOT a thrown error');
+  assert.ok(result.error, 'the failed PushResult carries the VersionConflictError');
   assert.ok(result.error, 'the conflict carries an error the engine reports');
 });

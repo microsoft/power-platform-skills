@@ -70,7 +70,11 @@ test('pushArtifact builds a real FormXML payload headlessly', async () => {
   const sdk = freshSdk(capture);
   const form = sdk.createArtifact('form', { entityLogicalName: 'account', name: 'Push Test Form' });
   const result = await sdk.pushArtifact('form', form.id);
-  assert.strictEqual(result.success, true);
+  // The SDK renamed PushResult.success -> saved to force call sites to distinguish "the write
+  // committed" from "the runtime serves it" (`shipped`, true only on a VERIFIED publish). Accept
+  // either spelling so this pins the CONTRACT rather than one bundle generation.
+  assert.strictEqual(result.saved !== undefined ? result.saved : result.success, true);
+  assert.strictEqual(result.shipped, false, 'a push with no publish requested is saved but NOT shipped');
   assert.ok(capture.length > 0, 'a POST should have been issued');
   const body = capture[0].body;
   assert.ok(typeof body.formxml === 'string' && body.formxml.includes('<form'), 'payload carries FormXML');
@@ -293,15 +297,22 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   assert.ok(!/<Title[^>]*>[^<]*&(?!amp;|lt;|gt;|quot;|apos;|#)/.test(sitemapXml), 'no raw unescaped ampersand inside a Title');
 });
 
-test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures } result surfacing child-cleanup failures (teardown relies on this to report orphaned genpage rows)', async () => {
-  // The app (and its sitemap) delete atomically, but a cascaded GENERATIVE-PAGE delete fails (a
-  // locked/500 row). The old void contract swallowed this; the skill's teardown reads
-  // result.failures to flag the orphan, so the bundle MUST keep returning the structured result
-  // after a re-vendor.
+test('CONTRACT: vendored deleteAppCascade returns a structured { success, deleted, failures, retained } result and RETAINS generative pages rather than cascading them', async () => {
+  // The app (and its sitemap) delete atomically. A generative page referenced by the sitemap is
+  // deliberately NOT deleted: a `uxagentproject` is REFERENCED by an app, not owned by one — another
+  // app's sitemap, or a form's UxAgentControl `RefId`, can point at the same row — so the SDK reports
+  // it in `retained[]` and leaves the decision to the caller. `scripts/lib/sdk-teardown.js` is that
+  // caller: it deletes only the pages the build's own page manifest records as authored here, and
+  // lets Dataverse's dependency graph reject anything still referenced.
   //
-  // The sitemap is deliberately NOT the failing row here: it is no longer an independently
-  // addressable cascade target — it is deleted in the SAME atomic $batch change set as the app, so
-  // a sitemap failure rejects the whole call instead of landing in failures[].
+  // This test previously asserted the OPPOSITE contract — that a failed cascaded genpage delete set
+  // `success=false` and landed in `failures[]`. That was written against a bundle which cascaded
+  // genpage deletes. Keep it pinned to `retained[]`: silently reverting to a cascade would delete a
+  // page another app still surfaces.
+  //
+  // The sitemap is deliberately not the failing row here: it is not an independently addressable
+  // cascade target — it is deleted in the SAME atomic $batch change set as the app, so a sitemap
+  // failure rejects the whole call instead of landing in failures[].
   const APP_ID = '77777777-7777-7777-7777-777777777777';
   const APP_UNIQUE = '88888888-8888-8888-8888-888888888888';
   const SITEMAP_ID = '99999999-9999-9999-9999-999999999999';
@@ -348,9 +359,13 @@ test('CONTRACT: vendored deleteAppCascade returns a structured { success, delete
   const sdk = sdkWith(client);
   const result = await sdk.deleteAppCascade(APP_ID, APP_UNIQUE);
   assert.ok(result && typeof result === 'object', 'deleteAppCascade returns a structured result (not void)');
-  assert.strictEqual(result.success, false, 'a failed child cleanup makes success=false');
   assert.ok(Array.isArray(result.deleted) && result.deleted.some((d) => d.type === 'app'), 'the primary app delete is reported in deleted[]');
-  assert.ok(Array.isArray(result.failures) && result.failures.some((f) => f.type === 'genPage'), 'the orphaned generative-page cleanup failure is surfaced in failures[]');
+  assert.strictEqual(result.success, true, 'retaining a referenced generative page is not a failure');
+  assert.deepStrictEqual(result.failures, [], 'nothing was attempted against the genpage, so nothing failed');
+  assert.ok(
+    Array.isArray(result.retained) && result.retained.some((r) => r.type === 'genPage' && r.id === GENPAGE_ID),
+    'the referenced generative page is surfaced in retained[] so the caller can decide'
+  );
 });
 
 test('CONTRACT: vendored seedRecordGraph returns { createdIds: { <entity>: [ids] } } (the sample-data phase reads createdIds to bind children)', async () => {
