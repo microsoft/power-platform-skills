@@ -23,11 +23,11 @@ Your invocation includes:
 
 - Action: `Create` or `Modify`
 - Logical screen name
-- Absolute target file under the working directory
+- Absolute target file under `[working directory]`
 - YAML screen key
 - Control name prefix
-- Shared plan: an absolute `canvas-app-shared.md` path
-- Screen brief: an absolute `*.screen-plan.md` path
+- Shared plan: `[working directory]/canvas-app-shared.md`
+- Screen brief: an absolute `[working directory]/*.screen-plan.md` path
 
 ## 1. Read Only Assigned Context
 
@@ -37,7 +37,7 @@ Read:
 2. The assigned screen brief
 3. For `Modify`, the exact target `.pa.yaml`
 
-Do not read `canvas-app-plan.md`, other screen briefs, or other screen YAML files.
+Do not read `[working directory]/canvas-app-plan.md`, other screen briefs, or other screen YAML files.
 Do not call discovery tools. The assigned documents contain all required context.
 
 Before writing, verify that the screen brief includes definitions for every control type
@@ -66,10 +66,10 @@ Screens:
   Screen1:
 ```
 
-`Screen1.pa.yaml` always exists in a new app. When your target file already exists, the
-create/write tool fails with `File already exists`. Read the file and replace its contents
-with the edit tool instead — the action is still `Create` in the sense that you author the
-whole screen.
+`[working directory]/Screen1.pa.yaml` always exists in a new app. When your target file already exists,
+`create` fails with `File already exists`. Read the file and replace its contents with
+`edit` instead — the action is still `Create` in the sense that you author the whole
+screen, but the tool call is `edit`.
 
 Use meaningful child-control names derived from the logical screen, each carrying your
 assigned control name prefix after the standard control-type abbreviation.
@@ -118,7 +118,7 @@ Do not fix unrelated pre-existing issues.
 - Quote non-formula strings and YAML-sensitive formula values.
 - Prefer the simplest correct formula.
 - Write the file in as few tool calls as possible. Compose the complete screen, then write
-  it with one `Write` or one whole-file `Edit`. Dozens of incremental edits against a
+  it with one `create` or one whole-file `edit`. Dozens of incremental edits against a
   file you keep re-reading is the dominant cost in this workflow and does not improve the
   result.
 - Keep the screen proportionate: roughly 40 controls is the practical ceiling for one
@@ -134,16 +134,16 @@ Do not fix unrelated pre-existing issues.
 
 ## 3. Self-QA
 
-1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a
-   long document; re-reading it between fixes is the largest avoidable cost in this role.
+1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a long document;
+   re-reading it between fixes is the largest avoidable cost in this role.
 2. Re-read the target file.
 3. Apply **every** check in order and fix issues inline. Checks are not optional and not
    sampled: a check you skipped is a defect you shipped, and most of them have no compile
    diagnostic behind them, so nothing downstream will catch it.
 4. For Modify, scope checks to changed or added content.
-5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as the
-   "Reporting" section in `${PLUGIN_ROOT}/references/QAChecks.md` describes. Report the
-   line; do not summarise it as a total.
+5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
+   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
+   summarize it as a total.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
 the first builder returns, so return promptly rather than polishing indefinitely.
@@ -159,13 +159,13 @@ QA: 1 [outcome] · 2 [outcome] · …
 Status: Done
 ```
 
-The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return
-without it is incomplete, and the orchestrator will send the screen back.
+The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
+incomplete, and the orchestrator will send the screen back.
 
 ## Constraints
 
 - Modify exactly one screen file.
-- Never edit `App.pa.yaml` or `_EditorState.pa.yaml`.
+- Do not edit `[working directory]/App.pa.yaml` or `[working directory]/_EditorState.pa.yaml`; the top-level orchestrator owns app-level and cross-file ordering changes.
 - Never substitute a filename, YAML key, or control name prefix.
 - Never use a property absent from that control's definition.
 - Never write a version suffix on a `Control:` value.

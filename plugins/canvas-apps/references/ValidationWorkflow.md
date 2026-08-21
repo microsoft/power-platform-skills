@@ -25,7 +25,7 @@ repairing it across six finished files is not.
 
 When gate 3 reveals a systemic defect:
 
-- Repair the files that already exist in place, with targeted `Edit` calls.
+- Repair the files that already exist in place, with targeted `edit` calls.
 - Correct the shared plan and the briefs for rows **not yet dispatched**, so the next wave
   does not repeat the defect.
 - Never re-dispatch a builder whose file already exists. A regenerated screen discards the
@@ -53,7 +53,7 @@ If compilation fails, fix diagnostics in this order:
 
 For each tier:
 
-1. Read every referenced absolute path in the working directory.
+1. Read every referenced file under `[working directory]`.
 2. Fix all diagnostics in the tier.
 3. Re-run `compile_canvas` before moving to the next tier.
 
@@ -114,7 +114,7 @@ lines. Reading all of them wastes the context you need to fix them.
 
 ### Liveness
 
-Every turn in the repair phase must end in an `Edit` or a `compile_canvas`. Those are the
+Every turn in the repair phase must end in an `edit` or a `compile_canvas`. Those are the
 only two actions that change the outcome.
 
 After **two consecutive turns** containing neither, stop and emit the unresolved-diagnostics
@@ -123,7 +123,7 @@ stopped compiling is not thinking — it is searching for a capability that does
 and it will not recover on its own.
 
 Reading a file, planning an approach, or delegating is not progress on its own. If you find
-yourself unable to express a fix with `Edit`, return to the named file and diagnostic
+yourself unable to express a fix with `edit`, return to the named file and diagnostic
 location. Repeated identical lines need separate targeted edits with enough surrounding
 context to make each match unique.
 
@@ -150,7 +150,7 @@ Track the count of **distinct** diagnostics after every compile.
 You repair the app yourself. You already hold the plan, the dispatch table, and the
 diagnostic history, and a fresh agent would have to rediscover all of it.
 
-- Fix compile diagnostics with targeted `Edit` calls against the named file. This is
+- Fix compile diagnostics with targeted `edit` calls against the named file. This is
   always the correct response to a diagnostic.
 - Do not spawn a general-purpose agent to "fix compilation." That restarts discovery from
   zero and has no shared budget with you.
@@ -161,8 +161,9 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
 - The only sanctioned re-delegation is back to `canvas-app-planner` when a builder
   returned `Status: Blocked` because its brief was genuinely missing a definition or an
   assignment field — never for a diagnostic on a file that already exists.
-
-Never modify `[working directory]/_EditorState.pa.yaml` while repairing diagnostics.
+- Modify `[working directory]/_EditorState.pa.yaml` when a diagnostic identifies it or when the requested
+  screen or component-definition order requires correction. Preserve valid names and
+  repair only the affected order entries.
 
 ### Verify before you summarize
 
@@ -171,9 +172,9 @@ The summary must describe a compile you actually observed. Before writing it, co
 has, compile again — a clean result from before your last edit says nothing about what you
 shipped.
 
-Edits to non-compiled artifacts do not invalidate the result: `canvas-app-plan.md`,
-`canvas-app-shared.md` and `*.screen-plan.md` are planning documents, and updating one
-after the final compile is fine.
+Edits to non-compiled artifacts do not invalidate the result: `[working directory]/canvas-app-plan.md`,
+`[working directory]/canvas-app-shared.md` and `[working directory]/*.screen-plan.md` are planning documents, and
+updating one after the final compile is fine.
 
 ## 2. Summary
 
