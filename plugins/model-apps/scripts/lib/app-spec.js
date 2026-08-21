@@ -1360,6 +1360,7 @@ module.exports = {
   SDK_ROLE_MARKER,
   canonicalPersonaName,
   VALIDATION_PROFILES,
+  DIRECT_ENTRY_BEHAVIORS,
   migrateAppSpec,
   columnTypeMap,
   TYPE_MAP,

@@ -227,12 +227,18 @@ function requireSuccessfulPush(result, what, warn) {
 // Surface the non-fatal half of a push/publish outcome. Never throws and never halts: the primary
 // write committed, so the build should continue — but silence here turns a partial success into a
 // reported clean one.
+//
+// The remediation hint is deliberately NOT "re-run with --publish". This runs for three different
+// callers and that advice is only right for one of them: an explicit `publishArtifact` has already
+// attempted the publish, and an app CREATE publishes inside the SDK, so telling either to pass a
+// flag they effectively already used sends the operator in a circle. What is true for all three is
+// that the save survived and the publish did not, so a re-run once the cause clears is the fix.
 function reportPartialPush(result, what, warn) {
   if (!result || typeof warn !== 'function') return result;
   const label = what || result.type || 'artifact';
   const st = result.publish;
   if (st && st.kind === 'failed') {
-    warn(`publish ${label} FAILED: ${(st.error && st.error.message) || 'unknown error'} — the change is SAVED but the runtime still serves the previously published copy; re-run with --publish once the cause is cleared`);
+    warn(`publish ${label} FAILED: ${(st.error && st.error.message) || 'unknown error'} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
   } else if (st && st.kind === 'unverifiable') {
     warn(`publish ${label} could not be CONFIRMED (${st.reason}) — the publish call succeeded but the published projection was not read back, so treat "live" as unproven`);
   }
