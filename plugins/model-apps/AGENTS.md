@@ -140,7 +140,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   fails the data-model phase with `The language code 1033 is not a valid language for this organization`
   ([#447](https://github.com/microsoft/power-platform-skills/issues/447)) — and confusingly only on
   *some* column types, because Dataverse tolerates an unprovisioned LCID on `EntityMetadata` and
-  `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fall back to 1033 warns. Note
+  `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fallback to 1033 warns. Note
   `updateTable(logical, { quickCreateEnabled })` deliberately passes no language: it only builds a
   Label when a `displayName`/`pluralName`/`description` is supplied, and otherwise round-trips
   Dataverse's own labels under `MSCRM.MergeLabels`.

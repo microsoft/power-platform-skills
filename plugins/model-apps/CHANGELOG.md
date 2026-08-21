@@ -29,7 +29,7 @@ smoke-eval assertion that could never pass live.
   `DateTimeAttributeMetadata` and `MemoAttributeMetadata` — so a build showed
   several green steps before failing and read like an environment problem.
 
-  Every fall back to 1033 now emits a warning naming the reason and the
+  Every fallback to 1033 now emits a warning naming the reason and the
   `--language-code` escape hatch; previously only a thrown read was reported, and
   an empty result or a null `languagecode` degraded to 1033 in silence.
 

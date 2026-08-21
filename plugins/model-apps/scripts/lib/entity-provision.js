@@ -49,8 +49,8 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
   const fallback = (reason) => {
     if (typeof warn === 'function') {
       warn(`could not determine the organization's base language (${reason}); using ${DEFAULT_LANGUAGE_CODE}. `
-        + `If this organization does not have ${DEFAULT_LANGUAGE_CODE} provisioned, pass --language-code <lcid> `
-        + 'or set "languageCode" in the App Spec.');
+        + `If this organization does not have ${DEFAULT_LANGUAGE_CODE} provisioned, pass `
+        + '--language-code (or --languageCode) <lcid>, or set "languageCode" in the App Spec.');
     }
     return DEFAULT_LANGUAGE_CODE;
   };
