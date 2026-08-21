@@ -104,7 +104,7 @@ The skill is organized into **4 high-level phases**. Each phase contains numbere
 | 2.2 | `pac pages download --webSiteId <…> --path ./mysite`, `node generate-migration-reports.js --automate-fetchxml --automate-liquid`, `pac pages upload --path <SITE_ROOT> --modelVersion 1` |
 | 3.1 | `pac pages migrate-datamodel --webSiteId <…> --mode <SELECTED>`, `--checkMigrationStatus` (polling) |
 | 3.2 | `pac pages migrate-datamodel --webSiteId <…> --updateDatamodelVersion --portalId <…>` |
-| 4.1 | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (only if rollback), `node generate-migration-reports.js` (final report) |
+| 4.1 | `pac pages migrate-datamodel --revertToStandardDataModel --portalId` (only if rollback), `node update-state.js` (final live-report render) |
 
 ### Why Customization Remediation (Phase 2) sits before Migration (Phase 3)
 
@@ -196,7 +196,7 @@ Test-Path .\website.yml
 | --- | --- | --- |
 | `SiteCustomization.csv` (and auto-numbered `SiteCustomization<N>.csv`) | `pac pages migrate-datamodel --siteCustomizationReportPath` | `<OUTPUT_DIR>` (PAC sometimes writes to cwd instead — step 2.1 globs for it) |
 | `customization-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
-| `sdm-to-edm-migration-report.html` | `generate-migration-reports.js` | `<OUTPUT_DIR>` |
+| `sdm-to-edm-migration-report.html` (live execution report) | `update-state.js` + `lib/render-live-report.js` | `<OUTPUT_DIR>` |
 | `remediation-staged/<rel path>` (proposed file copies) | `generate-migration-reports.js --automate-fetchxml --automate-liquid` | `<OUTPUT_DIR>/remediation-staged/` (mirrors `<SITE_ROOT>` layout; live source untouched until apply step) |
 | `remediation-diff.json` (structured per-file diff manifest) | same script | `<OUTPUT_DIR>` (consumed by live report's Remediation Diff card and by `apply-remediation.js`) |
 

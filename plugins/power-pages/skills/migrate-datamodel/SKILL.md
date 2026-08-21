@@ -796,6 +796,7 @@ This phase has **two completely different shapes** depending on the migration tr
      --customization-report "<OUTPUT_DIR>/SiteCustomization.csv" \
      --site-name "<SITE_NAME>" \
      --website-id "<WEBSITE_ID>" \
+     --template-name "<TEMPLATE_NAME>" \
      --output-dir "<OUTPUT_DIR>"
    ```
 
@@ -860,6 +861,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-
   --customization-report "<OUTPUT_DIR>/SiteCustomization.csv" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
+  --template-name "<TEMPLATE_NAME>" `
   --site-path "<SITE_ROOT>" `
   --automate-fetchxml `
   --output-dir "<OUTPUT_DIR>"
@@ -879,6 +881,7 @@ node "${CLAUDE_PLUGIN_ROOT}/skills/migrate-datamodel/scripts/generate-migration-
   --customization-report "<OUTPUT_DIR>/SiteCustomization.csv" `
   --site-name "<SITE_NAME>" `
   --website-id "<WEBSITE_ID>" `
+  --template-name "<TEMPLATE_NAME>" `
   --site-path "<SITE_ROOT>" `
   --automate-liquid `
   --output-dir "<OUTPUT_DIR>"

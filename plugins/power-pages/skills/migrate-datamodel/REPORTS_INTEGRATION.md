@@ -2,13 +2,14 @@
 
 This document explains how to integrate the HTML report templates and generation scripts into the `migrate-datamodel` skill workflow.
 
+> **Note on the execution report.** Parts of this guide are historical. The **execution/progress report** (`sdm-to-edm-migration-report.html`) is now the **live report**, rendered from `migration-state.json` by `scripts/lib/render-live-report.js` and driven by `scripts/update-state.js` — it is re-rendered after every step, not produced from a static template. `generate-migration-reports.js` owns only the **customization report**, the staged remediation rewrites, and the augmented prompts. Disregard any step below that describes `generate-migration-reports.js` generating or writing the execution report.
+
 ## Folder Structure
 
 ```
 plugins/power-pages/skills/migrate-datamodel/
 ├── assets/
 │   ├── customization-report.html      # Template for customization report
-│   ├── sdm-to-edm-migration-report.html    # Template for execution report
 │   └── README.md                      # Template documentation
 ├── scripts/
 │   └── generate-migration-reports.js  # Utility to generate reports from data
