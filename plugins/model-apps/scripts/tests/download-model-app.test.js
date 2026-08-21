@@ -796,3 +796,18 @@ test('a MANAGED nav web resource is left as a bare reference, not re-declared (#
   const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['crba3_managed.html']);
   assert.strictEqual(webResources.length, 0, 'a managed nav resource must not be re-declared');
 });
+
+test('a FOREIGN-prefix nav web resource is left as a bare reference, not re-declared (#430)', async () => {
+  // Together with the managed case above, this pins why nav refs go through PASS 1 rather than being
+  // added to `icons`. PASS 2 (the bare-name path) applies NEITHER an `ismanaged` check NOR an
+  // own-prefix check, so routing nav targets there would re-declare a resource owned by another
+  // publisher's managed solution -- and re-creating a foreign prefix on a fresh environment
+  // hard-fails the build. PASS 1 declines both.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'isv_page.html') return [{ name, webresourcetype: 1, content: 'PGh0bWw+', ismanaged: false }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['isv_page.html']);
+  assert.strictEqual(webResources.length, 0, 'a foreign-prefix nav resource must not be re-declared');
+});
