@@ -165,7 +165,7 @@ Optional top-level field: **`languageCode`** — the LCID for the Dataverse labe
 (`organization.languagecode`) and uses that, which is always a language the org has provisioned. Set
 it only to deliberately author labels in a *different* provisioned language. It must be a positive
 integer LCID up to 65535 (`1031`, not `"de-DE"`); an invalid value is rejected before any Dataverse
-write. `--language-code <lcid>` overrides it for one run.
+write. `--language-code` / `--languageCode <lcid>` overrides it for one run.
 
 **If provisioning fails with `The language code N is not a valid language for this organization`,**
 that is this setting — the organization does not have LCID N. Re-run with `--language-code <an LCID

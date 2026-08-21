@@ -284,7 +284,8 @@ before applying.)
 other stages and the legacy `--from/--to/--only/--skip` selectors are dry-run inspection only —
 their phase ranges are not dependency-closed and are rejected on `--apply`.
 
-**Language (`--language-code <lcid>`)** — you normally do **not** pass this. Data-model labels are
+**Language (`--language-code` / `--languageCode <lcid>`)** — you normally do **not** pass this.
+Data-model labels are
 stamped with the organization's own base language, read once per build. Pass it only to author
 labels in a different **provisioned** language, or if the build warns that it could not determine
 the base language and fell back to 1033. If a build fails with *"The language code N is not a valid

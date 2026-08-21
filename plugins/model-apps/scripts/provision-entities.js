@@ -4,7 +4,7 @@
 // a structured JSON result. Dry-run by default; --apply writes. --sample-data opt-in.
 //
 // Usage:
-//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code <lcid>]
+//   node provision-entities.js --env <orgUrl> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
