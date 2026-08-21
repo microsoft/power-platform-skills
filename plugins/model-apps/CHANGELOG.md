@@ -9,38 +9,21 @@ jobs-to-be-done surfaces checkable, fixes four crash paths, and corrects a
 smoke-eval assertion that could never pass live.
 
 ### Added
-- **The data-model phase now labels everything in the organization's own language
-  instead of a hardcoded `1033`.** `createColumn` in the SDK falls back to LCID
-  1033 when the caller supplies none, and `columnOptions()` never supplied one —
-  so in an organization that does not have 1033 provisioned, Dataverse rejected
-  the label and `data-model` halted with
-  `The language code 1033 is not a valid language for this organization`
-  ([#447](https://github.com/microsoft/power-platform-skills/issues/447)). The
-  build now resolves `organization.languagecode` **once per run** and threads it
-  into every label-emitting call — tables, columns, customer columns, global
-  choices, status reasons, alternate keys and relationships. Precedence is
-  `--language-code` / `--languageCode` → App Spec `languageCode` → the
-  organization's base language → 1033.
+- **Dataverse labels now use the organization's own language instead of a hardcoded
+  `1033`** ([#447](https://github.com/microsoft/power-platform-skills/issues/447)).
+  In an organization that has not provisioned 1033, `data-model` halted with
+  `The language code 1033 is not a valid language for this organization`. The build
+  resolves `organization.languagecode` once per run and threads it into every
+  label-emitting call (tables, columns, customer columns, global choices, status
+  reasons, alternate keys, relationships), and warns whenever it has to fall back.
+  Optional overrides: App Spec `languageCode`, or `--language-code` / `--languageCode`
+  on `build-model-app.js` and `provision-entities.js`.
 
-  The failure was confusing to diagnose because it was **not** all-or-nothing:
-  Dataverse silently accepts an unprovisioned LCID on `EntityMetadata` and on
-  `PicklistAttributeMetadata` (so the table and its Choice columns were created,
-  with labels coming back in the org language) but hard-rejects it on
-  `DateTimeAttributeMetadata` and `MemoAttributeMetadata` — so a build showed
-  several green steps before failing and read like an environment problem.
-
-  Every fallback to 1033 now emits a warning naming the reason and the
-  `--language-code` escape hatch; previously only a thrown read was reported, and
-  an empty result or a null `languagecode` degraded to 1033 in silence.
-
-- **`languageCode` (App Spec, optional) and `--language-code` / `--languageCode`
-  (CLI).** Overrides the organization's base language for a build. Validated as a
-  positive integer LCID at all three entry points through one shared normalizer,
-  so a JSON `true` (which `Number()` coerces to the invalid LCID `1`) is rejected
-  up front rather than failing deep in the data-model phase. `provision-entities.js`
-  (the genpage create flow's data-model path) accepts the same flag and an
-  `input.languageCode`, and reports language fallbacks on the same channel — it
-  shares the resolver, so both paths behave identically.
+  Worth knowing if you hit this: the failure is **not** all-or-nothing. Dataverse
+  accepts an unprovisioned LCID on `EntityMetadata` and `PicklistAttributeMetadata`
+  but rejects it on `DateTime` and `Memo` — so the table and its Choice columns are
+  created and the build fails a few steps later, which reads like an environment
+  problem rather than a defect.
 
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
