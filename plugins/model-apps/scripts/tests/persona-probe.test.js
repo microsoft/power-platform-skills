@@ -65,7 +65,10 @@ test('never plans a deny probe for appmodule', () => {
 test('mutating privileges are planned only when opted in', () => {
   const readOnly = planProbes(spec());
   assert.strictEqual(readOnly.probes.some((p) => p.mutating), false, 'read-only run must plan no mutations');
-  assert.match(readOnly.warnings.join(' '), /NOT executed/);
+  assert.match(readOnly.warnings.join(' '), /were NOT probed/);
+  // The warning must not claim a plan existed — in a read-only run these are never turned into
+  // probes at all, and "planned but not executed" misdescribes that to an operator.
+  assert.doesNotMatch(readOnly.warnings.join(' '), /planned/i);
 
   const withMutations = planProbes(spec(), { includeMutations: true });
   const write = withMutations.probes.find((p) => p.entity === 'co_workorder' && p.access === 'write');
@@ -278,9 +281,33 @@ test('checkImpersonation FAILS when the header is accepted but ignored', async (
     { status: 200, body: { UserId: 'CALLER-1' } },
     { status: 200, body: { UserId: 'caller-1' } }, // same user, different casing
   ]);
-  const r = await checkImpersonation(http, ROOT, 'CallerObjectId', 'oid-9');
+  const r = await checkImpersonation(http, ROOT, 'CallerObjectId', 'oid-9', 'target-9');
   assert.strictEqual(r.ok, false);
   assert.match(r.detail, /accepted but IGNORED/);
+});
+
+test('checkImpersonation PASSES when the persona test user IS the signed-in user', async () => {
+  // A persona whose test user is the caller is a legitimate configuration — a single-account dev
+  // environment, or an admin validating their own persona. Judging the header purely by
+  // "effective == caller" false-fails that setup and blocks the tool for no reason. The target
+  // systemuserid is the real oracle, and it is always known because assignTo.users[] carries it.
+  const http = httpStub([
+    { status: 200, body: { UserId: 'CALLER-1' } },
+    { status: 200, body: { UserId: 'CALLER-1' } },
+  ]);
+  const r = await checkImpersonation(http, ROOT, 'MSCRMCallerID', 'caller-1', 'caller-1');
+  assert.strictEqual(r.ok, true, 'impersonating yourself is valid, not a dropped header');
+  assert.strictEqual(r.effectiveId, 'caller-1');
+});
+
+test('checkImpersonation FAILS when the effective user is neither the caller nor the target', async () => {
+  const http = httpStub([
+    { status: 200, body: { UserId: 'CALLER-1' } },
+    { status: 200, body: { UserId: 'SOMEONE-ELSE' } },
+  ]);
+  const r = await checkImpersonation(http, ROOT, 'MSCRMCallerID', 'target-9', 'target-9');
+  assert.strictEqual(r.ok, false, 'probes would describe the wrong user');
+  assert.match(r.detail, /unexpected principal/);
 });
 
 test('checkImpersonation reports the missing privilege on a 403', async () => {
@@ -305,14 +332,26 @@ test('principal resolver prefers CallerObjectId when an object id is known', asy
   const s = { personas: [{ persona: 'Dispatcher', assignTo: { users: ['USER-1'] } }] };
   const cache = new Map([['user-1', 'entra-oid-1']]);
   const resolve = makePrincipalResolver(s, null, cache);
-  assert.deepStrictEqual(resolve('Dispatcher'), { header: 'CallerObjectId', value: 'entra-oid-1' });
+  assert.deepStrictEqual(resolve('Dispatcher'), { header: 'CallerObjectId', value: 'entra-oid-1', systemUserId: 'USER-1' });
 });
 
 test('principal resolver falls back to MSCRMCallerID with the systemuserid', async () => {
   // assignTo.users[] already holds systemuserid GUIDs, so this path needs no directory lookup.
   const s = { personas: [{ persona: 'Dispatcher', assignTo: { users: ['user-1'] } }] };
   const resolve = makePrincipalResolver(s, null, new Map());
-  assert.deepStrictEqual(resolve('Dispatcher'), { header: 'MSCRMCallerID', value: 'user-1' });
+  assert.deepStrictEqual(resolve('Dispatcher'), { header: 'MSCRMCallerID', value: 'user-1', systemUserId: 'user-1' });
+});
+
+test('the resolver always carries a systemUserId, even under CallerObjectId', async () => {
+  // The canary compares WhoAmI().UserId (a systemuserid) to the target. Under CallerObjectId the
+  // header value is an Entra object id, which is NOT comparable — so the systemuserid must travel
+  // alongside it or the canary loses its only reliable oracle.
+  const s = { personas: [{ persona: 'D', assignTo: { users: ['USER-1'] } }] };
+  for (const cache of [new Map([['user-1', 'entra-oid-1']]), new Map()]) {
+    const p = makePrincipalResolver(s, null, cache)('D');
+    assert.ok(p.systemUserId, `${p.header} must still carry the systemuserid`);
+    assert.strictEqual(p.systemUserId.toLowerCase(), 'user-1');
+  }
 });
 
 test('principal resolver returns null when the persona declares no test user', async () => {

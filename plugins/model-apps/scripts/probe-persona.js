@@ -49,7 +49,15 @@ function makeProvision(env, workspaceDir) {
 // authoritative while proving nothing. `WhoAmI` returns the EFFECTIVE user id, so comparing it to
 // the impersonated id detects that silently.
 // https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
-async function checkImpersonation(httpClient, apiRoot, header, value) {
+//
+// `expectedSystemUserId` is the target's `systemuserid`, which is directly comparable to
+// `WhoAmI().UserId`. It is checked FIRST and is the only positive proof, because "effective ==
+// caller" is NOT by itself evidence of a dropped header: a persona's test user is allowed to BE the
+// signed-in user (a single-account dev environment, or an admin validating their own persona), and
+// treating that as a failure would block a legitimate configuration. Note the target is always
+// known — `assignTo.users[]` carries a systemuserid even when the request upgrades to
+// `CallerObjectId`, which sends the Entra object id instead.
+async function checkImpersonation(httpClient, apiRoot, header, value, expectedSystemUserId) {
   const bare = await httpClient.get(`${apiRoot}/WhoAmI()`);
   if (!bare || bare.status < 200 || bare.status >= 300) {
     return { ok: false, detail: `WhoAmI failed as the signed-in user (status ${bare && bare.status}) — check --env and az login` };
@@ -64,8 +72,20 @@ async function checkImpersonation(httpClient, apiRoot, header, value) {
     return { ok: false, detail: `impersonated WhoAmI failed (status ${asUser && asUser.status})` };
   }
   const effectiveId = String((asUser.body && asUser.body.UserId) || '').toLowerCase();
+  const expected = String(expectedSystemUserId || '').toLowerCase();
+
+  // Positive proof: the request really ran as the target. Correct even when the target IS the caller.
+  if (expected && effectiveId && effectiveId === expected) return { ok: true, effectiveId };
+
   if (effectiveId && callerId && effectiveId === callerId) {
-    return { ok: false, detail: `the ${header} header was accepted but IGNORED — every probe would run as the signed-in admin and report false passes` };
+    return expected
+      ? { ok: false, detail: `the ${header} header was accepted but IGNORED — the request ran as the signed-in user, not as the target persona user (${expected}); every probe would report false passes` }
+      // No target to compare against, so this is the older, weaker heuristic: it cannot tell a
+      // dropped header apart from a persona whose test user is the signed-in user.
+      : { ok: false, detail: `the ${header} header appears to have been IGNORED — the request ran as the signed-in user, and no target systemuserid was available to confirm otherwise` };
+  }
+  if (expected && effectiveId && effectiveId !== expected) {
+    return { ok: false, detail: `the ${header} header resolved to an unexpected principal (${effectiveId}, expected ${expected}) — probes would describe the wrong user` };
   }
   return { ok: true, effectiveId };
 }
@@ -83,9 +103,12 @@ function makePrincipalResolver(spec, sdk, cache) {
     const systemUserId = users.find((u) => typeof u === 'string' && u.trim());
     if (!systemUserId) return null;
     const oid = cache.get(String(systemUserId).toLowerCase());
+    // `systemUserId` is carried alongside the header regardless of which header is used: the
+    // impersonation canary compares it to `WhoAmI().UserId`, and under `CallerObjectId` the header
+    // value itself is an Entra object id that cannot be compared to a systemuserid.
     return oid
-      ? { header: 'CallerObjectId', value: oid }
-      : { header: 'MSCRMCallerID', value: String(systemUserId).trim() };
+      ? { header: 'CallerObjectId', value: oid, systemUserId: String(systemUserId).trim() }
+      : { header: 'MSCRMCallerID', value: String(systemUserId).trim(), systemUserId: String(systemUserId).trim() };
   };
 }
 
@@ -152,7 +175,7 @@ async function main() {
     });
     return;
   }
-  const pre = await checkImpersonation(httpClient, apiRoot, firstPrincipal.header, firstPrincipal.value);
+  const pre = await checkImpersonation(httpClient, apiRoot, firstPrincipal.header, firstPrincipal.value, firstPrincipal.systemUserId);
   if (!pre.ok) { emitResult(false, { ok: false, preflight: pre.detail, warnings }); return; }
 
   const findings = await executeProbes(probes, {

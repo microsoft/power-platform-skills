@@ -112,7 +112,10 @@ function planProbes(spec, opts = {}) {
   if (!includeMutations && probes.every((p) => !p.mutating)) {
     const skipped = [...declaredByPersona.values()].flat().filter((d) => isMutating(d.access)).length;
     if (skipped > 0) {
-      warnings.push(`${skipped} mutating privilege(s) planned but NOT executed (read-only run; pass --allow-mutations to include them)`);
+      // Say what actually happened. These privileges were never turned into probes at all, so
+      // "planned but NOT executed" misdescribes the run for the operator reading it — it implies a
+      // plan exists and something stopped it, when the read-only default simply excludes them.
+      warnings.push(`${skipped} mutating privilege(s) were NOT probed — this is a read-only run, so nothing was verified about create/write/delete/append (pass --allow-mutations to probe them)`);
     }
   }
 
