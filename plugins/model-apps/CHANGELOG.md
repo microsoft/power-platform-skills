@@ -54,6 +54,15 @@ smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **A hand-pinned `languageCode` is no longer lost on download**
+  ([#456](https://github.com/microsoft/power-platform-skills/issues/456)). Download
+  still never reads the LCID from Dataverse — copying the source org's language into a
+  portable spec is how it starts failing in an org that lacks that language — but a value
+  the author wrote is now carried over from the previous `app-spec.json` at that path.
+  Losing it was quiet and costly: the next build resolved the org default, so newly
+  created columns got one language while the ones from the pinned build kept another,
+  with no error anywhere.
+
 - **A sitemap subarea that targets a custom web resource now round-trips**
   ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
   The Site Map Designer writes `$webresource:<name>` into a URL subarea; the http(s)

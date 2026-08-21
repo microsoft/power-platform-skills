@@ -85,10 +85,13 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
-  **Not emitted by `download-model-app.js`**, and that is deliberate: an LCID copied out of the
-  source org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly
-  how a spec starts failing in an org that lacks that language. Leaving it absent lets every target
-  org resolve its own base language. If you pinned one by hand, re-add it after a download.
+  **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
+  read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
+  spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
+  that language. Leaving it absent lets every target org resolve its own base language. But a value
+  **you** wrote is carried across a download from the previous `app-spec.json` at that path, so a
+  pin is not silently lost — losing it would leave newly created columns in the org default while
+  the existing ones keep the pinned language, with no error anywhere.
 
 ## entities[]
 ```jsonc
