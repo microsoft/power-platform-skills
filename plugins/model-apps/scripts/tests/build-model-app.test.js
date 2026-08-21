@@ -645,3 +645,38 @@ test('the org language read asks for the right column and a single row', async (
   assert.deepStrictEqual(seen.opts.select, ['languagecode']);
   assert.strictEqual(seen.opts.top, 1);
 });
+
+// #447 follow-up: the unit tests above call resolveLanguageCode() directly with a `warn`, which
+// proves the FUNCTION warns but says nothing about whether the CLI is wired to it. The chain is
+// build-model-app `deps.warn` -> runBuild `opts.warn` -> provisionDataModel -> resolveLanguageCode,
+// and a break anywhere in it silently costs the user the only diagnostic they get before an opaque
+// Dataverse 400. This asserts the whole chain end to end through the public buildModelApp entry.
+test('deps.warn reaches language resolution — the CLI warning wiring, not just the function', async () => {
+  const { sdk } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') throw new Error('org read blocked');
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  const warnings = [];
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, warn: (m) => warnings.push(m) });
+  assert.strictEqual(r.ok, true, 'a failed language read must not fail the build');
+  assert.ok(
+    warnings.some((w) => /base language/i.test(w) && /--language-code/.test(w)),
+    'the fallback warning must actually reach deps.warn; got: ' + JSON.stringify(warnings)
+  );
+});
+
+test('a healthy org language read produces no warning through the CLI path', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') return [{ languagecode: 1031 }];
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  const warnings = [];
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x' }, { sdk, warn: (m) => warnings.push(m) });
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(warnings, [], 'the happy path must not warn');
+  assert.ok(calls.some((c) => c[0] === 'createColumn' && c[2] && c[2].languageCode === 1031));
+});

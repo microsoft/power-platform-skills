@@ -37,7 +37,10 @@ smoke-eval assertion that could never pass live.
   (CLI).** Overrides the organization's base language for a build. Validated as a
   positive integer LCID at all three entry points through one shared normalizer,
   so a JSON `true` (which `Number()` coerces to the invalid LCID `1`) is rejected
-  up front rather than failing deep in the data-model phase.
+  up front rather than failing deep in the data-model phase. `provision-entities.js`
+  (the genpage create flow's data-model path) accepts the same flag and an
+  `input.languageCode`, and reports language fallbacks on the same channel — it
+  shares the resolver, so both paths behave identically.
 
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
