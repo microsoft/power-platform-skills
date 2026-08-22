@@ -1,6 +1,13 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const { withPowerNativeMetroLogging } = require('@microsoft/power-apps-native-host/metro-logger');
 
+let handleBuildEvents = null;
+try {
+  handleBuildEvents = require('./.mobile-build/events-middleware.cjs');
+} catch {
+  // Build progress is optional outside /create-mobile-prototype.
+}
+
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 // Add Metro config changes in this function only.
 function customizeMetroConfig(config) {
@@ -15,6 +22,7 @@ config.server = {
   ...config.server,
   enhanceMiddleware: (middleware) => withPowerNativeMetroLogging(
     (req, res, next) => {
+      if (handleBuildEvents?.(req, res)) return;
       if (req.url === '/__pawrap_verify') {
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Access-Control-Allow-Origin', '*');

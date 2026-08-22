@@ -1,6 +1,7 @@
 # Prototype Runtime Supervisor
 
-The creation workflow starts two independent tracks at Step 1.
+The creation workflow starts two independent tracks at Step 1. Both append to
+`.mobile-build/events.ndjson`; neither owns or prints progress independently.
 
 ## Track A - deterministic runtime
 
@@ -16,6 +17,10 @@ The creation workflow starts two independent tracks at Step 1.
 Every watched file is written to a sibling temporary file and renamed. Progress
 writes are separated by at least 500 ms so Metro sees one coherent refresh.
 Screen skeleton state is written before content state.
+
+The existing Metro process serves `GET /build/events` as replayable SSE and
+`GET /build/state` as the reduced cold-load state through the optional
+`.mobile-build/events-middleware.cjs` installed before Metro starts.
 
 ## Track B - model work
 

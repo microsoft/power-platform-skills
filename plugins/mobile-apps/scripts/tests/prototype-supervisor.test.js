@@ -31,6 +31,7 @@ test('supervisor paints an atomic shell before planning and restores runtime ent
   assert.equal(started.status, 0, started.stderr);
   assert.match(fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8'), /Redirect href="\/building"/);
   assert.match(fs.readFileSync(path.join(root, 'app/building.tsx'), 'utf8'), /Building your app/);
+  assert.equal(fs.existsSync(path.join(root, '.mobile-build/events.ndjson')), true);
   assert.equal(fs.existsSync(path.join(root, 'brand/tokens.ts')), true);
   assert.equal(fs.readdirSync(path.join(root, '.mobile-build')).some((name) => name.endsWith('.tmp')), false);
   const typecheck = spawnSync(process.execPath, [tsc, '--project', path.join(root, 'tsconfig.json')], { encoding: 'utf8' });
@@ -50,6 +51,7 @@ test('supervisor plans screens, debounces atomic progress, and reports dead Metr
   assert.equal(planned.status, 0, planned.stderr);
   assert.equal(spawnSync(process.execPath, [supervisor, 'screen', root, '--id', 'today', '--state', 'building'], { encoding: 'utf8' }).status, 0);
   assert.match(fs.readFileSync(path.join(root, 'src/generated/buildProgress.ts'), 'utf8'), /"state": "building"/);
+  assert.match(fs.readFileSync(path.join(root, '.mobile-build/events.ndjson'), 'utf8'), /"kind":"screen"/);
 
   const statePath = path.join(root, '.mobile-build/supervisor.json');
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));

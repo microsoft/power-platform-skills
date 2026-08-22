@@ -77,6 +77,22 @@ Read and follow [`runtime/supervisor.md`](./runtime/supervisor.md). Track A
 failure records a concern and Track B continues in text-only mode. All watched
 files use atomic writes; shell progress updates are debounced by 500 ms.
 
+The single progress source is `<PROJECT_DIR>/.mobile-build/events.ndjson`.
+Neither track prints progress directly. Emit through `runtime/events.js`; its
+terminal renderer is one consumer, while the phone shell reduces the same file.
+Metro exposes `GET /build/events` (SSE replay from `t=0`) and
+`GET /build/state` (cold-load reduction). Never start a second server.
+
+Before and after every long Track B phase:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/runtime/events.js" emit "$PROJECT_DIR" \
+  --json '{"kind":"phase","track":"B","id":"<phase>","state":"start","label":"<label>"}'
+# phase work
+node "${CLAUDE_SKILL_DIR}/runtime/events.js" emit "$PROJECT_DIR" \
+  --json '{"kind":"phase","track":"B","id":"<phase>","state":"complete","label":"<label>"}'
+```
+
 ## Workflow
 
 ### Step 1 - Start Both Tracks
@@ -127,7 +143,7 @@ paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
 and validation stages. Ask Proceed / Revise / Cancel before planning.
 
-Within roughly five seconds of parsing the brief, print this compact echo before
+Within roughly five seconds of parsing the brief, emit this compact echo before
 the impact preview. It names inferred and dropped behavior, not plan prose:
 
 ```text
@@ -142,6 +158,12 @@ Assumed:    <visual direction and why it was selected>
 ```
 
 Anything dropped from the template capability allowlist must appear here.
+Write the structured summary and let the event renderer print those eight lines:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/runtime/events.js" emit "$PROJECT_DIR" --json \
+  '{"kind":"brief","summary":{"understood":"...","flow":"...","records":[],"inferred":[],"native":[],"dropped":[],"connectors":[],"assumed":"..."}}'
+```
 
 #### Step 2.1 - Derive Seed Vocabulary (Spike)
 

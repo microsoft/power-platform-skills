@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { parseTable } = require('../../../scripts/validate-screen-contracts');
+const buildEvents = require('./events');
 
 const DEBOUNCE_MS = 500;
 const METRO_READY_BUDGET_MS = 30000;
@@ -34,7 +35,6 @@ function buildPaths(projectDir) {
     backupIndex: path.join(buildDir, 'index.backup.tsx'),
     buildingRoute: path.join(projectDir, 'app', 'building.tsx'),
     log: path.join(buildDir, 'metro.log'),
-    progressModule: path.join(projectDir, 'src', 'generated', 'buildProgress.ts'),
     state: path.join(buildDir, 'supervisor.json'),
   };
 }
@@ -46,12 +46,6 @@ function initialState(projectDir) {
     projectDir,
     trackA: 'starting',
     metro: { state: 'queued', pid: null, url: null },
-    screens: [
-      { id: 'brief', label: 'Understanding your brief', state: 'built' },
-      { id: 'plan', label: 'Planning data and screens', state: 'building' },
-      { id: 'screens', label: 'Building screens', state: 'queued' },
-      { id: 'quality', label: 'Checking quality', state: 'queued' },
-    ],
     concerns: [],
     lastShellWriteAt: 0,
   };
@@ -92,10 +86,6 @@ export const fontStack = { heading: 'Avenir Next, Avenir, Segoe UI, sans-serif',
 `;
 }
 
-function progressModule(state) {
-  return `// Generated atomically by the prototype supervisor.\nexport type BuildScreenState = 'queued' | 'building' | 'written' | 'checked' | 'built' | 'failed';\nexport const buildProgress: ReadonlyArray<{ id: string; label: string; state: BuildScreenState; file?: string }> = ${JSON.stringify(state.screens, null, 2)};\n`;
-}
-
 function buildingRoute() {
   return `import { ScrollView, Text, View } from 'react-native';
 import { buildProgress } from '../src/generated/buildProgress';
@@ -128,9 +118,12 @@ function shellIndex() {
 
 function writeShell(projectDir, state) {
   const paths = buildPaths(projectDir);
+  buildEvents.initialize(projectDir);
+  if (buildEvents.readEvents(projectDir).length === 0) {
+    buildEvents.append(projectDir, { kind: 'phase', track: 'A', id: 'install', label: 'Preparing the app', state: 'start' });
+  }
   const tokenPath = path.join(projectDir, 'brand', 'tokens.ts');
   if (!fs.existsSync(tokenPath)) atomicWrite(tokenPath, defaultTokens());
-  atomicWrite(paths.progressModule, progressModule(state));
   atomicWrite(paths.buildingRoute, buildingRoute());
   const indexPath = path.join(projectDir, 'app', 'index.tsx');
   if (!fs.existsSync(paths.backupIndex)) atomicWrite(paths.backupIndex, fs.readFileSync(indexPath, 'utf8'));
@@ -180,6 +173,7 @@ function startMetro(projectDir, port, state) {
   });
   child.unref();
   state.metro = { state: 'starting', pid: child.pid, url: null };
+  buildEvents.append(projectDir, { kind: 'runtime', state: 'metro-starting' });
   writeState(projectDir, state);
   const deadline = Date.now() + METRO_READY_BUDGET_MS;
   while (Date.now() < deadline && processAlive(child.pid)) {
@@ -187,6 +181,7 @@ function startMetro(projectDir, port, state) {
     const url = log.match(/(?:exp(?:\+[^:]+)?|http):\/\/[^\s]+/)?.[0] || null;
     if (/Metro waiting on|Waiting on http|Logs for your project/.test(log)) {
       state.metro = { state: 'ready', pid: child.pid, url };
+      buildEvents.append(projectDir, { kind: 'runtime', state: 'metro-ready', url });
       writeState(projectDir, state);
       return;
     }
@@ -195,8 +190,9 @@ function startMetro(projectDir, port, state) {
   throw new Error(processAlive(child.pid) ? 'Metro did not become ready within 30 seconds' : 'Metro exited before becoming ready');
 }
 
-function addConcern(state, concern) {
+function addConcern(projectDir, state, concern) {
   if (!state.concerns.includes(concern)) state.concerns.push(concern);
+  buildEvents.append(projectDir, { kind: 'concern', message: concern });
 }
 
 function start(projectDir, { noMetro = false, port = 8081 } = {}) {
@@ -205,8 +201,10 @@ function start(projectDir, { noMetro = false, port = 8081 } = {}) {
   writeShell(projectDir, state);
   try {
     install(projectDir);
+    buildEvents.append(projectDir, { kind: 'phase', track: 'A', id: 'install', label: 'Preparing the app', state: 'complete' });
   } catch (error) {
-    addConcern(state, error.message);
+    addConcern(projectDir, state, error.message);
+    buildEvents.append(projectDir, { kind: 'phase', track: 'A', id: 'install', label: 'Preparing the app', state: 'failed' });
   }
   if (noMetro) {
     state.metro.state = 'disabled';
@@ -214,8 +212,9 @@ function start(projectDir, { noMetro = false, port = 8081 } = {}) {
     try {
       startMetro(projectDir, port, state);
     } catch (error) {
-      addConcern(state, error.message);
+      addConcern(projectDir, state, error.message);
       state.metro.state = 'failed';
+      buildEvents.append(projectDir, { kind: 'runtime', state: 'failed' });
     }
   }
   state.trackA = state.concerns.length > 0 ? 'degraded' : 'ready';
@@ -237,24 +236,24 @@ function planScreens(projectDir, planPath) {
   if (errors.length > 0 || !table.headers.includes('Screen') || !table.headers.includes('File')) {
     throw new Error(errors.join('; ') || 'Screen Map is missing Screen/File columns');
   }
-  state.screens = table.rows
+  const screens = table.rows
     .map((row) => Object.fromEntries(table.headers.map((header, index) => [header, row[index] || ''])))
     .filter((row) => row.File.startsWith('app/(app)/'))
     .map((row) => ({ id: slug(row.Screen), label: row.Screen, state: 'queued', file: row.File }));
+  buildEvents.append(projectDir, { kind: 'plan', path: path.relative(projectDir, planPath) });
+  for (const screen of screens) buildEvents.append(projectDir, { kind: 'screen', ...screen });
   writeState(projectDir, state);
-  atomicWrite(buildPaths(projectDir).progressModule, progressModule(state));
   return state;
 }
 
 function updateScreen(projectDir, id, screenState) {
   const state = readState(projectDir);
-  const screen = state.screens.find((candidate) => candidate.id === id);
+  const screen = buildEvents.reduce(buildEvents.readEvents(projectDir)).screens[id];
   if (!screen) throw new Error(`unknown screen ${id}`);
-  screen.state = screenState;
   const elapsed = Date.now() - state.lastShellWriteAt;
   if (elapsed < DEBOUNCE_MS) sleep(DEBOUNCE_MS - elapsed);
   state.lastShellWriteAt = Date.now();
-  atomicWrite(buildPaths(projectDir).progressModule, progressModule(state));
+  buildEvents.append(projectDir, { kind: 'screen', id, label: screen.label, file: screen.file, state: screenState });
   writeState(projectDir, state);
 }
 
@@ -265,6 +264,7 @@ function release(projectDir, route) {
   atomicWrite(modePath, source.replace(/prototypeEntryRoute\s*=\s*[^;]+;/, `prototypeEntryRoute = ${JSON.stringify(route)} as const;`));
   const state = readState(projectDir);
   state.releasedRoute = route;
+  buildEvents.append(projectDir, { kind: 'phase', track: 'B', id: 'release', label: 'Opening the built app', state: 'complete' });
   writeState(projectDir, state);
 }
 
@@ -272,7 +272,8 @@ function status(projectDir) {
   const state = readState(projectDir);
   if (state.metro.state === 'ready' && !processAlive(state.metro.pid)) {
     state.metro.state = 'failed';
-    addConcern(state, 'Metro stopped before the build completed; continuing in text-only mode');
+    buildEvents.append(projectDir, { kind: 'runtime', state: 'failed' });
+    addConcern(projectDir, state, 'Metro stopped before the build completed; continuing in text-only mode');
     writeState(projectDir, state);
   }
   return state;
@@ -288,9 +289,11 @@ function parseArgs(argv) {
   return { command, projectDir: path.resolve(projectArg), option, argv };
 }
 
-function printResult(state) {
-  const statusName = state.concerns.length > 0 ? 'DONE_WITH_CONCERNS' : 'DONE';
-  console.log(JSON.stringify({ status: statusName, concerns: state.concerns, metro: state.metro, screens: state.screens }));
+function printResult(projectDir, state) {
+  const reduced = buildEvents.reduce(buildEvents.readEvents(projectDir));
+  const concerns = [...new Set([...state.concerns, ...reduced.concerns])];
+  const statusName = concerns.length > 0 ? 'DONE_WITH_CONCERNS' : 'DONE';
+  console.log(JSON.stringify({ status: statusName, concerns, metro: state.metro, screens: Object.values(reduced.screens) }));
 }
 
 function main() {
@@ -304,7 +307,7 @@ function main() {
     else if (args.command === 'release') { release(args.projectDir, args.option('--route')); state = readState(args.projectDir); }
     else if (args.command === 'status') state = status(args.projectDir);
     else throw new Error(`unknown supervisor command ${args.command}`);
-    printResult(state);
+    printResult(args.projectDir, state);
   } catch (error) {
     console.error(`prototype-supervisor: ${error.message}`);
     process.exit(1);
