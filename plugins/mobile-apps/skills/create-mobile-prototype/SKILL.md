@@ -437,8 +437,24 @@ Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
 ### Step 8 - Build Screens
 
-Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
-status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
+Compile the current plan again after panel edits, then consume its schedule:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-plan.js" \
+  --project "$PROJECT_DIR" \
+  --plan "$PROJECT_DIR/native-app-plan.md"
+```
+
+Read `.mobile-build/screen-build-schedule.json`. A complete schema-conforming
+plan has `concurrency: 3`; spawn exactly each listed wave with no more than
+three `mobile-app:screen-builder` agents. A thin plan has `concurrency: 1` and
+one screen per wave. Preserve the compiler's literal
+`DONE_WITH_CONCERNS: thin screen plan...` in the workflow concerns and final
+status. Never widen a thin schedule or infer missing plan fields in builder
+prompts.
+
+Use the same status/retry protocol as `/create-mobile-app` Step 11. Each prompt
+must include:
 
 Inject `${PLUGIN_ROOT}/shared/references/derivation-contract.md` before any
 styling reference. Subject/story/metric/image derivation controls the layout;
@@ -458,7 +474,8 @@ node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id>
 ```
 
 Use `failed` for a terminal builder/check failure. Skeleton always lands before
-content. Never write the same watched file concurrently.
+content. Never write the same watched file concurrently. Run the screen-wave
+TypeScript gate after every scheduled wave before starting the next one.
 
 ```text
 Data mode: prototype.
@@ -737,6 +754,7 @@ Preview: <path>
 Next: iterate with /edit-app, or run /prototype-to-real-app when the data model is ready for a real environment.
 ```
 
-Use `DONE_WITH_CONCERNS: <concerns>` when a non-blocking connector stub or
-visual review concern remains. Never use `DONE` when a route, contract,
-quality, contrast, changed-file, or TypeScript gate failed.
+Use `DONE_WITH_CONCERNS: <concerns>` when a thin plan forced serial scheduling,
+a non-blocking connector stub remains, or a visual review concern remains.
+Never use `DONE` when the screen-plan compiler returned concerns or when a
+route, contract, quality, contrast, changed-file, or TypeScript gate failed.

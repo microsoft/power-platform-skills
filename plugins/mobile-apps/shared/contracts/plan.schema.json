@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://power-platform-skills.dev/mobile-apps/plan.schema.json",
+  "title": "Mobile screen build plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "screens"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "screens": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/screen" }
+    }
+  },
+  "$defs": {
+    "screen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "route", "archetype", "pattern", "components", "binding", "states", "derived"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "route": { "type": "string", "pattern": "^/" },
+        "archetype": {
+          "type": "string",
+          "enum": ["list", "detail", "form", "auth", "tab-root", "modal-sheet", "empty-onboarding"]
+        },
+        "pattern": { "type": "string", "minLength": 1 },
+        "hero": { "type": "string", "minLength": 1 },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "binding": { "type": "string", "minLength": 1 },
+        "states": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "derived": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              { "properties": { "id": { "const": "home" } }, "required": ["id"] },
+              { "properties": { "route": { "pattern": "/home$" } }, "required": ["route"] }
+            ]
+          },
+          "then": { "required": ["hero"] }
+        }
+      ]
+    }
+  }
+}

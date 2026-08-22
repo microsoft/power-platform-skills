@@ -408,6 +408,11 @@ The full descriptions for row styles, hero types, and operational patterns live 
 
 For each screen the user adds, provide this compact shape:
 
+- **ID** — stable lowercase kebab-case identifier, unique across the plan
+- **Components** — comma-separated concrete component inventory for this screen
+- **Binding** — concise source-to-visible-slot contract; use `local/static` when no service is needed
+- **States** — explicit comma-separated rendered states; at least one state
+- **Derived** — semicolon-separated record/aggregate/state/media derivations, or `none` after explicit review
 - **Domain layout decisions:** (answer the 3 questions above — required)
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
@@ -531,6 +536,11 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 
 **Domain layout decisions:** Status badge per zone (Pending / In progress / Done) + photo-required indicator + defect count chip. Visual emphasis: the active zone hero with progress dots. Looks different from CRUD: sticky step header + previous/next controls instead of a free-form list.
 
+- **ID:** `walkaround`
+- **Components:** `ScreenHeader`, `ProgressDots`, `EntityImage`, `BottomActionBar`
+- **Binding:** `Cr3e9_zoneprogressService -> zone name, state, evidence count, defect count`
+- **States:** `loading`, `error`, `populated`, `evidence-required`, `saving`
+- **Derived:** `aggregate:defectCount=count(defects); state:photoRequired=zone.requiresEvidence && evidence.length===0`
 - **Operational pattern:** `walkaround-stepper`
 - **Archetype:** Form
 - **Purpose:** Drive inspector through 6 ordered zones, capture per-zone evidence and defects.
@@ -595,17 +605,17 @@ Section format (same in all phases):
 
 ### Screen Map
 
-| Screen | Route | File | Presentation | Purpose | Data | Native | Entity icon | Source |
-|---|---|---|---|---|---|---|---|---|
-| Splash | `/` | `app/index.tsx` | default | Auth-aware redirect | — | — | — | template (keep) |
-| Login | `/login` | `app/login.tsx` | default | MSAL sign-in | — | — | — | template (keep) |
-| OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Connector consent return | — | — | — | template (keep) |
-| Home | `/(app)/home` | `app/(app)/home.tsx` | default | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | `cr123_inspection=clipboard-outline` | replace template |
-| Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | `cr123_inspection=clipboard-outline` | new |
-| Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | `cr123_inspection=clipboard-outline` | new |
-| New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | `cr123_inspection=clipboard-outline` | new |
-| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | `cr123_inspection=clipboard-outline` | new |
-| Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | — | new |
+| ID | Screen | Route | File | Presentation | Archetype | Pattern | Purpose | Data | Native | Entity icon | Source |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| splash | Splash | `/` | `app/index.tsx` | default | Auth | auth-redirect | Auth-aware redirect | — | — | — | template (keep) |
+| login | Login | `/login` | `app/login.tsx` | default | Auth | sign-in | MSAL sign-in | — | — | — | template (keep) |
+| oauth-callback | OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Auth | oauth-callback | Connector consent return | — | — | — | template (keep) |
+| home | Home | `/(app)/home` | `app/(app)/home.tsx` | default | Tab-root | home-dashboard | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | `cr123_inspection=clipboard-outline` | replace template |
+| inspections | Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List | plain-list | List + filter | `cr123_inspectionService.getAll` | — | `cr123_inspection=clipboard-outline` | new |
+| inspection-detail | Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | Detail | record-detail | View + edit one | `getById`, `update` | — | `cr123_inspection=clipboard-outline` | new |
+| new-inspection | New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Form | record-form | Create form, slides up from list | `create` | — | `cr123_inspection=clipboard-outline` | new |
+| capture-photo | Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Modal-Sheet | media-capture | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | `cr123_inspection=clipboard-outline` | new |
+| profile | Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | Tab-root | profile-settings | User info + sign out | `useAuth()` only | — | — | new |
 
 > **Why the File column matters:** the orchestrator's Step 10b walks this column to (1) compute top-level tab/drawer entries (one per unique `app/(app)/<name>` — folder OR flat file) and (2) emit per-folder `_layout.tsx` files with the right modal options. Each builder reads its own row's File path as `target_file`. Without this column, the orchestrator falls back to flat `app/(app)/<screen-name>.tsx` for every screen — phantom tabs return.
 
@@ -780,6 +790,19 @@ The Hierarchy block should reflect the actual nav pattern — for `Stack`, rende
 node "${PLUGIN_ROOT}/skills/create-mobile-prototype/panel/install.js" "<working_dir>"
 ```
 
+In `phase: specs`, compile the approved markdown into the machine contract:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/compile-screen-plan.js" \
+  --project "<working_dir>" \
+  --plan "<plan_path>"
+```
+
+`DONE` means the structured plan is complete and schedules waves of at most 3.
+`DONE_WITH_CONCERNS` means the plan is thin; propagate that status and reason.
+Thin plans remain buildable but are scheduled one screen at a time. Skip this
+compiler in `phase: graph`, before per-screen fields exist.
+
 ## Return Status
 
 You MUST return your final message with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The planner parses the first line to decide what to do next. After the status line, leave a blank line, then write your summary.
@@ -787,7 +810,7 @@ You MUST return your final message with one of these four status codes as the **
 | Code | When to use | Example first line |
 |---|---|---|
 | `DONE` | Section written cleanly to the phase-appropriate target and panel refreshed | `DONE` |
-| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Wrote section but had to fall back — e.g. design tokens missing so used Tamagui defaults, navigation pattern conflicts with template, screen count exceeded reasonable cap | `DONE_WITH_CONCERNS: $brandPrimary token not found, used $blue10 in preview` |
+| `DONE_WITH_CONCERNS: <comma-separated concerns>` | Wrote section but had to fall back, including a thin structured plan that requires serial builds | `DONE_WITH_CONCERNS: Home missing binding and states; using serial builds` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info — e.g. data model section references entities the planner did not pass, or connector list is empty but spec requires services | `NEEDS_CONTEXT: spec references CrInspectionService but Generated Services table is empty` |
 | `BLOCKED: <reason>` | Hit a hard wall — cannot read the plan, write its section, or refresh the panel. The planner MUST escalate, never silently retry | `BLOCKED: cannot read <working_dir>/native-app-plan.md (file not found)` |
 

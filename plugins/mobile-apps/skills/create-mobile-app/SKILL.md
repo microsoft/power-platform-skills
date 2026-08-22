@@ -356,7 +356,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
-| Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
+| Build min | Screens, structured-plan cap of 3 | `ceil(screens / 3) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
 
 Print the block once, exactly in this format (substitute computed values; ranges as `low-high`):
@@ -374,7 +374,7 @@ Scope (proxy estimates — actual numbers come from architects):
 Time (rough — agent time only, excludes your approval latency at gates):
   Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
-  Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
+  Screen build  ~<low>-<high> min ← complete plans cap at 3; thin plans build serially
 
 Token tier: Opus everywhere in v0 (model routing not yet shipped).
 
@@ -2058,6 +2058,20 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
+Before the agent preflight, compile the current plan and read its generated
+schedule:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-plan.js" \
+  --project "<working_dir>" \
+  --plan "<working_dir>/native-app-plan.md"
+```
+
+Use `.mobile-build/screen-build-schedule.json` exactly. Schema-complete plans
+run waves of at most 3. Thin plans run one screen per wave and the compiler's
+`DONE_WITH_CONCERNS` status is propagated to the final result. Never fill
+missing structured fields in the orchestrator merely to unlock parallelism.
+
 **Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
 
 #### 11.0 — `Task` preflight (silent)
@@ -2071,13 +2085,13 @@ Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-a
 
 **Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run (rare), treat the next failure the same way: silently downgrade to inline and continue.
 
-**Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
+**Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per generated schedule wave (at most 3 for complete plans, exactly 1 for thin plans). If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
 
-**Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
-> "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
+**Print before spawning** (read `<W>` and the wave members from the generated schedule):
+> "→ [Step 11/13] Building <N> screens in <W> scheduled wave(s), concurrency <1|3>.
 > Wave 1/<W> starting: <comma-separated screen names in this wave>."
 
-Read the `## Screens` section's per-screen specs. For each screen the plan marks as new (skip baseline screens already in template), spawn a `mobile-app:screen-builder` agent via `Task` **in a single message** so they run in parallel. The `mobile-app:` plugin-name prefix is required.
+Read the `## Screens` section's per-screen specs. For each generated wave, spawn its new screens (skip baseline screens already in template) as `mobile-app:screen-builder` agents via `Task` **in a single message**. The `mobile-app:` plugin-name prefix is required.
 
 ```
 Spawn N agents (parallel): mobile-app:screen-builder
@@ -2095,7 +2109,7 @@ Each prompt:
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
 
-**Cap at 5 concurrent.** If the plan has more than 5 new screens, batch them in waves of 5.
+**The generated schedule is authoritative.** Do not merge waves, exceed 3, or parallelize a thin plan.
 
 **Progress streaming — print one line per builder as the wave returns, then a wave summary.** The `Task` tool returns all parallel results together, but you can still narrate per-builder by iterating the returned results in order before doing the status-switch branching. Format:
 

@@ -9,6 +9,7 @@ Project-local plans, contracts, vocabulary, and brand artifacts remain authorita
 - `shared/samples/src/components/index.tsx`: `915a2d22249c4c42c590e55e274452821ecab8ddbf1a2a6ee7a7c70f021fe077`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
+- `shared/contracts/plan.schema.json`: `7a91aa9fddb39b7bfee2c4f1368ee7480ea203b7aca193289892dc58b7728e96`
 - `skills/design-system/references/vibe/design-directions.md`: `df7852b1031e9d8922c06b4b5b4a49580674b10a51647367c715cc04ddc82463`
 - `skills/design-system/references/vibe/direction-carrier-consumer.md`: `5cc9562a4d6209265286c57ccb33b9a0418733678c14eb89626f1ee8fb46d839`
 - `skills/design-system/references/vibe/direction-airline.md`: `5d55c621ed8f6049a39fdef339049e87187dff5f2d678fc3ca59abae82423d35`
@@ -348,3 +349,8 @@ Run the same registry-driven harness in LTR and Arabic RTL modes:
 node harness/run.js --project "$PROJECT_DIR" --check all
 node harness/run.js --project "$PROJECT_DIR" --check all --locale ar
 ```
+
+## Structured Plan Contract
+- Required screen fields: `id`, `route`, `archetype`, `pattern`, `components`, `binding`, `states`, `derived`.
+- Home additionally requires `hero`.
+- Schema-complete plans build at concurrency 3; thin plans build serially and return `DONE_WITH_CONCERNS`.
