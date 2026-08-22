@@ -28,8 +28,7 @@ const VALIDATORS = [
   { script: 'validate-dataverse-payload.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-dataverse-heavy-lists.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-navigation-idempotency.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
-  { script: 'validate-screen-quality.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
-  { script: 'validate-color-contrast.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
+  { script: 'validate-static-quality.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
 ];
 
 function isTextFile(filePath) {

@@ -528,7 +528,7 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const registry = checkRegistry.load();
   if (options.check === 'all') {
-    for (const entry of registry) {
+    for (const entry of registry.filter((candidate) => candidate.tier === 2)) {
       const args = process.argv.slice(2);
       args[args.indexOf('--check') + 1] = entry.id;
       const result = spawnSync(process.execPath, [__filename, ...args], { encoding: 'utf8' });
@@ -541,6 +541,7 @@ async function main() {
   const projectDir = path.resolve(options.project);
   const registryEntry = checkRegistry.resolve(registry, options.check);
   if (!registryEntry) fail(`unknown or unregistered check ${options.check}`);
+  if (registryEntry.tier !== 2) fail(`${registryEntry.id} is tier ${registryEntry.tier}; run it through its tier runner`);
   const checkPath = path.join(CHECKS_DIR, `${registryEntry.module}.js`);
   const check = require(checkPath);
   if ((check.scope || 'screen') !== registryEntry.scope) fail(`${registryEntry.id} scope disagrees with its module`);

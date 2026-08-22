@@ -17,8 +17,8 @@ test('registry covers every check exactly once with complete routing metadata', 
     .filter((name) => name.endsWith('.js'))
     .map((name) => name.slice(0, -3))
     .sort();
-  assert.deepEqual(entries.map((entry) => entry.module).sort(), modules);
-  assert.equal(entries.length, 14);
+  assert.deepEqual(entries.filter((entry) => entry.tier === 2).map((entry) => entry.module).sort(), modules);
+  assert.equal(entries.filter((entry) => entry.tier === 2).length, 14);
   for (const entry of entries) {
     assert.ok(['A', 'B', 'C'].includes(entry.class));
     assert.ok([1, 2, 3].includes(entry.tier));
@@ -43,6 +43,7 @@ test('every registered fixture triggers its check or non-blocking threshold', (t
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'check-registry-fixtures-'));
   t.after(() => fs.rmSync(output, { recursive: true, force: true }));
   for (const entry of registry.load()) {
+    if (entry.tier !== 2) continue;
     const outfile = path.join(output, `${entry.module}.cjs`);
     esbuild.buildSync({
       bundle: true,

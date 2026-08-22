@@ -26,7 +26,12 @@ function validate(entries, { requireFiles = true } = {}) {
     if (typeof entry?.blocking !== 'boolean') errors.push(`${label}: blocking must be boolean`);
     if (entry?.blocking && !entry?.fixture) errors.push(`${label}: blocking checks require a fixture`);
     if (requireFiles && entry?.fixture && !fs.existsSync(path.join(PLUGIN_ROOT, entry.fixture))) errors.push(`${label}: fixture does not exist: ${entry.fixture}`);
-    if (requireFiles && entry?.module && !fs.existsSync(path.join(__dirname, 'checks', `${entry.module}.js`))) errors.push(`${label}: check module does not exist`);
+    if (requireFiles && entry?.module) {
+      const implementation = entry.tier === 1
+        ? path.join(__dirname, 'static', 'run.js')
+        : path.join(__dirname, 'checks', `${entry.module}.js`);
+      if (!fs.existsSync(implementation)) errors.push(`${label}: check implementation does not exist`);
+    }
   }
   return errors;
 }

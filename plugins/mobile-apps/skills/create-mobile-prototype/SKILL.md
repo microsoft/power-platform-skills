@@ -538,8 +538,7 @@ Run in this order from `PROJECT_DIR`:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md"
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
+node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
