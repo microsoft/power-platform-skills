@@ -211,6 +211,7 @@ test('uses the brief-derived vocabulary without a fixed retail profile', (t) => 
     roles: ['flight attendants', 'cabin retail managers'],
     prefix: 'ONB',
     pools: {
+      category: ['Travel Comfort', 'Beauty', 'Watches', 'Power and Adapters', 'Leather Goods', 'Gifts'],
       company: ['Nomad Form', 'Luma Atelier', 'Aster and Company', 'Orbit Supply', 'Northline Goods', 'Voyager Works'],
       location: ['Forward Cabin Cart', 'Aft Cabin Cart', 'Premium Cabin Store', 'Galley Retail Bay'],
       door: ['Forward Galley Locker', 'Aft Cart Compartment', 'Premium Display Case', 'Cabin Stock Drawer', 'Duty Free Cabinet', 'Service Trolley Bay'],
@@ -292,7 +293,7 @@ test('uses the brief-derived vocabulary without a fixed retail profile', (t) => 
   assert.match(manifest.seedProfile, /^vocabulary-[a-f0-9]{16}$/);
   assert.equal(manifest.seedVocabulary, '.tmp/seed-vocabulary.json');
   assert.match(manifest.seedVocabularySha256, /^[a-f0-9]{64}$/);
-  assert.equal(categoryRows.length, vocabulary.rowCount);
+  assert.equal(categoryRows.length, vocabulary.pools.category.length);
   assert.equal(productRows.length, vocabulary.rowCount);
   assert.equal(new Set(productRows.map((row) => row.cr_name)).size, vocabulary.pools.title.length);
   assert.equal(productRows.every((row) => vocabulary.pools.title.includes(row.cr_name)), true);
