@@ -27,9 +27,9 @@ data/auth integration layer.
 
 ## Non-Negotiables
 
-- Start in a fresh, already-installed `expo-app-standalone` template directory,
-  exactly like `/create-mobile-app`. Do not copy the plugin's bundled template
-  over the working directory.
+- Start with either an empty target directory or a fresh `expo-app-standalone`
+  template. Track A may materialize the bundled template only into an empty
+  target; it never overlays an existing app.
 - Require the committed `package-lock.json`. Prefer pnpm's committed lockfile
   and warm content-addressed store; use `npm install` when pnpm is unavailable.
   Never use `npm ci` for this workflow.
@@ -66,62 +66,50 @@ data/auth integration layer.
 Do not accept an environment argument. A request to choose an environment
 belongs to `/create-mobile-app` or `/prototype-to-real-app`.
 
-## Progress Contract
+## Two-Track Progress Contract
 
-Print one line before every long phase:
+Start both tracks at Step 1. Track A is deterministic and never waits for the
+model: materialize/install, start Metro, paint the temporary branded shell, then
+hold the server. Track B captures the brief, plans, generates, builds, and
+repairs. Track B never starts a dev server.
 
-```text
--> [prototype 1/10] Checking the fresh mobile template...
--> [prototype 2/10] Capturing the prototype brief...
--> [prototype 3/10] Planning data, integrations, and screens...
--> [prototype 4/10] Preparing the installed template...
--> [prototype 5/10] Generating typed mock services and seed data...
--> [prototype 6/10] Applying native capabilities and design tokens...
--> [prototype 7/10] Building navigation and typed screen skeletons...
--> [prototype 8/10] Building polished prototype screens...
--> [prototype 9/10] Running route, quality, contrast, and TypeScript gates...
--> [prototype 10/10] Recording state and starting Metro...
-```
+Read and follow [`runtime/supervisor.md`](./runtime/supervisor.md). Track A
+failure records a concern and Track B continues in text-only mode. All watched
+files use atomic writes; shell progress updates are debounced by 500 ms.
 
 ## Workflow
 
-### Step 1 - Verify Fresh Template
+### Step 1 - Start Both Tracks
 
-Resolve `PROJECT_DIR` from `--working-dir` or the current directory. Require:
+Resolve `PROJECT_DIR` from `--working-dir` or the current directory. Start Track
+A immediately, before reading the brief or invoking a model:
 
 ```bash
-test -f "$PROJECT_DIR/package.json"
-test -f "$PROJECT_DIR/app.config.js"
-test -f "$PROJECT_DIR/auth.config.json"
-test -f "$PROJECT_DIR/tamagui.config.ts"
-test -f "$PROJECT_DIR/package-lock.json"
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" start "$PROJECT_DIR"
 ```
+
+The command returns `DONE` or `DONE_WITH_CONCERNS` as JSON. Record concerns and
+continue Track B. A failed install, occupied port, Metro crash, or missing QR
+must not stop planning.
 
 Classify the directory using the same markers as
 [`/create-mobile-app`](../create-mobile-app/SKILL.md#fresh-template-working-directory-mode):
 
 | State | Action |
 |---|---|
-| Fresh installed template | Continue. |
-| Template files exist but `node_modules/expo` is absent | Run the deterministic installer below. Do not provision npm credentials. |
+| Empty target | Track A copies the bundled template and installs from locks. |
+| Fresh installed template | Track A installs only when dependencies are absent. |
+| Template files exist but `node_modules/expo` is absent | Track A runs the deterministic installer. Do not provision npm credentials. |
 | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, `src/generated/services/*.ts`, or `.mobile-app/state.json` exists | STOP unless this is an explicitly confirmed resume of the same prototype run. |
 | Required template files are missing | STOP and point to the README `degit` setup. |
 
 Require Node 22+ and npm 10+. Do not probe Power Platform or native build
 toolchains.
 
-Install missing dependencies before planning:
-
-```bash
-if ! test -d "$PROJECT_DIR/node_modules/expo"; then
-  node "${CLAUDE_SKILL_DIR}/runtime/install-dependencies.js" "$PROJECT_DIR"
-fi
-```
-
-The installer selects `pnpm install --frozen-lockfile` when pnpm is available
-and falls back to `npm install`. Both consume committed lockfiles. A failed
-install is surfaced as a Track A concern once the two-track supervisor exists;
-it must never trigger an unpinned install or `npm ci`.
+The supervisor selects `pnpm install --frozen-lockfile` when pnpm is available
+and falls back to `npm install`. Both consume committed lockfiles. It writes the
+`Building your app` shell before the plan exists and budgets 30 seconds for a
+scannable Metro handoff.
 
 ### Step 2 - Capture Brief And Impact Preview
 
@@ -138,6 +126,22 @@ Write `<PROJECT_DIR>/brief.md`. Mark `Mode: prototype` and preserve the source
 paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
 and validation stages. Ask Proceed / Revise / Cancel before planning.
+
+Within roughly five seconds of parsing the brief, print this compact echo before
+the impact preview. It names inferred and dropped behavior, not plan prose:
+
+```text
+Understood: <domain and user outcome>
+Flow:       <actor action -> decision -> completion>
+Records:    <important records and relationships>
+Inferred:   <every inferred record, role, identity, or workflow assumption>
+Native:     <ready template capabilities or none>
+Dropped:    <every requested unsupported capability and allowlist reason or none>
+Connectors: <planned connector names or none>
+Assumed:    <visual direction and why it was selected>
+```
+
+Anything dropped from the template capability allowlist must appear here.
 
 #### Step 2.1 - Derive Seed Vocabulary (Spike)
 
@@ -258,15 +262,18 @@ Copy the memory-bank template to `<PROJECT_DIR>/memory-bank.md` only when it is
 missing. Record `data_mode: prototype`, no environment, and the approved plan
 path.
 
-Choose `PROTOTYPE_ENTRY_ROUTE` from the approved Screen Map: use the explicit
+Choose `REAL_PROTOTYPE_ENTRY_ROUTE` from the approved Screen Map: use the explicit
 initial/home route, otherwise the first tab/root route. Normalize the plan's
 `app/(app)/...tsx` file to an Expo href such as `/(app)/home`.
 
-Then enable the reversible local runtime:
+Restore the template index atomically, then enable the reversible local runtime
+on the temporary shell route. The real route is released only after screens are
+built:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" prepare-runtime "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/scripts/configure-prototype-runtime.js" \
-  "$PROJECT_DIR" prototype "$PROTOTYPE_ENTRY_ROUTE"
+  "$PROJECT_DIR" prototype "/building"
 ```
 
 This intentionally:
@@ -367,6 +374,8 @@ Reuse the current owning implementation in `/create-mobile-app`, in this order:
   ```bash
   node "${CLAUDE_SKILL_DIR}/../../scripts/generate-prototype-navigation.js" \
     "$PROJECT_DIR"
+  node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" plan "$PROJECT_DIR" \
+    --plan "$PROJECT_DIR/native-app-plan.md"
   ```
   Tab roots must use `navigate`, labels must be content nouns, and at most one
   tab may be app furniture (`Home`, `Profile`, `Settings`, and equivalents).
@@ -389,6 +398,22 @@ Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
 Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
 status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
+
+For every screen, update the supervisor around the existing builder and
+TypeScript gates using the slug printed by `supervisor.js plan`:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state building
+# builder writes the skeleton, then fills content atomically
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state written
+# after the screen-wave type-check
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state checked
+# after its focused checks
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state built
+```
+
+Use `failed` for a terminal builder/check failure. Skeleton always lands before
+content. Never write the same watched file concurrently.
 
 ```text
 Data mode: prototype.
@@ -577,7 +602,7 @@ to guarantee it didn't break TS typing.
 After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.
 
-### Step 10 - Record State And Start Metro
+### Step 10 - Record State And Release The Built App
 
 Update `.mobile-app/state.json`:
 
@@ -591,8 +616,18 @@ Update `.mobile-app/state.json`:
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
 
-Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
-or crawl routes in a browser. Return the Metro URL/QR handoff to the user.
+Release the approved real entry route and inspect the Track A process that has
+been running since Step 1:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" release "$PROJECT_DIR" \
+  --route "$REAL_PROTOTYPE_ENTRY_ROUTE"
+node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" status "$PROJECT_DIR"
+```
+
+Do not start Metro here. If status reports that Metro stopped, complete with
+`DONE_WITH_CONCERNS` and the text-only reason. Return its persisted URL/QR when
+available.
 
 ## Graduation Contract
 
