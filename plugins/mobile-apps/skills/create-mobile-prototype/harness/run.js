@@ -573,7 +573,10 @@ async function main() {
         continue;
       }
       const result = check.run(snapshot, context);
-      if (!result.pass) failures.push(`${screenRelative}: ${result.failures.join('; ')}`);
+      if (result.notRun) {
+        console.log(`prototype-harness: NOT RUN ${options.check} ${screenRelative} reason=${JSON.stringify(result.failures.join('; '))}`);
+        failures.push(`${screenRelative}: NOT RUN: ${result.failures.join('; ')}`);
+      } else if (!result.pass) failures.push(`${screenRelative}: ${result.failures.join('; ')}`);
       else if (result.reportOnly) {
         const report = result.report || {};
         const details = options.check === 'density'
@@ -587,7 +590,10 @@ async function main() {
   }
   if (check.scope === 'app' && failures.length === 0) {
     const result = check.runApp(appRendered, baseContext);
-    if (!result.pass) failures.push(`app: ${result.failures.join('; ')}`);
+    if (result.notRun) {
+      console.log(`prototype-harness: NOT RUN ${options.check} app reason=${JSON.stringify(result.failures.join('; '))}`);
+      failures.push(`app: NOT RUN: ${result.failures.join('; ')}`);
+    } else if (!result.pass) failures.push(`app: ${result.failures.join('; ')}`);
     else console.log(`prototype-harness: REPORT ${options.check} app details=${JSON.stringify(result.report || {})}`);
   }
   if (failures.length > 0) fail(`${options.check} failed\n- ${failures.join('\n- ')}`);

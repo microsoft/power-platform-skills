@@ -13,8 +13,15 @@ function descendants(element, byParent) {
 
 function runApp(rendered) {
   const failures = [];
+  const notRunReasons = [];
   const expectedIcons = new Map();
   const actualIcons = new Map();
+  const contractCount = rendered.reduce((total, item) => {
+    const contracts = item.context.conditionalContracts || {};
+    return total + ['visibility', 'warnings', 'inputs', 'icons']
+      .reduce((count, key) => count + (contracts[key]?.length || 0), 0);
+  }, 0);
+  if (contractCount === 0) notRunReasons.push('conditional UX contract is absent');
 
   for (const { snapshot, context } of rendered) {
     const contracts = context.conditionalContracts || {};
@@ -27,9 +34,21 @@ function runApp(rendered) {
     }
 
     for (const contract of contracts.visibility || []) {
+      const stateRows = elements.filter((element) => (
+        element.testId.startsWith('row:')
+        && String(element.attributes?.['data-record-state'] || '').trim()
+      ));
+      if (stateRows.length === 0) {
+        notRunReasons.push(`${context.screenRelative}: required row:* data-record-state evidence is absent for ${contract.field}`);
+        continue;
+      }
+      if (!elements.some((element) => element.testId === `conditional-field:${contract.field}`)) {
+        notRunReasons.push(`${context.screenRelative}: required conditional-field:${contract.field} testID is absent`);
+        continue;
+      }
       let allowedRows = 0;
       let disallowedRows = 0;
-      for (const row of elements.filter((element) => element.testId.startsWith('row:'))) {
+      for (const row of stateRows) {
         const state = String(row.attributes?.['data-record-state'] || '').trim();
         if (!state) continue;
         const fieldVisible = descendants(row, byParent).some((child) => child.testId === `conditional-field:${contract.field}`);
@@ -48,7 +67,12 @@ function runApp(rendered) {
     }
 
     for (const contract of contracts.warnings || []) {
-      for (const warning of elements.filter((element) => element.testId === `warning:${contract.warning}`)) {
+      const warnings = elements.filter((element) => element.testId === `warning:${contract.warning}`);
+      if (warnings.length === 0) {
+        notRunReasons.push(`${context.screenRelative}: required warning:${contract.warning} testID is absent`);
+        continue;
+      }
+      for (const warning of warnings) {
         const remedy = elements.find((element) => (
           element.testId === `remedy:${contract.remedy}`
           && element.parentId === warning.parentId
@@ -62,7 +86,7 @@ function runApp(rendered) {
       if (contract.role !== 'count-against-expected') continue;
       const root = elements.find((element) => element.testId === `input-role:${contract.field}:numeric-stepper`);
       if (!root) {
-        failures.push(`${context.screenRelative}: ${contract.field} must render numeric-stepper for count-against-expected`);
+        notRunReasons.push(`${context.screenRelative}: required input-role:${contract.field}:numeric-stepper testID is absent`);
         continue;
       }
       const children = descendants(root, byParent);
@@ -92,20 +116,24 @@ function runApp(rendered) {
     if (owner && owner !== entity) failures.push(`entities ${owner} and ${entity} share icon ${icon}`);
     ownerByIcon.set(icon, entity);
     const renderedIcons = actualIcons.get(entity) || new Set();
-    if (renderedIcons.size !== 1 || !renderedIcons.has(icon)) {
+    if (renderedIcons.size === 0) {
+      notRunReasons.push(`required entity-icon:${entity}:${icon} testID is absent`);
+    } else if (renderedIcons.size !== 1 || !renderedIcons.has(icon)) {
       failures.push(`entity ${entity} rendered ${[...renderedIcons].join(', ') || 'no icon'}, expected only ${icon}`);
     }
   }
 
   return {
-    pass: failures.length === 0,
-    failures,
-    reportOnly: failures.length === 0,
+    pass: failures.length === 0 && notRunReasons.length === 0,
+    failures: [...notRunReasons, ...failures],
+    notRun: notRunReasons.length > 0,
+    reportOnly: failures.length === 0 && notRunReasons.length === 0,
     report: {
       fieldVisibilityContracts: rendered.reduce((total, item) => total + (item.context.conditionalContracts?.visibility?.length || 0), 0),
       warningRemedyContracts: rendered.reduce((total, item) => total + (item.context.conditionalContracts?.warnings?.length || 0), 0),
       inputRoleContracts: rendered.reduce((total, item) => total + (item.context.conditionalContracts?.inputs?.length || 0), 0),
       entityIcons: Object.fromEntries([...actualIcons].map(([entity, icons]) => [entity, [...icons]])),
+      notRunReasons,
     },
   };
 }

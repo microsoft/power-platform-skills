@@ -45,6 +45,7 @@ test('harness contains direct-bundle aliases and browser globals banner', () => 
   assert.match(source, /'\.ttf': 'dataurl'/);
   assert.match(source, /globalThis\.process/);
   assert.match(source, /globalThis\.global/);
+  assert.match(source, /prototype-harness: NOT RUN/);
 });
 
 test('prototype workflow runs all six harness checks before design refinement', () => {
@@ -72,6 +73,21 @@ test('scroll padding includes all pinned heights and safe-area bottom', () => {
   ] }, { safeAreaBottom: 20 });
   assert.equal(failure.pass, false);
   assert.match(failure.failures[0], /55px.*76px/);
+
+  const missingPinned = scrollPadding.run({ elements: [
+    element({ id: 1, testId: 'scroll:items', style: { overflowY: 'auto', paddingBottom: '76px' } }),
+  ] }, { safeAreaBottom: 20 });
+  assert.equal(missingPinned.pass, false);
+  assert.equal(missingPinned.notRun, true);
+  assert.match(missingPinned.failures[0], /pinned:<layer> testID is absent/);
+
+  const missingScroll = scrollPadding.run({ elements: [
+    element({ id: 1, style: { overflowY: 'auto', paddingBottom: '76px' } }),
+    element({ id: 2, testId: 'pinned:actions', rect: { height: 56 } }),
+  ] }, { safeAreaBottom: 20 });
+  assert.equal(missingScroll.pass, false);
+  assert.equal(missingScroll.notRun, true);
+  assert.match(missingScroll.failures[0], /scroll:<screen> testID is absent/);
 });
 
 test('contrast enforces WCAG AA thresholds from computed colours', () => {
@@ -202,9 +218,20 @@ test('cardinality derives expected patterns from N and rejects mismatches', () =
   assert.equal(pass.pass, true);
   const failure = cardinality.run({ elements: [
     element({ id: 1, testId: 'cardinality:filters:chips', rect: { height: 1 } }),
+    element({ id: 2, testId: 'cardinality:choice-cr_status:inline-radio-list', rect: { height: 1 } }),
   ] }, { cardinalityExpectations: expectations });
   assert.equal(failure.pass, false);
   assert.match(failure.failures.join('\n'), /rendered chips, expected chips-overflow/);
+
+  const missingContract = cardinality.run({ elements: [] }, { cardinalityExpectations: [] });
+  assert.equal(missingContract.pass, false);
+  assert.equal(missingContract.notRun, true);
+  assert.match(missingContract.failures[0], /contract is absent/);
+
+  const missingTestId = cardinality.run({ elements: [] }, { cardinalityExpectations: expectations });
+  assert.equal(missingTestId.pass, false);
+  assert.equal(missingTestId.notRun, true);
+  assert.match(missingTestId.failures[0], /required cardinality testID is absent/);
 });
 
 test('discipline gates published scales and source-derived gradients while reporting warning metrics', () => {
@@ -332,6 +359,22 @@ test('conditional UX validates visibility, warning remedies, steppers, and entit
   assert.match(failure.failures.join('\n'), /lacks adjacent interactive remedy/);
   assert.match(failure.failures.join('\n'), /missing interactive increment/);
   assert.match(failure.failures.join('\n'), /share icon cube-outline/);
+
+  const missingContract = conditional.runApp([{
+    snapshot: { elements: [] },
+    context: { screenRelative: 'app/(app)/home.tsx', conditionalContracts: {} },
+  }]);
+  assert.equal(missingContract.pass, false);
+  assert.equal(missingContract.notRun, true);
+  assert.match(missingContract.failures[0], /contract is absent/);
+
+  const missingTestIds = conditional.runApp([{
+    snapshot: { elements: [] },
+    context: { screenRelative: 'app/(app)/home.tsx', conditionalContracts: contracts },
+  }]);
+  assert.equal(missingTestIds.pass, false);
+  assert.equal(missingTestIds.notRun, true);
+  assert.match(missingTestIds.failures.join('\n'), /required .* testID is absent|data-record-state evidence is absent/);
 });
 
 test('sort requires a visible active choice, count-driven control, and top reset', () => {

@@ -36,13 +36,24 @@ function run(snapshot, context) {
   const expectations = context.cardinalityExpectations || [];
   if (expectations.length === 0) {
     return {
-      pass: true,
-      failures: [],
-      reportOnly: true,
+      pass: false,
+      notRun: true,
+      failures: ['cardinality contract is absent'],
       report: { missingContract: true, comparisons: [] },
     };
   }
   const actual = renderedPatterns(snapshot);
+  const missingTestIds = expectations
+    .filter((expectation) => !actual.has(expectation.element))
+    .map((expectation) => `cardinality:${expectation.element}:<pattern>`);
+  if (missingTestIds.length > 0) {
+    return {
+      pass: false,
+      notRun: true,
+      failures: [`required cardinality testID is absent: ${missingTestIds.join(', ')}`],
+      report: { missingContract: false, missingTestIds, comparisons: [] },
+    };
+  }
   const failures = [];
   const comparisons = [];
   for (const expectation of expectations) {

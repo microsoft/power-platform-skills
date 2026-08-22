@@ -5,10 +5,14 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function notRun(reason) {
+  return { pass: false, notRun: true, failures: [reason] };
+}
+
 function run(snapshot, context) {
   const visible = snapshot.elements.filter((element) => element.visible);
   const pinned = visible.filter((element) => element.testId.startsWith('pinned:'));
-  if (pinned.length === 0) return { pass: true, failures: [] };
+  if (pinned.length === 0) return notRun('required pinned:<layer> testID is absent');
   const requiredPadding = pinned.reduce((total, element) => total + element.rect.height, 0) + context.safeAreaBottom;
   const byParent = new Map();
   for (const element of visible) {
@@ -16,12 +20,8 @@ function run(snapshot, context) {
     children.push(element);
     byParent.set(element.parentId, children);
   }
-  const scrolls = visible.filter((element) => (
-    element.testId.startsWith('scroll:') || ['auto', 'scroll'].includes(element.style.overflowY)
-  ));
-  if (scrolls.length === 0) {
-    return { pass: false, failures: [`pinned layers require a scroll container with at least ${requiredPadding}px bottom padding`] };
-  }
+  const scrolls = visible.filter((element) => element.testId.startsWith('scroll:'));
+  if (scrolls.length === 0) return notRun('required scroll:<screen> testID is absent');
   const failures = [];
   for (const scroll of scrolls) {
     const candidates = [scroll, ...(byParent.get(scroll.id) || [])];
