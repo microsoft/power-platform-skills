@@ -1729,6 +1729,7 @@ return (
       name="<screen-file-name>"
       options={{
         title: '<Screen Title>',
+        tabBarTestID: 'device-tab:<ID from Screen Map>',
         tabBarIcon: ({ color }) => <Ionicons name="<icon>" size={22} color={color} />,
       }}
     />
@@ -2300,6 +2301,20 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 - Metro launch cmd: cd <working_dir> && npx expo start
 ```
 
+After Metro is ready, generate and run the native device contract:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-device-contract.js" "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/harness/device/run.js" \
+  --project "<working_dir>" --check all --boot
+```
+
+When the original arguments include `--full-device`, add `--full`. Standard
+mode records unavailable Maestro/simulator/app/probe evidence as `NOT RUN` and
+returns `DONE_WITH_CONCERNS`; an executed failure blocks. Full mode blocks on
+every failure or `NOT RUN`, so a reported full device pass always has complete
+font, tab, and keyboard/CTA evidence.
+
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
 
 ### Step 12.5 — Optional debug handoff
@@ -2332,6 +2347,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+Device checks : <PASS | NOT RUN with reason>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────

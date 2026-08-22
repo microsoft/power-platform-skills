@@ -1,0 +1,1 @@
+export const fixture = { contract: { fonts: [{ role: 'heading', family: 'Brand Sans', id: 'device-font:heading' }, { role: 'body', family: 'Brand Sans', id: 'device-font:body' }] }, evidence: { executed: true, exitCode: 1, output: 'heading probe absent', screenshot: null } };

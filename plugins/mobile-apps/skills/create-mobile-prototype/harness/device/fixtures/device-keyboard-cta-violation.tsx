@@ -1,0 +1,1 @@
+export const fixture = { contract: { forms: [{ id: 'new-item', route: '/(app)/new-item', inputId: 'device-input:primary', ctaId: 'device-cta:submit' }] }, evidence: { executed: true, exitCode: 1, output: 'submit CTA obscured by keyboard', screenshot: '/tmp/form.png' } };

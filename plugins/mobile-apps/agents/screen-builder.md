@@ -986,6 +986,12 @@ Before finishing the screen, mentally verify:
     direction-sensitive icon names on `I18nManager.isRTL`. A horizontal group
     whose semantic order must mirror uses `mirror-row:<key>` and gives direct
     children `dataSet={{ logicalOrder: '<1..N>' }}`.
+  32. **Device probes are stable.** Home exposes visible heading and body text as
+    `device-font:heading` and `device-font:body` with the actual `$heading` and
+    `$body` families. A Form or Modal-Sheet gives its first editable input
+    `device-input:<ID from spec>` and its primary submit action
+    `device-cta:<ID from spec>`. These IDs are native verification contracts,
+    not decorative test hooks.
     Reject an undefined result before calling `Service.get`, `Service.update`, `Service.delete`, `Service.upload`, or `Service.download*`. `enabled: !!rawId`, a generic RFC UUID validator, and checks for only `'undefined'` / `'null'` are forbidden. Dataverse sequential GUIDs do not guarantee RFC version bits. Bug killed: valid Dataverse IDs rejected locally and HTTP 400 `table(undefined)` after create-then-navigate.
 25. **Scanner Dataverse writes are locked and reset on focus.** Any scanner callback that creates/updates Dataverse rows, uploads evidence, or navigates to a created record uses a `useRef` in-flight lock plus `paused` state, passes `paused` and `resetKey` to `BarcodeScannerView`, resets lock/paused/resetKey inside `useFocusEffect`, and routes manual code entry through the same guarded mutation. Bug killed: rapid QR callbacks creating duplicate or broken scan rows, and scanner stuck when returning from detail.
 25. **Camera evidence screens show a visible Take picture action.** Any evidence/photo capture flow has a first-class `Take picture` / `Take evidence photo` button wired to `takePhoto()` from `src/native/camera`. Gallery/upload/file picker actions may exist only as secondary siblings, never as the only visible capture path. Bug killed: evidence screen where camera capture exists technically but users cannot find it.

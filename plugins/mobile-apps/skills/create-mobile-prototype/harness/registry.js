@@ -29,7 +29,9 @@ function validate(entries, { requireFiles = true } = {}) {
     if (requireFiles && entry?.module) {
       const implementation = entry.tier === 1
         ? path.join(__dirname, 'static', 'run.js')
-        : path.join(__dirname, 'checks', `${entry.module}.js`);
+        : entry.tier === 3
+          ? path.join(__dirname, 'device', 'checks', `${entry.module}.js`)
+          : path.join(__dirname, 'checks', `${entry.module}.js`);
       if (!fs.existsSync(implementation)) errors.push(`${label}: check implementation does not exist`);
     }
   }

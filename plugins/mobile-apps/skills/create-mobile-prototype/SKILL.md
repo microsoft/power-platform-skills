@@ -662,8 +662,9 @@ visible text nodes in the first viewport, and reports the comparison floor:
 measurement-only: record `wouldMeetFloor`, but do not fail generation on it.
 
 Record every command, pass/fail result, issue count, and accepted concern in
-`.tmp/final-validation.md`. The file must name all five commands before the
-prototype can be reported complete or converted.
+`.tmp/final-validation.md`. It must name route, screen-contract, static AST,
+TypeScript, LTR browser, RTL browser, changed-file, and Tier 3 device stages
+before the prototype can be reported complete or converted.
 
 Run the mandatory changed-file dispatcher against every file written by this
 workflow or its agents. Pass explicit files, not directories:
@@ -692,6 +693,36 @@ Wait for it to complete. If it modifies any UI files, run:
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 to guarantee it didn't break TS typing.
+
+### Step 9.7 - Native Device Evidence
+
+Generate probe contracts from the final structured plan and run the Tier 3
+checks after all UI edits:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-device-contract.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/harness/device/run.js" \
+  --project "$PROJECT_DIR" \
+  --check all \
+  --boot
+```
+
+The runner uses `simctl` for simulator selection, app-install verification,
+and screenshots, and Maestro for native accessibility assertions. It checks
+resolved heading/body font probes, every planned tab, and each form's primary
+CTA while the keyboard remains open.
+
+Without `--full-device`, an unavailable simulator, Maestro installation, app
+binary, or probe is emitted as `NOT RUN`, persisted in
+`.tmp/device-check-results.json`, and carried into final
+`DONE_WITH_CONCERNS`. An executed failing check remains blocking.
+
+When `--full-device` is present in the original arguments, add `--full` to the
+runner command. A full device pass succeeds only when the report contains zero
+`NOT_RUN` results and zero failures; missing evidence is blocking. If contract
+generation fails only because the earlier plan was thin, standard mode records
+that as `NOT RUN`; full mode blocks. Any other contract-generation failure
+blocks in both modes.
 
 After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.
@@ -755,6 +786,7 @@ Next: iterate with /edit-app, or run /prototype-to-real-app when the data model 
 ```
 
 Use `DONE_WITH_CONCERNS: <concerns>` when a thin plan forced serial scheduling,
-a non-blocking connector stub remains, or a visual review concern remains.
+Tier 3 contains `NOT RUN`, a non-blocking connector stub remains, or a visual
+review concern remains.
 Never use `DONE` when the screen-plan compiler returned concerns or when a
 route, contract, quality, contrast, changed-file, or TypeScript gate failed.

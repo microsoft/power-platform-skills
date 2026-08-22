@@ -44,6 +44,8 @@ test('generates noun-labelled tabs from navigation contracts using brand tokens'
   assert.match(layout, /title: "Profile"/);
   assert.match(layout, /tabBarActiveTintColor: tokens\.color\.primary/);
   assert.match(layout, /tabBarInactiveTintColor: tokens\.color\.textMuted/);
+  assert.match(layout, /tabBarTestID: "device-tab:inspections"/);
+  assert.match(layout, /tabBarTestID: "device-tab:assets"/);
   assert.doesNotMatch(layout, /statusSuccess|statusWarning|statusDanger|statusInfo/);
   assert.match(layout, /dataMode !== 'prototype'/);
   const inner = fs.readFileSync(path.join(root, 'app', '(app)', 'inspections', '_layout.tsx'), 'utf8');

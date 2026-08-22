@@ -6,7 +6,7 @@ Project-local plans, contracts, vocabulary, and brand artifacts remain authorita
 
 ## Source Digests
 - `shared/references/screen-templates.md`: `97eeefa6c62ee29b65c954c4230859b8983bd5c02c4603bb58dd2499c5bb4129`
-- `shared/samples/src/components/index.tsx`: `915a2d22249c4c42c590e55e274452821ecab8ddbf1a2a6ee7a7c70f021fe077`
+- `shared/samples/src/components/index.tsx`: `49208a311fd47dd90535fd863d158a5a8cb30b28b6277aea9ddfbceddcb35ce1`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
 - `shared/contracts/plan.schema.json`: `7a91aa9fddb39b7bfee2c4f1368ee7480ea203b7aca193289892dc58b7728e96`

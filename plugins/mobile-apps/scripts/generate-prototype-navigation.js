@@ -99,6 +99,7 @@ function renderTabs(tabs, hiddenEntries) {
       name=${JSON.stringify(tab.entry)}
       options={{
         title: ${JSON.stringify(tab.label)},
+        tabBarTestID: ${JSON.stringify(`device-tab:${tab.id}`)},
         tabBarIcon: ({ color }) => (
           <Ionicons name=${JSON.stringify(tab.icon)} size={tokens.size.iconSize} color={color} />
         ),
@@ -175,7 +176,7 @@ function buildNavigation(markdown) {
         fail(`Tab-root ${row.Screen} must use navigate intent, not ${contract.Intent}`);
       }
       const label = tabLabel(row);
-      return { entry: info.entry, icon: iconFor(label), label, route: row.Route };
+      return { id: row.ID || info.entry, entry: info.entry, icon: iconFor(label), label, route: row.Route };
     });
   if (tabs.length === 0) fail('Tabs navigation requires at least one Tab-root screen');
   const duplicateEntries = tabs.filter((tab, index) => tabs.findIndex((candidate) => candidate.entry === tab.entry) !== index);

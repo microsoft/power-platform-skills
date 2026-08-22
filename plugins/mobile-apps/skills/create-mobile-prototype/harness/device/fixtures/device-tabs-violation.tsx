@@ -1,0 +1,1 @@
+export const fixture = { contract: { tabs: [{ id: 'device-tab:home', label: 'Home' }, { id: 'device-tab:profile', label: 'Profile' }] }, evidence: { executed: true, exitCode: 1, output: 'profile tab clipped', screenshot: '/tmp/tabs.png' } };

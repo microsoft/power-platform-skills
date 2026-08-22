@@ -764,11 +764,11 @@ export function ScreenHeader({
       <XStack items="center" justify="space-between" gap="$3">
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            <Text testID="device-font:heading" fontFamily="$heading" fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
             {status}
           </XStack>
           {subtitle && (
-            <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
+            <Text testID="device-font:body" fontFamily="$body" fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
           )}
         </YStack>
         {rightAction}
