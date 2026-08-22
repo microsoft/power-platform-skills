@@ -24,6 +24,7 @@ function parseArgs(argv) {
     if (value === '--project') result.project = argv[++index];
     else if (value === '--screen') result.screens.push(argv[++index]);
     else if (value === '--check') result.check = argv[++index];
+    else if (value === '--report') result.report = argv[++index];
     else if (value === '--chrome') result.chrome = argv[++index];
     else if (value === '--safe-area-bottom') result.safeAreaBottom = Number(argv[++index]);
     else if (value === '--viewport') {
@@ -631,11 +632,16 @@ async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) 
     fs.writeFileSync(path.join(outputDir, 'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta id="harness-snapshot" data-value=""><style>html,body,#root{width:100%;height:100%;margin:0;overflow:hidden}*{box-sizing:border-box}</style><script>globalThis.__HARNESS_ERRORS=[];addEventListener('error',function(event){globalThis.__HARNESS_ERRORS.push(String(event.error&&event.error.stack||event.message));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});addEventListener('unhandledrejection',function(event){globalThis.__HARNESS_ERRORS.push(String(event.reason&&event.reason.stack||event.reason));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});</script></head><body><div id="root"></div><script src="./bundle.js"></script></body></html>`);
     browser = await launchChrome(chrome, userDataDir, options);
     const captures = [];
+    const screenshotDir = path.join(projectDir, '.tmp', 'prototype-harness-screens');
+    fs.rmSync(screenshotDir, { recursive: true, force: true });
+    fs.mkdirSync(screenshotDir, { recursive: true });
     for (const screenPath of screenPaths) {
       const screenRelative = path.relative(projectDir, screenPath).split(path.sep).join('/');
       const url = `${pathToFileURL(path.join(outputDir, 'index.html')).href}?screen=${encodeURIComponent(screenRelative)}`;
       const captured = await capturePage(browser.port, url, options);
-      captures.push({ screenPath, screenRelative, snapshot: decodeSnapshot(captured.html), image: captured.image });
+      const screenshotPath = path.join(screenshotDir, `${screenRelative.replace(/[^a-z0-9]+/gi, '-')}.png`);
+      fs.writeFileSync(screenshotPath, captured.image);
+      captures.push({ screenPath, screenRelative, screenshotPath, snapshot: decodeSnapshot(captured.html), image: captured.image });
     }
     const contactSheet = await writeContactSheet(browser.port, outputDir, captures, options, projectDir);
     return { captures, contactSheet };
@@ -651,6 +657,42 @@ async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) 
     }
     fs.rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
+}
+
+function splitFailure(message, rule) {
+  const match = String(message).match(/^(.*?)(?:,?\s+expected\s+|\s+is below\s+)(.+)$/i);
+  return match
+    ? { actual: match[1].trim(), expected: match[2].trim() }
+    : { actual: String(message), expected: rule };
+}
+
+function sourceLine(screenPath, message) {
+  if (!screenPath || !fs.existsSync(screenPath)) return 1;
+  const lines = fs.readFileSync(screenPath, 'utf8').split('\n');
+  const identifiers = [...String(message).matchAll(/[a-z][a-z0-9]+(?::[a-z0-9-]+)+/gi)].map((match) => match[0]);
+  const index = identifiers.length > 0 ? lines.findIndex((line) => identifiers.some((identifier) => line.includes(identifier))) : -1;
+  return index >= 0 ? index + 1 : 1;
+}
+
+function renderFinding(entry, label, message, renderedItem, contactSheet, state = 'OPEN') {
+  const evidence = splitFailure(message, entry.rule);
+  return {
+    id: entry.id,
+    class: entry.class,
+    file: renderedItem?.context.screenRelative || label,
+    line: sourceLine(renderedItem?.context.screenPath, message),
+    actual: evidence.actual,
+    expected: evidence.expected,
+    screenshot: renderedItem?.screenshotPath || contactSheet,
+    state,
+  };
+}
+
+function writeFindingsReport(projectDir, reportPath, findings) {
+  const destination = path.resolve(projectDir, reportPath || '.tmp/prototype-harness-findings.json');
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, `${JSON.stringify({ findings }, null, 2)}\n`);
+  return destination;
 }
 
 async function main() {
@@ -684,7 +726,8 @@ async function main() {
   for (const screen of screens) if (!fs.existsSync(screen)) fail(`screen not found: ${screen}`);
   const renderedResult = await renderScreens(esbuild, projectDir, screens, options, chrome);
   console.log(`prototype-harness: CONTACT SHEET ${renderedResult.contactSheet}`);
-  const rendered = renderedResult.captures.map(({ screenPath, screenRelative, snapshot }) => ({
+  const rendered = renderedResult.captures.map(({ screenPath, screenRelative, screenshotPath, snapshot }) => ({
+    screenshotPath,
     snapshot,
     context: {
       ...baseContext,
@@ -704,28 +747,35 @@ async function main() {
   if (renderFailures.length > 0) fail(`render failed\n- ${renderFailures.join('\n- ')}`);
 
   const blockingFailures = [];
+  const structuredFindings = [];
   for (const entry of entries) {
     const check = require(path.join(CHECKS_DIR, `${entry.module}.js`));
     if ((check.scope || 'screen') !== entry.scope) fail(`${entry.id} scope disagrees with its module`);
     const failures = [];
-    const inspect = (result, label) => {
+    const inspect = (result, label, renderedItem) => {
       if (result.notRun) {
         console.log(`prototype-harness: NOT RUN ${entry.id} ${label} reason=${JSON.stringify(result.failures.join('; '))}`);
         failures.push(`${label}: NOT RUN: ${result.failures.join('; ')}`);
-      } else if (!result.pass) failures.push(`${label}: ${result.failures.join('; ')}`);
+        for (const message of result.failures) structuredFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet, 'NOT_RUN'));
+      } else if (!result.pass) {
+        failures.push(`${label}: ${result.failures.join('; ')}`);
+        for (const message of result.failures) structuredFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet));
+      }
       else if (result.reportOnly || entry.scope === 'app') console.log(`prototype-harness: REPORT ${entry.id} ${label} details=${JSON.stringify(result.report || {})}`);
       else console.log(`prototype-harness: PASS ${entry.id} ${label}`);
     };
     if (entry.scope === 'app') inspect(check.runApp(rendered, baseContext), 'app');
-    else for (const item of rendered) inspect(check.run(item.snapshot, item.context), item.context.screenRelative);
+    else for (const item of rendered) inspect(check.run(item.snapshot, item.context), item.context.screenRelative, item);
     if (failures.length > 0) {
       if (entry.blocking) blockingFailures.push(`${entry.id}: ${failures.join(' | ')}`);
       else console.log(`prototype-harness: REPORT ${entry.id} non-blocking findings=${JSON.stringify(failures)}`);
     }
   }
+  const reportPath = writeFindingsReport(projectDir, options.report, structuredFindings);
+  console.log(`prototype-harness: FINDINGS ${reportPath}`);
   if (blockingFailures.length > 0) fail(`blocking checks failed\n- ${blockingFailures.join('\n- ')}`);
 }
 
 if (require.main === module) main().catch((error) => fail(error.stack || error.message));
 
-module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, heroContract, parseArgs, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions };
+module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, heroContract, parseArgs, renderFinding, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions, sourceLine, splitFailure, writeFindingsReport };

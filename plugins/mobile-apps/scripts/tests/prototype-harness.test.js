@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const harnessDir = path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-prototype', 'harness');
+const harness = require(path.join(harnessDir, 'run.js'));
 const cardinality = require(path.join(harnessDir, 'checks', 'cardinality.js'));
 const batchSelection = require(path.join(harnessDir, 'checks', 'batch-selection.js'));
 const carouselCheck = require(path.join(harnessDir, 'checks', 'carousel.js'));
@@ -49,6 +50,21 @@ test('harness contains direct-bundle aliases and browser globals banner', () => 
   assert.match(source, /entrySource\(projectDir, screenPaths/);
   assert.match(source, /prototype-harness: CONTACT SHEET/);
   assert.equal((source.match(/await esbuild\.build\(/g) || []).length, 1);
+});
+
+test('browser findings preserve repair evidence and screenshot without parsing check output later', () => {
+  const finding = harness.renderFinding(
+    { id: 'layout.example', class: 'B', rule: 'clear the footer' },
+    'app/(app)/home.tsx',
+    'footer overlaps button, expected 20px clearance',
+    { context: { screenRelative: 'app/(app)/home.tsx' }, screenshotPath: '/tmp/home.png' },
+    '/tmp/contact.png',
+  );
+  assert.deepEqual(finding, {
+    id: 'layout.example', class: 'B', file: 'app/(app)/home.tsx', line: 1,
+    actual: 'footer overlaps button', expected: '20px clearance',
+    screenshot: '/tmp/home.png', state: 'OPEN',
+  });
 });
 
 test('prototype workflow runs one registry-driven harness pass before design refinement', () => {

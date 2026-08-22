@@ -561,12 +561,17 @@ Run in this order from `PROJECT_DIR`:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md"
+node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all \
+  || node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" class-a --project "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-Stop at the first failing stage, repair that stage, and rerun it before moving
-on. Do not run real schema generation in prototype mode.
+Class A is deterministic only. The repair runner uses TypeScript AST locations,
+makes no model call, runs `type-check` after its pass, and restores every file
+if that check fails. An unhandled Class A finding is emitted as `OPEN` to the
+panel and remains blocking according to the registry. Never send Class A to a
+model. Do not run real schema generation in prototype mode.
 
 Then run the direct-component harness once. It creates one bundle containing
 every signed-in screen, opens one headless Chrome process with one page target
@@ -578,6 +583,34 @@ node "${CLAUDE_SKILL_DIR}/harness/run.js" \
   --project "$PROJECT_DIR" \
   --check all
 ```
+
+The harness always writes `.tmp/prototype-harness-findings.json` and stable
+per-screen screenshots under `.tmp/prototype-harness-screens/`, including on a
+blocking check failure. After that first pass, prepare bounded Class B repair:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" prepare-b \
+  --project "$PROJECT_DIR"
+```
+
+If its status is `repair`, read only
+`.mobile-build/repair-request.json`. Each item contains exactly `file`, `line`,
+`actual`, `expected`, and `screenshot`; do not expose the registry ID or check
+name to the repair model. Apply one targeted pass to the named files, then run:
+
+```bash
+npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/harness/run.js" --project "$PROJECT_DIR" --check all
+node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" assess-b \
+  --project "$PROJECT_DIR"
+```
+
+Repeat only when `assess-b` returns `continue`, using its newly written request.
+There are at most two Class B model rounds. Stop immediately when findings fail
+to decrease or reshape into a new file/check/expectation. On completion or stop,
+the controller emits each unresolved result once as an `OPEN` panel event.
+Blocking unresolved findings stop the workflow; non-blocking ones are recorded
+as concerns.
 
 The harness must use the generated project's own `esbuild`, React, Tamagui,
 and React Native Web dependencies. Do not replace it with a full Expo web build

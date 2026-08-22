@@ -279,4 +279,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { blockingFindings, findProjectRoot, isWatchedFile, lintFile, lintSource, runFiles, runHook };
+module.exports = { blockingFindings, collect, findProjectRoot, isWatchedFile, lintFile, lintSource, runFiles, runHook };
