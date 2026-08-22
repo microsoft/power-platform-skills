@@ -141,6 +141,29 @@ Edit only the selected design dimension in the plan. Do not invoke
 `/design-system` here because that mutates `brand/`; `/edit-app --apply-plan`
 owns the later brand/token update.
 
+Inspect the current block before editing:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md" --json --allow-fallback
+```
+
+If it is malformed, do not preserve or partially patch it: resolve a complete
+catalogue bundle, apply the requested dimension to that bundle, and surface the
+fallback as a concern. Write the complete result to
+`.mobile-build/design-direction-input.json`, then atomically replace and verify
+it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/write-design-direction.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --input "<working_dir>/.mobile-build/design-direction-input.json"
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md"
+```
+
+Do not report the Design Direction edit complete if strict validation fails.
+
 Parse every agent result using the literal first-line status protocol. Retry
 `NEEDS_CONTEXT` at most twice, surface `DONE_WITH_CONCERNS`, and stop on
 `BLOCKED` or malformed status.

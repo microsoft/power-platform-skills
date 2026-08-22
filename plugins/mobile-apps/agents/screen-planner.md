@@ -114,7 +114,19 @@ If the planner's prompt includes an industry, use the matching catalogue keys al
 
 ### Step 0b — Load Design Direction (if present)
 
-Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
+Inspect `<working_dir>/native-app-plan.md` through the shared validator:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md" --json --allow-fallback
+```
+
+Use the returned bundle only when `present: true`, `valid: true`, and
+`effective: "bundle"`. If the block is absent or malformed, treat it as
+missing and use catalogue defaults; never parse a partial bundle around errors.
+Surface a malformed block as a concern, but do not block screen planning. For a
+valid block, use these values as **defaults** for the per-screen design fields
+you produce in Step 4:
 
 - `density` → defaults `Density mode`
 - `surface` → defaults `Surface style`
@@ -127,7 +139,7 @@ Per-screen specs may still override (a celebration screen can be expressive in a
 
 **Also check for `<working_dir>/brand/design-system.md`** — if it exists, it takes priority over `## Design Direction` for palette, typography, components, and negatives. Read its `## Palette`, `## Typography`, `## Components`, and `## Negatives` sections and use them as the authoritative design defaults for all per-screen specs. The `## Negatives` section contains HARD RULES — no per-screen spec may violate them.
 
-**If neither `## Design Direction` nor `brand/design-system.md` exists**, fall back to the context pack catalogue and `mobile-design-philosophy.md`. Do not block on their absence.
+**If neither a valid `## Design Direction` bundle nor `brand/design-system.md` exists**, fall back to the context pack catalogue and `mobile-design-philosophy.md`. Do not block on their absence.
 
 ---
 

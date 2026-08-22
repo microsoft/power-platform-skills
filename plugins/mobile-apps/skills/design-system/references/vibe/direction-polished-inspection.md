@@ -22,7 +22,9 @@ palette: cool-gray + power-platform-green
 typography: sans-only
 heading_font: Inter
 body_font: Inter
+body_size: 16pt
 body_size_min: 16pt
+heading_letter_spacing: 0
 list_style: card-with-status-stripe
 density: comfortable
 motion: functional-only (skeleton + press + screen-enter)
@@ -30,6 +32,7 @@ status_saturation: full (kept on pills + stripes only)
 status_pill_style: soft-tint-bg-with-full-hue-text
 empty_state: icon-sentence-bigbutton
 primary_action_shape: bottom-right-FAB-OR-rectangular-bottom-pinned
+primary_action_position: bottom-right-FAB-or-bottom-pinned
 primary_action_min_height: 56pt
 accent_color: power-platform-green (#007d48)
 secondary_accents: none — no decorative colors

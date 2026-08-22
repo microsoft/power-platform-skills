@@ -106,15 +106,14 @@ If `## Design Direction` is absent, the builder uses today's defaults from `mobi
 Both planner and builder use a single conditional check at the top of their workflow:
 
 ```text
-Read native-app-plan.md
-If "## Design Direction" section exists:
-  Parse the bundle into a config object
+Run validate-design-direction.js native-app-plan.md --json --allow-fallback
+If present=true AND valid=true AND effective="bundle":
   Use config values as defaults for design decisions
 Else:
-  Use existing industry-inferred defaults
+  Treat the block as missing and use existing catalogue defaults
 ```
 
-This is the only integration point between the internal style picker and the rest of the system. If `## Design Direction` is absent, existing agents fall back to the `Else` branch automatically.
+This is the only integration point between the internal style picker and the rest of the system. If `## Design Direction` is absent or malformed, agents fall back to the `Else` branch automatically and never salvage individual keys from an invalid block.
 
 ## Validation rules
 
@@ -126,8 +125,22 @@ This is the only integration point between the internal style picker and the res
 
 If the block is malformed, downstream agents should treat it as missing and fall back to the `Else` branch. They should NOT attempt to parse around errors.
 
+Writers create `.mobile-build/design-direction-input.json` and invoke:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/write-design-direction.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --input "<working_dir>/.mobile-build/design-direction-input.json"
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md"
+```
+
+The first command atomically inserts or replaces exactly one block; the second
+is strict and rejects malformed output. Consumers use `--allow-fallback` so an
+invalid legacy block behaves exactly like an absent block.
+
 ## Re-running the style picker
 
-Each `/design-system --reskin` run that uses the style picker REPLACES the existing `## Design Direction` block (does not append). The previous direction is logged in `memory-bank.md` under `## Design history` so the team has an audit trail.
+Each `/design-system --reskin` run that uses the style picker REPLACES the existing `## Design Direction` block (does not append). The writer returns `previousDirection`; log it in `memory-bank.md` under `## Design history` after the validated replacement succeeds so the team has an audit trail.
 
 If the user re-runs after screens have been built, `/edit-app` should be the next step to regenerate affected screens with the new direction's defaults.

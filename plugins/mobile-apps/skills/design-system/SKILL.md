@@ -188,18 +188,45 @@ unmatched brief resolves to the catalogue's `polished-inspection` default.
 
 Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 
+**Persist direction procedure (required before every branch returns):** Resolve
+the complete bundle from the picked direction or resolver source. If
+`native-app-plan.md` exists, write
+`.mobile-build/design-direction-input.json` with:
+
+- `picked`: visible direction name or Hybrid composition;
+- `referenceApps`: at least two entries from the direction source;
+- `pickedAt`: current ISO 8601 timestamp;
+- `bundle`: all keys required by
+  [`references/vibe/design-bundle-schema.md`](./references/vibe/design-bundle-schema.md).
+
+Then run both commands:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/write-design-direction.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --input "<working_dir>/.mobile-build/design-direction-input.json"
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md"
+```
+
+The writer atomically inserts or replaces exactly one block. Log its returned
+`previousDirection` in `memory-bank.md` after success. A write or validation
+failure is `BLOCKED`; never return `DONE` with a partial or malformed block.
+When no plan exists (standalone design-system use), skip only the plan write.
+
 **Branches:**
 - **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
-- **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand apply** → skip Sub-steps 3–6, write brand tokens, refresh the live panel, and proceed to Sub-step 7.
+- **(b)** → skip the Sub-step 3 picker, resolve the complete chosen source bundle in chat, run the persist direction procedure, then run Sub-steps 4–7 (spec + gallery + confirmation)
+- **(c) Brand apply** → skip Sub-steps 3–6, write brand tokens, run the persist direction procedure using the resolver direction plus brand inputs, refresh the live panel, and proceed to Sub-step 7.
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
   1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
   Load exactly the resolver's `source`; do not derive a filename or apply a
   local fallback. Skip the full `brand/design-system.md` write — only
   `brand/tokens.ts` is needed. Record `direction`, `source`, and `reason` in
   `memory-bank.md` so future runs reproduce the decision.
-  2. **Panel refresh** — run the prototype panel installer and print its stable URL. Do not render screen HTML; the running device is visual truth.
-  3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
+  2. **Persist direction** — run the persist direction procedure with the exact resolver source bundle.
+  3. **Panel refresh** — run the prototype panel installer and print its stable URL. Do not render screen HTML; the running device is visual truth.
+  4. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
   **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens and refresh the panel before the device verification phase.
 
@@ -256,6 +283,10 @@ If brand_notes or --logo palette exist, prepend banner showing inferred recommen
 - Retry cap: max 2 regenerates
 
 Store result as `picked_direction` with all resolved dimensions.
+
+Run the persist direction procedure above before Sub-step 4. The style-picker
+result is incomplete unless it supplies all schema keys; treat a partial result
+as `BLOCKED` rather than filling missing values from memory.
 
 ---
 

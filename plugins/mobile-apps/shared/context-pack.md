@@ -11,12 +11,13 @@ Project-local plans, contracts, vocabulary, and brand artifacts remain authorita
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
 - `shared/contracts/plan.schema.json`: `7a91aa9fddb39b7bfee2c4f1368ee7480ea203b7aca193289892dc58b7728e96`
 - `skills/design-system/references/vibe/design-directions.md`: `df7852b1031e9d8922c06b4b5b4a49580674b10a51647367c715cc04ddc82463`
-- `skills/design-system/references/vibe/direction-carrier-consumer.md`: `5cc9562a4d6209265286c57ccb33b9a0418733678c14eb89626f1ee8fb46d839`
-- `skills/design-system/references/vibe/direction-airline.md`: `5d55c621ed8f6049a39fdef339049e87187dff5f2d678fc3ca59abae82423d35`
-- `skills/design-system/references/vibe/direction-inspection.md`: `2fcb57570825f58f4a1f5490248ca09b95aa6d53c6205f2c80cadbdb91b27eb8`
+- `skills/design-system/references/vibe/design-bundle-schema.md`: `2c136432b3c8227e96a14e9a899a8e04ecc2da4fc051a62931f5bd403cbcaa8c`
+- `skills/design-system/references/vibe/direction-carrier-consumer.md`: `b136c1a56c9f341100b4de2470d0d9c3b8b12d8d6830133211c6eedccd1af4a9`
+- `skills/design-system/references/vibe/direction-airline.md`: `2a5175feb87617e52e0d1825306c792d5849c3d830542158b068522b938cbcae`
+- `skills/design-system/references/vibe/direction-inspection.md`: `5a6433539e79f86f4bf8f9010cfe978ef29e62c5926706bc94519cc0cc9e62c7`
 - `skills/design-system/references/vibe/direction-product.md`: `d41458e5f6fac2eec38a894578c7af01e51c252788b5c7fea42e78b30e66f8cd`
-- `skills/design-system/references/vibe/direction-saas.md`: `1c0fac7e427bab882f4c2a7ac9acddb49d98d5bc60080572e7a531a82307d7f1`
-- `skills/design-system/references/vibe/direction-polished-inspection.md`: `525c95405df3f05435a184dfdf3a081be1fc3100c19a2322430e63b0ce22e16b`
+- `skills/design-system/references/vibe/direction-saas.md`: `e67963d86b57e419b3c5fbf9c5514daee30cd9cb113e9519f4989c7efca06534`
+- `skills/design-system/references/vibe/direction-polished-inspection.md`: `d4338c123d70d4067b5eecfb1515ce5462bc657848d6d165901ab67147554744`
 - `shared/references/derivation-contract.md`: `127cdd9d985496d1a580dc9ebb118bb2f6b7b563d564a4bd488425c9a62f33c2`
 - `shared/references/i18n-rtl.md`: `7711f31659b4a7e9e9654c9b6801ee33012d9578497a201be13e198292e6482e`
 
@@ -263,6 +264,11 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 - `product` — Consumer and experience-led products
 - `saas` — Familiar enterprise and internal tools
 - `polished-inspection` — Demo-friendly enterprise operations default
+
+## Design Direction Block Contract
+- Required keys: `direction`, `surface`, `background`, `palette`, `typography`, `heading_font`, `body_font`, `body_size`, `heading_letter_spacing`, `list_style`, `density`, `motion`, `status_saturation`, `empty_state`, `primary_action_shape`, `primary_action_position`, `accent_color`, `tone`.
+- Consumers run `validate-design-direction.js --json --allow-fallback` and use only a valid effective bundle.
+- Writers run `write-design-direction.js`, then strict `validate-design-direction.js`; malformed blocks are never partially parsed.
 
 ## Derivation Contract
 1. **Every screen states a fact.** The largest text is a sentence about a

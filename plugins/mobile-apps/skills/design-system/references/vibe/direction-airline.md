@@ -21,6 +21,7 @@ typography: sans-only
 heading_font: Inter
 body_font: Inter
 body_size: 15pt
+heading_letter_spacing: 0
 list_style: row-with-chevron
 density: comfortable
 motion: subtle

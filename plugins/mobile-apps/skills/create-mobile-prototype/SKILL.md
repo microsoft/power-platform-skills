@@ -595,6 +595,8 @@ Run in this order from `PROJECT_DIR`:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-direction.js" \
+  "$PROJECT_DIR/native-app-plan.md" --json --allow-fallback
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md"
 node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all \
   || node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" class-a --project "$PROJECT_DIR"
@@ -607,6 +609,10 @@ makes no model call, runs `type-check` after its pass, and restores every file
 if that check fails. An unhandled Class A finding is emitted as `OPEN` to the
 panel and remains blocking according to the registry. Never send Class A to a
 model. Do not run real schema generation in prototype mode.
+
+If Design Direction validation reports `present: true` and `valid: false`,
+record the fallback as a concern and verify that builders used catalogue
+defaults. Do not salvage individual values from the malformed block.
 
 Then run the direct-component harness once. It creates one bundle containing
 every signed-in screen, opens one headless Chrome process with one page target
@@ -662,9 +668,10 @@ visible text nodes in the first viewport, and reports the comparison floor:
 measurement-only: record `wouldMeetFloor`, but do not fail generation on it.
 
 Record every command, pass/fail result, issue count, and accepted concern in
-`.tmp/final-validation.md`. It must name route, screen-contract, static AST,
-TypeScript, LTR browser, RTL browser, changed-file, and Tier 3 device stages
-before the prototype can be reported complete or converted.
+`.tmp/final-validation.md`. It must name route, design-direction,
+screen-contract, static AST, TypeScript, LTR browser, RTL browser,
+changed-file, and Tier 3 device stages before the prototype can be reported
+complete or converted.
 
 Run the mandatory changed-file dispatcher against every file written by this
 workflow or its agents. Pass explicit files, not directories:

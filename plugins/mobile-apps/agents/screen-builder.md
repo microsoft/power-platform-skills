@@ -481,7 +481,20 @@ Apply the **Tamagui × Expo scope rule** from Hard Rules above. The Expo `buildi
 
 ## Step 1a — Read `## Design Direction` (if present)
 
-After reading your per-screen spec, also check `<plan_path>` for a `## Design Direction` section. **If it exists**, parse the YAML-style bundle and use these values as defaults wherever the per-screen spec is silent:
+After reading your per-screen spec, inspect `<plan_path>` through the shared
+validator:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<plan_path>" --json --allow-fallback
+```
+
+Use the returned bundle only when `present: true`, `valid: true`, and
+`effective: "bundle"`. If absent or malformed, treat it as missing and use the
+normal catalogue defaults; never salvage individual keys from an invalid
+block. A malformed block is a non-blocking concern in your return status. For a
+valid block, use these values as defaults wherever the per-screen spec is
+silent:
 
 - `list_style` (`card-with-status-stripe` / `row-with-chevron` / `sentence`) → which row pattern family to adapt from the user's spec and design direction. Use `shared/samples/` only for API/import idioms, never as copyable layout/content.
 - `motion` (`none` / `subtle` / `liberal-tasteful`) → which animations from the vocabulary are allowed; clamps how many `FadeInUp` staggers, whether parallax is permitted
@@ -494,7 +507,7 @@ After reading your per-screen spec, also check `<plan_path>` for a `## Design Di
 
 Per-screen spec values always win. The Design Direction bundle is the *fallback* for fields the per-screen spec didn't pin.
 
-**If no `## Design Direction` section exists**, use today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`. Do not block on its absence.
+**If no valid `## Design Direction` bundle exists**, use today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`. Do not block on its absence.
 
 ## Step 1b — Read brand/design-system.md (MANDATORY if present)
 

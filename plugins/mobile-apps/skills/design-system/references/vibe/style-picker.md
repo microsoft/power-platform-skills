@@ -63,9 +63,22 @@ record the source direction of every overridden dimension. Never invent a
 partial bundle.
 
 When `sub_step_mode` is false, replace or insert `## Design Direction` before
-`## Design` (or `## Screens`) in `native-app-plan.md` using the schema. Append a
-dated decision and any rejected directions to `memory-bank.md` under
-`## Design history`.
+`## Design` (or `## Screens`) using the deterministic writer. Write
+`.mobile-build/design-direction-input.json` with `picked`, at least two
+`referenceApps`, an ISO `pickedAt`, and a `bundle` containing every key from
+`design-bundle-schema.md`, then run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/write-design-direction.js" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --input "<working_dir>/.mobile-build/design-direction-input.json"
+node "${PLUGIN_ROOT}/scripts/validate-design-direction.js" \
+  "<working_dir>/native-app-plan.md"
+```
+
+Do not return success if either command fails. Append a dated decision, the
+replaced direction returned by the writer (when present), and any rejected
+directions to `memory-bank.md` under `## Design history` only after validation.
 
 When `sub_step_mode` is true, return:
 
@@ -73,20 +86,27 @@ When `sub_step_mode` is true, return:
 DESIGN_VIBE_RESULT
 direction: <registered direction or Hybrid>
 surface: <value>
+background: <value>
 palette: <value>
 typography: <value>
+heading_font: <font>
+body_font: <font>
+body_size: <pt>
+heading_letter_spacing: <em or 0>
 list_style: <value>
 density: <value>
 motion: <value>
 status_saturation: <value>
 empty_state: <value>
-tone: <value>
 primary_action_shape: <value>
+primary_action_position: <value>
 accent_color: <name (#hex)>
-heading_font: <font>
-body_font: <font>
+tone: <value>
 reference_apps: <comma-separated>
 ```
+
+The caller uses these dimensions to write the validated plan block and
+`brand/design-system.md`. A partial result is `BLOCKED`, not a fallback bundle.
 
 Refresh the live panel after persistence:
 
@@ -98,6 +118,6 @@ node "${PLUGIN_ROOT}/skills/create-mobile-prototype/panel/install.js" "<working_
 
 - Writes only `native-app-plan.md` and `memory-bank.md` outside sub-step mode.
 - Never writes an ephemeral preview file or modifies app source.
-- Re-running replaces the plan block and appends design history.
+- Re-running atomically replaces one validated plan block and appends design history.
 - Screen planner and builders consume `## Design Direction`; absent blocks use
   the catalogue's routed default.

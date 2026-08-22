@@ -26,6 +26,7 @@ typography: display-sans + utility-sans
 heading_font: DM Sans
 body_font: Inter
 body_size: 15pt
+heading_letter_spacing: 0
 list_style: product-card-row
 density: comfortable
 motion: subtle-purposeful
