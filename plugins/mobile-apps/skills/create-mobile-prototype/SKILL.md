@@ -545,45 +545,22 @@ npm --prefix "$PROJECT_DIR" run type-check
 Stop at the first failing stage, repair that stage, and rerun it before moving
 on. Do not run real schema generation in prototype mode.
 
-Then run the direct-component harness. It bundles each signed-in screen without
-starting Expo web, renders it in headless Chrome through the required native
-shims, and blocks on each invariant independently:
+Then run the direct-component harness once. It creates one bundle containing
+every signed-in screen, opens one headless Chrome process with one page target
+per screen, reuses those snapshots across every tier-2 check, and writes
+`.tmp/prototype-harness-contact-sheet.png`:
 
 ```bash
-for CHECK in \
-  scroll-padding \
-  contrast \
-  raw-values \
-  seed-hero \
-  interactive-overlap \
-  primary-label-truncation \
-  cardinality \
-  discipline \
-  conditional \
-  sort \
-  batch-selection \
-  carousel \
-  chart
-do
-  node "${CLAUDE_SKILL_DIR}/harness/run.js" \
-    --project "$PROJECT_DIR" \
-    --check "$CHECK"
-done
+node "${CLAUDE_SKILL_DIR}/harness/run.js" \
+  --project "$PROJECT_DIR" \
+  --check all
 ```
 
 The harness must use the generated project's own `esbuild`, React, Tamagui,
 and React Native Web dependencies. Do not replace it with a full Expo web build
 or suppress a screen that fails to bundle/render.
 
-Finally, report first-viewport seed density without gating completion yet:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/harness/run.js" \
-  --project "$PROJECT_DIR" \
-  --check density | tee "$PROJECT_DIR/.tmp/density-report.txt"
-```
-
-`density` builds its oracle from every generated `*.seed.json`, counts matching
+The non-blocking `density` registry entry builds its oracle from every generated `*.seed.json`, counts matching
 visible text nodes in the first viewport, and reports the comparison floor:
 35 for List/queue screens, 8 for other data-backed screens. This phase is
 measurement-only: record `wouldMeetFloor`, but do not fail generation on it.

@@ -46,17 +46,18 @@ test('harness contains direct-bundle aliases and browser globals banner', () => 
   assert.match(source, /globalThis\.process/);
   assert.match(source, /globalThis\.global/);
   assert.match(source, /prototype-harness: NOT RUN/);
+  assert.match(source, /entrySource\(projectDir, screenPaths/);
+  assert.match(source, /prototype-harness: CONTACT SHEET/);
+  assert.equal((source.match(/await esbuild\.build\(/g) || []).length, 1);
 });
 
-test('prototype workflow runs all six harness checks before design refinement', () => {
+test('prototype workflow runs one registry-driven harness pass before design refinement', () => {
   const skill = fs.readFileSync(path.resolve(harnessDir, '..', 'SKILL.md'), 'utf8');
-  const harnessStep = skill.indexOf('for CHECK in');
+  const harnessStep = skill.indexOf('--check all');
   const refinement = skill.indexOf('### Step 9.6 - Automated Design Refinement');
   assert.ok(harnessStep > 0 && harnessStep < refinement);
-  for (const check of ['scroll-padding', 'contrast', 'raw-values', 'seed-hero', 'interactive-overlap', 'primary-label-truncation', 'cardinality', 'discipline']) {
-    assert.match(skill, new RegExp(check));
-  }
-  assert.match(skill, /--check density/);
+  assert.match(skill, /one bundle containing/);
+  assert.match(skill, /prototype-harness-contact-sheet\.png/);
   assert.match(skill, /measurement-only/);
 });
 
@@ -658,70 +659,69 @@ test('directly bundles and checks three generated app domains', { skip: !depende
   ];
   for (const item of items) {
     const root = generatedFixture(t, dependencyProject, item);
-    for (const check of ['scroll-padding', 'contrast', 'raw-values', 'seed-hero', 'interactive-overlap', 'primary-label-truncation', 'cardinality', 'discipline', 'conditional', 'sort', 'batch-selection', 'carousel', 'chart', 'density']) {
-      const result = spawnSync(process.execPath, [
-        path.join(harnessDir, 'run.js'), '--project', root, '--screen', 'app/(app)/home.tsx', '--check', check,
-      ], { encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
-      assert.equal(result.status, 0, `${item.name} / ${check}\n${result.stdout}\n${result.stderr}`);
-      const reportedCheck = ['density', 'cardinality', 'discipline', 'conditional', 'sort', 'batch-selection', 'carousel', 'chart'].includes(check);
-      assert.match(result.stdout, new RegExp(reportedCheck ? `REPORT ${check}` : `PASS ${check}`));
-      if (check === 'density') {
-        assert.match(
-          result.stdout,
-          /observed=10 floor=35 classification=list-queue wouldMeetFloor=false/,
-        );
-      }
-      if (check === 'cardinality') {
-        assert.match(result.stdout, /"element":"filters","count":6,"expected":"chips-overflow"/);
-        assert.match(result.stdout, /"element":"choice-cr_status"[^\n]+"source":"schema-contract"/);
-        assert.match(result.stdout, /"element":"listRows"[^\n]+"source":"seed-vocabulary"/);
-      }
-      if (check === 'discipline') {
-        for (const metric of ['typeRoles', 'surfaceCount', 'accentBudgets', 'shapeScale', 'iconSizes', 'primaryActions', 'rowSignatures', 'gradients']) {
-          assert.match(result.stdout, new RegExp(`"${metric}"`));
-        }
-        assert.match(result.stdout, /"hardFailures":\[\]/);
-        assert.match(
-          result.stdout,
-          item.photoHero ? /"gradients":\["imageScrim"\]/ : /"gradients":\[\]/,
-        );
-      }
-      if (check === 'conditional') {
-        assert.match(result.stdout, /"fieldVisibilityContracts":1/);
-        assert.match(result.stdout, /"warningRemedyContracts":1/);
-        assert.match(result.stdout, /"inputRoleContracts":1/);
-        assert.match(result.stdout, /"cr_item":\["cube-outline"\]/);
-      }
-      if (check === 'sort') {
-        assert.match(result.stdout, /"optionCount":3/);
-        assert.match(result.stdout, /"expectedPattern":"inline-chips"/);
-        assert.match(result.stdout, /"active":"sort-active:cr_createdat:desc"/);
-      }
-      if (check === 'batch-selection') {
-        assert.match(result.stdout, item.batchMode ? /"applicable":true/ : /"applicable":false/);
-        if (item.batchMode) {
-          assert.match(result.stdout, /"selectedCount":2/);
-          assert.match(result.stdout, /"actionCount":2/);
-          assert.match(result.stdout, /"pattern":"batch-actions:buttons"/);
-        }
-      }
-      if (check === 'carousel') {
-        assert.match(result.stdout, item.carouselMode ? /"applicable":true/ : /"applicable":false/);
-        if (item.carouselMode) {
-          assert.match(result.stdout, /"itemCount":3/);
-          assert.match(result.stdout, /"entity":"cr_item"/);
-        }
-      }
-      if (check === 'chart') {
-        assert.match(result.stdout, item.chartMode ? /"applicable":true/ : /"applicable":false/);
-        if (item.chartMode) {
-          assert.match(result.stdout, /"kind":"series-chart"/);
-          assert.match(result.stdout, /"form":"bar"/);
-          assert.match(result.stdout, /"pointCount":6/);
-          assert.match(result.stdout, /"seriesToken":"seriesPrimary"/);
-          assert.match(result.stdout, /"caption":"42 intakes in the last 6 months"/);
-        }
-      }
+    const result = spawnSync(process.execPath, [
+      path.join(harnessDir, 'run.js'), '--project', root, '--screen', 'app/(app)/home.tsx', '--check', 'all',
+    ], { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+    assert.equal(result.status, 0, `${item.name}\n${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /CONTACT SHEET/);
+    assert.equal(fs.existsSync(path.join(root, '.tmp/prototype-harness-contact-sheet.png')), true);
+    for (const id of ['layout.scroll-padding', 'accessibility.contrast', 'content.raw-values', 'content.seed-hero', 'interaction.overlap', 'content.primary-label']) {
+      assert.match(result.stdout, new RegExp(`PASS ${id}`));
+    }
+    assert.match(result.stdout, /REPORT content\.density[^\n]+"wouldMeetFloor":false/);
+    assert.match(result.stdout, /"element":"filters","count":6,"expected":"chips-overflow"/);
+    assert.match(result.stdout, /"element":"choice-cr_status"[^\n]+"source":"schema-contract"/);
+    assert.match(result.stdout, /"element":"listRows"[^\n]+"source":"seed-vocabulary"/);
+    for (const metric of ['typeRoles', 'surfaceCount', 'accentBudgets', 'shapeScale', 'iconSizes', 'primaryActions', 'rowSignatures', 'gradients']) {
+      assert.match(result.stdout, new RegExp(`"${metric}"`));
+    }
+    assert.match(result.stdout, /"hardFailures":\[\]/);
+    assert.match(result.stdout, item.photoHero ? /"gradients":\["imageScrim"\]/ : /"gradients":\[\]/);
+    assert.match(result.stdout, /"fieldVisibilityContracts":1/);
+    assert.match(result.stdout, /"warningRemedyContracts":1/);
+    assert.match(result.stdout, /"inputRoleContracts":1/);
+    assert.match(result.stdout, /"cr_item":\["cube-outline"\]/);
+    assert.match(result.stdout, /"optionCount":3/);
+    assert.match(result.stdout, /"expectedPattern":"inline-chips"/);
+    assert.match(result.stdout, /"active":"sort-active:cr_createdat:desc"/);
+    if (item.batchMode) {
+      assert.match(result.stdout, /"selectedCount":2/);
+      assert.match(result.stdout, /"actionCount":2/);
+      assert.match(result.stdout, /"pattern":"batch-actions:buttons"/);
+    }
+    if (item.carouselMode) {
+      assert.match(result.stdout, /"itemCount":3/);
+      assert.match(result.stdout, /"entity":"cr_item"/);
+    }
+    if (item.chartMode) {
+      assert.match(result.stdout, /"kind":"series-chart"/);
+      assert.match(result.stdout, /"form":"bar"/);
+      assert.match(result.stdout, /"pointCount":6/);
+      assert.match(result.stdout, /"seriesToken":"seriesPrimary"/);
+      assert.match(result.stdout, /"caption":"42 intakes in the last 6 months"/);
     }
   }
+});
+
+test('one bundle renders seven screens materially faster than seven single runs', { skip: !dependencyProject }, (t) => {
+  const root = generatedFixture(t, dependencyProject, {
+    id: 'perf-001', name: 'North Dock Inspection', location: 'Loading Gate A', statusLabel: 'In review',
+    reference: 'INS-2026-0042', photoHero: false, batchMode: false, carouselMode: false, chartMode: false,
+  });
+  for (let index = 2; index <= 7; index += 1) {
+    write(root, `app/(app)/screen-${index}.tsx`, `export { default } from './home';\n`);
+  }
+  const command = (extra = []) => spawnSync(process.execPath, [
+    path.join(harnessDir, 'run.js'), '--project', root, '--check', 'accessibility.contrast', ...extra,
+  ], { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+  const singleStarted = performance.now();
+  const single = command(['--screen', 'app/(app)/home.tsx']);
+  const singleMs = performance.now() - singleStarted;
+  assert.equal(single.status, 0, `${single.stdout}\n${single.stderr}`);
+  const allStarted = performance.now();
+  const all = command();
+  const allMs = performance.now() - allStarted;
+  assert.equal(all.status, 0, `${all.stdout}\n${all.stderr}`);
+  assert.ok(allMs < singleMs * 7, `seven-screen ${allMs.toFixed(0)}ms versus single ${singleMs.toFixed(0)}ms`);
+  assert.equal(fs.existsSync(path.join(root, '.tmp/prototype-harness-contact-sheet.png')), true);
 });

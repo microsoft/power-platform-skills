@@ -2,10 +2,11 @@
 'use strict';
 
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const checkRegistry = require('./registry');
 
 const HARNESS_DIR = __dirname;
@@ -421,11 +422,13 @@ function publishSnapshot() {
 `;
 }
 
-function entrySource(projectDir, screenPath, options) {
+function entrySource(projectDir, screenPaths, options) {
   const configPath = path.join(projectDir, 'tamagui.config.ts');
   if (!fs.existsSync(configPath)) fail('tamagui.config.ts is required for direct component rendering');
   const providers = discoverProviders(projectDir);
   const providerImport = providers.length > 0 ? `import { ${providers.join(', ')} } from '@/hooks';` : '';
+  const screenImports = screenPaths.map((screenPath, index) => `import Screen${index} from ${JSON.stringify(screenPath)};`).join('\n');
+  const screenMap = screenPaths.map((screenPath, index) => `${JSON.stringify(path.relative(projectDir, screenPath).split(path.sep).join('/'))}: Screen${index}`).join(',\n');
   const wrappedScreen = providers.reduceRight((child, provider) => `<${provider}>${child}</${provider}>`, '<Screen />');
   return `
 import React from 'react';
@@ -435,8 +438,12 @@ import { TamaguiProvider } from 'tamagui';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import tamaguiConfig from ${JSON.stringify(configPath)};
-import Screen from ${JSON.stringify(screenPath)};
+${screenImports}
 ${providerImport}
+
+const screens = { ${screenMap} };
+const screenKey = new URLSearchParams(location.search).get('screen');
+const Screen = screens[screenKey] || Object.values(screens)[0];
 
 globalThis.__HARNESS_ERRORS = globalThis.__HARNESS_ERRORS || [];
 addEventListener('error', (event) => globalThis.__HARNESS_ERRORS.push(String(event.error?.stack || event.message)));
@@ -488,8 +495,115 @@ function decodeSnapshot(html) {
   return JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
 }
 
-async function renderScreen(esbuild, projectDir, screenPath, options, chrome) {
+function requestJson(port, requestPath, method = 'GET') {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ host: '127.0.0.1', port, path: requestPath, method }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) reject(new Error(`Chrome HTTP ${response.statusCode}: ${body}`));
+        else { try { resolve(JSON.parse(body)); } catch (error) { reject(error); } }
+      });
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+function launchChrome(chrome, userDataDir, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(chrome, [
+      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--allow-file-access-from-files',
+      '--remote-debugging-port=0', `--user-data-dir=${userDataDir}`,
+      `--window-size=${options.viewport.width},${options.viewport.height}`, 'about:blank',
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`Chrome DevTools did not start: ${output}`)); }, 10000);
+    const inspect = (chunk) => {
+      output += chunk.toString();
+      const match = output.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
+      if (match) { clearTimeout(timeout); resolve({ child, port: Number(match[1]) }); }
+    };
+    child.stdout.on('data', inspect);
+    child.stderr.on('data', inspect);
+    child.on('exit', (code) => { if (!output.includes('DevTools listening')) { clearTimeout(timeout); reject(new Error(`Chrome exited ${code}: ${output}`)); } });
+  });
+}
+
+class CdpClient {
+  constructor(url) { this.url = url; this.nextId = 1; this.pending = new Map(); }
+  async connect() {
+    this.socket = new WebSocket(this.url);
+    await new Promise((resolve, reject) => { this.socket.addEventListener('open', resolve, { once: true }); this.socket.addEventListener('error', reject, { once: true }); });
+    this.socket.addEventListener('message', (message) => {
+      const payload = JSON.parse(message.data);
+      if (!payload.id || !this.pending.has(payload.id)) return;
+      const { resolve, reject } = this.pending.get(payload.id); this.pending.delete(payload.id);
+      if (payload.error) reject(new Error(payload.error.message)); else resolve(payload.result);
+    });
+  }
+  send(method, params = {}) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.socket.send(JSON.stringify({ id, method, params })); });
+  }
+  close() { this.socket.close(); }
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function capturePage(port, url, options, { screenshot = true } = {}) {
+  const target = await requestJson(port, `/json/new?${encodeURIComponent(url)}`, 'PUT');
+  const client = new CdpClient(target.webSocketDebuggerUrl);
+  await client.connect();
+  try {
+    await client.send('Runtime.enable');
+    await client.send('Page.enable');
+    await client.send('Emulation.setDeviceMetricsOverride', { width: options.viewport.width, height: options.viewport.height, deviceScaleFactor: 1, mobile: false });
+    let html = '';
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const result = await client.send('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });
+      html = result.result.value || '';
+      if (/id="harness-snapshot"[^>]+data-(?:value|error)="[^"]+"/.test(html)) break;
+      await wait(100);
+    }
+    const image = screenshot ? (await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })).data : null;
+    return { html, image: image ? Buffer.from(image, 'base64') : null };
+  } finally {
+    client.close();
+    await requestJson(port, `/json/close/${target.id}`).catch(() => {});
+  }
+}
+
+async function writeContactSheet(port, outputDir, captures, options, projectDir) {
+  const columns = Math.min(3, Math.max(1, captures.length));
+  const width = columns * options.viewport.width;
+  const rows = Math.ceil(captures.length / columns);
+  const html = `<!doctype html><html><head><style>*{box-sizing:border-box}body{margin:0;background:#111;display:grid;grid-template-columns:repeat(${columns},${options.viewport.width}px);gap:12px;padding:12px;color:white;font:14px sans-serif}.item{display:grid;gap:6px}.label{overflow:hidden;white-space:nowrap}.item img{width:${options.viewport.width}px;height:${options.viewport.height}px;object-fit:cover;object-position:top;background:white}</style></head><body>${captures.map((capture) => `<div class="item"><div class="label">${capture.screenRelative}</div><img src="data:image/png;base64,${capture.image.toString('base64')}"></div>`).join('')}</body></html>`;
+  const filePath = path.join(outputDir, 'contact-sheet.html');
+  fs.writeFileSync(filePath, html);
+  const target = await requestJson(port, `/json/new?${encodeURIComponent(pathToFileURL(filePath).href)}`, 'PUT');
+  const client = new CdpClient(target.webSocketDebuggerUrl);
+  await client.connect();
+  try {
+    await client.send('Page.enable');
+    await client.send('Emulation.setDeviceMetricsOverride', { width: width + 24, height: rows * (options.viewport.height + 30) + 24, deviceScaleFactor: 1, mobile: false });
+    await wait(300);
+    const result = await client.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+    const destination = path.join(projectDir, '.tmp', 'prototype-harness-contact-sheet.png');
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.writeFileSync(destination, Buffer.from(result.data, 'base64'));
+    return destination;
+  } finally {
+    client.close();
+    await requestJson(port, `/json/close/${target.id}`).catch(() => {});
+  }
+}
+
+async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) {
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-harness-render-'));
+  const userDataDir = path.join(outputDir, 'chrome-profile');
+  let browser;
   try {
     const bundlePath = path.join(outputDir, 'bundle.js');
     await esbuild.build({
@@ -503,48 +617,43 @@ async function renderScreen(esbuild, projectDir, screenPath, options, chrome) {
       outfile: bundlePath,
       platform: 'browser',
       plugins: [aliasPlugin(projectDir)],
-      stdin: { contents: entrySource(projectDir, screenPath, options), loader: 'tsx', resolveDir: projectDir, sourcefile: 'prototype-harness-entry.tsx' },
+      stdin: { contents: entrySource(projectDir, screenPaths, options), loader: 'tsx', resolveDir: projectDir, sourcefile: 'prototype-harness-entry.tsx' },
       banner: { js: 'globalThis.process = globalThis.process || { env: {} }; globalThis.global = globalThis;' },
     });
     fs.writeFileSync(path.join(outputDir, 'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta id="harness-snapshot" data-value=""><style>html,body,#root{width:100%;height:100%;margin:0;overflow:hidden}*{box-sizing:border-box}</style><script>globalThis.__HARNESS_ERRORS=[];addEventListener('error',function(event){globalThis.__HARNESS_ERRORS.push(String(event.error&&event.error.stack||event.message));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});addEventListener('unhandledrejection',function(event){globalThis.__HARNESS_ERRORS.push(String(event.reason&&event.reason.stack||event.reason));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});</script></head><body><div id="root"></div><script src="./bundle.js"></script></body></html>`);
-    const browser = spawnSync(chrome, [
-      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--allow-file-access-from-files',
-      `--window-size=${options.viewport.width},${options.viewport.height}`, '--virtual-time-budget=3000', '--dump-dom',
-      pathToFileURL(path.join(outputDir, 'index.html')).href,
-    ], { encoding: 'utf8', maxBuffer: 25 * 1024 * 1024 });
-    if (browser.status !== 0) throw new Error(`Chrome exited ${browser.status}: ${browser.stderr.trim()}`);
-    try {
-      return decodeSnapshot(browser.stdout);
-    } catch (error) {
-      const meta = browser.stdout.match(/<meta[^>]*harness-snapshot[^>]*>/)?.[0] || 'snapshot meta missing';
-      throw new Error(`${error.message}; ${meta}; Chrome: ${browser.stderr.trim() || 'no stderr'}`);
+    browser = await launchChrome(chrome, userDataDir, options);
+    const captures = [];
+    for (const screenPath of screenPaths) {
+      const screenRelative = path.relative(projectDir, screenPath).split(path.sep).join('/');
+      const url = `${pathToFileURL(path.join(outputDir, 'index.html')).href}?screen=${encodeURIComponent(screenRelative)}`;
+      const captured = await capturePage(browser.port, url, options);
+      captures.push({ screenPath, screenRelative, snapshot: decodeSnapshot(captured.html), image: captured.image });
     }
+    const contactSheet = await writeContactSheet(browser.port, outputDir, captures, options, projectDir);
+    return { captures, contactSheet };
   } finally {
-    fs.rmSync(outputDir, { recursive: true, force: true });
+    if (browser?.child && browser.child.exitCode === null) {
+      const exited = new Promise((resolve) => browser.child.once('exit', resolve));
+      browser.child.kill('SIGTERM');
+      await Promise.race([exited, wait(1000)]);
+      if (browser.child.exitCode === null) {
+        browser.child.kill('SIGKILL');
+        await Promise.race([exited, wait(1000)]);
+      }
+    }
+    fs.rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const registry = checkRegistry.load();
-  if (options.check === 'all') {
-    for (const entry of registry.filter((candidate) => candidate.tier === 2)) {
-      const args = process.argv.slice(2);
-      args[args.indexOf('--check') + 1] = entry.id;
-      const result = spawnSync(process.execPath, [__filename, ...args], { encoding: 'utf8' });
-      process.stdout.write(result.stdout);
-      process.stderr.write(result.stderr);
-      if (result.status !== 0 && entry.blocking) process.exitCode = 1;
-    }
-    return;
-  }
   const projectDir = path.resolve(options.project);
-  const registryEntry = checkRegistry.resolve(registry, options.check);
-  if (!registryEntry) fail(`unknown or unregistered check ${options.check}`);
-  if (registryEntry.tier !== 2) fail(`${registryEntry.id} is tier ${registryEntry.tier}; run it through its tier runner`);
-  const checkPath = path.join(CHECKS_DIR, `${registryEntry.module}.js`);
-  const check = require(checkPath);
-  if ((check.scope || 'screen') !== registryEntry.scope) fail(`${registryEntry.id} scope disagrees with its module`);
+  const entries = options.check === 'all'
+    ? registry.filter((candidate) => candidate.tier === 2)
+    : [checkRegistry.resolve(registry, options.check)];
+  if (entries.some((entry) => !entry)) fail(`unknown or unregistered check ${options.check}`);
+  if (entries.some((entry) => entry.tier !== 2)) fail(`${entries.find((entry) => entry.tier !== 2).id} is not a render-tier check`);
   const chrome = chromePath(options.chrome);
   if (!chrome) fail('Chrome is required; pass --chrome or set CHROME_PATH');
   let esbuild;
@@ -564,60 +673,50 @@ async function main() {
     seedTexts: seedOracle(projectDir),
     brandTokenSource: fs.existsSync(brandTokenPath) ? fs.readFileSync(brandTokenPath, 'utf8') : '',
   };
-  const failures = [];
-  const appRendered = [];
-  for (const screenPath of screens) {
-    if (!fs.existsSync(screenPath)) fail(`screen not found: ${screenPath}`);
-    try {
-      const snapshot = await renderScreen(esbuild, projectDir, screenPath, options, chrome);
-      if (snapshot.errors.length > 0) throw new Error(`render error: ${snapshot.errors.join(' | ')}`);
-      const screenRelative = path.relative(projectDir, screenPath).split(path.sep).join('/');
-      const context = {
-        ...baseContext,
-        screenPath,
-        screenRelative,
-        screenMeta: screenMetadata(projectDir, screenRelative),
-        cardinalityExpectations: cardinalityExpectations(projectDir, screenRelative),
-        conditionalContracts: conditionalContracts(projectDir, screenRelative),
-        sortOptions: sortOptions(projectDir, screenRelative),
-        batchActions: batchActions(projectDir, screenRelative),
-        carouselContract: carouselContract(projectDir, screenRelative),
-        chartContract: chartContract(projectDir, screenRelative),
-      };
-      if (check.scope === 'app') {
-        appRendered.push({ snapshot, context });
-        continue;
-      }
-      const result = check.run(snapshot, context);
+  for (const screen of screens) if (!fs.existsSync(screen)) fail(`screen not found: ${screen}`);
+  const renderedResult = await renderScreens(esbuild, projectDir, screens, options, chrome);
+  console.log(`prototype-harness: CONTACT SHEET ${renderedResult.contactSheet}`);
+  const rendered = renderedResult.captures.map(({ screenPath, screenRelative, snapshot }) => ({
+    snapshot,
+    context: {
+      ...baseContext,
+      screenPath,
+      screenRelative,
+      screenMeta: screenMetadata(projectDir, screenRelative),
+      cardinalityExpectations: cardinalityExpectations(projectDir, screenRelative),
+      conditionalContracts: conditionalContracts(projectDir, screenRelative),
+      sortOptions: sortOptions(projectDir, screenRelative),
+      batchActions: batchActions(projectDir, screenRelative),
+      carouselContract: carouselContract(projectDir, screenRelative),
+      chartContract: chartContract(projectDir, screenRelative),
+    },
+  }));
+  const renderFailures = rendered.flatMap((item) => item.snapshot.errors.map((error) => `${item.context.screenRelative}: render error: ${error}`));
+  if (renderFailures.length > 0) fail(`render failed\n- ${renderFailures.join('\n- ')}`);
+
+  const blockingFailures = [];
+  for (const entry of entries) {
+    const check = require(path.join(CHECKS_DIR, `${entry.module}.js`));
+    if ((check.scope || 'screen') !== entry.scope) fail(`${entry.id} scope disagrees with its module`);
+    const failures = [];
+    const inspect = (result, label) => {
       if (result.notRun) {
-        console.log(`prototype-harness: NOT RUN ${options.check} ${screenRelative} reason=${JSON.stringify(result.failures.join('; '))}`);
-        failures.push(`${screenRelative}: NOT RUN: ${result.failures.join('; ')}`);
-      } else if (!result.pass) failures.push(`${screenRelative}: ${result.failures.join('; ')}`);
-      else if (result.reportOnly) {
-        const report = result.report || {};
-        const details = options.check === 'density'
-          ? `observed=${report.observed} floor=${report.floor} classification=${report.classification} wouldMeetFloor=${report.wouldMeetFloor}`
-          : `details=${JSON.stringify(report)}`;
-        console.log(`prototype-harness: REPORT ${options.check} ${screenRelative} ${details}`);
-      } else console.log(`prototype-harness: PASS ${options.check} ${screenRelative}`);
-    } catch (error) {
-      failures.push(`${path.relative(projectDir, screenPath)}: ${error.message}`);
+        console.log(`prototype-harness: NOT RUN ${entry.id} ${label} reason=${JSON.stringify(result.failures.join('; '))}`);
+        failures.push(`${label}: NOT RUN: ${result.failures.join('; ')}`);
+      } else if (!result.pass) failures.push(`${label}: ${result.failures.join('; ')}`);
+      else if (result.reportOnly || entry.scope === 'app') console.log(`prototype-harness: REPORT ${entry.id} ${label} details=${JSON.stringify(result.report || {})}`);
+      else console.log(`prototype-harness: PASS ${entry.id} ${label}`);
+    };
+    if (entry.scope === 'app') inspect(check.runApp(rendered, baseContext), 'app');
+    else for (const item of rendered) inspect(check.run(item.snapshot, item.context), item.context.screenRelative);
+    if (failures.length > 0) {
+      if (entry.blocking) blockingFailures.push(`${entry.id}: ${failures.join(' | ')}`);
+      else console.log(`prototype-harness: REPORT ${entry.id} non-blocking findings=${JSON.stringify(failures)}`);
     }
   }
-  if (check.scope === 'app' && failures.length === 0) {
-    const result = check.runApp(appRendered, baseContext);
-    if (result.notRun) {
-      console.log(`prototype-harness: NOT RUN ${options.check} app reason=${JSON.stringify(result.failures.join('; '))}`);
-      failures.push(`app: NOT RUN: ${result.failures.join('; ')}`);
-    } else if (!result.pass) failures.push(`app: ${result.failures.join('; ')}`);
-    else console.log(`prototype-harness: REPORT ${options.check} app details=${JSON.stringify(result.report || {})}`);
-  }
-  if (failures.length > 0) {
-    if (registryEntry.blocking) fail(`${registryEntry.id} failed\n- ${failures.join('\n- ')}`);
-    console.log(`prototype-harness: REPORT ${registryEntry.id} non-blocking findings=${JSON.stringify(failures)}`);
-  }
+  if (blockingFailures.length > 0) fail(`blocking checks failed\n- ${blockingFailures.join('\n- ')}`);
 }
 
 if (require.main === module) main().catch((error) => fail(error.stack || error.message));
 
-module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, parseArgs, screenMetadata, screenSpecBody, seedOracle, sortOptions };
+module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, parseArgs, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions };
