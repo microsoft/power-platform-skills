@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, text: 'TypeError: failed', testId: 'screen:fixture' }] }, context: {} };

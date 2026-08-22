@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [] }, context: { batchActions: [{ key: 'approve', label: 'Approve', destructive: false }] } };

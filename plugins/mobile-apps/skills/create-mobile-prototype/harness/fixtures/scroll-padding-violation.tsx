@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, testId: 'scroll:fixture', rect: { height: 600 }, style: { paddingBottom: '20px' } }, { id: 2, visible: true, testId: 'pinned:actions', rect: { height: 56 }, style: {} }] }, context: { safeAreaBottom: 20 } };

@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [] }, context: { cardinalityExpectations: [{ element: 'filters', count: 6, declaredPattern: 'chips-overflow', source: 'plan' }] } };

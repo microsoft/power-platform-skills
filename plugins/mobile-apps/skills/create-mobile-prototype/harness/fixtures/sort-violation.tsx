@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [] }, context: { sortOptions: [{ field: 'createdon', direction: 'desc', label: 'Newest' }, { field: 'name', direction: 'asc', label: 'Name' }] } };

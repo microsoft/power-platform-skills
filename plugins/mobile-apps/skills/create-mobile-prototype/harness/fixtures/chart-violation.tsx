@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [] }, context: { chartContract: { kind: 'series-chart', form: 'bar', points: 6 }, brandTokenSource: '', projectDir: '$TEMPLATE' } };

@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, text: 'Faint', testId: 'faint', tag: 'span', style: { color: 'rgb(180, 180, 180)', backgroundColor: 'rgb(255, 255, 255)', fontSize: '16px', fontWeight: '400' } }] }, context: {} };

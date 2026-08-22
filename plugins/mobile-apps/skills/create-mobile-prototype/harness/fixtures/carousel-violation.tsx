@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [] }, context: { carouselContract: { entity: 'cr_item', field: 'cr_image', items: 3, queue: false } } };

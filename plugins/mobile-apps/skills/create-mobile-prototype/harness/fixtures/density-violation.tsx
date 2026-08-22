@@ -1,0 +1,1 @@
+export const fixture = { expect: 'report', snapshot: { viewport: { height: 844 }, elements: [{ id: 1, visible: true, text: '', testId: 'row:item:1', rect: { top: 0, bottom: 80 } }] }, context: { seedTexts: ['Record'], screenMeta: { Screen: 'Queue', Archetype: 'List' } } };

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
+const checkRegistry = require('./registry');
 
 const HARNESS_DIR = __dirname;
 const CHECKS_DIR = path.join(HARNESS_DIR, 'checks');
@@ -525,10 +526,24 @@ async function renderScreen(esbuild, projectDir, screenPath, options, chrome) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const registry = checkRegistry.load();
+  if (options.check === 'all') {
+    for (const entry of registry) {
+      const args = process.argv.slice(2);
+      args[args.indexOf('--check') + 1] = entry.id;
+      const result = spawnSync(process.execPath, [__filename, ...args], { encoding: 'utf8' });
+      process.stdout.write(result.stdout);
+      process.stderr.write(result.stderr);
+      if (result.status !== 0 && entry.blocking) process.exitCode = 1;
+    }
+    return;
+  }
   const projectDir = path.resolve(options.project);
-  const checkPath = path.join(CHECKS_DIR, `${options.check}.js`);
-  if (!fs.existsSync(checkPath)) fail(`unknown check ${options.check}`);
+  const registryEntry = checkRegistry.resolve(registry, options.check);
+  if (!registryEntry) fail(`unknown or unregistered check ${options.check}`);
+  const checkPath = path.join(CHECKS_DIR, `${registryEntry.module}.js`);
   const check = require(checkPath);
+  if ((check.scope || 'screen') !== registryEntry.scope) fail(`${registryEntry.id} scope disagrees with its module`);
   const chrome = chromePath(options.chrome);
   if (!chrome) fail('Chrome is required; pass --chrome or set CHROME_PATH');
   let esbuild;
@@ -596,7 +611,10 @@ async function main() {
     } else if (!result.pass) failures.push(`app: ${result.failures.join('; ')}`);
     else console.log(`prototype-harness: REPORT ${options.check} app details=${JSON.stringify(result.report || {})}`);
   }
-  if (failures.length > 0) fail(`${options.check} failed\n- ${failures.join('\n- ')}`);
+  if (failures.length > 0) {
+    if (registryEntry.blocking) fail(`${registryEntry.id} failed\n- ${failures.join('\n- ')}`);
+    console.log(`prototype-harness: REPORT ${registryEntry.id} non-blocking findings=${JSON.stringify(failures)}`);
+  }
 }
 
 if (require.main === module) main().catch((error) => fail(error.stack || error.message));

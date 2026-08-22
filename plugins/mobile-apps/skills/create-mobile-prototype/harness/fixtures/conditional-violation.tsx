@@ -1,0 +1,1 @@
+export const fixture = { rendered: [{ snapshot: { elements: [] }, context: { screenRelative: 'fixture.tsx', conditionalContracts: { visibility: [], warnings: [{ warning: 'warning', remedy: 'fix' }], inputs: [], icons: [] } } }], context: {} };

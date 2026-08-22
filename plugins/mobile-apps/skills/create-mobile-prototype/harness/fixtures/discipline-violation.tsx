@@ -1,0 +1,1 @@
+export const fixture = { rendered: [{ snapshot: { viewport: { width: 390 }, elements: [] }, context: { screenRelative: 'fixture.tsx' } }], context: { brandTokenSource: '' } };
