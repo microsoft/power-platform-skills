@@ -2,6 +2,20 @@
 
 The default productivity look. Familiar, professional, the look people inside an org expect from internal tools. Microsoft 365 / Asana / Salesforce family resemblance.
 
+<!-- TOKENS - machine-readable roles. Every hex below already appears in this file.
+```json
+{
+  "brand": "#4f46e5",
+  "surface0": "#fafafa",
+  "surface1": "#ffffff",
+  "surface2": "#e5e7eb",
+  "ink": "#111827",
+  "headingFont": "Inter, SF Pro, Segoe UI, sans-serif",
+  "bodyFont": "Inter, SF Pro, Segoe UI, sans-serif"
+}
+```
+-->
+
 ## Reference apps
 
 Microsoft Teams mobile, Asana, Slack, Salesforce mobile, Notion (the trustworthy default), GitHub mobile, Jira mobile, Monday.com

@@ -14,6 +14,17 @@ const {
 
 const script = path.resolve(__dirname, '..', 'validate-seed-vocabulary.js');
 
+function additionalPools(prefix) {
+  return {
+    status: [`${prefix} Draft`, `${prefix} Active`, `${prefix} Complete`],
+    priority: [`${prefix} Low`, `${prefix} Medium`, `${prefix} High`],
+    category: [`${prefix} Intake`, `${prefix} Review`, `${prefix} Action`, `${prefix} Archive`],
+    seat: Array.from({ length: 6 }, (_, index) => `${prefix}-${index + 1}A`),
+    flight: Array.from({ length: 4 }, (_, index) => `${prefix}${index + 101}`),
+    url: Array.from({ length: 3 }, (_, index) => `https://${prefix.toLowerCase()}.example/${index + 1}`),
+  };
+}
+
 const cases = [
   {
     brief: 'Build a corporate access control app for security officers and facilities coordinators. They review badge requests for employees and visitors, assign doors in office buildings, record approvals, and investigate expired credentials.',
@@ -28,6 +39,7 @@ const cases = [
         title: ['Review contractor badge request', 'Approve visitor access window', 'Investigate expired credential', 'Assign server room permission', 'Replace damaged employee badge', 'Audit weekend door access'],
         note: ['Photo identification needs review', 'Manager approval is recorded', 'Credential expires after the visit', 'Door assignment follows facilities policy', 'Badge pickup is waiting at reception'],
         role: ['Security officers', 'Facilities coordinators'],
+        ...additionalPools('Access'),
       },
       idFormats: { serial: 'BDG-{seq4}', reference: 'REQ-{year}-{seq4}', code: '{ALPHA2}-{seq3}' },
     },
@@ -45,6 +57,7 @@ const cases = [
         title: ['Review kestrel treatment plan', 'Prepare heron release assessment', 'Record owl feeding response', 'Schedule songbird medical review', 'Transfer tern to recovery enclosure', 'Document eagle wing rehabilitation'],
         note: ['Weight trend supports continued recovery', 'Flight strength needs another assessment', 'Feeding response is improving', 'Release weather window is being monitored', 'Veterinary medication was administered'],
         role: ['Veterinarians', 'Animal care volunteers'],
+        ...additionalPools('Wildlife'),
       },
       idFormats: { serial: 'ANI-{seq4}', reference: 'CASE-{year}-{seq4}', code: '{ALPHA2}-{seq3}' },
     },
@@ -62,6 +75,7 @@ const cases = [
         title: ['Inspect lager fermentation tank', 'Review packaged stout release', 'Record pale ale batch sample', 'Investigate cellar contamination finding', 'Approve seasonal canning run', 'Verify taproom keg quality'],
         note: ['Gravity reading is within target', 'Sample aroma needs laboratory review', 'Packaging seal passed inspection', 'Fermentation temperature remained stable', 'Contamination swab requires follow-up'],
         role: ['Brewers', 'Laboratory technicians'],
+        ...additionalPools('Brewery'),
       },
       idFormats: { serial: 'BAT-{seq4}', reference: 'QC-{year}-{seq4}', code: '{ALPHA2}-{seq3}' },
     },
@@ -93,10 +107,12 @@ test('brief provenance rejects a foreign domain and unmentioned role', () => {
 test('schema validation fails for missing pools and unsupported ID placeholders', () => {
   const vocabulary = structuredClone(cases[1].vocabulary);
   delete vocabulary.pools.door;
+  delete vocabulary.pools.url;
   vocabulary.idFormats.serial = 'ANI-{counter}';
   const result = validateVocabulary(vocabulary, { briefText: cases[1].brief });
   assert.equal(result.valid, false);
   assert.equal(result.errors.includes('pools.door must be an array'), true);
+  assert.equal(result.errors.includes('pools.url must be an array'), true);
   assert.equal(result.errors.includes('idFormats.serial must contain {seq4}'), true);
   assert.equal(result.errors.includes('idFormats.serial uses unsupported placeholder {counter}'), true);
 });

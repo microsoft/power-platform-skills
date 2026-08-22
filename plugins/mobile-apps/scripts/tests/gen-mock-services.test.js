@@ -42,6 +42,12 @@ function makeVocabulary({
       title: ['North dock safety walk', 'Cold room equipment audit', 'Rooftop unit inspection', 'Loading bay compliance review', 'Generator maintenance check', 'Packaging line follow-up'],
       note: ['Evidence requires review', 'Inspection is ready for sign-off', 'Follow-up work is scheduled', 'Equipment readings are within target', 'Site access was confirmed'],
       role: roles,
+      status: ['Draft', 'In progress', 'Complete'],
+      priority: ['Low', 'Medium', 'High'],
+      category: ['Safety', 'Equipment', 'Access', 'Compliance'],
+      seat: ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'],
+      flight: ['INS101', 'INS202', 'INS303', 'INS404'],
+      url: ['https://inspection.example/1', 'https://inspection.example/2', 'https://inspection.example/3'],
       ...pools,
     },
     idFormats: {
@@ -405,6 +411,34 @@ test('generates entity-aware names, distinct sibling lookups and numerics, and o
   }
 });
 
+test('routes passenger and account primary names from entity semantics', (t) => {
+  const vocabulary = makeVocabulary({ domain: 'travel operations', prefix: 'TRV' });
+  const root = makeProject(t, {
+    'brief.md': 'Build travel operations for warehouse technicians.',
+    'native-app-plan.md': '## Data Model\n\nApproved in the contract.\n\n## Connectors\n\nNone.\n',
+    '.tmp/seed-vocabulary.json': JSON.stringify(vocabulary),
+    '.tmp/dataverse-schema-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      tables: [
+        {
+          logicalName: 'cr_passenger', displayName: 'Passenger', plannedDecision: 'create', serviceRequired: true,
+          columns: [{ logicalName: 'cr_name', displayName: 'Name', type: 'string', primaryName: true }],
+        },
+        {
+          logicalName: 'cr_account', displayName: 'Customer Account', plannedDecision: 'create', serviceRequired: true,
+          columns: [{ logicalName: 'cr_name', displayName: 'Name', type: 'string', primaryName: true }],
+        },
+      ],
+    }),
+  });
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+  const passengers = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_passenger.seed.json'), 'utf8'));
+  const accounts = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_account.seed.json'), 'utf8'));
+  assert.equal(passengers.every((row) => vocabulary.pools.person.includes(row.cr_name)), true);
+  assert.equal(accounts.every((row) => vocabulary.pools.company.includes(row.cr_name)), true);
+});
+
 test('three unrelated brief vocabularies produce disjoint rendered strings', (t) => {
   const cases = [
     {
@@ -479,10 +513,12 @@ test('fails closed when the seed vocabulary or a required field pool is missing'
   assert.equal(noVocabulary.status, 1);
   assert.match(noVocabulary.stderr, /missing \.tmp\/seed-vocabulary\.json/);
 
-  writeProjectFile(root, '.tmp/seed-vocabulary.json', vocabularyFile());
+  const incompleteVocabulary = makeVocabulary();
+  delete incompleteVocabulary.pools.status;
+  writeProjectFile(root, '.tmp/seed-vocabulary.json', JSON.stringify(incompleteVocabulary));
   const missingPool = run(root);
   assert.equal(missingPool.status, 1);
-  assert.match(missingPool.stderr, /pool "status" is required/);
+  assert.match(missingPool.stderr, /pools\.status must be an array/);
 });
 
 test('fails closed when a choice label is a raw optionset integer', (t) => {

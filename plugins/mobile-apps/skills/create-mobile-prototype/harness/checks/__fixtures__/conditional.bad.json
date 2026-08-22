@@ -1,0 +1,25 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/conditional-violation.tsx",
+  "rendered": [
+    {
+      "snapshot": {
+        "elements": []
+      },
+      "context": {
+        "screenRelative": "fixture.tsx",
+        "conditionalContracts": {
+          "visibility": [],
+          "warnings": [
+            {
+              "warning": "warning",
+              "remedy": "fix"
+            }
+          ],
+          "inputs": [],
+          "icons": []
+        }
+      }
+    }
+  ],
+  "context": {}
+}

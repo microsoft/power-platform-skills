@@ -129,6 +129,17 @@ test('parses GFM escaped pipes without shifting navigation intent cells', () => 
   assert.equal(validate(plan).valid, true, validate(plan).errors.join('\n'));
 });
 
+test('accepts planner-style per-screen headings and derives routes from fields', () => {
+  const plan = validPlan().replace(
+    /^#### Screen \d+ - (.+?) \(`[^`]+`\)$/gm,
+    '#### $1',
+  );
+  const result = validate(plan);
+
+  assert.equal(result.valid, true, result.errors.join('\n'));
+  assert.equal(result.summary.specs, 3);
+});
+
 test('CLI validates built routes, declared service imports, and parameter reads', (t) => {
   const root = makeBuiltProject(t);
   const result = spawnSync(process.execPath, [script, path.join(root, 'native-app-plan.md')], { encoding: 'utf8' });
@@ -159,6 +170,14 @@ export function useItem(id) { return ItemService.getById(id); }
   );
 
   const result = validate(validPlan(), { projectRoot: root });
+  assert.equal(result.valid, true, result.errors.join('\n'));
+});
+
+test('built validation compares declared and imported service names case-insensitively', (t) => {
+  const plan = validPlan().replaceAll('ItemService', 'itemService');
+  const root = makeBuiltProject(t, plan);
+  const result = validate(plan, { projectRoot: root });
+
   assert.equal(result.valid, true, result.errors.join('\n'));
 });
 

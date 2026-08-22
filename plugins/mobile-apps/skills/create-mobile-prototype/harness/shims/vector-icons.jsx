@@ -1,6 +1,16 @@
 import React from 'react';
+import glyphMap from 'prototype-harness-glyphmaps-Ionicons.json';
+import fontUrl from 'prototype-harness-Ionicons.ttf';
+
+if (typeof document !== 'undefined' && !document.getElementById('ionicons-face')) {
+  const styleElement = document.createElement('style');
+  styleElement.id = 'ionicons-face';
+  styleElement.textContent = `@font-face{font-family:Ionicons;src:url(${fontUrl}) format('truetype');font-display:block}`;
+  document.head.appendChild(styleElement);
+}
 
 function Icon({ name, size = 24, color = 'currentColor', style, testID }) {
+  const codePoint = glyphMap[name];
   return (
     <span
       aria-label={name}
@@ -11,7 +21,10 @@ function Icon({ name, size = 24, color = 'currentColor', style, testID }) {
         color,
         display: 'inline-flex',
         flex: `0 0 ${size}px`,
-        fontSize: Math.max(10, Math.round(size * 0.55)),
+        fontFamily: 'Ionicons',
+        fontSize: size,
+        fontStyle: 'normal',
+        fontWeight: 'normal',
         height: size,
         justifyContent: 'center',
         lineHeight: `${size}px`,
@@ -20,7 +33,7 @@ function Icon({ name, size = 24, color = 'currentColor', style, testID }) {
         ...style,
       }}
     >
-      {'\u25cf'}
+      {codePoint ? String.fromCodePoint(codePoint) : ''}
     </span>
   );
 }

@@ -55,6 +55,6 @@ object icons.
 Run the same registry-driven harness in LTR and Arabic RTL modes:
 
 ```bash
-node harness/run.js --project "$PROJECT_DIR" --check all
-node harness/run.js --project "$PROJECT_DIR" --check all --locale ar
+node harness/run.js --project "$PROJECT_DIR" --checks all
+node harness/run.js --project "$PROJECT_DIR" --checks all --locale ar
 ```

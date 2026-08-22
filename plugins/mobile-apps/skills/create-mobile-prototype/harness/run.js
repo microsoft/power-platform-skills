@@ -8,6 +8,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 const checkRegistry = require('./registry');
+const planContract = require('../../../scripts/lib/plan-contract');
 
 const HARNESS_DIR = __dirname;
 const CHECKS_DIR = path.join(HARNESS_DIR, 'checks');
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     if (value === '--project') result.project = argv[++index];
     else if (value === '--screen') result.screens.push(argv[++index]);
     else if (value === '--check') result.check = argv[++index];
+    else if (value === '--checks') result.checks = String(argv[++index] || '').split(',').map((name) => name.trim()).filter(Boolean);
     else if (value === '--report') result.report = argv[++index];
     else if (value === '--locale') result.locale = argv[++index];
     else if (value === '--chrome') result.chrome = argv[++index];
@@ -34,8 +36,8 @@ function parseArgs(argv) {
       result.viewport = { width: Number(match[1]), height: Number(match[2]) };
     } else fail(`unknown argument ${value}`);
   }
-  if (!result.project || !result.check) {
-    fail('usage: node run.js --project <dir> --check <name> [--screen <tsx>] [--viewport 390x844]');
+  if (!result.project || (!result.check && !result.checks?.length) || (result.check && result.checks?.length)) {
+    fail('usage: node run.js --project <dir> (--check <name> | --checks <name,...>) [--screen <tsx>] [--viewport 390x844]');
   }
   if (!Number.isFinite(result.safeAreaBottom) || result.safeAreaBottom < 0) {
     fail('--safe-area-bottom must be a non-negative number');
@@ -81,8 +83,8 @@ function seedOracle(projectDir) {
 
 function screenMetadata(projectDir, screenRelative) {
   const planPath = path.join(projectDir, 'native-app-plan.md');
-  if (!fs.existsSync(planPath)) return {};
-  const markdown = fs.readFileSync(planPath, 'utf8');
+  const markdown = planContract.readText(planPath, { optional: true });
+  if (markdown === null) return {};
   const sectionStart = markdown.indexOf('### Screen Map\n');
   if (sectionStart < 0) return {};
   const section = markdown.slice(sectionStart + '### Screen Map\n'.length).split(/^###\s/m)[0];
@@ -104,8 +106,8 @@ function screenMetadata(projectDir, screenRelative) {
 
 function screenSpecBody(projectDir, screenRelative) {
   const planPath = path.join(projectDir, 'native-app-plan.md');
-  if (!fs.existsSync(planPath)) return '';
-  const markdown = fs.readFileSync(planPath, 'utf8');
+  const markdown = planContract.readText(planPath, { optional: true });
+  if (markdown === null) return '';
   const headings = [...markdown.matchAll(/^#### Screen \d+ - .+$/gm)];
   for (let index = 0; index < headings.length; index += 1) {
     const candidate = markdown.slice(
@@ -217,11 +219,12 @@ function cardinalityExpectations(projectDir, screenRelative) {
   if (!cardinalityLine) return [];
   let rowCount = null;
   const vocabularyPath = path.join(projectDir, '.tmp', 'seed-vocabulary.json');
-  if (fs.existsSync(vocabularyPath)) rowCount = Number(JSON.parse(fs.readFileSync(vocabularyPath, 'utf8')).rowCount);
+  const vocabulary = planContract.readJson(vocabularyPath, { optional: true });
+  if (vocabulary) rowCount = Number(vocabulary.rowCount);
   const choiceCounts = new Map();
   const contractPath = path.join(projectDir, '.tmp', 'dataverse-schema-contract.json');
-  if (fs.existsSync(contractPath)) {
-    const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+  const contract = planContract.readJson(contractPath, { optional: true });
+  if (contract) {
     for (const table of contract.tables || []) {
       for (const column of table.columns || []) {
         if (Array.isArray(column.options)) choiceCounts.set(column.logicalName, column.options.length);
@@ -274,6 +277,7 @@ function resolveFile(basePath) {
 }
 
 function aliasPlugin(projectDir) {
+  const vectorIconsRoot = path.dirname(require.resolve('@expo/vector-icons/package.json', { paths: [projectDir] }));
   const aliases = new Map([
     ['react', require.resolve('react', { paths: [projectDir] })],
     ['react/jsx-runtime', require.resolve('react/jsx-runtime', { paths: [projectDir] })],
@@ -286,6 +290,8 @@ function aliasPlugin(projectDir) {
     ['expo-linear-gradient', path.join(HARNESS_DIR, 'shims', 'expo-linear-gradient.jsx')],
     ['@expo/vector-icons', path.join(HARNESS_DIR, 'shims', 'vector-icons.jsx')],
     ['@microsoft/power-apps-native-host', path.join(HARNESS_DIR, 'shims', 'power-apps-native-host.jsx')],
+    ['prototype-harness-glyphmaps-Ionicons.json', path.join(vectorIconsRoot, 'build', 'vendor', 'react-native-vector-icons', 'glyphmaps', 'Ionicons.json')],
+    ['prototype-harness-Ionicons.ttf', path.join(vectorIconsRoot, 'build', 'vendor', 'react-native-vector-icons', 'Fonts', 'Ionicons.ttf')],
   ]);
   return {
     name: 'prototype-harness-aliases',
@@ -294,6 +300,7 @@ function aliasPlugin(projectDir) {
       build.onResolve({ filter: /^(react-native|react-native-safe-area-context|react-native-reanimated|react-native-gesture-handler|expo-router|expo-status-bar|expo-linear-gradient|@expo\/vector-icons|@microsoft\/power-apps-native-host)(?:\/.*)?$/ }, (args) => ({
         path: aliases.get(args.path) || aliases.get(args.path.split('/').slice(0, args.path.startsWith('@') ? 2 : 1).join('/')),
       }));
+      build.onResolve({ filter: /^prototype-harness-(?:glyphmaps-Ionicons\.json|Ionicons\.ttf)$/ }, (args) => ({ path: aliases.get(args.path) }));
       build.onResolve({ filter: /^@\// }, (args) => {
         const resolved = resolveFile(path.join(projectDir, 'src', args.path.slice(2)));
         return resolved ? { path: resolved } : null;
@@ -665,7 +672,9 @@ async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) 
         await Promise.race([exited, wait(1000)]);
       }
     }
-    fs.rmSync(outputDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Chrome can exit before its profile writer releases the final LevelDB file
+    // on macOS. Keep cleanup bounded, but allow that asynchronous close to land.
+    fs.rmSync(outputDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 }
 
@@ -705,14 +714,61 @@ function writeFindingsReport(projectDir, reportPath, findings) {
   return destination;
 }
 
+function findingKind(message) {
+  const text = String(message || '');
+  if (/uses unpublished type tuple/i.test(text)) return 'unpublished type tuple';
+  if (/radius .* outside 4\/8\/12\/16\/24/i.test(text)) return 'radius outside 4/8/12/16/24';
+  if (/brand visual font stack matches/i.test(text)) return 'brand font matches neutral template';
+  if (/brand accent matches/i.test(text)) return 'brand accent matches neutral template';
+  if (/brand surfaces match/i.test(text)) return 'brand surfaces match neutral template';
+  if (/wraps to \d+ lines/i.test(text)) return 'text exceeds line budget';
+  if (/ overflows .* by \d+(?:\.\d+)?px/i.test(text)) return 'content overflows parent';
+  if (/contrast .* is below/i.test(text)) return 'contrast below threshold';
+  if (/bottom padding .* is below/i.test(text)) return 'scroll padding below requirement';
+  return text
+    .replace(/^.*?\.tsx:\s*/, '')
+    .replace(/"[^"]*"/g, '<value>')
+    .replace(/\b\d+(?:\.\d+)?(?:px|%)?\b/g, '<number>')
+    .trim();
+}
+
+function groupFindingMessages(records) {
+  const groups = new Map();
+  for (const record of records) {
+    const kind = findingKind(record.message);
+    const group = groups.get(kind) || { kind, count: 0, examples: [] };
+    group.count += 1;
+    if (group.examples.length < 3) group.examples.push(`${record.label}: ${record.message}`);
+    groups.set(kind, group);
+  }
+  return [...groups.values()].sort((left, right) => right.count - left.count || left.kind.localeCompare(right.kind));
+}
+
+function writeCheckFindings(projectDir, entry, findings) {
+  const destination = path.join(projectDir, '.tmp', `${entry.module}-findings.json`);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, `${JSON.stringify({ check: entry.id, findings }, null, 2)}\n`);
+  return destination;
+}
+
+function captureFailureFixture(entry, payload, captured) {
+  if (!process.env.HARNESS_CAPTURE_FIXTURES || captured.has(entry.module)) return null;
+  const destination = path.join(CHECKS_DIR, '__fixtures__', `${entry.module}.bad.json`);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, `${JSON.stringify(payload, null, 2)}\n`);
+  captured.add(entry.module);
+  return destination;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const registry = checkRegistry.load();
   const projectDir = path.resolve(options.project);
-  const entries = options.check === 'all'
+  const requestedChecks = options.checks || [options.check];
+  const entries = requestedChecks.includes('all')
     ? registry.filter((candidate) => candidate.tier === 2)
-    : [checkRegistry.resolve(registry, options.check)];
-  if (entries.some((entry) => !entry)) fail(`unknown or unregistered check ${options.check}`);
+    : requestedChecks.map((name) => checkRegistry.resolve(registry, name));
+  if (entries.some((entry) => !entry)) fail(`unknown or unregistered check ${requestedChecks.filter((name) => !checkRegistry.resolve(registry, name)).join(', ')}`);
   if (entries.some((entry) => entry.tier !== 2)) fail(`${entries.find((entry) => entry.tier !== 2).id} is not a render-tier check`);
   const chrome = chromePath(options.chrome);
   if (!chrome) fail('Chrome is required; pass --chrome or set CHROME_PATH');
@@ -759,27 +815,53 @@ async function main() {
 
   const blockingFailures = [];
   const structuredFindings = [];
+  const capturedFixtures = new Set();
   for (const entry of entries) {
     const check = require(path.join(CHECKS_DIR, `${entry.module}.js`));
     if ((check.scope || 'screen') !== entry.scope) fail(`${entry.id} scope disagrees with its module`);
-    const failures = [];
+    const outcomes = [];
+    const failureRecords = [];
+    const checkFindings = [];
     const inspect = (result, label, renderedItem) => {
+      outcomes.push({ result, label, renderedItem });
       if (result.notRun) {
-        console.log(`prototype-harness: NOT RUN ${entry.id} ${label} reason=${JSON.stringify(result.failures.join('; '))}`);
-        failures.push(`${label}: NOT RUN: ${result.failures.join('; ')}`);
-        for (const message of result.failures) structuredFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet, 'NOT_RUN'));
+        for (const message of result.failures) {
+          failureRecords.push({ label, message: `NOT RUN: ${message}` });
+          checkFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet, 'NOT_RUN'));
+        }
       } else if (!result.pass) {
-        failures.push(`${label}: ${result.failures.join('; ')}`);
-        for (const message of result.failures) structuredFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet));
+        for (const message of result.failures) {
+          failureRecords.push({ label, message });
+          checkFindings.push(renderFinding(entry, label, message, renderedItem, renderedResult.contactSheet));
+        }
       }
-      else if (result.reportOnly || entry.scope === 'app') console.log(`prototype-harness: REPORT ${entry.id} ${label} details=${JSON.stringify(result.report || {})}`);
-      else console.log(`prototype-harness: PASS ${entry.id} ${label}`);
+      if (!result.pass || result.notRun) {
+        const payload = entry.scope === 'app'
+          ? { rendered, context: baseContext }
+          : { snapshot: renderedItem.snapshot, context: renderedItem.context };
+        const captured = captureFailureFixture(entry, payload, capturedFixtures);
+        if (captured) console.log(`prototype-harness: ${entry.id} captured fixture ${path.relative(projectDir, captured)}`);
+      }
     };
     if (entry.scope === 'app') inspect(check.runApp(rendered, baseContext), 'app');
     else for (const item of rendered) inspect(check.run(item.snapshot, item.context), item.context.screenRelative, item);
-    if (failures.length > 0) {
-      if (entry.blocking) blockingFailures.push(`${entry.id}: ${failures.join(' | ')}`);
-      else console.log(`prototype-harness: REPORT ${entry.id} non-blocking findings=${JSON.stringify(failures)}`);
+    structuredFindings.push(...checkFindings);
+    const passed = outcomes.filter(({ result }) => result.pass && !result.notRun).length;
+    const unit = entry.scope === 'app' ? 'app' : 'screens';
+    if (failureRecords.length > 0) {
+      const groups = groupFindingMessages(failureRecords);
+      const checkReport = writeCheckFindings(projectDir, entry, checkFindings);
+      console.log(`prototype-harness: ${entry.id} FAILED - ${groups.length} kinds, ${failureRecords.length} findings (${passed}/${outcomes.length} ${unit} PASS)`);
+      for (const group of groups) {
+        console.log(`  ${group.count}x ${group.kind}`);
+        for (const example of group.examples) console.log(`     ${example}`);
+      }
+      console.log(`  full list: ${path.relative(projectDir, checkReport)}`);
+      if (entry.blocking) blockingFailures.push(`${entry.id}: ${groups.length} kinds, ${failureRecords.length} findings`);
+    } else {
+      const reports = outcomes.map(({ result }) => result.report).filter((report) => report !== undefined);
+      const report = reports.length === 0 ? '' : ` report=${JSON.stringify(reports.length === 1 ? reports[0] : reports)}`;
+      console.log(`prototype-harness: ${entry.id} ${passed}/${outcomes.length} ${unit} PASS${report}`);
     }
   }
   const reportPath = writeFindingsReport(projectDir, options.report, structuredFindings);
@@ -789,4 +871,4 @@ async function main() {
 
 if (require.main === module) main().catch((error) => fail(error.stack || error.message));
 
-module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, heroContract, parseArgs, renderFinding, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions, sourceLine, splitFailure, writeFindingsReport };
+module.exports = { aliasPlugin, batchActions, captureFailureFixture, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, findingKind, groupFindingMessages, heroContract, parseArgs, renderFinding, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions, sourceLine, splitFailure, writeCheckFindings, writeFindingsReport };

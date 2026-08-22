@@ -2,6 +2,20 @@
 
 For consumer-grade apps and premium employee experience. Type-led, warm or rich-dark, single muted accent, asymmetric layouts. Looks like an app you'd download by choice.
 
+<!-- TOKENS - machine-readable roles. Every hex below already appears in this file.
+```json
+{
+  "brand": "#7d9b76",
+  "surface0": "#faf8f5",
+  "surface1": "#f8f5ef",
+  "surface2": "#a8a29e",
+  "ink": "#1a1614",
+  "headingFont": "Georgia, Times New Roman, serif",
+  "bodyFont": "Inter, Segoe UI, sans-serif"
+}
+```
+-->
+
 ## Reference apps
 
 Linear, Notion (consumer side), Spotify, Airbnb, Headspace, Robinhood, Apple Music, Vercel mobile, Mercury, Substack reader

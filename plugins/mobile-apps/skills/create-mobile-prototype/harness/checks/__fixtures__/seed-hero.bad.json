@@ -1,0 +1,38 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/seed-hero-violation.tsx",
+  "snapshot": {
+    "elements": [
+      {
+        "id": 1,
+        "visible": true,
+        "text": "",
+        "testId": "row:item:1",
+        "rect": {
+          "width": 300,
+          "height": 80
+        },
+        "style": {
+          "fontSize": "16px"
+        }
+      },
+      {
+        "id": 2,
+        "visible": true,
+        "text": "Big finds",
+        "testId": "",
+        "rect": {
+          "width": 300,
+          "height": 50
+        },
+        "style": {
+          "fontSize": "32px"
+        }
+      }
+    ]
+  },
+  "context": {
+    "seedTexts": [
+      "Different record"
+    ]
+  }
+}

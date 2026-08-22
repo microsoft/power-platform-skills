@@ -1,0 +1,42 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/rtl-mirrored-order-violation.tsx",
+  "snapshot": {
+    "locale": "ar",
+    "direction": "rtl",
+    "elements": [
+      {
+        "id": 1,
+        "parentId": null,
+        "visible": true,
+        "testId": "mirror-row:actions"
+      },
+      {
+        "id": 2,
+        "parentId": 1,
+        "visible": true,
+        "attributes": {
+          "data-logical-order": "1"
+        },
+        "rect": {
+          "left": 10,
+          "width": 40
+        }
+      },
+      {
+        "id": 3,
+        "parentId": 1,
+        "visible": true,
+        "attributes": {
+          "data-logical-order": "2"
+        },
+        "rect": {
+          "left": 100,
+          "width": 40
+        }
+      }
+    ]
+  },
+  "context": {
+    "locale": "ar"
+  }
+}

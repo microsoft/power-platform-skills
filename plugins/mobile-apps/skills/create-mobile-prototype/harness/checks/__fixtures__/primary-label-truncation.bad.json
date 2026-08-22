@@ -1,0 +1,29 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/primary-label-violation.tsx",
+  "snapshot": {
+    "elements": [
+      {
+        "id": 1,
+        "parentId": null,
+        "visible": true,
+        "text": "",
+        "testId": "row:item:1"
+      },
+      {
+        "id": 2,
+        "parentId": 1,
+        "visible": true,
+        "text": "A clipped record name",
+        "testId": "",
+        "clientWidth": 80,
+        "scrollWidth": 180,
+        "style": {
+          "textOverflow": "ellipsis",
+          "whiteSpace": "nowrap",
+          "webkitLineClamp": "none"
+        }
+      }
+    ]
+  },
+  "context": {}
+}

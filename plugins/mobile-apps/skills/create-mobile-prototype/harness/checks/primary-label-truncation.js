@@ -14,7 +14,7 @@ function run(snapshot) {
   const byId = new Map(snapshot.elements.map((element) => [element.id, element]));
   const failures = [];
   for (const element of snapshot.elements) {
-    if (!element.visible || !element.text.trim() || !primaryAncestor(element, byId)) continue;
+    if (!element.visible || element.harnessIcon || !element.text.trim() || !primaryAncestor(element, byId)) continue;
     const ellipsized = element.style.textOverflow === 'ellipsis';
     const clamped = Number.parseInt(element.style.webkitLineClamp, 10) > 0;
     const horizontalOverflow = element.scrollWidth > element.clientWidth + 1;

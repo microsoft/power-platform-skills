@@ -10,7 +10,12 @@ const test = require('node:test');
 const script = path.resolve(__dirname, '..', 'generate-prototype-design-system.js');
 const templateRoot = path.resolve(__dirname, '..', '..', 'template');
 const templateTsc = path.join(templateRoot, 'node_modules', 'typescript', 'bin', 'tsc');
-const { contrastRatio, derivePalette, statusTone } = require(script);
+const {
+  assertPaletteContrast,
+  contrastRatio,
+  derivePalette,
+  statusTone,
+} = require(script);
 
 function write(root, relativePath, value) {
   const filePath = path.join(root, relativePath);
@@ -44,6 +49,8 @@ test('writes semantic tokens and schema-keyed status colours before screens', (t
   assert.equal(fs.existsSync(path.join(root, 'app')), false);
   const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /direction=saas accent=#4F46E5/);
+  assert.match(result.stdout, /resolved at tier 3 .*contrast min .* PASS/);
   const tokens = fs.readFileSync(path.join(root, 'brand/tokens.ts'), 'utf8');
   const design = fs.readFileSync(path.join(root, 'brand/design-system.md'), 'utf8');
   const tamaguiConfig = fs.readFileSync(path.join(root, 'tamagui.config.ts'), 'utf8');
@@ -86,8 +93,8 @@ test('maps common workflow and inventory labels to semantic tones', () => {
   assert.equal(statusTone('Sold out'), 'alarm');
 });
 
-test('every generated ink meets 4.5:1 on every generated surface', () => {
-  for (const domain of ['corporate access control', 'onboard retail', 'wildlife rehabilitation']) {
+test('every named baseline ink meets 4.5:1 on every generated surface', () => {
+  for (const domain of ['company inventory', 'employee expense requests', 'retail store audits']) {
     const palette = derivePalette(domain);
     for (const ink of ['ink', 'inkMuted', 'inkFaint']) {
       for (const surface of ['surface0', 'surface1', 'surface2']) {
@@ -98,6 +105,52 @@ test('every generated ink meets 4.5:1 on every generated surface', () => {
       }
     }
   }
+});
+
+test('contrast assertion checks all grounds and accent text', () => {
+  const palette = derivePalette('company inventory');
+  assert.doesNotThrow(() => assertPaletteContrast(palette));
+  assert.throws(
+    () => assertPaletteContrast({ ...palette, inkFaint: '#E2E8F0' }),
+    /inkFaint .*surface1|inkFaint .*surface2/,
+  );
+  assert.throws(
+    () => assertPaletteContrast({ ...palette, accentOn: palette.accentBase }),
+    /accentOn/,
+  );
+});
+
+test('tier 4 requires an explicit direction instead of a hash fallback', (t) => {
+  const root = project(t, 'travel accessories');
+  const preflight = spawnSync(process.execPath, [script, root, '--resolve-only'], { encoding: 'utf8' });
+  assert.equal(preflight.status, 0, preflight.stderr);
+  const report = JSON.parse(preflight.stdout);
+  assert.equal(report.needsChoice, true);
+  assert.deepEqual(report.candidates.map((candidate) => candidate.direction), ['polished-inspection', 'saas', 'product']);
+
+  const blocked = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.stderr, /design direction choice required/);
+
+  const selected = spawnSync(process.execPath, [script, root, '--direction', 'product'], { encoding: 'utf8' });
+  assert.equal(selected.status, 0, selected.stderr);
+  assert.match(selected.stdout, /direction=product/);
+});
+
+test('generated baseline persists its named direction in the plan', (t) => {
+  const root = project(t, 'company inventory');
+  write(root, 'native-app-plan.md', `# Inventory\n\n## Native Capabilities\n\nNone.\n\n## Connectors\n\nNone.\n\n## Design Direction: <deferred - set by /design-system>\n\n## Screens\n\nPending.\n`);
+  const result = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const plan = fs.readFileSync(path.join(root, 'native-app-plan.md'), 'utf8');
+  assert.equal((plan.match(/^## Design Direction$/gm) || []).length, 1);
+  assert.doesNotMatch(plan, /<deferred/);
+  assert.match(plan, /^direction: polished-inspection$/m);
+});
+
+test('generator source contains no domain hash palette or font selection', () => {
+  const source = fs.readFileSync(script, 'utf8');
+  assert.doesNotMatch(source, /hashNumber|deterministic hash of the approved domain phrase/);
 });
 
 test('generated status colors type-check as Tamagui color props', {

@@ -1,0 +1,16 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/decoration-derivation-violation.tsx",
+  "snapshot": {
+    "elements": [
+      {
+        "id": 1,
+        "visible": true,
+        "testId": "decoration:hero-accent",
+        "attributes": {
+          "data-derived-from": "static"
+        }
+      }
+    ]
+  },
+  "context": {}
+}

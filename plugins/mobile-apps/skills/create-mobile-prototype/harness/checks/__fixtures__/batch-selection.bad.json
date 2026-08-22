@@ -1,0 +1,15 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/batch-selection-violation.tsx",
+  "snapshot": {
+    "elements": []
+  },
+  "context": {
+    "batchActions": [
+      {
+        "key": "approve",
+        "label": "Approve",
+        "destructive": false
+      }
+    ]
+  }
+}

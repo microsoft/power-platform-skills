@@ -1,0 +1,17 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/archetype-consistency-violation.tsx",
+  "snapshot": {
+    "elements": [
+      {
+        "id": 1,
+        "visible": true,
+        "testId": "archetype:detail"
+      }
+    ]
+  },
+  "context": {
+    "screenMeta": {
+      "Archetype": "List"
+    }
+  }
+}

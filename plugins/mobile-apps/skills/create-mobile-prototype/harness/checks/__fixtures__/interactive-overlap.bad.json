@@ -1,0 +1,46 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/interactive-overlap-violation.tsx",
+  "snapshot": {
+    "elements": [
+      {
+        "id": 1,
+        "parentId": null,
+        "visible": true,
+        "interactive": true,
+        "text": "One",
+        "rect": {
+          "left": 0,
+          "top": 0,
+          "right": 100,
+          "bottom": 48
+        },
+        "visibleRect": {
+          "left": 0,
+          "top": 0,
+          "right": 100,
+          "bottom": 48
+        }
+      },
+      {
+        "id": 2,
+        "parentId": null,
+        "visible": true,
+        "interactive": true,
+        "text": "Two",
+        "rect": {
+          "left": 0,
+          "top": 20,
+          "right": 100,
+          "bottom": 68
+        },
+        "visibleRect": {
+          "left": 0,
+          "top": 20,
+          "right": 100,
+          "bottom": 68
+        }
+      }
+    ]
+  },
+  "context": {}
+}

@@ -4,15 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const REQUIRED_POOLS = {
-  person: [8, 10],
-  company: [6, 8],
-  location: [4, 6],
-  door: [6, 8],
-  title: [6, 8],
-  note: [5, 6],
-  role: [1, 12],
-};
+const { POOLS: REQUIRED_POOLS } = require('./lib/seed-pools');
 
 const REQUIRED_FORMAT_PLACEHOLDERS = {
   serial: ['seq4'],

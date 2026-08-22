@@ -2,6 +2,20 @@
 
 **The MVP-first-run default for inspection / field-ops / asset-tracking apps.** Light surface, restrained Power-Platform green brand, status-loud pills, large tap targets. Demo-friendly polish without sacrificing field-ops ergonomics.
 
+<!-- TOKENS - machine-readable roles. Every hex below already appears in this file.
+```json
+{
+  "brand": "#007d48",
+  "surface0": "#ffffff",
+  "surface1": "#f9fafb",
+  "surface2": "#e2e8f0",
+  "ink": "#0f172a",
+  "headingFont": "Inter, Segoe UI, sans-serif",
+  "bodyFont": "Inter, Segoe UI, sans-serif"
+}
+```
+-->
+
 > Use this when the app needs to look "modern enterprise SaaS" in a demo room AND remain genuinely usable by an inspector with gloves. If the user wants outdoor-only dark + safety-orange (true field-utility look), pass `--direction inspection` to opt into that instead.
 
 ## Reference apps

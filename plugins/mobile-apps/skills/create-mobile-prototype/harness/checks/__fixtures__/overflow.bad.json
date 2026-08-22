@@ -1,0 +1,35 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/overflow-violation.tsx",
+  "snapshot": {
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "elements": [
+      {
+        "id": 1,
+        "parentId": null,
+        "tag": "div",
+        "testId": "hero",
+        "text": "A headline that consumes far too much of the first viewport",
+        "visible": true,
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "left": 0,
+          "right": 300,
+          "top": 0,
+          "width": 300,
+          "height": 200
+        },
+        "style": {
+          "fontSize": "32px",
+          "lineHeight": "40px"
+        }
+      }
+    ]
+  },
+  "context": {
+    "foldHeight": 844
+  }
+}

@@ -14,19 +14,27 @@ const esbuild = require(path.join(pluginRoot, 'template', 'node_modules', 'esbui
 test('registry covers every check exactly once with complete routing metadata', () => {
   const entries = registry.load();
   const modules = fs.readdirSync(path.join(harnessRoot, 'checks'))
-    .filter((name) => name.endsWith('.js'))
+    .filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))
     .map((name) => name.slice(0, -3))
     .sort();
   assert.deepEqual(entries.filter((entry) => entry.tier === 2).map((entry) => entry.module).sort(), modules);
-  assert.equal(entries.filter((entry) => entry.tier === 2).length, 24);
+  assert.equal(entries.filter((entry) => entry.tier === 2).length, 25);
   for (const entry of entries) {
     assert.ok(['A', 'B', 'C'].includes(entry.class));
     assert.ok([1, 2, 3].includes(entry.tier));
     assert.equal(entry.fixture.endsWith('.tsx'), true);
+    if (entry.tier === 2) {
+      assert.equal(
+        fs.existsSync(path.join(harnessRoot, 'checks', '__fixtures__', `${entry.module}.bad.json`)),
+        true,
+        `${entry.id} has no captured .bad.json fixture`,
+      );
+    }
   }
   const runner = fs.readFileSync(path.join(harnessRoot, 'run.js'), 'utf8');
   assert.match(runner, /checkRegistry\.load\(\)/);
-  assert.match(runner, /options\.check === 'all'/);
+  assert.match(runner, /requestedChecks\.includes\('all'\)/);
+  assert.match(runner, /--checks/);
   assert.doesNotMatch(runner, /readdirSync\(CHECKS_DIR/);
 });
 

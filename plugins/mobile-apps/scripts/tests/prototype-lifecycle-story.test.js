@@ -50,6 +50,12 @@ test('prototype plan edit preserves seed identity through real migration and cle
       title: ['Review urgent service task', 'Coordinate delivery follow-up', 'Approve completion request', 'Investigate blocked work item', 'Schedule priority handoff', 'Close verified task'],
       note: ['Priority needs confirmation', 'Coordinator review is recorded', 'Completion evidence is available', 'Follow-up is scheduled', 'Task owner has been notified'],
       role: ['operations coordinators'],
+      status: ['Draft', 'In progress', 'Complete'],
+      priority: ['Low', 'Medium', 'High'],
+      category: ['Intake', 'Review', 'Action', 'Archive'],
+      seat: ['Desk A1', 'Desk A2', 'Desk B1', 'Desk B2', 'Desk C1', 'Desk C2'],
+      flight: ['TASK101', 'TASK202', 'TASK303', 'TASK404'],
+      url: ['https://tasks.example/1', 'https://tasks.example/2', 'https://tasks.example/3'],
     },
     idFormats: {
       serial: 'TSK-{seq4}',

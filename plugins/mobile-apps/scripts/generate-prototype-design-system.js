@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
+const directionBlock = require('./lib/design-direction-block');
+const directions = require('./lib/directions');
+const directionWriter = require('./write-design-direction');
+
+const { contrastRatio } = directions;
 
 function renderTamaguiConfig() {
   return `import { createTamagui, createTokens } from '@tamagui/core';
@@ -217,6 +221,16 @@ const DESIGN_BLOCK_START = '<!-- PROTOTYPE SEMANTICS START - managed by generate
 const DESIGN_BLOCK_END = '<!-- PROTOTYPE SEMANTICS END -->';
 const DISCIPLINE_BLOCK_START = '<!-- PROTOTYPE DISCIPLINE START - managed by generate-prototype-design-system.js -->';
 const DISCIPLINE_BLOCK_END = '<!-- PROTOTYPE DISCIPLINE END -->';
+const TEXT_TOKENS = ['ink', 'inkMuted', 'inkFaint'];
+const GROUNDS = ['surface0', 'surface1', 'surface2'];
+const STATUS_TOKEN_TYPE = [
+  'export type StatusToken = {',
+  '  label: string;',
+  '  fg: `#${string}`;',
+  '  bg: `#${string}`;',
+  '  stripe: `#${string}`;',
+  '};',
+].join('\n');
 
 function fail(message) {
   console.error(`prototype-design-system: ${message}`);
@@ -229,51 +243,6 @@ function readJson(filePath) {
   } catch (error) {
     fail(`${filePath} is not valid JSON: ${error.message}`);
   }
-}
-
-function hashNumber(value) {
-  return Number.parseInt(crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 8), 16);
-}
-
-function hslToHex(hue, saturation, lightness) {
-  const s = saturation / 100;
-  const l = lightness / 100;
-  const chroma = (1 - Math.abs(2 * l - 1)) * s;
-  const segment = ((hue % 360) + 360) % 360 / 60;
-  const x = chroma * (1 - Math.abs((segment % 2) - 1));
-  const [red, green, blue] = segment < 1 ? [chroma, x, 0]
-    : segment < 2 ? [x, chroma, 0]
-      : segment < 3 ? [0, chroma, x]
-        : segment < 4 ? [0, x, chroma]
-          : segment < 5 ? [x, 0, chroma]
-            : [chroma, 0, x];
-  const match = l - chroma / 2;
-  return `#${[red, green, blue]
-    .map((channel) => Math.round((channel + match) * 255).toString(16).padStart(2, '0'))
-    .join('')}`.toUpperCase();
-}
-
-function relativeLuminance(hex) {
-  const channels = hex.slice(1).match(/.{2}/g).map((value) => Number.parseInt(value, 16) / 255);
-  return channels
-    .map((channel) => (channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
-    .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
-}
-
-function contrastRatio(first, second) {
-  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
-  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-function darkenToContrast(hue, saturation, initialLightness, backgrounds, minimum = 4.5) {
-  for (let lightness = initialLightness; lightness >= 0; lightness -= 1) {
-    const candidate = hslToHex(hue, saturation, lightness);
-    if (backgrounds.every((background) => contrastRatio(candidate, background) >= minimum)) {
-      return candidate;
-    }
-  }
-  return '#000000';
 }
 
 function hueFromHex(hex) {
@@ -300,29 +269,21 @@ function warningAccentFromTokens(source, fallback) {
   return hue === null ? fallback : hue <= 20 || hue >= 340;
 }
 
-function derivePalette(domain) {
-  const hue = hashNumber(domain) % 360;
-  const accentBase = hslToHex(hue, 62, 36);
-  const surface0 = hslToHex(hue, 24, 99);
-  const surface1 = hslToHex(hue, 22, 96);
-  const surface2 = hslToHex(hue, 20, 91);
-  const surfaces = [surface0, surface1, surface2];
-  const accentCandidates = ['#10202C', '#FFFFFF'];
-  return {
-    hue,
-    accentIsWarningHue: hue <= 20 || hue >= 340,
-    accentBase,
-    accentSoft: hslToHex(hue, 45, 91),
-    accentOn: accentCandidates.sort((left, right) => contrastRatio(right, accentBase) - contrastRatio(left, accentBase))[0],
-    surface0,
-    surface1,
-    surface2,
-    ink: darkenToContrast(hue, 28, 14, surfaces),
-    inkMuted: darkenToContrast(hue, 16, 35, surfaces),
-    inkFaint: darkenToContrast(hue, 12, 48, surfaces),
-    warnFg: '#7A3700',
-    warnBg: '#FBEAD9',
-  };
+function resolvePalette(input) {
+  return directions.resolvePalette(typeof input === 'string' ? { domain: input } : input);
+}
+
+function derivePalette(input) {
+  const resolution = resolvePalette(input);
+  if (resolution.needsChoice) throw new Error(`design direction choice required: ${resolution.reason}`);
+  return resolution.palette;
+}
+
+function assertPaletteContrast(palette) {
+  if (TEXT_TOKENS.join() !== directions.TEXT_TOKENS.join() || GROUNDS.join() !== directions.GROUNDS.join()) {
+    throw new Error('prototype palette contrast contract is out of sync with directions.js');
+  }
+  return directions.assertPaletteContrast(palette);
 }
 
 function statusTone(label) {
@@ -387,13 +348,9 @@ function statusColors(tone, accentIsWarningHue) {
   return { fg: '#344657', bg: '#E8EDF2', stripe: '#6A7D8E' };
 }
 
-function deriveFontStack(domain) {
-  const stacks = [
-    { heading: 'Avenir Next, Avenir, Segoe UI, sans-serif', body: 'Avenir Next, Avenir, Segoe UI, sans-serif' },
-    { heading: 'Trebuchet MS, Segoe UI, sans-serif', body: 'Segoe UI, Helvetica Neue, Arial, sans-serif' },
-    { heading: 'Georgia, Times New Roman, serif', body: 'Avenir Next, Avenir, Segoe UI, sans-serif' },
-  ];
-  return stacks[hashNumber(domain) % stacks.length];
+function deriveFontStack(direction) {
+  const tokens = directions.get(direction).tokens;
+  return { heading: tokens.headingFont, body: tokens.bodyFont };
 }
 
 function renderDisciplineTokens(fontStack) {
@@ -468,7 +425,7 @@ function renderTokenSemantics(domain, palette, statusOptions, statusFields = [])
     });
     return `  ${JSON.stringify(field.key)}: {\n${options.join('\n')}\n  },`;
   });
-  return `${TOKEN_BLOCK_START}\nexport type StatusToken = {\n  label: string;\n  fg: \`#\${string}\`;\n  bg: \`#\${string}\`;\n  stripe: \`#\${string}\`;\n};\n\n// Values shared by multiple local choices appear here only when their labels agree.\nexport const statusByValue: Record<string, StatusToken> = {\n${statusEntries.join('\n')}\n};\n\n// Dataverse local choices can reuse the same integer for different labels.\nexport const statusByFieldValue: Record<string, Record<string, StatusToken>> = {\n${fieldEntries.join('\n')}\n};\n\nexport function statusToken(field: string, value: string | number): StatusToken | undefined {\n  const key = String(value);\n  return statusByFieldValue[field]?.[key] ?? statusByValue[key];\n}\n\nconst dayFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\nconst dayTimeFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });\n\nfunction dateValue(value: Date | string | number): Date {\n  return value instanceof Date ? value : new Date(value);\n}\n\nexport function day(value: Date | string | number): string {\n  return dayFormatter.format(dateValue(value));\n}\n\nexport function dayTime(value: Date | string | number): string {\n  return dayTimeFormatter.format(dateValue(value));\n}\n\nexport const designProvenance = ${JSON.stringify({ domain, source: 'brief + schema contract' })} as const;\n${TOKEN_BLOCK_END}`;
+  return `${TOKEN_BLOCK_START}\n${STATUS_TOKEN_TYPE}\n\n// Values shared by multiple local choices appear here only when their labels agree.\nexport const statusByValue: Record<string, StatusToken> = {\n${statusEntries.join('\n')}\n};\n\n// Dataverse local choices can reuse the same integer for different labels.\nexport const statusByFieldValue: Record<string, Record<string, StatusToken>> = {\n${fieldEntries.join('\n')}\n};\n\nexport function statusToken(field: string, value: string | number): StatusToken | undefined {\n  const key = String(value);\n  return statusByFieldValue[field]?.[key] ?? statusByValue[key];\n}\n\nconst dayFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' });\nconst dayTimeFormatter = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });\n\nfunction dateValue(value: Date | string | number): Date {\n  return value instanceof Date ? value : new Date(value);\n}\n\nexport function day(value: Date | string | number): string {\n  return dayFormatter.format(dateValue(value));\n}\n\nexport function dayTime(value: Date | string | number): string {\n  return dayTimeFormatter.format(dateValue(value));\n}\n\nexport const designProvenance = ${JSON.stringify({ domain, source: 'brief + schema contract' })} as const;\n${TOKEN_BLOCK_END}`;
 }
 
 function renderTokens(domain, palette, statusOptions, statusFields = []) {
@@ -509,7 +466,7 @@ function renderDesignSystem(domain, palette, statusOptions, statusFields = []) {
     ['warnFg', palette.warnFg, 'Warning text and icons'],
     ['warnBg', palette.warnBg, 'Warning surface'],
   ].map(([token, hex, usage]) => `| \`${token}\` | \`${hex}\` | ${usage} |`);
-  return `# ${domain} - Prototype Design System\n\n## Brand\n\n- Identity: ${domain}\n- Accent source: deterministic hash of the approved domain phrase\n- Status source: approved schema choice labels\n\n## Palette\n\n| Token | Hex | Usage |\n|---|---|---|\n${paletteRows.join('\n')}\n\n${renderDesignSemantics(statusOptions, palette, statusFields)}\n`;
+  return `# ${domain} - Prototype Design System\n\n## Brand\n\n- Identity: ${domain}\n- Direction: ${palette.direction}\n- Accent source: authored token from direction-${palette.direction}.md\n- Resolution: tier ${palette.tier}, ${palette.reason}\n- Status source: approved schema choice labels\n\n## Palette\n\n| Token | Hex | Usage |\n|---|---|---|\n${paletteRows.join('\n')}\n\n${renderDesignSemantics(statusOptions, palette, statusFields)}\n`;
 }
 
 function replaceManagedBlock(source, start, end, block) {
@@ -522,10 +479,58 @@ function replaceManagedBlock(source, start, end, block) {
   return `${source.trimEnd()}\n\n${block}\n`;
 }
 
+function parseArgs(argv) {
+  const projectArg = argv.find((value) => !value.startsWith('--'));
+  const directionIndex = argv.indexOf('--direction');
+  if (!projectArg) throw new Error('usage: node generate-prototype-design-system.js <project-dir> [--resolve-only] [--direction <name>]');
+  if (directionIndex >= 0 && !argv[directionIndex + 1]) throw new Error('--direction requires a value');
+  return {
+    projectDir: path.resolve(projectArg),
+    resolveOnly: argv.includes('--resolve-only'),
+    explicitDirection: directionIndex >= 0 ? argv[directionIndex + 1] : null,
+  };
+}
+
+function readOptional(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+}
+
+function resolutionReport(resolution) {
+  if (resolution.needsChoice) return resolution;
+  return {
+    needsChoice: false,
+    direction: resolution.direction,
+    tier: resolution.tier,
+    reason: resolution.reason,
+    accentBase: resolution.palette.accentBase,
+    contrastMinimum: resolution.palette.contrastMinimum,
+  };
+}
+
+function persistGeneratedDirection(projectDir, resolution) {
+  const planPath = path.join(projectDir, 'native-app-plan.md');
+  if (!fs.existsSync(planPath)) return null;
+  const direction = directions.get(resolution.direction);
+  const source = fs.readFileSync(planPath, 'utf8');
+  const withoutPlaceholder = source.replace(/^## Design Direction:\s*<deferred[^>]*>\s*\n*/gmi, '');
+  if (withoutPlaceholder !== source) directionWriter.atomicWrite(planPath, withoutPlaceholder);
+  return directionWriter.write(planPath, {
+    picked: resolution.direction.split('-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+    referenceApps: direction.referenceApps,
+    pickedAt: new Date().toISOString(),
+    bundle: direction.bundle,
+  });
+}
+
 function main() {
-  const projectArg = process.argv[2];
-  if (!projectArg) fail('usage: node generate-prototype-design-system.js <project-dir>');
-  const projectDir = path.resolve(projectArg);
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    fail(error.message);
+    return;
+  }
+  const { projectDir } = options;
   const vocabularyPath = path.join(projectDir, '.tmp', 'seed-vocabulary.json');
   const contractPath = path.join(projectDir, '.tmp', 'dataverse-schema-contract.json');
   if (!fs.existsSync(vocabularyPath)) fail('.tmp/seed-vocabulary.json is required');
@@ -534,20 +539,47 @@ function main() {
   const contract = readJson(contractPath);
   if (!String(vocabulary.domain || '').trim()) fail('seed vocabulary domain is required');
   if (!Array.isArray(contract.tables)) fail('schema contract tables must be an array');
-  const palette = derivePalette(vocabulary.domain.trim());
-  const statusFields = collectStatusFields(contract);
-  const statusOptions = unambiguousStatusOptions(statusFields);
   const brandDir = path.join(projectDir, 'brand');
-  fs.mkdirSync(brandDir, { recursive: true });
   const tokenPath = path.join(brandDir, 'tokens.ts');
   const designPath = path.join(brandDir, 'design-system.md');
   const tamaguiConfigPath = path.join(projectDir, 'tamagui.config.ts');
   const existingTokenSource = fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8') : '';
   const generatedBaseline = !existingTokenSource
     || existingTokenSource.startsWith('// Generated by generate-prototype-design-system.js');
+  if (options.resolveOnly && !generatedBaseline) {
+    console.log(JSON.stringify({ needsChoice: false, preserveApproved: true }, null, 2));
+    return;
+  }
+  const planText = readOptional(path.join(projectDir, 'native-app-plan.md'));
+  let approvedDirection = '';
+  if (planText) {
+    const inspected = directionBlock.inspect(planText);
+    if (inspected.valid && inspected.present) approvedDirection = `Direction: ${inspected.bundle.direction}`;
+  }
+  const resolution = generatedBaseline ? resolvePalette({
+    brandDoc: approvedDirection,
+    appType: `${readOptional(path.join(projectDir, 'brief.md'))}\n${planText}`,
+    domain: vocabulary.domain.trim(),
+    explicit: options.explicitDirection,
+  }) : null;
+  if (options.resolveOnly) {
+    console.log(JSON.stringify(resolutionReport(resolution), null, 2));
+    return;
+  }
+  if (resolution?.needsChoice) {
+    fail(`design direction choice required (${resolution.reason}); rerun with --direction ${resolution.candidates.map((candidate) => candidate.direction).join('|')}`);
+  }
+  const palette = generatedBaseline ? assertPaletteContrast(resolution.palette) : null;
+  if (palette) {
+    palette.tier = resolution.tier;
+    palette.reason = resolution.reason;
+  }
+  const statusFields = collectStatusFields(contract);
+  const statusOptions = unambiguousStatusOptions(statusFields);
+  fs.mkdirSync(brandDir, { recursive: true });
   const semanticPalette = generatedBaseline
     ? palette
-    : { ...palette, accentIsWarningHue: warningAccentFromTokens(existingTokenSource, palette.accentIsWarningHue) };
+    : { accentIsWarningHue: warningAccentFromTokens(existingTokenSource, false) };
   const tokenSource = generatedBaseline
     ? renderTokens(vocabulary.domain.trim(), semanticPalette, statusOptions, statusFields)
     : replaceManagedBlock(
@@ -570,7 +602,7 @@ function main() {
     tokenSource,
     TOKEN_DISCIPLINE_START,
     TOKEN_DISCIPLINE_END,
-    renderDisciplineTokens(generatedBaseline ? deriveFontStack(vocabulary.domain.trim()) : null),
+    renderDisciplineTokens(generatedBaseline ? resolution.fontStack : null),
   );
   const disciplinedDesignSource = replaceManagedBlock(
     designSource,
@@ -581,13 +613,20 @@ function main() {
   fs.writeFileSync(tokenPath, disciplinedTokenSource);
   fs.writeFileSync(designPath, disciplinedDesignSource);
   fs.writeFileSync(tamaguiConfigPath, renderTamaguiConfig());
+  if (generatedBaseline) persistGeneratedDirection(projectDir, resolution);
   const statusCount = statusFields.reduce((total, field) => total + field.options.length, 0);
-  console.log(`prototype-design-system: ${generatedBaseline ? 'generated baseline' : 'augmented approved artifacts'} (${statusCount} status option(s))`);
+  if (generatedBaseline) {
+    console.log(`prototype-design-system: direction=${resolution.direction} accent=${palette.accentBase}`);
+    console.log(`  resolved at tier ${resolution.tier} (${resolution.reason}); contrast min ${palette.contrastMinimum.ratio.toFixed(2)}:1 ${palette.contrastMinimum.pair} PASS; ${statusCount} status option(s)`);
+  } else {
+    console.log(`prototype-design-system: augmented approved artifacts (${statusCount} status option(s))`);
+  }
 }
 
 if (require.main === module) main();
 
 module.exports = {
+  assertPaletteContrast,
   collectStatusFields,
   collectStatusOptions,
   contrastRatio,
@@ -601,6 +640,7 @@ module.exports = {
   renderTokenSemantics,
   renderTokens,
   renderTamaguiConfig,
+  resolvePalette,
   replaceManagedBlock,
   statusColors,
   statusTone,

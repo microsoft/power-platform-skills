@@ -143,6 +143,17 @@ paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
 and validation stages. Ask Proceed / Revise / Cancel before planning.
 
+Run the warn-only capability check immediately after writing the brief:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-prototype-capabilities.js" \
+  "$PROJECT_DIR"
+```
+
+Read `.tmp/prototype-capability-check.json` into the `Native` and `Dropped`
+brief-echo fields below. `AVAILABLE` is ready; `PARTIAL` and `UNAVAILABLE` are
+warnings. Never prompt, stop, or change the exit code because of those rows.
+
 Within roughly five seconds of parsing the brief, emit this compact echo before
 the impact preview. It names inferred and dropped behavior, not plan prose:
 
@@ -183,7 +194,13 @@ artifact, not a selection from a bundled catalogue.
     "door": ["6-8 domain-specific rooms, gates, zones, or sub-locations"],
     "title": ["6-8 recognisable work-item titles"],
     "note": ["5-6 short domain-real remarks"],
-    "role": ["roles using the wording present in the brief"]
+    "role": ["roles using the wording present in the brief"],
+    "status": ["3-8 domain workflow states"],
+    "priority": ["3-5 domain priority or severity labels"],
+    "category": ["4-10 domain categories or types"],
+    "seat": ["6-12 domain seat or position labels"],
+    "flight": ["4-8 domain flight or journey labels"],
+    "url": ["3-6 safe example URLs under .example"]
   },
   "idFormats": {
     "serial": "<domain prefix>-{seq4}",
@@ -201,9 +218,10 @@ Hard rules:
   the brief's wording for `pools.role` so provenance is mechanically checkable.
 - Use stable ordering and unique values within each pool. Do not add generic
   numbered strings such as `Item 1` or `<Entity> 1`.
-- Add extra string-array pools when the brief explicitly names another display
-  role that the base pools do not represent. Do not invent schema-only pools
-  before the data model exists.
+- All thirteen listed pools are required because the generator can route to any
+  of them after schema planning. Use brief-grounded neutral values when a pool
+  is not central to the workflow; never omit it. Add extra string-array pools
+  only when the brief names another display role that these pools do not cover.
 - Use `rowCount: 12` for this spike unless an approved input explicitly requires
   a different density.
 
@@ -258,7 +276,13 @@ test -f "$PROJECT_DIR/native-app-plan.md"
 test -f "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
 test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-prototype-capabilities.js" \
+  "$PROJECT_DIR" --persist
 ```
+
+The persistence pass writes every `PARTIAL` and `UNAVAILABLE` row under
+`## Native Capabilities` and always continues. The plan is the durable warning
+record; do not rely on terminal scrollback.
 
 When `--from-plan` was supplied, do not silently replace approved Data Model,
 Native Capabilities, Connectors, Design Direction, Screen Map, Navigation
@@ -332,11 +356,9 @@ Write `.mobile-app/state.json` per
 `dataMode: "prototype"`, null environment/transition/hashes, and schema version
 1.
 
-Run the scaffold gate:
-
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
+Do not type-check the untouched scaffold here. Step 5 owns the first TypeScript
+gate after generated services exist, which preserves useful error attribution
+without checking the same scaffold twice.
 
 ### Step 5 - Generate Typed Mocks
 
@@ -348,6 +370,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-seed-vocabulary.js" \
   "$PROJECT_DIR/.tmp/seed-vocabulary.json" \
   --brief "$PROJECT_DIR/brief.md"
 node "${CLAUDE_SKILL_DIR}/scripts/gen-mock-services.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-seed-consistency.js" "$PROJECT_DIR"
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
@@ -370,7 +393,7 @@ states, and domain-readable labels. Generic numbered rows are a blocker for a
 recognized field-service, inventory, CRM, grocery/retail, or healthcare brief.
 
 Do not hand-edit a generated service to hide a contract mismatch. Repair the
-approved structured contract or generator, regenerate, and rerun type-check.
+approved structured contract or generator, regenerate, and rerun the TypeScript gate.
 
 ### Step 6 - Apply Native Capabilities And Design
 
@@ -385,10 +408,25 @@ semantics before invoking any screen planner or builder:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/generate-prototype-design-system.js" \
-  "$PROJECT_DIR"
+  "$PROJECT_DIR" --resolve-only \
+  > "$PROJECT_DIR/.tmp/prototype-design-direction.json"
+```
+
+Read the resolution artifact. When it says `preserveApproved`, continue without
+a direction argument. When it contains a resolved direction, continue with that
+named result. When `needsChoice` is true, ask exactly one question using the
+three returned candidates and their accent swatches; tier 4 never silently
+defaults. Pass the selected slug as `--direction <slug>`. Only
+`polished-inspection`, `saas`, and `product` are selectable until the other
+direction files receive deliberately authored `TOKENS` blocks.
+
+Then generate and validate the artifacts:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-prototype-design-system.js" \
+  "$PROJECT_DIR" [--direction "<tier-4 selection>"]
 test -f "$PROJECT_DIR/brand/tokens.ts"
 test -f "$PROJECT_DIR/brand/design-system.md"
-npm --prefix "$PROJECT_DIR" run type-check
 ```
 
 When approved brand artifacts already exist, the helper preserves their palette
@@ -403,7 +441,8 @@ unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
-`/create-mobile-app` brand-token integration contract, then type-check.
+`/create-mobile-app` brand-token integration contract. The final TypeScript
+gate validates this integration together with the completed screens.
 
 ### Step 7 - Navigation, Shared Code, And Skeletons
 
@@ -433,7 +472,8 @@ Prototype-specific rules:
 - Skeleton service imports come from `@/generated/services` and use only the
   generated methods/types on disk.
 
-Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
+Do not run another TypeScript pass before builders; the post-generation gate
+already attributed generator errors, and the final pass owns builder output.
 
 ### Step 8 - Build Screens
 
@@ -461,21 +501,21 @@ styling reference. Subject/story/metric/image derivation controls the layout;
 tokens and components come afterward.
 
 For every screen, update the supervisor around the existing builder and
-TypeScript gates using the slug printed by `supervisor.js plan`:
+focused gates using the slug printed by `supervisor.js plan`:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state building
 # builder writes the skeleton, then fills content atomically
 node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state written
-# after the screen-wave type-check
+# after the screen wave's focused static checks
 node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state checked
 # after its focused checks
 node "${CLAUDE_SKILL_DIR}/runtime/supervisor.js" screen "$PROJECT_DIR" --id <id> --state built
 ```
 
 Use `failed` for a terminal builder/check failure. Skeleton always lands before
-content. Never write the same watched file concurrently. Run the screen-wave
-TypeScript gate after every scheduled wave before starting the next one.
+content. Never write the same watched file concurrently. Do not invoke `tsc`
+per wave; the final TypeScript gate checks all builder output together.
 
 ```text
 Data mode: prototype.
@@ -572,8 +612,9 @@ Prototype screen-builder rules (HARD):
   use `mirror-row:<key>` plus `dataSet={{ logicalOrder: '<1..N>' }}` children.
 ```
 
-Run the screen-wave TypeScript gate after every wave. Group failures by root
-cause and cap retries at two per screen.
+Run focused route/static checks after every wave. Group failures by root cause
+and cap retries at two per screen; defer whole-project TypeScript to the final
+gate.
 
 After the cold builder wave, inspect its output without editing the screen
 files. For every applicable screen, require: conventional testIDs, one icon per
@@ -601,7 +642,6 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_
 node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all \
   || node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" class-a --project "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/harness/static/run.js" --project "$PROJECT_DIR" --all
-npm --prefix "$PROJECT_DIR" run type-check
 ```
 
 Class A is deterministic only. The repair runner uses TypeScript AST locations,
@@ -622,10 +662,10 @@ per screen, reuses those snapshots across every tier-2 check, and writes
 ```bash
 node "${CLAUDE_SKILL_DIR}/harness/run.js" \
   --project "$PROJECT_DIR" \
-  --check all
+  --checks all
 node "${CLAUDE_SKILL_DIR}/harness/run.js" \
   --project "$PROJECT_DIR" \
-  --check all \
+  --checks all \
   --locale ar
 ```
 
@@ -645,8 +685,7 @@ If its status is `repair`, read only
 name to the repair model. Apply one targeted pass to the named files, then run:
 
 ```bash
-npm --prefix "$PROJECT_DIR" run type-check
-node "${CLAUDE_SKILL_DIR}/harness/run.js" --project "$PROJECT_DIR" --check all
+node "${CLAUDE_SKILL_DIR}/harness/run.js" --project "$PROJECT_DIR" --checks all
 node "${CLAUDE_SKILL_DIR}/harness/repair/run.js" assess-b \
   --project "$PROJECT_DIR"
 ```
@@ -695,11 +734,12 @@ Invoke the design skill:
 ```
 Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, run:
+Wait for it to complete. Then run the final TypeScript gate unconditionally:
 ```bash
 npm --prefix "$PROJECT_DIR" run type-check
 ```
-to guarantee it didn't break TS typing.
+This is the second and final whole-project TypeScript invocation. It validates
+all builder, repair, design, and navigation changes before device evidence.
 
 ### Step 9.7 - Native Device Evidence
 

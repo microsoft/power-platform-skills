@@ -1,0 +1,20 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/sort-violation.tsx",
+  "snapshot": {
+    "elements": []
+  },
+  "context": {
+    "sortOptions": [
+      {
+        "field": "createdon",
+        "direction": "desc",
+        "label": "Newest"
+      },
+      {
+        "field": "name",
+        "direction": "asc",
+        "label": "Name"
+      }
+    ]
+  }
+}

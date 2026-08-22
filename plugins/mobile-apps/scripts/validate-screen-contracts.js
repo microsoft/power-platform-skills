@@ -77,31 +77,42 @@ function parseSpecs(markdown, errors) {
     return [];
   }
   const specsText = screensBody.slice(specsStart + '### Per-Screen Specs\n'.length);
-  const headingPattern = /^#### Screen (\d+) - (.+?) \(`([^`]+)`\)$/gm;
+  const headingPattern = /^#### (?:Screen (\d+)\s*[-–—]\s*)?(.+?)(?:\s*\(`([^`]+)`\))?$/gm;
   const headings = [...specsText.matchAll(headingPattern)];
-  return headings.map((match, index) => ({
-    number: Number(match[1]),
-    name: match[2].trim(),
-    route: match[3].trim(),
-    body: specsText.slice(
+  return headings.map((match, index) => {
+    const body = specsText.slice(
       match.index + match[0].length,
       index + 1 < headings.length ? headings[index + 1].index : specsText.length,
-    ),
-  }));
+    );
+    const routeMatch = body.match(/^\s*[-*]?\s*(?:\*\*)?Route\s*:(?:\*\*)?\s*`?([^\n`]+)`?/mi);
+    const fileMatch = body.match(/^\s*[-*]?\s*(?:\*\*)?File\s*:(?:\*\*)?\s*`?([^\n`]+)`?/mi);
+    return {
+      number: match[1] ? Number(match[1]) : index + 1,
+      name: match[2].trim(),
+      route: cleanCell(match[3] || routeMatch?.[1] || routeFromFile(fileMatch?.[1] || '') || ''),
+      body,
+    };
+  });
+}
+
+function serviceKey(name) {
+  return String(name || '').toLocaleLowerCase('en-US');
 }
 
 function serviceNames(value) {
-  return [...new Set(
-    [...String(value || '').matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*Service)\b/g)]
-      .map((match) => match[1]),
-  )];
+  const namesByKey = new Map();
+  for (const match of String(value || '').matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*Service)\b/g)) {
+    const name = match[1];
+    if (!namesByKey.has(serviceKey(name))) namesByKey.set(serviceKey(name), name);
+  }
+  return [...namesByKey.values()];
 }
 
 function importedServiceNames(source) {
   const imported = new Set();
   const importPattern = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s+['"][^'"]+['"];?/g;
   for (const match of source.matchAll(importPattern)) {
-    for (const serviceName of serviceNames(match[0])) imported.add(serviceName);
+    for (const serviceName of serviceNames(match[0])) imported.add(serviceKey(serviceName));
   }
   return imported;
 }
@@ -201,7 +212,7 @@ function validateBuiltScreens({ screenMap, specByRoute, navigationByRoute, proje
     const declaredServices = serviceNames(`${row.Data}\n${spec?.body || ''}`);
     const importedServices = reachableServiceNames(screenFile, resolvedRoot);
     for (const serviceName of declaredServices) {
-      if (!importedServices.has(serviceName)) {
+      if (!importedServices.has(serviceKey(serviceName))) {
         errors.push(`${row.Screen} declares ${serviceName} but ${row.File} does not import it directly or through a local dependency`);
       }
     }
@@ -383,6 +394,7 @@ module.exports = {
   reachableServiceNames,
   readsLocalParam,
   routeFromFile,
+  serviceKey,
   serviceNames,
   validate,
 };

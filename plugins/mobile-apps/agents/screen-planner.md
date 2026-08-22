@@ -3,7 +3,9 @@ name: screen-planner
 description: Use when an orchestrator needs a screen graph + per-screen specs (navigation pattern, components, data, native capabilities) and a plan-time HTML preview or screen-plan delta for a Power Apps mobile app. Read-only — does NOT write TSX. Called by native-app-planner and /edit-app; not invoked directly by users.
 user-invocable: false
 color: cyan
-model: sonnet
+model:
+  - opus
+  - GPT-5.6 Sol
 tools:
   - Read
   - Write

@@ -1,0 +1,19 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/discipline-violation.tsx",
+  "rendered": [
+    {
+      "snapshot": {
+        "viewport": {
+          "width": 390
+        },
+        "elements": []
+      },
+      "context": {
+        "screenRelative": "fixture.tsx"
+      }
+    }
+  ],
+  "context": {
+    "brandTokenSource": ""
+  }
+}

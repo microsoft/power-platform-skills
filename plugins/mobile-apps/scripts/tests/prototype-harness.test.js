@@ -18,6 +18,7 @@ const contrast = require(path.join(harnessDir, 'checks', 'contrast.js'));
 const density = require(path.join(harnessDir, 'checks', 'density.js'));
 const discipline = require(path.join(harnessDir, 'checks', 'discipline.js'));
 const interactiveOverlap = require(path.join(harnessDir, 'checks', 'interactive-overlap.js'));
+const overflow = require(path.join(harnessDir, 'checks', 'overflow.js'));
 const primaryLabelTruncation = require(path.join(harnessDir, 'checks', 'primary-label-truncation.js'));
 const rawValues = require(path.join(harnessDir, 'checks', 'raw-values.js'));
 const rtlMirroredOrder = require(path.join(harnessDir, 'checks', 'rtl-mirrored-order.js'));
@@ -47,15 +48,45 @@ test('harness contains direct-bundle aliases and browser globals banner', () => 
   assert.match(source, /'\.ttf': 'dataurl'/);
   assert.match(source, /globalThis\.process/);
   assert.match(source, /globalThis\.global/);
-  assert.match(source, /prototype-harness: NOT RUN/);
+  assert.match(source, /NOT RUN:/);
   assert.match(source, /entrySource\(projectDir, screenPaths/);
   assert.match(source, /prototype-harness: CONTACT SHEET/);
   assert.equal((source.match(/await esbuild\.build\(/g) || []).length, 1);
 });
 
+test('vector icon shim bundles the pinned Ionicons glyph map and font', async (t) => {
+  const shim = fs.readFileSync(path.join(harnessDir, 'shims', 'vector-icons.jsx'), 'utf8');
+  assert.match(shim, /String\.fromCodePoint/);
+  assert.match(shim, /@font-face/);
+  assert.doesNotMatch(shim, /\\u25cf/);
+
+  const output = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-icon-shim-'));
+  t.after(() => fs.rmSync(output, { recursive: true, force: true }));
+  const esbuild = require(path.join(harnessDir, '..', '..', '..', 'template', 'node_modules', 'esbuild'));
+  const projectDir = path.join(harnessDir, '..', '..', '..', 'template');
+  const result = await esbuild.build({
+    bundle: true,
+    format: 'iife',
+    loader: { '.ttf': 'dataurl' },
+    outfile: path.join(output, 'icons.js'),
+    platform: 'browser',
+    plugins: [harness.aliasPlugin(projectDir)],
+    stdin: {
+      contents: "import { Ionicons } from '@expo/vector-icons'; console.log(Ionicons);",
+      loader: 'jsx',
+      resolveDir: projectDir,
+    },
+  });
+  assert.equal(result.errors.length, 0);
+  const bundle = fs.readFileSync(path.join(output, 'icons.js'), 'utf8');
+  assert.match(bundle, /data:font\/ttf;base64/);
+  assert.match(bundle, /airplane-outline/);
+});
+
 test('Arabic locale parsing and RTL logical order are deterministic', () => {
   const parsed = harness.parseArgs(['--project', '/tmp/app', '--check', 'all', '--locale', 'ar']);
   assert.equal(parsed.locale, 'ar');
+  assert.deepEqual(harness.parseArgs(['--project', '/tmp/app', '--checks', 'contrast,overflow']).checks, ['contrast', 'overflow']);
   const pass = rtlMirroredOrder.run({ locale: 'ar', direction: 'rtl', elements: [
     element({ id: 1, testId: 'mirror-row:actions' }),
     element({ id: 2, parentId: 1, attributes: { 'data-logical-order': '1' }, rect: { left: 100, width: 40 } }),
@@ -86,14 +117,40 @@ test('browser findings preserve repair evidence and screenshot without parsing c
   });
 });
 
+test('finding output groups repeated discipline failures by kind', () => {
+  const records = Array.from({ length: 97 }, (_, index) => ({
+    label: `app/(app)/screen-${index}.tsx`,
+    message: `app/(app)/screen-${index}.tsx: "Title ${index}" uses unpublished type tuple 16px/24px/600`,
+  }));
+  records.push(
+    { label: 'app/(app)/home.tsx', message: 'app/(app)/home.tsx: radius 999px is outside 4/8/12/16/24' },
+    { label: 'app', message: 'brand visual font stack matches or omits the neutral template font stack' },
+  );
+  const groups = harness.groupFindingMessages(records);
+
+  assert.equal(records.length, 99);
+  assert.equal(groups.length, 3);
+  assert.equal(groups[0].kind, 'unpublished type tuple');
+  assert.equal(groups[0].count, 97);
+  assert.equal(groups[0].examples.length, 3);
+});
+
 test('prototype workflow runs one registry-driven harness pass before design refinement', () => {
   const skill = fs.readFileSync(path.resolve(harnessDir, '..', 'SKILL.md'), 'utf8');
-  const harnessStep = skill.indexOf('--check all');
+  const harnessStep = skill.indexOf('--checks all');
   const refinement = skill.indexOf('### Step 9.6 - Automated Design Refinement');
   assert.ok(harnessStep > 0 && harnessStep < refinement);
   assert.match(skill, /one bundle containing/);
   assert.match(skill, /prototype-harness-contact-sheet\.png/);
   assert.match(skill, /measurement-only/);
+});
+
+test('prototype workflow runs exactly two whole-project TypeScript gates', () => {
+  const skill = fs.readFileSync(path.resolve(harnessDir, '..', 'SKILL.md'), 'utf8');
+  assert.equal((skill.match(/npm --prefix "\$PROJECT_DIR" run type-check/g) || []).length, 2);
+  assert.match(skill, /post-generation gate/);
+  assert.match(skill, /second and final whole-project TypeScript invocation/);
+  assert.doesNotMatch(skill, /screen-wave TypeScript gate/);
 });
 
 test('scroll padding includes all pinned heights and safe-area bottom', () => {
@@ -113,9 +170,7 @@ test('scroll padding includes all pinned heights and safe-area bottom', () => {
   const missingPinned = scrollPadding.run({ elements: [
     element({ id: 1, testId: 'scroll:items', style: { overflowY: 'auto', paddingBottom: '76px' } }),
   ] }, { safeAreaBottom: 20 });
-  assert.equal(missingPinned.pass, false);
-  assert.equal(missingPinned.notRun, true);
-  assert.match(missingPinned.failures[0], /pinned:<layer> testID is absent/);
+  assert.deepEqual(missingPinned, { pass: true, failures: [], note: 'no pinned layer found' });
 
   const missingScroll = scrollPadding.run({ elements: [
     element({ id: 1, style: { overflowY: 'auto', paddingBottom: '76px' } }),
@@ -133,6 +188,40 @@ test('scroll padding includes all pinned heights and safe-area bottom', () => {
   assert.equal(structuralFailure.notRun, undefined);
   assert.match(structuralFailure.failures.join('\n'), /missing required pinned:<layer> testID/);
   assert.match(structuralFailure.failures.join('\n'), /20px.*76px/);
+});
+
+test('overflow catches parent overhang and excessive line use', () => {
+  const parent = element({
+    id: 1,
+    testId: 'row:item:1',
+    rect: { x: 0, left: 0, right: 300, top: 0, width: 300, height: 100 },
+  });
+  const child = element({
+    id: 2,
+    parentId: 1,
+    testId: 'row:title',
+    text: 'A title that unexpectedly wraps into several lines',
+    rect: { x: 16, left: 16, right: 320, top: 8, width: 304, height: 72 },
+    style: { fontSize: '16px', lineHeight: '24px' },
+  });
+  const failure = overflow.run({ viewport: { height: 844 }, elements: [parent, child] }, {});
+  assert.equal(failure.pass, false);
+  assert.match(failure.failures.join('\n'), /overflows .* by 20px/);
+  assert.match(failure.failures.join('\n'), /wraps to 3 lines \(budget 1\)/);
+
+  child.rect = { x: 16, left: 16, right: 284, top: 8, width: 268, height: 24 };
+  assert.deepEqual(
+    overflow.run({ viewport: { height: 844 }, elements: [parent, child] }, {}),
+    { pass: true, failures: [] },
+  );
+
+  parent.clientWidth = 300;
+  parent.scrollWidth = 520;
+  child.rect = { x: 16, left: 16, right: 520, top: 8, width: 504, height: 24 };
+  assert.deepEqual(
+    overflow.run({ viewport: { height: 844 }, elements: [parent, child] }, {}),
+    { pass: true, failures: [] },
+  );
 });
 
 test('contrast enforces WCAG AA thresholds from computed colours', () => {
@@ -225,6 +314,19 @@ test('primary labels cannot use clipping or ellipsis', () => {
   const failure = primaryLabelTruncation.run({ elements: [row, label] });
   assert.equal(failure.pass, false);
   assert.match(failure.failures[0], /truncates primary label/);
+
+  const icon = element({
+    id: 3,
+    parentId: 1,
+    text: String.fromCodePoint(0xf299),
+    harnessIcon: 'cube-outline',
+    clientWidth: 12,
+    clientHeight: 12,
+    scrollWidth: 24,
+    scrollHeight: 24,
+    style: { textOverflow: 'clip', whiteSpace: 'nowrap', webkitLineClamp: 'none' },
+  });
+  assert.equal(primaryLabelTruncation.run({ elements: [row, icon] }).pass, true);
 });
 
 test('density reports first-viewport seed matches without gating', () => {
@@ -727,9 +829,9 @@ test('directly bundles and checks three generated app domains', { skip: !depende
     assert.match(result.stdout, /CONTACT SHEET/);
     assert.equal(fs.existsSync(path.join(root, '.tmp/prototype-harness-contact-sheet.png')), true);
     for (const id of ['layout.scroll-padding', 'accessibility.contrast', 'content.raw-values', 'content.seed-hero', 'interaction.overlap', 'content.primary-label']) {
-      assert.match(result.stdout, new RegExp(`PASS ${id}`));
+      assert.match(result.stdout, new RegExp(`${id}[^\\n]*PASS`));
     }
-    assert.match(result.stdout, /REPORT content\.density[^\n]+"wouldMeetFloor":false/);
+    assert.match(result.stdout, /content\.density[^\n]+PASS report=[^\n]+"wouldMeetFloor":false/);
     assert.match(result.stdout, /"element":"filters","count":6,"expected":"chips-overflow"/);
     assert.match(result.stdout, /"element":"choice-cr_status"[^\n]+"source":"schema-contract"/);
     assert.match(result.stdout, /"element":"listRows"[^\n]+"source":"seed-vocabulary"/);
@@ -774,7 +876,7 @@ test('Arabic browser matrix mirrors declared logical order', { skip: !dependency
     '--check', 'rtl-mirrored-order', '--locale', 'ar',
   ], { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /PASS layout\.rtl\.mirrored-order/);
+  assert.match(result.stdout, /layout\.rtl\.mirrored-order[^\n]*PASS/);
 });
 
 test('one bundle renders seven screens materially faster than seven single runs', { skip: !dependencyProject }, (t) => {

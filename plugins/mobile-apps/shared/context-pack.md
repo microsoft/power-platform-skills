@@ -15,11 +15,11 @@ Project-local plans, contracts, vocabulary, and brand artifacts remain authorita
 - `skills/design-system/references/vibe/direction-carrier-consumer.md`: `b136c1a56c9f341100b4de2470d0d9c3b8b12d8d6830133211c6eedccd1af4a9`
 - `skills/design-system/references/vibe/direction-airline.md`: `2a5175feb87617e52e0d1825306c792d5849c3d830542158b068522b938cbcae`
 - `skills/design-system/references/vibe/direction-inspection.md`: `5a6433539e79f86f4bf8f9010cfe978ef29e62c5926706bc94519cc0cc9e62c7`
-- `skills/design-system/references/vibe/direction-product.md`: `d41458e5f6fac2eec38a894578c7af01e51c252788b5c7fea42e78b30e66f8cd`
-- `skills/design-system/references/vibe/direction-saas.md`: `e67963d86b57e419b3c5fbf9c5514daee30cd9cb113e9519f4989c7efca06534`
-- `skills/design-system/references/vibe/direction-polished-inspection.md`: `d4338c123d70d4067b5eecfb1515ce5462bc657848d6d165901ab67147554744`
+- `skills/design-system/references/vibe/direction-product.md`: `9c27683c6e438f79f8eb6e5c28c5b8ec35872df8c98b81c95322b14136c2b54b`
+- `skills/design-system/references/vibe/direction-saas.md`: `5c7201667846652ed476d0d3a5cd48c2f47d560f54c769afa32113b0a4e4f2a6`
+- `skills/design-system/references/vibe/direction-polished-inspection.md`: `30e8497a5ebb263f9d93f0f4660e83bd3c5769fbd4b8a722a5ab585981c7f619`
 - `shared/references/derivation-contract.md`: `127cdd9d985496d1a580dc9ebb118bb2f6b7b563d564a4bd488425c9a62f33c2`
-- `shared/references/i18n-rtl.md`: `7711f31659b4a7e9e9654c9b6801ee33012d9578497a201be13e198292e6482e`
+- `shared/references/i18n-rtl.md`: `f14f889a0f4e96fa88b0fa4ee446d3e7825e999d50c8355d0108cb4f9b6c4fe5`
 
 ## Template Contract
 - Expo Router + React Native + TypeScript + Tamagui Config v5.
@@ -352,8 +352,8 @@ object icons.
 Run the same registry-driven harness in LTR and Arabic RTL modes:
 
 ```bash
-node harness/run.js --project "$PROJECT_DIR" --check all
-node harness/run.js --project "$PROJECT_DIR" --check all --locale ar
+node harness/run.js --project "$PROJECT_DIR" --checks all
+node harness/run.js --project "$PROJECT_DIR" --checks all --locale ar
 ```
 
 ## Structured Plan Contract

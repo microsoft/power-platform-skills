@@ -1,0 +1,16 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/cardinality-violation.tsx",
+  "snapshot": {
+    "elements": []
+  },
+  "context": {
+    "cardinalityExpectations": [
+      {
+        "element": "filters",
+        "count": 6,
+        "declaredPattern": "chips-overflow",
+        "source": "plan"
+      }
+    ]
+  }
+}

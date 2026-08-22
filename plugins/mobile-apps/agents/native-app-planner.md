@@ -3,6 +3,9 @@ name: native-app-planner
 description: Use when the orchestrator needs a full plan + approval gates (data model → native capabilities/connectors → screens) for a real or mock-backed Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app and /create-mobile-prototype; not invoked directly by users.
 user-invocable: false
 color: cyan
+model:
+  - opus
+  - GPT-5.6 Sol
 tools:
   - Read
   - Write

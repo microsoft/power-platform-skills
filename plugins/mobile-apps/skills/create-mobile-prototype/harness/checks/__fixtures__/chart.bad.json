@@ -1,0 +1,15 @@
+{
+  "capturedFrom": "skills/create-mobile-prototype/harness/fixtures/chart-violation.tsx",
+  "snapshot": {
+    "elements": []
+  },
+  "context": {
+    "chartContract": {
+      "kind": "series-chart",
+      "form": "bar",
+      "points": 6
+    },
+    "brandTokenSource": "",
+    "projectDir": "$TEMPLATE"
+  }
+}
