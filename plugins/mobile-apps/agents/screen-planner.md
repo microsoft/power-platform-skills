@@ -68,6 +68,18 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `npx power-apps init`, or `npm install`.
 
+**Prototype context rule.** Read `${PLUGIN_ROOT}/shared/context-pack.md` once and
+resolve catalogue keys, cardinality defaults, shared components, template
+dependencies, and direction names from it. In prototype mode do not re-read
+`screen-templates.md`, `universal-patterns.md`, template `package.json`, or any
+Dataverse reference. Project-local plan, schema contract, vocabulary, and brand
+files remain required inputs.
+
+**Plan-depth tiers.** Three or fewer signed-in screens use a compact plan: no
+more than 180 lines total and only fields required by the gate/builder. Four to
+seven screens use the standard delta format. Eight or more retain graph/spec
+phases but never duplicate shared conventions or design prose per screen.
+
 Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase: specs`. If a sub-agent (data-model architect, etc.) returns a concern that needs persisting, stash the line in `<working_dir>/.tmp/pending-memory-bank-appends.txt` (orchestrator's Step 6.7 flushes this after JOIN). Do not append to `memory-bank.md` directly.
 
 ## Workflow

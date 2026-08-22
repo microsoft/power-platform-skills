@@ -101,6 +101,10 @@ artifact milestone, and return `DONE`.
 When `Dataverse planning mode: prototype` is supplied, use this
 environment-free path:
 
+0. Read `${PLUGIN_ROOT}/shared/context-pack.md` once. Read zero Dataverse
+  references or implementation scripts: no `skills/add-dataverse/**`,
+  `dataverse-reference.md`, metadata snapshots, environment resolvers,
+  request helpers, or operation-manifest builders.
 1. Skip Steps 1-3 and every live Dataverse command. Do not read
   `power.config.json`, `.resolved-environment.json`, a planning snapshot, or a
   planning evidence appendix.

@@ -37,4 +37,6 @@ jobs:
             - name: run-mobile-apps-script-tests
               shell: bash
               working-directory: plugins/mobile-apps
-              run: node --test scripts/tests/*.test.js
+                            run: |
+                                    node scripts/generate-context-pack.js --check
+                                    node --test scripts/tests/*.test.js

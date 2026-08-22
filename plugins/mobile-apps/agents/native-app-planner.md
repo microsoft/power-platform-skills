@@ -88,12 +88,21 @@ The orchestrator's Step 3 has a documented inline-gate fallback for exactly this
 
 ## Step 1 — Read Inputs and Decide Scope
 
-Read these references once before doing anything else:
+Read `${PLUGIN_ROOT}/shared/context-pack.md` once before doing anything else.
+It contains the current template allowlist, pattern/hero/cardinality catalogue,
+component inventory, template contract, and direction names.
+
+When `Dataverse planning mode: prototype`, this is the only plugin reference you
+may read. Do not read any Dataverse reference, add-dataverse skill, metadata
+script, operation-manifest script, environment resolver, or live schema evidence.
+Read only the context pack plus project-local brief/plan/contract/brand files.
+
+For non-prototype modes, also read:
 
 - `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
-- `${PLUGIN_ROOT}/template/package.json` — **the native-code allowlist**. The set of modules with native code/config is fixed by the rewrap pipeline; you may NEVER propose a native capability whose module is not present here. Pure-JavaScript app dependencies are planned separately by `screen-planner` under `## Screens` and need not be bundled in this template.
 
-Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
+Do not re-read `template/package.json` in prototype mode; use the exact allowlist
+embedded in the generated context pack.
 
 From the planner prompt extract:
 - **Target platforms** — iOS + Android by default. If the user picked just one platform, native modules need `Platform.OS` branching notes in the screen plan.
