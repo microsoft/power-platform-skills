@@ -968,6 +968,20 @@ Before finishing the screen, mentally verify:
     const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
     const id = normalizeDataverseGuid(rawId);
     ```
+  26. **Pluralization is explicit.** Quantity-bound copy uses `Intl.PluralRules`,
+    project i18n plural forms, or a singular/plural branch. Never use `item(s)`
+    or an always-plural suffix after a dynamic count.
+  27. **Archetype evidence is exact.** The content root inside `screen:<name>` has
+    one `archetype:<key>` testID matching the Screen Map.
+  28. **Chip and wrap contracts are visible.** Chip collections use
+    `chip-row:<key>` and `chip:<key>`; repeated peer rows expose the same
+    `dataSet={{ wrapGroup: '<key>' }}` and `flexWrap` mode.
+  29. **Decoration is derived.** `decoration:<slot>` elements declare
+    `dataSet={{ derivedFrom: 'record:<field>' }}` or an `aggregate:`, `state:`,
+    or `media:` source. Do not add static ornament to a data-derived slot.
+  30. **Adjacent copy is not duplicated.** Keep one heading, instruction, or
+    command per content region; repeated record values across separate rows are
+    valid.
     Reject an undefined result before calling `Service.get`, `Service.update`, `Service.delete`, `Service.upload`, or `Service.download*`. `enabled: !!rawId`, a generic RFC UUID validator, and checks for only `'undefined'` / `'null'` are forbidden. Dataverse sequential GUIDs do not guarantee RFC version bits. Bug killed: valid Dataverse IDs rejected locally and HTTP 400 `table(undefined)` after create-then-navigate.
 25. **Scanner Dataverse writes are locked and reset on focus.** Any scanner callback that creates/updates Dataverse rows, uploads evidence, or navigates to a created record uses a `useRef` in-flight lock plus `paused` state, passes `paused` and `resetKey` to `BarcodeScannerView`, resets lock/paused/resetKey inside `useFocusEffect`, and routes manual code entry through the same guarded mutation. Bug killed: rapid QR callbacks creating duplicate or broken scan rows, and scanner stuck when returning from detail.
 25. **Camera evidence screens show a visible Take picture action.** Any evidence/photo capture flow has a first-class `Take picture` / `Take evidence photo` button wired to `takePhoto()` from `src/native/camera`. Gallery/upload/file picker actions may exist only as secondary siblings, never as the only visible capture path. Bug killed: evidence screen where camera capture exists technically but users cannot find it.

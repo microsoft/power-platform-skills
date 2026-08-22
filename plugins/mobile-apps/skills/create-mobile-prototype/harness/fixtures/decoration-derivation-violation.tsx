@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, testId: 'decoration:hero-accent', attributes: { 'data-derived-from': 'static' } }] }, context: {} };

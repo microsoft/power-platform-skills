@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, testId: 'chip-row:filters', clientWidth: 300, scrollWidth: 420, rect: { width: 300 }, style: { flexWrap: 'nowrap', overflowX: 'visible' } }], viewport: { width: 390 } }, context: {} };

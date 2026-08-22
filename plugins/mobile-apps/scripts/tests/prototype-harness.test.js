@@ -242,6 +242,10 @@ test('cardinality derives expected patterns from N and rejects mismatches', () =
   assert.equal(cardinality.patternFor('choice-cr_status', 6), 'inline-radio-list');
   assert.equal(cardinality.patternFor('listRows', 12), 'plain-list');
   assert.equal(cardinality.patternFor('listRows', 60), 'search-section-groups');
+  assert.equal(cardinality.patternFor('productCards', 1), 'featured-product-card');
+  assert.equal(cardinality.patternFor('productCards', 4), 'product-card-row');
+  assert.equal(cardinality.patternFor('productCards', 8), 'product-card-grid');
+  assert.equal(cardinality.patternFor('productCards', 20), 'product-list-search');
   const expectations = [
     { element: 'filters', count: 6, declaredPattern: 'chips-overflow', source: 'plan' },
     { element: 'choice-cr_status', count: 6, declaredPattern: 'inline-radio-list', source: 'schema-contract' },

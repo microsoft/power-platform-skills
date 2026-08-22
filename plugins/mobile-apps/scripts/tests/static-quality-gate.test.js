@@ -68,6 +68,15 @@ test('three unrelated clean app screens produce zero static findings', (t) => {
   }
 });
 
+test('pluralisation distinguishes dynamic values from hard-coded plural nouns', (t) => {
+  const root = project(t);
+  const filePath = path.join(root, 'app', 'counts.tsx');
+  const clean = "import { Text } from 'react-native';\nconst items = [{ id: 1 }];\nexport default function Screen() { return <Text>{`${items.length}`}</Text>; }\n";
+  assert.equal(staticRunner.lintSource(clean, filePath, root).some((finding) => finding.id === 'content.pluralisation'), false);
+  const unsafe = "import { Text } from 'react-native';\nconst count = 1;\nexport default function Screen() { return <Text>{`${count} items`}</Text>; }\n";
+  assert.equal(staticRunner.lintSource(unsafe, filePath, root).some((finding) => finding.id === 'content.pluralisation'), true);
+});
+
 test('mobile dispatcher and plugin hook route TSX writes through the static registry', () => {
   const manifest = fs.readFileSync(path.join(pluginRoot, 'scripts', 'lib', 'mobile-validator-manifest.js'), 'utf8');
   const hooks = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'hooks', 'hooks.json'), 'utf8'));

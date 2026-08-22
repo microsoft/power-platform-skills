@@ -16,6 +16,7 @@ function patternFor(element, count) {
   }
   if (element === 'statTiles') return count <= 4 ? 'single-stat-row' : 'stat-grid-2xn';
   if (element === 'images') return count <= 1 ? 'image-hero' : count <= 4 ? 'thumbnail-row' : 'gallery-count-badge';
+  if (element === 'productCards') return count <= 1 ? 'featured-product-card' : count <= 4 ? 'product-card-row' : count <= 12 ? 'product-card-grid' : 'product-list-search';
   return null;
 }
 

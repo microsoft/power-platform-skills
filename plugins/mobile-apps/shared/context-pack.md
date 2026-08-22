@@ -5,7 +5,7 @@ Use this as the first and normally only plugin-reference read in prototype mode.
 Project-local plans, contracts, vocabulary, and brand artifacts remain authoritative.
 
 ## Source Digests
-- `shared/references/screen-templates.md`: `4179a9893360c4bdf78f6c791d304d993cf9ec69d394d4ffca05604a4bbe1e51`
+- `shared/references/screen-templates.md`: `6b687831ee265a379fe1ab668aa74ef803e7f3fe23c2e4c8e7848fb345e27efa`
 - `shared/samples/src/components/index.tsx`: `d90ada8a57fa22ae5665bd7e84799da820f1af4f1378598be7558176ac8c6ee5`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
@@ -173,6 +173,10 @@ forbidden.
 | Images | 1 | `image-hero` |
 | Images | 2-4 | `thumbnail-row` |
 | Images | >4 | `gallery-count-badge` |
+| Product cards | 1 | `featured-product-card` |
+| Product cards | 2-4 | `product-card-row` |
+| Product cards | 5-12 | `product-card-grid` |
+| Product cards | >12 | `product-list-search` |
 
 Screen implementations expose the selected pattern as
 `cardinality:<element-key>:<pattern-key>` so the prototype harness can compare

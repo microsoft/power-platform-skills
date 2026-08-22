@@ -183,6 +183,19 @@ function lintSource(source, filePath, projectRoot) {
     }
 
     if (ts.isJsxText(node) && /\b(?:Item|Record|Entity)\s+\d+\b/.test(node.text)) add('static.binding-literal', node, node.text.trim(), 'a data binding');
+    if (ts.isJsxText(node) && /\b[A-Za-z]+\(s\)/.test(node.text)) add('content.pluralisation', node, node.text.trim(), 'Intl.PluralRules, i18n plural forms, or an explicit singular/plural branch');
+    if (ts.isTemplateExpression(node)) {
+      const quantity = node.templateSpans.some((span) => /\b(?:count|length)\b/i.test(span.expression.getText(sourceFile)));
+      const literalCopy = `${node.head.text}${node.templateSpans.map((span) => span.literal.text).join('')}`;
+      if (quantity && /\s+[A-Za-z]+s\b/.test(literalCopy)) add('content.pluralisation', node, node.getText(sourceFile), 'Intl.PluralRules, i18n plural forms, or an explicit singular/plural branch');
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = node.left.getText(sourceFile);
+      const right = node.right.getText(sourceFile);
+      const unsafe = /\b(?:count|length)\b/i.test(left) && /^['"]\s+[A-Za-z]+s\b/.test(right)
+        || /\b(?:count|length)\b/i.test(right) && /^['"]\s+[A-Za-z]+s\b/.test(left);
+      if (unsafe) add('content.pluralisation', node, node.getText(sourceFile), 'Intl.PluralRules, i18n plural forms, or an explicit singular/plural branch');
+    }
     if (ts.isJsxExpression(node) && node.expression) {
       const text = node.expression.getText(sourceFile);
       if (/\.(?:cr_)?(?:status|state|phase|outcome)\b/i.test(text) && !/choiceLabel|statusToken|formattedValue/.test(text)) {

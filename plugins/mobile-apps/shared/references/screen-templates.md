@@ -40,6 +40,10 @@ forbidden.
 | Images | 1 | `image-hero` |
 | Images | 2-4 | `thumbnail-row` |
 | Images | >4 | `gallery-count-badge` |
+| Product cards | 1 | `featured-product-card` |
+| Product cards | 2-4 | `product-card-row` |
+| Product cards | 5-12 | `product-card-grid` |
+| Product cards | >12 | `product-list-search` |
 
 Screen implementations expose the selected pattern as
 `cardinality:<element-key>:<pattern-key>` so the prototype harness can compare

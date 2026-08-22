@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, visible: true, testId: 'wrap-row:one', attributes: { 'data-wrap-group': 'facts' }, style: { flexWrap: 'wrap' } }, { id: 2, visible: true, testId: 'wrap-row:two', attributes: { 'data-wrap-group': 'facts' }, style: { flexWrap: 'nowrap' } }] }, context: {} };

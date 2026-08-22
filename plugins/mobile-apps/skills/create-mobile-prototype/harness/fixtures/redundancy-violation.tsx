@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, parentId: null, visible: true, text: 'Open requests', rect: { top: 20 } }, { id: 2, parentId: null, visible: true, text: 'Open requests', rect: { top: 60 } }] }, context: {} };

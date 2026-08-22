@@ -535,6 +535,21 @@ Prototype screen-builder rules (HARD):
   Series charts render `chart-axis-label` elements in `labelSmall`, use at most
   12 points and one series, and show the planned range-aware empty state. Area
   form uses only `gradient:chartArea:magnitude`; colors never use accent/status.
+16. Pluralization - quantity-bound copy uses `Intl.PluralRules`, the project's
+  i18n plural forms, or an explicit singular/plural branch. Never render
+  `item(s)` or concatenate a count with one always-plural noun.
+17. Archetype evidence - inside `screen:<name>`, render exactly one
+  `archetype:<list|detail|form|auth|tab-root|modal|empty>` layout root matching
+  the Screen Map.
+18. Chip fit - every chip collection uses `chip-row:<key>` and each chip uses
+  `chip:<key>`. The row must wrap or scroll; no chip may clip.
+19. Wrap consistency - repeated peer rows set
+  `dataSet={{ wrapGroup: '<key>' }}` and use one `flexWrap` mode per group.
+20. Derived decoration - a decorative treatment uses `decoration:<slot>` and
+  `dataSet={{ derivedFrom: 'record:<field>' }}` (or `aggregate:`, `state:`,
+  `media:`). Never add a static flourish to a derived slot.
+21. Copy economy - do not repeat the same heading, instruction, or command in
+  adjacent content regions. Repeated values in separate data rows are allowed.
 ```
 
 Run the screen-wave TypeScript gate after every wave. Group failures by root
