@@ -10,7 +10,7 @@ function fail(message) {
 }
 
 function cleanCell(value) {
-  return String(value || '').trim().replace(/^`|`$/g, '');
+  return String(value || '').trim().replace(/^`|`$/g, '').replace(/\\\|/g, '|');
 }
 
 function sectionBody(markdown, heading) {
@@ -38,7 +38,7 @@ function parseTable(markdown, heading, errors) {
     errors.push(`${heading} does not contain a Markdown table`);
     return { headers: [], rows: [] };
   }
-  const parseLine = (line) => line.trim().split('|').slice(1, -1).map(cleanCell);
+  const parseLine = (line) => line.trim().split(/(?<!\\)\|/).slice(1, -1).map(cleanCell);
   const headers = parseLine(tableLines[0]);
   const rows = tableLines
     .slice(1)

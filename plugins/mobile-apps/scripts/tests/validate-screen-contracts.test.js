@@ -114,6 +114,21 @@ test('accepts a complete screen map, navigation contract, and spec set', () => {
   });
 });
 
+test('parses GFM escaped pipes without shifting navigation intent cells', () => {
+  const plan = validPlan().replace(
+    '| `/(app)/items/[id]` | `id: string` | - | `push` | back |',
+    '| `/(app)/items/[id]` | `id: string \\| string[]` | - | `push` | back |',
+  );
+  const errors = [];
+  const table = require('../validate-screen-contracts').parseTable(plan, '### Navigation Contracts', errors);
+  const itemRow = table.rows.find((row) => row[0] === '/(app)/items/[id]');
+
+  assert.deepEqual(errors, []);
+  assert.equal(itemRow[1], 'id: string | string[]');
+  assert.equal(itemRow[3], 'push');
+  assert.equal(validate(plan).valid, true, validate(plan).errors.join('\n'));
+});
+
 test('CLI validates built routes, declared service imports, and parameter reads', (t) => {
   const root = makeBuiltProject(t);
   const result = spawnSync(process.execPath, [script, path.join(root, 'native-app-plan.md')], { encoding: 'utf8' });
