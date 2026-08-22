@@ -1,0 +1,9 @@
+packages:
+  - .
+
+allowBuilds:
+  '@azure/msal-node-extensions': true
+  '@azure/msal-node-runtime': true
+  '@microsoft/power-apps-native-offline': true
+  esbuild: true
+  keytar: true

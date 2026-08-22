@@ -30,6 +30,9 @@ data/auth integration layer.
 - Start in a fresh, already-installed `expo-app-standalone` template directory,
   exactly like `/create-mobile-app`. Do not copy the plugin's bundled template
   over the working directory.
+- Require the committed `package-lock.json`. Prefer pnpm's committed lockfile
+  and warm content-addressed store; use `npm install` when pnpm is unavailable.
+  Never use `npm ci` for this workflow.
 - Do not run `npx power-apps`, `pac`, `az`, Dataverse HTTP calls, connection
   creation, app registration, or offline-profile mutation in this workflow.
 - Use `mobile-app:native-app-planner` with `Dataverse planning mode: prototype`.
@@ -91,7 +94,7 @@ test -f "$PROJECT_DIR/package.json"
 test -f "$PROJECT_DIR/app.config.js"
 test -f "$PROJECT_DIR/auth.config.json"
 test -f "$PROJECT_DIR/tamagui.config.ts"
-test -d "$PROJECT_DIR/node_modules/expo"
+test -f "$PROJECT_DIR/package-lock.json"
 ```
 
 Classify the directory using the same markers as
@@ -100,12 +103,25 @@ Classify the directory using the same markers as
 | State | Action |
 |---|---|
 | Fresh installed template | Continue. |
-| Template files exist but `node_modules/expo` is absent | STOP and ask the user to run `npm install`. Do not provision npm credentials. |
+| Template files exist but `node_modules/expo` is absent | Run the deterministic installer below. Do not provision npm credentials. |
 | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, `src/generated/services/*.ts`, or `.mobile-app/state.json` exists | STOP unless this is an explicitly confirmed resume of the same prototype run. |
 | Required template files are missing | STOP and point to the README `degit` setup. |
 
 Require Node 22+ and npm 10+. Do not probe Power Platform or native build
 toolchains.
+
+Install missing dependencies before planning:
+
+```bash
+if ! test -d "$PROJECT_DIR/node_modules/expo"; then
+  node "${CLAUDE_SKILL_DIR}/runtime/install-dependencies.js" "$PROJECT_DIR"
+fi
+```
+
+The installer selects `pnpm install --frozen-lockfile` when pnpm is available
+and falls back to `npm install`. Both consume committed lockfiles. A failed
+install is surfaced as a Track A concern once the two-track supervisor exists;
+it must never trigger an unpinned install or `npm ci`.
 
 ### Step 2 - Capture Brief And Impact Preview
 
