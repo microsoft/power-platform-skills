@@ -421,6 +421,10 @@ Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
 status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
 
+Inject `${PLUGIN_ROOT}/shared/references/derivation-contract.md` before any
+styling reference. Subject/story/metric/image derivation controls the layout;
+tokens and components come afterward.
+
 For every screen, update the supervisor around the existing builder and
 TypeScript gates using the slug printed by `supervisor.js plan`:
 

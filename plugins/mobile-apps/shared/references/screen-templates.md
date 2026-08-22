@@ -563,7 +563,7 @@ Apply these to every screen. They are the difference between an app that feels c
 
 ### Skeleton shimmer (initial data load)
 
-Every data-driven screen must show a skeleton while loading — never a spinner, never blank. Use the `ShimmerBox` component from [universal-patterns.md](universal-patterns.md) Section 3.
+Every data-driven screen must show a skeleton while loading — never a spinner, never blank. Use the implemented `ShimmerBox` export from `shared/samples/src/components/index.tsx`.
 
 **List screen skeleton:**
 ```tsx
@@ -662,7 +662,7 @@ When data loads or a UI state changes, never snap between states — always anim
 
 ### Swipe-to-act
 
-For any list that supports quick actions (delete, archive, complete), use swipe-to-act from [universal-patterns.md](universal-patterns.md) Section 28. Rules for when to add it:
+For any list that supports quick actions (delete, archive, complete), use swipe-to-act from `mobile-gesture-recipes.md`. Rules for when to add it:
 
 - Add swipe-to-delete only if the delete action appears in the detail screen too
 - Always pair with an undo toast (3-second window)

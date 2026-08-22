@@ -257,7 +257,7 @@ Layout: question whether cards are needed — see Section 14 (edge-to-edge rows 
 Data values: use fontFamily="$mono" for IDs, timestamps, currency, coordinates.
 Peak moments: note which screens have task-completion flows that deserve celebration.
 Anti-patterns: ensure no items from Section 16 checklist are present.
-Universal patterns: screen-builder will read universal-patterns.md for industry-specific
+Catalogue patterns: screen-builder resolves industry-specific keys from shared/context-pack.md
 patterns (sparklines for finance, offline sync for field, etc.). Include the industry in
 per-screen specs so the builder knows which sections to apply.
 ```

@@ -71,7 +71,7 @@ If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.
 **Prototype context rule.** Read `${PLUGIN_ROOT}/shared/context-pack.md` once and
 resolve catalogue keys, cardinality defaults, shared components, template
 dependencies, and direction names from it. In prototype mode do not re-read
-`screen-templates.md`, `universal-patterns.md`, template `package.json`, or any
+large legacy prose catalogues, template `package.json`, or any
 Dataverse reference. Project-local plan, schema contract, vocabulary, and brand
 files remain required inputs.
 
@@ -110,7 +110,7 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ### Step 0 — Load Industry Patterns
 
-If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
+If the planner's prompt includes an industry, use the matching catalogue keys already embedded in `${PLUGIN_ROOT}/shared/context-pack.md`. Do not load a second industry-pattern prose catalogue.
 
 ### Step 0b — Load Design Direction (if present)
 
@@ -127,7 +127,7 @@ Per-screen specs may still override (a celebration screen can be expressive in a
 
 **Also check for `<working_dir>/brand/design-system.md`** — if it exists, it takes priority over `## Design Direction` for palette, typography, components, and negatives. Read its `## Palette`, `## Typography`, `## Components`, and `## Negatives` sections and use them as the authoritative design defaults for all per-screen specs. The `## Negatives` section contains HARD RULES — no per-screen spec may violate them.
 
-**If neither `## Design Direction` nor `brand/design-system.md` exists**, fall back to today's industry-inferred logic from `universal-patterns.md` and `mobile-design-philosophy.md`. Do not block on their absence.
+**If neither `## Design Direction` nor `brand/design-system.md` exists**, fall back to the context pack catalogue and `mobile-design-philosophy.md`. Do not block on their absence.
 
 ---
 

@@ -216,5 +216,5 @@ open "<working_dir>/preview.html" 2>/dev/null \
 ## References
 
 - [tamagui-html-mapping.md](../../shared/references/tamagui-html-mapping.md) — component + token mapping + phone frame template
-- [tamagui-component-recipes.md](../../shared/references/tamagui-component-recipes.md) — copy-paste Tamagui snippets (context for recognizing patterns)
+- [shared component source](../../shared/samples/src/components/index.tsx) — implemented Tamagui primitives
 - [screen-templates.md](../../shared/references/screen-templates.md) — screen archetype layouts

@@ -74,13 +74,13 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   - `${PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
   - `${PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
   - `${PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
+  - `${PLUGIN_ROOT}/shared/references/derivation-contract.md` — read before styling; determines subject, story, metrics, imagery, and what to cut
   - `${PLUGIN_ROOT}/shared/references/accessibility-checklist.md` — universal a11y rules
   - The matching sample for your archetype — **read for code patterns and API only, not as a layout template**:
     - List → `${PLUGIN_ROOT}/shared/samples/screen-list.tsx`
     - Detail → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
     - Form → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
-  - For component snippets: `${PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
-  - **If the plan's `## Design` section names an industry**, also read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and apply the relevant sections per the "When to Use This Document" table at the bottom. For example: finance → Sections 2, 3, 5, 6, 7, 19, 20; field/ops → Sections 8, 9, 10, 14, 15, 23, 24. Skip this file only if the plan says "Industry: productivity" with no further industry signal.
+  - For shared component APIs, read the real exports in `${PLUGIN_ROOT}/shared/samples/src/components/index.tsx`; use catalogue keys from `${PLUGIN_ROOT}/shared/context-pack.md`.
   - **If the plan's `## Design` section specifies a non-default font pairing or non-Professional copy tone**, also read:
     - `${PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
     - `${PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
@@ -909,7 +909,7 @@ export default function <ScreenName>Screen() {
 
 - **Detail routes** like `/(app)/inspections/[id]` use `useLocalSearchParams<{ id: string }>()` from `expo-router`
 - **Form screens** use `react-hook-form` if installed; otherwise inline `useState` per field for v0
-- **Choice / picklist fields in forms** — use Tamagui `<Select>` with the generated const. The const lives in `src/generated/models/<Entity>Model.ts` and maps int values (as string keys) to label strings (e.g. `Cr123_Projectstatus = { '100000000': 'Active', ... }`). Use `Object.entries(Const)` to build `<Select.Item>` elements. Convert to/from string at the `Select` boundary (`String(field.value)` in, `Number(v)` out). Never hardcode option values. For read-only display (list rows, detail fields), use the `formattedValue(record, '<columnLogicalName>')` helper from `@/utils`, or fall back to the generated const lookup (`Cr123_Projectstatus[String(record.cr123_status)]`). NEVER invent/read a separate `*name` shadow property and NEVER inline the raw annotation key. See the "Choice / picklist select" recipe in `shared/references/tamagui-component-recipes.md`.
+- **Choice / picklist fields in forms** — use Tamagui `<Select>` with the generated const. The const lives in `src/generated/models/<Entity>Model.ts` and maps int values (as string keys) to label strings (e.g. `Cr123_Projectstatus = { '100000000': 'Active', ... }`). Use `Object.entries(Const)` to build `<Select.Item>` elements. Convert to/from string at the `Select` boundary (`String(field.value)` in, `Number(v)` out). Never hardcode option values. For read-only display (list rows, detail fields), use the `formattedValue(record, '<columnLogicalName>')` helper from `@/utils`, or fall back to the generated const lookup (`Cr123_Projectstatus[String(record.cr123_status)]`). NEVER invent/read a separate `*name` shadow property and NEVER inline the raw annotation key. Use the implemented helpers in `shared/samples/src/utils/choices.ts`.
   - **Fallback — const missing or model file absent:** emit a plain `<Input>` storing the raw int as a string, with a TODO comment:
     ```tsx
     {/* TODO(choice-missing): No option const found for cr123_status in Cr123_ProjectModel.ts.

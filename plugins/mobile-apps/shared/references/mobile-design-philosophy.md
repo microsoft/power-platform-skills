@@ -1,6 +1,6 @@
 # Mobile Design Philosophy
 
-Required reading for `screen-builder` and `native-app-planner`. Defines **why** screens look a certain way. Companion docs: `screen-templates.md` (archetypes), `tamagui-component-recipes.md` (snippets), `accessibility-checklist.md` (a11y).
+Required reading for `screen-builder` and `native-app-planner`. Defines **why** screens look a certain way. Companion sources: `screen-templates.md` (archetypes), `shared/samples/src/components/index.tsx` (implemented primitives), `accessibility-checklist.md` (a11y).
 
 ---
 
@@ -247,7 +247,7 @@ Monospace date on left, title center, badge right. Vary spacing: tight within gr
 
 ## 12. Shadows & Polish
 
-Two-layer shadows feel natural. Use `shadows.sm/md/lg` from `tamagui-component-recipes.md`.
+Two-layer shadows feel natural. Use `shadows.sm/md/lg` from `shared/samples/src/tokens/index.ts`.
 
 **Dark mode:** No shadows — use surface elevation (`$color3` on `$color2`) + hairline borders.
 

@@ -247,7 +247,7 @@ Run this scorer mentally on `<description>` (the prompt the user gave with `/cre
 | **Word count** | description has ≥ 60 words |
 | **Distinct nouns** | description names ≥ 5 distinct domain nouns (people, things, documents, places — e.g. "inspector", "aircraft", "gate", "defect", "evidence") |
 | **Action verbs** | description uses ≥ 3 workflow verbs from this set: log, track, submit, assign, notify, scan, upload, approve, verify, complete, capture, override, dispatch, review, sign |
-| **Domain phrase** | description names a known industry domain — match against the industry table in [`shared/references/universal-patterns.md`](../../shared/references/universal-patterns.md) (airline, hospital, retail, manufacturing, field-service, finance, logistics, …) OR explicitly says "field operations" / "ground operations" / "site visit" / similar |
+| **Domain phrase** | description names a known industry domain from [`shared/context-pack.md`](../../shared/context-pack.md) (airline, hospital, retail, manufacturing, field-service, finance, logistics, …) OR explicitly says "field operations" / "ground operations" / "site visit" / similar |
 
 Tier the result:
 
@@ -789,7 +789,7 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 - The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
 - If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to catalogue defaults from `shared/context-pack.md`.
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
@@ -1210,7 +1210,7 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to catalogue defaults from `shared/context-pack.md`.
 
 **Otherwise**, invoke `/design-system` (ships with this plugin):
 

@@ -293,4 +293,4 @@ const customConfig = {
 
 - **`design-planning.md` Step 1c** decides whether to use a custom palette and which industry default to start from
 - **`tamagui-custom-tokens.md`** covers the mechanics of wiring tokens into `tamagui.config.ts` — refer to that file for the full config setup
-- **`tamagui-component-recipes.md`** "Named palette tokens" recipe provides the copy-paste implementation block
+- **`shared/samples/src/tokens/index.ts`** provides the implemented palette-derived gradients and shadows

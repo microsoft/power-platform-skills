@@ -50,20 +50,9 @@ Before doing anything else, load the direction bundles. These are the source of 
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
 - [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan
-- [`brand-examples.md`](./brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry) + security rules for user inputs
+- [`../input-modes.md`](../input-modes.md) — security rules for user inputs
 
 Also read once: [`shared/references/tamagui-html-mapping.md`](../../../../shared/references/tamagui-html-mapping.md) Section 4 (phone frame template) — the HTML scaffolding for each preview.
-
-### Brand example files (local copies)
-
-These are pre-loaded design systems from real-world apps — use as `--brand-doc` input or inspiration:
-
-- [`uber-design.md`](./uber-design.md) — mobile-first, field drivers, pill buttons
-- [`linear-design.md`](./linear-design.md) — enterprise SaaS, dark mode, keyboard-first
-- [`intercom-design.md`](./intercom-design.md) — enterprise chat/support, cream canvas
-- [`sentry-design.md`](./sentry-design.md) — developer tools, dark purple, ops monitoring
-
----
 
 ## Security — User Input Validation
 
@@ -103,7 +92,7 @@ STOP immediately. Print: "BLOCKED: <input> contains <issue>"
 Do NOT echo problematic content. Log to memory-bank.md ## Security events.
 ```
 
-See [`brand-examples.md`](./brand-examples.md) for the full security checklist.
+See [`../input-modes.md`](../input-modes.md) for the full security checklist.
 
 ---
 
@@ -456,9 +445,5 @@ If this skill folder is removed:
 - [direction-saas.md](./direction-saas.md) — full bundle
 - [direction-product.md](./direction-product.md) — full bundle
 - [design-bundle-schema.md](./design-bundle-schema.md) — block schema downstream agents read
-- [brand-examples.md](./brand-examples.md) — real-world brand examples + security rules
-- [uber-design.md](./uber-design.md) — Uber design system
-- [linear-design.md](./linear-design.md) — Linear design system
-- [intercom-design.md](./intercom-design.md) — Intercom design system
-- [sentry-design.md](./sentry-design.md) — Sentry design system
+- [../input-modes.md](../input-modes.md) — input security and extraction rules
 - [shared/references/tamagui-html-mapping.md](../../../../shared/references/tamagui-html-mapping.md) — phone frame template + token mapping

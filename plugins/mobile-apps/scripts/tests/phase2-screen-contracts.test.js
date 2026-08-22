@@ -101,13 +101,13 @@ test('planner and builder publish conditional UX contracts without changing the 
   assert.match(designGenerator, /selected cautionary or negative option in the accent colour/);
 });
 
-test('every shipped shared component has a component recipe', () => {
+test('every shipped shared component is present in generated context inventory', () => {
   const components = read('shared/samples/src/components/index.tsx');
-  const recipes = read('shared/references/tamagui-component-recipes.md');
+  const context = read('shared/context-pack.md');
   const exports = [...components.matchAll(/^export function ([A-Za-z][A-Za-z0-9]*)/gm)].map((match) => match[1]);
   assert.equal(exports.length, 24);
   for (const component of exports) {
-    assert.match(recipes, new RegExp(`^### \`<${component}>\`$`, 'm'), `missing recipe for ${component}`);
+    assert.match(context, new RegExp(`^- \`${component}\`$`, 'm'), `missing context inventory entry for ${component}`);
   }
 });
 

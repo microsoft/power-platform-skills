@@ -5,10 +5,11 @@ Use this as the first and normally only plugin-reference read in prototype mode.
 Project-local plans, contracts, vocabulary, and brand artifacts remain authoritative.
 
 ## Source Digests
-- `shared/references/screen-templates.md`: `72adee275c56279ec92624d063ece9384fcc9e109730c5e4d4a8a3bf369caf27`
+- `shared/references/screen-templates.md`: `4179a9893360c4bdf78f6c791d304d993cf9ec69d394d4ffca05604a4bbe1e51`
 - `shared/samples/src/components/index.tsx`: `d90ada8a57fa22ae5665bd7e84799da820f1af4f1378598be7558176ac8c6ee5`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
+- `shared/references/derivation-contract.md`: `127cdd9d985496d1a580dc9ebb118bb2f6b7b563d564a4bd488425c9a62f33c2`
 
 ## Template Contract
 - Expo Router + React Native + TypeScript + Tamagui Config v5.
@@ -250,4 +251,27 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 - `saas`
 
 ## Derivation Contract
-Not yet authored. Apply current subject/data-binding rules until the generated source exists.
+1. **Every screen states a fact.** The largest text is a sentence about a
+   specific record or the screen's data-derived subject, never a category label
+   or slogan.
+2. **One screen, one story.** Every block above the fold serves the headline's
+   fact. If a block would be unchanged when the headline changes, cut it.
+3. **Reinforce, do not repeat.** A magnitude may earn a number, delta, and visual
+   form. Repeating the same label is redundancy; encoding one fact three useful
+   ways is hierarchy.
+4. **Every count answers a user question.** Never show a row count merely because
+   it is available.
+5. **Imagery is chosen by data.** If the image could represent any other record,
+   it is decoration and must be removed.
+6. **Static words never occupy derived slots.** Replace `EXPLORE`, `AIR`, and
+   similar decoration with values such as `3 products` or `8h 15m`.
+7. **The largest text is the subject.** On a record screen it names the record;
+   state belongs in a pill, progress form, or supporting sentence.
+8. **Derive hierarchy before styling.** Choose subject, metric, relationship,
+   and action first; tokens only express those decisions.
+9. **A component earns its place through data or action.** Decorative bars,
+   dots, stripes, and cards that discriminate nothing are removed.
+10. **Empty/loading/error states preserve the same story.** They name the missing
+    subject and the next useful action rather than switching to generic copy.
+
+Screen builders read this contract before any styling or component reference.
