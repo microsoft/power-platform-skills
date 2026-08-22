@@ -22,6 +22,7 @@ function project(t) {
   fs.mkdirSync(path.join(root, 'app'), { recursive: true });
   fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
   fs.mkdirSync(path.join(root, 'src', 'components'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'tokens.ts'), `export * from '../brand/tokens';\n`);
   fs.writeFileSync(path.join(root, 'brand', 'tokens.ts'), `export const tokens = { color: { primary: '#0A4F8F' } } as const;\n`);
   fs.copyFileSync(path.join(pluginRoot, 'shared', 'samples', 'src', 'components', 'index.tsx'), path.join(root, 'src', 'components', 'index.tsx'));
   fs.symlinkSync(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
@@ -68,6 +69,12 @@ test('three unrelated clean app screens produce zero static findings', (t) => {
   }
 });
 
+test('scaffolded shared components produce zero static findings', (t) => {
+  const root = project(t);
+  const filePath = path.join(root, 'src', 'components', 'index.tsx');
+  assert.deepEqual(staticRunner.lintFile(filePath, root), []);
+});
+
 test('pluralisation distinguishes dynamic values from hard-coded plural nouns', (t) => {
   const root = project(t);
   const filePath = path.join(root, 'app', 'counts.tsx');
@@ -75,6 +82,13 @@ test('pluralisation distinguishes dynamic values from hard-coded plural nouns', 
   assert.equal(staticRunner.lintSource(clean, filePath, root).some((finding) => finding.id === 'content.pluralisation'), false);
   const unsafe = "import { Text } from 'react-native';\nconst count = 1;\nexport default function Screen() { return <Text>{`${count} items`}</Text>; }\n";
   assert.equal(staticRunner.lintSource(unsafe, filePath, root).some((finding) => finding.id === 'content.pluralisation'), true);
+});
+
+test('script-aware typography rejects visible unconditional casing', (t) => {
+  const root = project(t);
+  const source = "import { Text } from 'react-native';\nconst label = 'Open';\nexport default function Screen() { return <Text>{label.toUpperCase()}</Text>; }\n";
+  const findings = staticRunner.lintSource(source, path.join(root, 'app', 'case.tsx'), root);
+  assert.equal(findings.some((finding) => finding.id === 'typography.script-aware'), true);
 });
 
 test('mobile dispatcher and plugin hook route TSX writes through the static registry', () => {

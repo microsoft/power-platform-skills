@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { ScrollView, Image as RNImage, type ColorValue } from 'react-native';
+import { I18nManager, ScrollView, Image as RNImage, type ColorValue } from 'react-native';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -385,7 +385,7 @@ export function ActionRow({
         <Text fontSize="$4" color={destructive ? '$statusOverdue' : '$color12'}>{label}</Text>
         {subtitle && <Text fontSize="$2" color="$color10">{subtitle}</Text>}
       </YStack>
-      <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
+      <Ionicons name={I18nManager.isRTL ? 'chevron-back' : 'chevron-forward'} size={16} color={theme.color10.val} />
     </XStack>
   );
 }
@@ -725,7 +725,7 @@ export function CarouselRow<T>({
       snapToAlignment="start"
       decelerationRate="fast"
       showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ gap, paddingHorizontal: 16, paddingRight: 48 }}
+      contentContainerStyle={{ gap, paddingHorizontal: 16, paddingEnd: 48 }}
       onMomentumScrollEnd={(event) => onOffsetChange?.(event.nativeEvent.contentOffset.x)}
     >
       {items.map((item, index) => (
@@ -820,8 +820,8 @@ export function FormField({
 }) {
   return (
     <YStack gap="$2">
-      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0.6}>
-        {label.toUpperCase()}
+      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0}>
+        {label}
       </Text>
       {children}
     </YStack>

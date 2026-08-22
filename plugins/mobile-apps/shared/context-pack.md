@@ -5,11 +5,12 @@ Use this as the first and normally only plugin-reference read in prototype mode.
 Project-local plans, contracts, vocabulary, and brand artifacts remain authoritative.
 
 ## Source Digests
-- `shared/references/screen-templates.md`: `6b687831ee265a379fe1ab668aa74ef803e7f3fe23c2e4c8e7848fb345e27efa`
-- `shared/samples/src/components/index.tsx`: `d90ada8a57fa22ae5665bd7e84799da820f1af4f1378598be7558176ac8c6ee5`
+- `shared/references/screen-templates.md`: `97eeefa6c62ee29b65c954c4230859b8983bd5c02c4603bb58dd2499c5bb4129`
+- `shared/samples/src/components/index.tsx`: `915a2d22249c4c42c590e55e274452821ecab8ddbf1a2a6ee7a7c70f021fe077`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
 - `shared/references/derivation-contract.md`: `127cdd9d985496d1a580dc9ebb118bb2f6b7b563d564a4bd488425c9a62f33c2`
+- `shared/references/i18n-rtl.md`: `7711f31659b4a7e9e9654c9b6801ee33012d9578497a201be13e198292e6482e`
 
 ## Template Contract
 - Expo Router + React Native + TypeScript + Tamagui Config v5.
@@ -279,3 +280,63 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
     subject and the next useful action rather than switching to generic copy.
 
 Screen builders read this contract before any styling or component reference.
+
+## Internationalization And RTL
+Generated mobile apps must remain usable when device locale, script, and
+reading direction change. English layout is not the canonical geometry.
+
+## Locale And Messages
+
+- Format dates, numbers, currencies, and plurals with `Intl` using the active
+  device locale. Do not concatenate translated fragments.
+- Quantity copy uses `Intl.PluralRules`, project i18n plural forms, or an
+  explicit singular/plural branch.
+- Test realistic translated content, not mirrored English placeholders.
+
+## Script-Aware Typography
+
+Arabic and other joining scripts do not tolerate Latin display tracking or
+uppercase transforms. Resolve typography from the active locale:
+
+```tsx
+const isLatinScript = /^en\b|^fr\b|^de\b/i.test(locale);
+<Text
+  fontFamily={isLatinScript ? '$heading' : '$body'}
+  letterSpacing={isLatinScript ? -0.5 : 0}
+  textTransform={isLatinScript ? 'uppercase' : 'none'}
+/>
+```
+
+Literal non-zero `letterSpacing` and unconditional uppercase UI text are
+forbidden. Arabic uses a font stack with Arabic glyph coverage and spacing 0.
+
+## Logical Layout
+
+- Use `start`/`end`, `marginStart`/`marginEnd`, `paddingStart`/`paddingEnd`, and
+  logical border properties. Do not encode reading direction with left/right.
+- Read direction from the app i18n layer or `I18nManager.isRTL`.
+- A direction-sensitive horizontal group uses `testID="mirror-row:<key>"`.
+  Its meaningful children expose `dataSet={{ logicalOrder: '<1..N>' }}` so the
+  harness can prove increasing logical order appears right-to-left in Arabic.
+
+## Directional Icons
+
+Mirror only icons whose meaning depends on reading direction. Back/forward,
+chevrons, arrows, progressions, and navigation transitions use an explicit
+`I18nManager.isRTL` branch:
+
+```tsx
+<Ionicons name={I18nManager.isRTL ? 'chevron-forward' : 'chevron-back'} />
+```
+
+Do not mirror media controls, clocks, brand marks, numbers, or non-directional
+object icons.
+
+## Browser Matrix
+
+Run the same registry-driven harness in LTR and Arabic RTL modes:
+
+```bash
+node harness/run.js --project "$PROJECT_DIR" --check all
+node harness/run.js --project "$PROJECT_DIR" --check all --locale ar
+```

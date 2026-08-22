@@ -20,6 +20,7 @@ const discipline = require(path.join(harnessDir, 'checks', 'discipline.js'));
 const interactiveOverlap = require(path.join(harnessDir, 'checks', 'interactive-overlap.js'));
 const primaryLabelTruncation = require(path.join(harnessDir, 'checks', 'primary-label-truncation.js'));
 const rawValues = require(path.join(harnessDir, 'checks', 'raw-values.js'));
+const rtlMirroredOrder = require(path.join(harnessDir, 'checks', 'rtl-mirrored-order.js'));
 const seedHero = require(path.join(harnessDir, 'checks', 'seed-hero.js'));
 const scrollPadding = require(path.join(harnessDir, 'checks', 'scroll-padding.js'));
 const sortCheck = require(path.join(harnessDir, 'checks', 'sort.js'));
@@ -50,6 +51,24 @@ test('harness contains direct-bundle aliases and browser globals banner', () => 
   assert.match(source, /entrySource\(projectDir, screenPaths/);
   assert.match(source, /prototype-harness: CONTACT SHEET/);
   assert.equal((source.match(/await esbuild\.build\(/g) || []).length, 1);
+});
+
+test('Arabic locale parsing and RTL logical order are deterministic', () => {
+  const parsed = harness.parseArgs(['--project', '/tmp/app', '--check', 'all', '--locale', 'ar']);
+  assert.equal(parsed.locale, 'ar');
+  const pass = rtlMirroredOrder.run({ locale: 'ar', direction: 'rtl', elements: [
+    element({ id: 1, testId: 'mirror-row:actions' }),
+    element({ id: 2, parentId: 1, attributes: { 'data-logical-order': '1' }, rect: { left: 100, width: 40 } }),
+    element({ id: 3, parentId: 1, attributes: { 'data-logical-order': '2' }, rect: { left: 10, width: 40 } }),
+  ] }, { locale: 'ar' });
+  assert.equal(pass.pass, true, pass.failures.join('\n'));
+  const failure = rtlMirroredOrder.run({ locale: 'ar', direction: 'rtl', elements: [
+    element({ id: 1, testId: 'mirror-row:actions' }),
+    element({ id: 2, parentId: 1, attributes: { 'data-logical-order': '1' }, rect: { left: 10, width: 40 } }),
+    element({ id: 3, parentId: 1, attributes: { 'data-logical-order': '2' }, rect: { left: 100, width: 40 } }),
+  ] }, { locale: 'ar' });
+  assert.equal(failure.pass, false);
+  assert.match(failure.failures[0], /right-to-left/);
 });
 
 test('browser findings preserve repair evidence and screenshot without parsing check output later', () => {
@@ -574,6 +593,10 @@ export default function HomeScreen() {
         <View testID="cardinality:listRows:plain-list" style={{ height: 1 }} />
         <View testID="cardinality:actions:single-primary" style={{ height: 1 }} />
         <View testID="cardinality:images:image-hero" style={{ height: 1 }} />
+        <View testID="mirror-row:summary" style={{ flexDirection: 'row', gap: 8 }}>
+          <View dataSet={{ logicalOrder: '1' }} style={{ width: 40, height: 8 }} />
+          <View dataSet={{ logicalOrder: '2' }} style={{ width: 40, height: 8 }} />
+        </View>
         <View testID="sort-control:inline-chips" style={{ minHeight: 24 }}>
           <Text testID="sort-active:cr_createdat:desc" style={{ color: tokens.color.textMuted, fontSize: 14, lineHeight: 20, fontWeight: '400' }}>Sort: Newest</Text>
         </View>
@@ -739,6 +762,19 @@ test('directly bundles and checks three generated app domains', { skip: !depende
       assert.match(result.stdout, /"caption":"42 intakes in the last 6 months"/);
     }
   }
+});
+
+test('Arabic browser matrix mirrors declared logical order', { skip: !dependencyProject }, (t) => {
+  const root = generatedFixture(t, dependencyProject, {
+    id: 'rtl-001', name: 'North Dock Inspection', location: 'Loading Gate A', statusLabel: 'In review',
+    reference: 'INS-2026-0042', photoHero: false, batchMode: false, carouselMode: false, chartMode: false,
+  });
+  const result = spawnSync(process.execPath, [
+    path.join(harnessDir, 'run.js'), '--project', root, '--screen', 'app/(app)/home.tsx',
+    '--check', 'rtl-mirrored-order', '--locale', 'ar',
+  ], { encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /PASS layout\.rtl\.mirrored-order/);
 });
 
 test('one bundle renders seven screens materially faster than seven single runs', { skip: !dependencyProject }, (t) => {

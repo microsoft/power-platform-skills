@@ -38,7 +38,7 @@ When the aesthetic direction calls for it (Editorial, Soft/Organic), pair a **se
 | Refined Minimal (default) | Inter | Inter | -0.3 at `$8`+ only | 1.5x |
 | Bold / Expressive | DM Sans bold | DM Sans lighter weight | -0.5 to -0.8 | 1.5x |
 
-**Negative tracking on headlines:** Apply `letterSpacing` of -0.5 to -1.0 on `fontSize="$7"` and above. Never apply negative tracking below `$6`. This pulls letters closer and makes headings feel authoritative, not loose.
+**Script-aware headline tracking:** Latin display text may apply `letterSpacing` of -0.5 to -1.0 on `fontSize="$7"` and above through a locale/script branch. Arabic and other joining scripts always resolve to 0. Never apply negative tracking below `$6`.
 
 **Line height for body:** Long-form body text (detail screen descriptions, onboarding copy) uses 1.5–1.6x line height for reading comfort. Dense list rows use tighter default (1.3x).
 
@@ -200,7 +200,7 @@ Endings: brief confirmation after save, undo after delete, silent draft save on 
 
 | Direction | When | Characteristics |
 |---|---|---|
-| **Industrial** | Field ops, maintenance | Monospace data, uppercase tracked labels, edge-to-edge rows, single accent |
+| **Industrial** | Field ops, maintenance | Monospace data, compact sentence-case labels, edge-to-edge rows, single accent |
 | **Editorial** | Content, learning | Serif headings, generous line height, minimal cards, section numbers |
 | **Refined Minimal** | Productivity, enterprise (default) | Inter, precise weight hierarchy, low-radius bordered cards |
 | **Soft / Organic** | Healthcare, wellness, consumer | Rounded sans-serif, warm shadow, tinted surfaces |
@@ -253,7 +253,7 @@ Two-layer shadows feel natural. Use `shadows.sm/md/lg` from `shared/samples/src/
 
 **Hairline rules:** `borderBottomWidth={0.5}` between list items. 0.5px on retina = refined; 1px = clunky.
 
-**Status indicators beyond pills:** Colored dot prefix (`● Open`), left border accent (3px), uppercase tracked text. Reserve filled pills for high-priority states.
+**Status indicators beyond pills:** Colored dot prefix (`● Open`), logical-start border accent (3px), and concise sentence-case text. Reserve filled pills for high-priority states.
 
 ---
 

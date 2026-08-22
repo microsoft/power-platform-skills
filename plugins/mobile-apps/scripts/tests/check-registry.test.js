@@ -18,7 +18,7 @@ test('registry covers every check exactly once with complete routing metadata', 
     .map((name) => name.slice(0, -3))
     .sort();
   assert.deepEqual(entries.filter((entry) => entry.tier === 2).map((entry) => entry.module).sort(), modules);
-  assert.equal(entries.filter((entry) => entry.tier === 2).length, 23);
+  assert.equal(entries.filter((entry) => entry.tier === 2).length, 24);
   for (const entry of entries) {
     assert.ok(['A', 'B', 'C'].includes(entry.class));
     assert.ok([1, 2, 3].includes(entry.tier));

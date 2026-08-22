@@ -505,7 +505,7 @@ When the plan's `## Design` specifies a font pairing (e.g., `Typography: paired:
 | Archetype | Title treatment | Body treatment | Special rules |
 |---|---|---|---|
 | **List** | `fontFamily="$heading"` on screen title only; rows use `$body` | Row titles `fontWeight="600"`, descriptions `$color10` | Monospace (`$mono`) for IDs/timestamps in row metadata |
-| **Detail** | `fontFamily="$heading"` on entity title + section headers | Body prose at `lineHeight` 1.6x, `maxW={520}` | Negative tracking on hero title (`letterSpacing` -0.5 to -1.0 at `$7`+) |
+| **Detail** | `fontFamily="$heading"` on entity title + section headers | Body prose at `lineHeight` 1.6x, `maxW={520}` | Latin hero titles may use -0.5 to -1.0 tracking at `$7`+ through a script branch; joining scripts use 0 |
 | **Form** | `fontFamily="$body"` throughout | Labels `fontSize="$3"`, inputs `fontSize="$4"` | No serif in forms — forms are UI chrome, serif slows scanning |
 | **Auth** | `fontFamily="$heading"` on app name/tagline only | Everything else `$body` | Centered title is acceptable here (exception to left-align rule) |
 | **Tab-root** | Inherits from child archetype (usually List) | N/A | Tab bar labels always `$body`, `fontSize="$1"` |

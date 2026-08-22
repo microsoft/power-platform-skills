@@ -200,7 +200,7 @@ Default stack — no customization needed.
 - Mood: <choice>
 - Font: <font name> via <@tamagui/font-* or expo-font>
 - Typography: <single-family | paired: heading=X, body=Y>
-- Headline tracking: <letterSpacing overrides, e.g., "-0.5 at $7+">
+- Headline tracking: 0 globally; optional Latin-script display override through an explicit locale branch
 - Body line-height: <ratio, e.g., "1.6x for prose screens">
 - Brand color token: $brand → <hex or Tamagui token>
 - Palette: <default | custom: surface=warm cream, accent=ochre triad> (see color-palette-architecture.md)

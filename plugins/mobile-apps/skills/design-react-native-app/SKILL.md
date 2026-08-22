@@ -76,7 +76,7 @@ Create a deliberate, readable type system that supports the selected visual dire
 - Build hierarchy with size, weight, line height, color, and spacing. Avoid relying on font size alone or using many similar text styles.
 - Keep body text generally at least 16 logical pixels, secondary text at least 14, and captions at least 12 unless the existing design system specifies accessible alternatives.
 - Use comfortable line heights: approximately 1.3–1.5 times the font size for body text and 1.1–1.3 for headings.
-- Use letter spacing sparingly. Slightly increase it for small uppercase labels, but avoid wide tracking on paragraphs or long headings.
+- Keep global letter spacing at 0 and use sentence-case labels. Any Latin-only display tracking must branch on the active script; joining scripts remain at 0.
 - Do not disable font scaling. Ensure important text can grow without clipping, overlapping, or hiding controls; use `maxFontSizeMultiplier` only when a genuine layout constraint requires it.
 - When adding custom fonts, use the project's existing font-loading approach, include a loading state, and verify the correct font-family names and weights on Android, iOS, and web.
 - Test hierarchy with realistic long titles, multiline content, numeric values, and localized text rather than only short English samples.

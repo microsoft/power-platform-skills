@@ -88,7 +88,7 @@ tone: conversational
 - **Type-led, no icon required:**
   ```tsx
   <YStack items="flex-start" gap="$3" px="$5" py="$10">
-    <Text fontSize="$8" fontWeight="500" letterSpacing={-0.5}>
+    <Text fontSize="$8" fontWeight="500" letterSpacing={isLatinScript ? -0.5 : 0}>
       Nothing here yet.
     </Text>
     <Text fontSize="$5" color="$color10" lineHeight="$6">

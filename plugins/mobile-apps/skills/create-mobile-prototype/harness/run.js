@@ -18,13 +18,14 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const result = { screens: [], viewport: { width: 390, height: 844 }, safeAreaBottom: 20 };
+  const result = { screens: [], viewport: { width: 390, height: 844 }, safeAreaBottom: 20, locale: 'en' };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--project') result.project = argv[++index];
     else if (value === '--screen') result.screens.push(argv[++index]);
     else if (value === '--check') result.check = argv[++index];
     else if (value === '--report') result.report = argv[++index];
+    else if (value === '--locale') result.locale = argv[++index];
     else if (value === '--chrome') result.chrome = argv[++index];
     else if (value === '--safe-area-bottom') result.safeAreaBottom = Number(argv[++index]);
     else if (value === '--viewport') {
@@ -39,6 +40,7 @@ function parseArgs(argv) {
   if (!Number.isFinite(result.safeAreaBottom) || result.safeAreaBottom < 0) {
     fail('--safe-area-bottom must be a non-negative number');
   }
+  if (!/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(result.locale)) fail('--locale must be a BCP 47 language tag');
   return result;
 }
 
@@ -362,6 +364,8 @@ function captureSnapshot() {
   const indexes = new Map(elements.map((element, index) => [element, index]));
   return {
     errors: globalThis.__HARNESS_ERRORS || [],
+    locale: document.documentElement.lang,
+    direction: getComputedStyle(document.documentElement).direction,
     viewport: { width: innerWidth, height: innerHeight },
     elements: elements.map((element, index) => {
       const rect = element.getBoundingClientRect();
@@ -530,6 +534,7 @@ function launchChrome(chrome, userDataDir, options) {
     const child = spawn(chrome, [
       '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--allow-file-access-from-files',
       '--remote-debugging-port=0', `--user-data-dir=${userDataDir}`,
+      `--lang=${options.locale}`,
       `--window-size=${options.viewport.width},${options.viewport.height}`, 'about:blank',
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -634,7 +639,7 @@ async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) 
       stdin: { contents: entrySource(projectDir, screenPaths, options), loader: 'tsx', resolveDir: projectDir, sourcefile: 'prototype-harness-entry.tsx' },
       banner: { js: 'globalThis.process = globalThis.process || { env: {} }; globalThis.global = globalThis;' },
     });
-    fs.writeFileSync(path.join(outputDir, 'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta id="harness-snapshot" data-value=""><style>html,body,#root{width:100%;height:100%;margin:0;overflow:hidden}*{box-sizing:border-box}</style><script>globalThis.__HARNESS_ERRORS=[];addEventListener('error',function(event){globalThis.__HARNESS_ERRORS.push(String(event.error&&event.error.stack||event.message));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});addEventListener('unhandledrejection',function(event){globalThis.__HARNESS_ERRORS.push(String(event.reason&&event.reason.stack||event.reason));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});</script></head><body><div id="root"></div><script src="./bundle.js"></script></body></html>`);
+    fs.writeFileSync(path.join(outputDir, 'index.html'), `<!doctype html><html><head><meta charset="utf-8"><meta id="harness-snapshot" data-value=""><style>html,body,#root{width:100%;height:100%;margin:0;overflow:hidden}*{box-sizing:border-box}</style><script>const locale=new URLSearchParams(location.search).get('locale')||'en';document.documentElement.lang=locale;document.documentElement.dir=/^(ar|fa|he|ur)(-|$)/i.test(locale)?'rtl':'ltr';globalThis.__HARNESS_ERRORS=[];addEventListener('error',function(event){globalThis.__HARNESS_ERRORS.push(String(event.error&&event.error.stack||event.message));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});addEventListener('unhandledrejection',function(event){globalThis.__HARNESS_ERRORS.push(String(event.reason&&event.reason.stack||event.reason));document.querySelector('#harness-snapshot').setAttribute('data-error',globalThis.__HARNESS_ERRORS.join(' | '));});</script></head><body><div id="root"></div><script src="./bundle.js"></script></body></html>`);
     browser = await launchChrome(chrome, userDataDir, options);
     const captures = [];
     const screenshotDir = path.join(projectDir, '.tmp', 'prototype-harness-screens');
@@ -642,7 +647,7 @@ async function renderScreens(esbuild, projectDir, screenPaths, options, chrome) 
     fs.mkdirSync(screenshotDir, { recursive: true });
     for (const screenPath of screenPaths) {
       const screenRelative = path.relative(projectDir, screenPath).split(path.sep).join('/');
-      const url = `${pathToFileURL(path.join(outputDir, 'index.html')).href}?screen=${encodeURIComponent(screenRelative)}`;
+      const url = `${pathToFileURL(path.join(outputDir, 'index.html')).href}?screen=${encodeURIComponent(screenRelative)}&locale=${encodeURIComponent(options.locale)}`;
       const captured = await capturePage(browser.port, url, options);
       const screenshotPath = path.join(screenshotDir, `${screenRelative.replace(/[^a-z0-9]+/gi, '-')}.png`);
       fs.writeFileSync(screenshotPath, captured.image);
@@ -724,6 +729,7 @@ async function main() {
   const brandTokenPath = path.join(projectDir, 'brand', 'tokens.ts');
   const baseContext = {
     projectDir,
+    locale: options.locale,
     safeAreaBottom: options.safeAreaBottom,
     seedTexts: seedOracle(projectDir),
     brandTokenSource: fs.existsSync(brandTokenPath) ? fs.readFileSync(brandTokenPath, 'utf8') : '',

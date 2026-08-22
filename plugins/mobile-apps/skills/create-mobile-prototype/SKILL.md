@@ -550,6 +550,9 @@ Prototype screen-builder rules (HARD):
   `media:`). Never add a static flourish to a derived slot.
 21. Copy economy - do not repeat the same heading, instruction, or command in
   adjacent content regions. Repeated values in separate data rows are allowed.
+22. RTL - apply `shared/references/i18n-rtl.md`. Use logical start/end layout,
+  locale-aware typography, and conditional directional icons. Directional rows
+  use `mirror-row:<key>` plus `dataSet={{ logicalOrder: '<1..N>' }}` children.
 ```
 
 Run the screen-wave TypeScript gate after every wave. Group failures by root
@@ -597,9 +600,14 @@ per screen, reuses those snapshots across every tier-2 check, and writes
 node "${CLAUDE_SKILL_DIR}/harness/run.js" \
   --project "$PROJECT_DIR" \
   --check all
+node "${CLAUDE_SKILL_DIR}/harness/run.js" \
+  --project "$PROJECT_DIR" \
+  --check all \
+  --locale ar
 ```
 
-The harness always writes `.tmp/prototype-harness-findings.json` and stable
+Both LTR and Arabic RTL passes must run. The harness always writes
+`.tmp/prototype-harness-findings.json` and stable
 per-screen screenshots under `.tmp/prototype-harness-screens/`, including on a
 blocking check failure. After that first pass, prepare bounded Class B repair:
 

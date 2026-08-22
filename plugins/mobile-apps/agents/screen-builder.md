@@ -949,7 +949,7 @@ Before finishing the screen, mentally verify:
 11. **Monospace for data** — IDs, timestamps, coordinates, currency use `fontFamily="$mono"`
 12. **Button labels** — action-specific ("Save inspection", "Send for review"), never generic ("Submit", "OK", "Continue")
 14. **Anti-patterns** — check against mobile-design-philosophy.md Section 16. No centered text in content flows, no unnecessary cards, no engineer-facing strings
-15. **Typography** — if plan specifies font pairing, headings use `fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply per-archetype rules from screen-templates.md "Typography by Archetype" table. Apply negative tracking (`letterSpacing` -0.5 to -1.0) on titles at `fontSize="$7"` and above.
+15. **Typography** — if plan specifies font pairing, headings use `fontFamily="$heading"`, UI chrome uses `fontFamily="$body"`. Apply per-archetype rules from screen-templates.md "Typography by Archetype" table and `shared/references/i18n-rtl.md`. Latin display text may use negative tracking at `fontSize="$7"` and above only through a locale/script branch; Arabic and other joining scripts use spacing 0 and no uppercase transform.
 16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. Check examples in screen-templates.md "Copy Tone by Archetype" tables. No exclamation marks, no emoji, no "Submit"/"OK".
 17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections per mobile-design-philosophy.md Section 11. Dense lists use tight spacing with separators.
 18. **Card borders** — cards use background fill difference (`bg="$color2"` on `$background`), NOT `borderWidth={1}` on everything. Borders are only for list item separators (`borderBottomWidth={0.5}`) and inputs. If every surface has a border, strip them and use fill contrast instead.
@@ -982,6 +982,10 @@ Before finishing the screen, mentally verify:
   30. **Adjacent copy is not duplicated.** Keep one heading, instruction, or
     command per content region; repeated record values across separate rows are
     valid.
+  31. **RTL behavior is explicit.** Use logical start/end props. Branch
+    direction-sensitive icon names on `I18nManager.isRTL`. A horizontal group
+    whose semantic order must mirror uses `mirror-row:<key>` and gives direct
+    children `dataSet={{ logicalOrder: '<1..N>' }}`.
     Reject an undefined result before calling `Service.get`, `Service.update`, `Service.delete`, `Service.upload`, or `Service.download*`. `enabled: !!rawId`, a generic RFC UUID validator, and checks for only `'undefined'` / `'null'` are forbidden. Dataverse sequential GUIDs do not guarantee RFC version bits. Bug killed: valid Dataverse IDs rejected locally and HTTP 400 `table(undefined)` after create-then-navigate.
 25. **Scanner Dataverse writes are locked and reset on focus.** Any scanner callback that creates/updates Dataverse rows, uploads evidence, or navigates to a created record uses a `useRef` in-flight lock plus `paused` state, passes `paused` and `resetKey` to `BarcodeScannerView`, resets lock/paused/resetKey inside `useFocusEffect`, and routes manual code entry through the same guarded mutation. Bug killed: rapid QR callbacks creating duplicate or broken scan rows, and scanner stuck when returning from detail.
 25. **Camera evidence screens show a visible Take picture action.** Any evidence/photo capture flow has a first-class `Take picture` / `Take evidence photo` button wired to `takePhoto()` from `src/native/camera`. Gallery/upload/file picker actions may exist only as secondary siblings, never as the only visible capture path. Bug killed: evidence screen where camera capture exists technically but users cannot find it.

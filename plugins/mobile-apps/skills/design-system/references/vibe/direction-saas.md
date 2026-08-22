@@ -67,10 +67,10 @@ tone: professional
       <Text fontSize="$3" color="$color10" numberOfLines={1}>{item.meta}</Text>
     </YStack>
     <StatusPill status={item.status} />
-    <Ionicons name="chevron-forward" size={16} color={theme.color10.val} />
+    <Ionicons name={I18nManager.isRTL ? 'chevron-back' : 'chevron-forward'} size={16} color={theme.color10.val} />
   </XStack>
   ```
-- Avatar/icon left, title + meta middle, status pill + chevron right
+- Avatar/icon at logical start, title + meta middle, status pill + direction-aware chevron at logical end
 - 0.5px separator between rows (not full borders)
 - Tap target: entire row, 56pt+ tall
 

@@ -43,7 +43,7 @@ function nameText(ts, name) {
 
 function jsxTag(ts, node) {
   const name = node.tagName;
-  return ts.isIdentifier(name) ? name.text : name.getText().split('.')[0];
+  return ts.isIdentifier(name) ? name.text : name.getText();
 }
 
 function attributes(ts, node) {
@@ -64,6 +64,13 @@ function literalValue(ts, value) {
   if (value && (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value))) return value.text;
   if (value?.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (value?.kind === ts.SyntaxKind.TrueKeyword) return true;
+  return null;
+}
+
+function numericValue(ts, value) {
+  const expression = value && ts.isJsxExpression(value) ? value.expression : value;
+  if (expression && ts.isNumericLiteral(expression)) return Number(expression.text);
+  if (expression && ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(expression.operand)) return -Number(expression.operand.text);
   return null;
 }
 
@@ -139,6 +146,7 @@ function lintSource(source, filePath, projectRoot) {
       const interactive = INTERACTIVE_TAGS.has(tag) || attrs.has('onPress');
       if (interactive) {
         let parent = node.parent;
+        if (ts.isJsxElement(parent) && parent.openingElement === node) parent = parent.parent;
         while (parent) {
           if (ts.isJsxElement(parent)) {
             const parentTag = jsxTag(ts, parent.openingElement);
@@ -158,16 +166,27 @@ function lintSource(source, filePath, projectRoot) {
           if (value.startsWith('$') && !validToken(value)) add('static.token-membership', node, value, 'a token declared by Config v5 or brand/tokens.ts');
         }
         if (name === 'allowFontScaling' && value === false) add('static.font-scaling', node, 'allowFontScaling={false}', 'font scaling enabled');
+        if (name === 'letterSpacing' && numericValue(ts, raw) !== null && numericValue(ts, raw) !== 0) add('typography.script-aware', node, `letterSpacing=${numericValue(ts, raw)}`, 'a locale/script branch that resolves non-Latin scripts to 0');
+        if (name === 'textTransform' && value === 'uppercase') add('typography.script-aware', node, 'textTransform=uppercase', 'a locale/script branch that resolves scripts without case to none');
         if (name === 'testID' && typeof value === 'string') {
           if (value.startsWith('conditional-field:')) hasConditionalField = true;
           if (value.startsWith('input-role:') && !value.endsWith(':numeric-stepper')) add('static.control-role', node, value, 'input-role:<field>:numeric-stepper');
         }
         if (name === 'data-record-state' || name === 'dataSet' && raw?.getText?.().includes('recordState')) hasRecordState = true;
       }
+      if (/(?:Ionicons|MaterialIcons|FontAwesome|Icon)$/.test(tag)) {
+        const iconName = literalValue(ts, attrs.get('name'));
+        if (typeof iconName === 'string' && /(?:arrow|chevron|caret).*(?:left|right|back|forward)|(?:left|right|back|forward).*(?:arrow|chevron|caret)|^(?:arrow-back|arrow-forward|chevron-back|chevron-forward)/i.test(iconName)) {
+          add('static.directional-icon', node, `name=${iconName}`, 'an I18nManager.isRTL conditional icon name');
+        }
+      }
       if (tag === 'Gradient') {
         const testId = literalValue(ts, attrs.get('testID'));
+        const name = literalValue(ts, attrs.get('name'));
         const sourceValue = literalValue(ts, attrs.get('source'));
-        if (!sourceValue || !/^gradient:[A-Za-z][A-Za-z0-9]*:(content|state|magnitude|legibility)$/.test(String(testId || ''))) {
+        const wrapperContract = typeof name === 'string' && /^[A-Za-z][A-Za-z0-9]*$/.test(name) && /^(content|state|magnitude|legibility)$/.test(String(sourceValue || ''));
+        const directContract = /^(content|state|magnitude|legibility)$/.test(String(sourceValue || '')) && /^gradient:[A-Za-z][A-Za-z0-9]*:(content|state|magnitude|legibility)$/.test(String(testId || ''));
+        if (!wrapperContract && !directContract) {
           add('static.gradient-source', node, node.getText(sourceFile).slice(0, 120), 'source plus gradient:<token>:<source> testID');
         }
       }
@@ -198,6 +217,7 @@ function lintSource(source, filePath, projectRoot) {
     }
     if (ts.isJsxExpression(node) && node.expression) {
       const text = node.expression.getText(sourceFile);
+      if (/\.toUpperCase\s*\(/.test(text)) add('typography.script-aware', node, text, 'locale-authored casing or a script-aware branch');
       if (/\.(?:cr_)?(?:status|state|phase|outcome)\b/i.test(text) && !/choiceLabel|statusToken|formattedValue/.test(text)) {
         add('static.choice-label', node, text, 'choiceLabel/statusToken/formattedValue');
       }
@@ -206,6 +226,9 @@ function lintSource(source, filePath, projectRoot) {
       const name = nameText(ts, node.name);
       if (PHYSICAL_PROPS.has(name)) add('static.logical-properties', node, name, name.replace(/Left/g, 'Start').replace(/Right/g, 'End').replace(/^left$/, 'start').replace(/^right$/, 'end'));
       if (COLOR_PROPS.has(name) && ts.isStringLiteral(node.initializer) && /^#[0-9a-f]{3,8}$/i.test(node.initializer.text)) add('static.raw-hex', node, `${name}: ${node.initializer.text}`, 'a semantic color token');
+      const spacing = numericValue(ts, node.initializer);
+      if (name === 'letterSpacing' && spacing !== null && spacing !== 0) add('typography.script-aware', node, `letterSpacing=${spacing}`, 'a locale/script branch that resolves non-Latin scripts to 0');
+      if (name === 'textTransform' && ts.isStringLiteral(node.initializer) && node.initializer.text === 'uppercase') add('typography.script-aware', node, 'textTransform=uppercase', 'a locale/script branch that resolves scripts without case to none');
     }
     ts.forEachChild(node, (child) => visit(child, interactiveAncestors));
   };
