@@ -9,6 +9,13 @@ Project-local plans, contracts, vocabulary, and brand artifacts remain authorita
 - `shared/samples/src/components/index.tsx`: `915a2d22249c4c42c590e55e274452821ecab8ddbf1a2a6ee7a7c70f021fe077`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
+- `skills/design-system/references/vibe/design-directions.md`: `df7852b1031e9d8922c06b4b5b4a49580674b10a51647367c715cc04ddc82463`
+- `skills/design-system/references/vibe/direction-carrier-consumer.md`: `5cc9562a4d6209265286c57ccb33b9a0418733678c14eb89626f1ee8fb46d839`
+- `skills/design-system/references/vibe/direction-airline.md`: `5d55c621ed8f6049a39fdef339049e87187dff5f2d678fc3ca59abae82423d35`
+- `skills/design-system/references/vibe/direction-inspection.md`: `2fcb57570825f58f4a1f5490248ca09b95aa6d53c6205f2c80cadbdb91b27eb8`
+- `skills/design-system/references/vibe/direction-product.md`: `d41458e5f6fac2eec38a894578c7af01e51c252788b5c7fea42e78b30e66f8cd`
+- `skills/design-system/references/vibe/direction-saas.md`: `1c0fac7e427bab882f4c2a7ac9acddb49d98d5bc60080572e7a531a82307d7f1`
+- `skills/design-system/references/vibe/direction-polished-inspection.md`: `525c95405df3f05435a184dfdf3a081be1fc3100c19a2322430e63b0ce22e16b`
 - `shared/references/derivation-contract.md`: `127cdd9d985496d1a580dc9ebb118bb2f6b7b563d564a4bd488425c9a62f33c2`
 - `shared/references/i18n-rtl.md`: `7711f31659b4a7e9e9654c9b6801ee33012d9578497a201be13e198292e6482e`
 
@@ -249,11 +256,12 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 - `StatusVariant`
 
 ## Design Directions
-- `airline`
-- `inspection`
-- `polished-inspection`
-- `product`
-- `saas`
+- `carrier-consumer` — Passenger-facing carrier retail and commerce
+- `airline` — Crew, ground, and operational aviation
+- `inspection` — High-contrast hands-busy field work
+- `product` — Consumer and experience-led products
+- `saas` — Familiar enterprise and internal tools
+- `polished-inspection` — Demo-friendly enterprise operations default
 
 ## Derivation Contract
 1. **Every screen states a fact.** The largest text is a sentence about a

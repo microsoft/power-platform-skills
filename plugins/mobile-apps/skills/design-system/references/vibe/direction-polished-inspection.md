@@ -160,4 +160,4 @@ The owning mobile workflow checks these rules explicitly with the contrast and s
 - Consumer-facing marketplaces with photo content → use `--direction product` or a brand-specific spec
 - Long-form content / reading apps → use `--direction product` (editorial typography)
 - Apps that need celebration / playful motion → use `--direction product`
-- Aviation / airline apps → carve-out exists, use `--direction airline` (FlightCheck preset)
+- Aviation apps are resolved by the central catalogue: passenger commerce uses `carrier-consumer`; crew and ground operations use `airline`

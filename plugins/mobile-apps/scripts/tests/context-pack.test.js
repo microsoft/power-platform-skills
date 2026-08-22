@@ -13,9 +13,10 @@ const generator = require(generatorPath);
 test('generated planner context pack is current and contains required facts', () => {
   assert.equal(fs.readFileSync(generator.OUTPUT, 'utf8'), generator.generate());
   const pack = generator.generate();
-  for (const heading of ['Template Contract', 'Template Dependency Allowlist', 'Catalogue Keys', 'Cardinality pattern defaults', 'Shared Component Inventory', 'Design Directions', 'Derivation Contract']) assert.match(pack, new RegExp(heading));
+  for (const heading of ['Template Contract', 'Template Dependency Allowlist', 'Catalogue Keys', 'Cardinality pattern defaults', 'Shared Component Inventory', 'Design Directions', 'Derivation Contract', 'Internationalization And RTL']) assert.match(pack, new RegExp(heading));
   assert.match(pack, /`expo-camera`/);
   assert.match(pack, /`StatusPill`/);
+  assert.match(pack, /`carrier-consumer` — Passenger-facing carrier retail and commerce/);
 });
 
 test('context pack check command passes committed output', () => {

@@ -151,12 +151,25 @@ Show the cost picker, adapting the intro and option set to brand input.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
-| a | Full design | See 3 browser styles, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
+| a | Full design | Compare compatible directions in chat, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~8k tokens |
-| c | Brand preview | Apply brand to List + Form + Detail mockups; skip style picker and component sheets. | ~30 sec, ~2k tokens |
-| d | Skip everything | Use palette with industry defaults; no previews. | <5 sec, ~0 tokens |
+| c | Apply brand | Apply brand tokens, refresh the live panel, and skip direction comparison. | ~30 sec, ~2k tokens |
+| d | Skip everything | Use the brand palette with routed defaults; no gallery. | <5 sec, ~0 tokens |
 
-**If NO brand input, print:** `No brand input — defaulting to polished-inspection (white surface + Power-Platform green accent + status-stripe cards + soft-tinted pills; source: references/vibe/direction-polished-inspection.md).` Default: **c**.
+Before showing the no-brand picker, resolve the catalogue direction once:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-design-direction.js" \
+  --project "<working_dir>" \
+  [--direction "<explicit --direction value>"]
+```
+
+Store its `direction`, absolute `source`, and `reason`. A resolver failure is
+`BLOCKED`; never reconstruct a keyword exception in this skill. The resolver
+validates that every direction file is registered in
+`references/vibe/design-directions.md`.
+
+**If NO brand input, print:** `No brand input — routed to <direction> (<reason>; source: <source>).` Default: **c**.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
@@ -164,11 +177,14 @@ Show the cost picker, adapting the intro and option set to brand input.
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
 | c | Apply defaults | Apply routed default tokens and refresh the live panel. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
 
-**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
+**Default rationale:** `(c)` is the zero-click MVP path: it applies the
+catalogue-routed direction. Passenger airline commerce resolves to
+`carrier-consumer`; crew and ground operations resolve to `airline`; an
+unmatched brief resolves to the catalogue's `polished-inspection` default.
 
 **Outdoor-only opt-in:** for true field-utility apps (full sun, full shift, gloves), pass `--direction inspection` to use the dark slate + safety-orange preset instead. The MVP default is light + green because that demos better and remains usable; the outdoor-dark preset is a deliberate opt-in.
 
-**Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
+**Note:** Option (c) "Apply brand" only appears when brand input was provided.
 
 Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 
@@ -178,13 +194,10 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 - **(c) Brand apply** → skip Sub-steps 3–6, write brand tokens, refresh the live panel, and proceed to Sub-step 7.
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
   1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
-     **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent, status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange) is now opt-in via `--direction inspection` for true outdoor-only field apps.
-     4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
-
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
+  Load exactly the resolver's `source`; do not derive a filename or apply a
+  local fallback. Skip the full `brand/design-system.md` write — only
+  `brand/tokens.ts` is needed. Record `direction`, `source`, and `reason` in
+  `memory-bank.md` so future runs reproduce the decision.
   2. **Panel refresh** — run the prototype panel installer and print its stable URL. Do not render screen HTML; the running device is visual truth.
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
@@ -231,7 +244,7 @@ Before processing any external content, apply the sanitization rules from [`refe
 > "→ [design-system] Opening direction picker…"
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
-- Pass `working_dir` and `default_direction` (from industry)
+- Pass `working_dir` and `default_direction` from the resolver
 - The style picker asks with compatible catalogue options; it writes no HTML
 - Returns: picked direction name + merged bundle dimensions
 

@@ -1,91 +1,61 @@
-# Design Directions — overview
+# Design Direction Catalogue
 
-Three named gestalts the internal `/design-system` style picker uses. Each is a bundle of ~12 design tokens chosen to maximise contrast against the other two so the user can decide at a glance.
+This is the single registry and routing source for `/design-system`. Every
+`direction-*.md` file in this directory appears exactly once below. Skills,
+generators, and tests read this table; do not maintain routing carve-outs
+elsewhere.
 
-## Why three?
+## Registered Catalogue
 
-- **Two** isn't a choice — it's a forced binary
-- **Six** is decision paralysis — people decide worse with more options
-- **Three** gives genuine choice without overwhelm and matches the "Goldilocks" intuition the brain is wired for
+`Route clauses` are semicolon-separated alternatives. Within one clause, `&`
+means every group must match; `|` separates terms in a group. Matching is
+case-insensitive against the confirmed brief, app name, users, and purpose.
+Highest priority wins. `polished-inspection` is the default when no clause
+matches.
 
-The three are intentionally far apart in look, not "shades of beige". If the user picks one, they're picking a clear identity, not a nuance.
+| Slug | Source | Priority | Route clauses | Summary |
+|---|---|---:|---|---|
+| `carrier-consumer` | `direction-carrier-consumer.md` | 100 | `airline\|aviation\|flight\|carrier\|cabin\|onboard & retail\|shop\|shopping\|store\|product\|catalog\|catalogue\|buy\|purchase\|duty-free\|duty free\|merchandise`; `passenger & retail\|shop\|shopping\|product\|catalog\|buy\|purchase` | Passenger-facing carrier retail and commerce |
+| `airline` | `direction-airline.md` | 90 | `airline\|aviation\|flight\|aircraft\|carrier & crew\|pilot\|ground ops\|ground operations\|turnaround\|tarmac\|dispatch\|maintenance\|safety\|operations`; `airline operations`; `flight operations`; `airline\|aviation\|flight\|aircraft\|carrier` | Crew, ground, and operational aviation |
+| `inspection` | `direction-inspection.md` | 80 | `outdoor\|glove\|sunlight\|rugged & inspection\|field\|maintenance\|route\|dispatch`; `field operations`; `field service` | High-contrast hands-busy field work |
+| `product` | `direction-product.md` | 60 | `consumer\|customer\|premium\|wellness\|learning\|engagement\|retention\|marketplace\|commerce\|retail` | Consumer and experience-led products |
+| `saas` | `direction-saas.md` | 50 | `internal\|employee\|approval\|helpdesk\|expense\|request\|tracker\|dashboard\|report\|back office` | Familiar enterprise and internal tools |
+| `polished-inspection` | `direction-polished-inspection.md` | 0 | - | Demo-friendly enterprise operations default |
 
-## The three directions
+## Selection Rules
 
-### 1. Inspection
-**Reference apps:** Uber Driver, Lyft Driver, ServiceTitan, Procore, Field Service Lightning, Square for Restaurants
+1. An explicit `--direction <slug>` wins when the slug is registered.
+2. Otherwise evaluate every route clause and choose the highest-priority match.
+3. Passenger commerce outranks operational aviation when a brief serves both
+   passengers and cabin retail staff. The product is retail-first, so route it
+   to `carrier-consumer`.
+4. Crew, pilot, turnaround, tarmac, maintenance, safety, and ground-operation
+   workflows route to `airline` unless a higher-priority passenger-commerce
+   clause also matches.
+5. When no clause matches, use `polished-inspection`; never infer from a
+   directory filename or a separate skill-local keyword table.
 
-For someone outside, in gloves, in sunlight, with one hand on a clipboard. Glance-first, tap-second. High contrast, fully saturated status colors, big touch targets, no decorative motion (jitters in moving vehicles).
+## Bundle Contract
 
-**Pick when:** field operations, work orders, deliveries, audits, dispatch, inspections, anything outdoor or hands-busy.
+Each source file supplies every key in `design-bundle-schema.md`. A direction
+locks surface, palette, typography, row treatment, density, motion, status,
+empty state, primary action, and copy tone as one coherent choice. Per-screen
+overrides remain explicit.
 
-→ [direction-inspection.md](./direction-inspection.md)
+## Hybrid Handling
 
-### 2. SaaS
-**Reference apps:** Microsoft Teams mobile, Asana, Slack, Salesforce mobile, Notion (the trustworthy default), GitHub mobile
+A user may combine named dimensions after routing, for example:
 
-The look people inside an org expect. Familiar, professional, doesn't surprise. Cool gray base + one brand color, hairline-bordered cards, row-with-chevron lists, subtle motion. The "safe and trusted" pick.
-
-**Pick when:** internal tools, employee-facing dashboards, task trackers, request systems, anything where Microsoft 365 family resemblance is a feature.
-
-→ [direction-saas.md](./direction-saas.md)
-
-### 3. Product
-**Reference apps:** Linear, Notion (consumer side), Spotify, Airbnb, Headspace, Robinhood, Apple Music
-
-Apps you'd download by choice. Type-led, warm or rich-dark surfaces, single muted accent, sentence-style rows over icon-rich cards, generous whitespace, asymmetric layouts. The premium feel.
-
-**Pick when:** consumer-facing apps, employee experience apps where retention matters (HR onboarding, learning, wellness), executive dashboards that need to look "designed."
-
-→ [direction-product.md](./direction-product.md)
-
-## How they map to the existing surface vocabulary
-
-Existing `surface` token in `shared/references/design-planning.md`:
-
-| Direction | Surface (existing token) | Plus |
-|---|---|---|
-| Inspection | `strong-cards` | High-contrast bg, status stripe on card |
-| SaaS | `subtle-depth` | Hairline border + mild shadow on raised |
-| Product | `editorial` | Flat warm bg, full-bleed sections, asymmetry |
-
-The new direction names *bundle* the existing tokens with palette + typography + tone choices, so the user picks one thing instead of nine.
-
-## What gets locked when a direction is picked
-
-Picking one direction cascades into ~30 downstream decisions in the screen-builder. The user never has to think about these individually:
-
-| Cascaded decision | Picked from direction's bundle |
-|---|---|
-| Card border style | Inspection: status stripe / SaaS: hairline / Product: none |
-| List row layout | Inspection: card-with-stripe / SaaS: row-with-chevron / Product: sentence |
-| Empty state | Inspection: icon+sentence+big button / SaaS: icon+ghost button / Product: type-led, no icon |
-| Loading skeleton | Inspection: solid blocks / SaaS: shimmer / Product: type-shaped lines |
-| Error state | All three: inline + retry — but copy tone differs |
-| Status color saturation | Inspection: full / SaaS: desaturated / Product: monochrome+accent |
-| Primary button shape | Inspection: 56pt+ rectangular / SaaS: rectangular / Product: pill |
-| Primary action position | Inspection: bottom-pinned / SaaS: top-right + / Product: in-flow accent |
-| Heading font | Inspection: sans / SaaS: sans / Product: display |
-| Body letter-spacing | Inspection: 0 / SaaS: 0 / Product: -0.02em on titles |
-| Density | Inspection: comfortable-to-dense / SaaS: comfortable / Product: sparse |
-| Motion | Inspection: none / SaaS: subtle / Product: liberal-tasteful |
-| Accent count | Inspection: status-driven multi / SaaS: 1 brand color / Product: 1 muted |
-| Tone of copy | Inspection: direct / SaaS: professional / Product: conversational |
-
-This is the contract: **one human decision unlocks 30+ machine decisions, consistently**.
-
-## Hybrid handling
-
-Most apps fit one direction cleanly. Occasionally the right answer is a merge — "Product look but Inspection's data density" for a dashboard that needs to look premium AND fit a lot of data. The skill handles this by picking dimensions across bundles:
-
-```
-Hybrid = Product.{surface, palette, typography, motion} + Inspection.{density, list_style}
+```text
+Hybrid = carrier-consumer.{surface,palette,typography}
+       + airline.{density,status_saturation}
 ```
 
-Hybrids are documented in the plan with their composition (`Picked: Hybrid (Product base + Inspection data density)`) so downstream agents know what to do.
+Record each overridden dimension and source in `## Design Direction`. Hybrid is
+a user decision, never an automatic fallback.
 
-## When NOT to use directions
+## When Routing Is Bypassed
 
-- The user has a brand book or design system already (use their tokens directly, skip the picker)
-- The app is a pure utility with one screen (overkill — let the default ride)
-- The user explicitly asks for "Microsoft default look" (they want SaaS without the picker — just lock it)
+Use supplied brand tokens directly when the user provides a complete brand book
+or design system. A one-screen utility can use the routed default without
+opening a picker. An explicit Microsoft-default request resolves to `saas`.

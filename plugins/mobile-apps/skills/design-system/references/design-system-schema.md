@@ -118,103 +118,13 @@ Generated: {{ISO 8601 timestamp}} | Direction: {{inspection | saas | product | h
 - Locked at: {{ISO timestamp}}
 ```
 
-## Direction-specific defaults
+## Direction Defaults
 
-### Inspection
-
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #f7f6f3   | screen background       |
-| surface     | #ffffff   | cards, inputs           |
-| primary     | #1e293b   | primary CTAs, headers   |
-| accent      | #FF6A00   | safety-orange accent    |
-| text        | #1a1a1a   | body text               |
-| text-muted  | #6b6b6b   | meta, captions          |
-| border      | #d8d6d0   | dividers                |
-
-## Status palette
-| Token          | Hex       |
-|----------------|-----------|
-| status-success | #2d7a3e   |
-| status-warning | #c8881e   |
-| status-danger  | #b8321a   |
-| status-info    | #1e293b   |
-
-## Typography
-| Role     | Family | Size | Weight | Line | Tracking |
-|----------|--------|------|--------|------|----------|
-| Display  | Inter  | 28   | 700    | 1.2  | -0.01em  |
-| Heading  | Inter  | 22   | 600    | 1.25 | -0.005em |
-| Title    | Inter  | 18   | 600    | 1.3  | 0        |
-| Body     | Inter  | 16   | 400    | 1.5  | 0        |
-| Body-sm  | Inter  | 14   | 400    | 1.4  | 0        |
-| Caption  | Inter  | 12   | 500    | 1.3  | 0.02em   |
-| Mono     | JetBrains Mono | 14 | 400 | 1.4 | 0     |
-
-## Negatives (HARD RULES)
-- ✗ No shadows — use border for separation
-- ✗ No serif fonts — Inter or JetBrains Mono only
-- ✗ No decorative motion — functional only (150ms ease-out)
-- ✗ No tap targets under 52px (gloved use)
-- ✗ No saturated red except status-danger
-- ✗ No chevrons on list rows — use status pills only
-- ✗ No display serif fonts
-```
-
-### SaaS
-
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #ffffff   | screen background       |
-| surface     | #f8f9fa   | cards, sections         |
-| primary     | #4f46e5   | primary CTAs, links     |
-| accent      | #4f46e5   | (= primary, indigo)     |
-| text        | #111827   | body text               |
-| text-muted  | #6b7280   | secondary text          |
-| border      | #e5e7eb   | dividers, input borders |
-
-## Status palette
-| Token          | Hex       |
-|----------------|-----------|
-| status-success | #dcfce7   |
-| status-warning | #fef3c7   |
-| status-danger  | #fecaca   |
-| status-info    | #dbeafe   |
-
-## Negatives (HARD RULES)
-- ✗ No pill buttons — use standard radius
-- ✗ No bold colors outside accent — keep neutral
-- ✗ No decorative illustration in UI chrome
-- ✗ No custom fonts — system-ui stack or Inter
-- ✗ No card shadows heavier than 0 1px 3px rgba(0,0,0,0.1)
-```
-
-### Product
-
-```markdown
-## Palette
-| Token       | Hex       | Usage                   |
-|-------------|-----------|-------------------------|
-| bg          | #faf8f5   | warm cream background   |
-| surface     | #ffffff   | cards, modals           |
-| primary     | #1a1614   | headings, primary text  |
-| accent      | #7d9b76   | sage accent             |
-| text        | #1a1614   | body text               |
-| text-muted  | #8a857e   | secondary text          |
-| border      | #e8e4de   | subtle dividers         |
-
-## Negatives (HARD RULES)
-- ✗ No chevrons on list rows — content-led, not action-led
-- ✗ No status pills — use subtle text indicators
-- ✗ No uppercase labels — sentence case only
-- ✗ No information density — sparse is the aesthetic
-- ✗ No system fonts — display heading must be visually distinct
-- ✗ No flat/utilitarian card styling — editorial warmth required
-```
+Resolve the direction through
+[`vibe/design-directions.md`](./vibe/design-directions.md), then load the exact
+registered source returned by `scripts/resolve-design-direction.js`. That source
+owns palette, typography, negatives, and component treatment. Do not duplicate
+direction names or token bundles in this schema.
 
 ## Validation rules
 

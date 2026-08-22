@@ -1,6 +1,6 @@
 # Direction: Airline
 
-Commercial-aviation brand language. Deep navy + crisp white surfaces + high-visibility status — the look of carrier mobile apps (Delta, United, Lufthansa, ANA) and ground-operations tools that read as both branded and operationally serious.
+Commercial-aviation operations language. Deep navy + crisp white surfaces + high-visibility status for crew, ground, turnaround, safety, and flight-operation workflows.
 
 ## Reference apps
 
@@ -147,8 +147,8 @@ const tokens = {
 
 ## When to use this direction
 
-- App brief includes any of: `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`.
-- App audience is commercial-aviation operators, ground crew, pilots, cabin crew, or airline back-office staff.
+- App combines aviation context with crew, pilot, turnaround, tarmac, maintenance, safety, dispatch, or ground-operation work.
+- App audience is commercial-aviation operators, ground crew, pilots, cabin crew, or airline operations staff.
 - App brand should read as carrier-affiliated rather than generic field-ops or generic SaaS.
 
 ## When NOT to use this direction
@@ -156,5 +156,6 @@ const tokens = {
 - Defense / military aviation (different palette — earth tones or cammo-inspired).
 - General-aviation hobbyist apps (community-feel, less corporate).
 - Drone or UAV ops apps (different operational context — use `field-ops` or a custom direction).
+- Passenger retail, duty-free, product catalogue, or onboard shopping apps (use `carrier-consumer`).
 
-For those, use `signature` (slate + safety-orange) or a custom direction file.
+For those, use the catalogue's matched direction or an explicit custom brand specification.

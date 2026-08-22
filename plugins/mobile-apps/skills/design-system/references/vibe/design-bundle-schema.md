@@ -22,11 +22,11 @@ Inserted between `## Native Capabilities` (or `## Connectors`) and `## Design`. 
 ```markdown
 ## Design Direction
 
-**Picked:** <Inspection | SaaS | Product | Hybrid (...)>
+**Picked:** <registered catalogue direction | Hybrid (...)>
 **Reference apps:** <comma-separated list>
 **Picked at:** <ISO 8601 timestamp> (via /design-system style picker)
 
-direction: <inspection | saas | product | hybrid>
+direction: <registered slug from design-directions.md | hybrid>
 surface: <strong-cards | subtle-depth | editorial>
 background: <dark-slate | cool-gray-light | warm-cream | rich-dark>
 palette: <named bundle, e.g. "slate + safety-orange">
@@ -119,7 +119,7 @@ This is the only integration point between the internal style picker and the res
 ## Validation rules
 
 - All bundle keys are required when the block exists (no partial bundles)
-- `direction` value MUST be one of: `inspection`, `saas`, `product`, `hybrid`
+- `direction` value MUST be a registered slug in `design-directions.md` or `hybrid`
 - Color values MUST include a hex code in parentheses if a name is given
 - `Picked at` MUST be a valid ISO 8601 timestamp
 - `Reference apps` MUST be non-empty (at least 2 reference apps for clarity)
