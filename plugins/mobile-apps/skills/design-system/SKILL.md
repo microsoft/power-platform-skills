@@ -16,7 +16,7 @@ Source of truth for every screen built in a Power Apps mobile app. Produces thre
 2. `brand/tokens.ts` — importable Tamagui token export
 3. `brand/design-system.html` — deterministic visual gallery (zero LLM cost)
 
-Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9b applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
+Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; the template already owns the compile-time semantic token names and neutral values. `/create-mobile-app` Step 9b applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) so approved brand values override those defaults and reach provider props. Do not make design-system execution a prerequisite for compilation, and do not reintroduce the old user-invocable `tamagui-design-system` split.
 
 ## When to use
 
@@ -602,6 +602,10 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
+
+The template owns alias creation. Integration may override values but must not
+delete/recreate `$surface*`, `$status*`, or `$mono`. In add-aliases mode on a
+current template, verification is the only action.
 
 ---
 

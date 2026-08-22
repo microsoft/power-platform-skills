@@ -257,17 +257,19 @@ Gradient arrays for use with the `<Gradient>` primitive (requires `expo-linear-g
 
 ```ts
 export const gradients = {
-  hero:    ['#0078d4', '#0a4f8f'] as const,   // brand hero headers
-  danger:  ['#d23a3a', '#b81e1e'] as const,   // destructive / overdue heroes
-  success: ['#107c10', '#054b05'] as const,   // completion heroes
-  warm:    ['#ca5010', '#8a3500'] as const,   // warning / ops accent
-  neutral: ['#323130', '#201f1e'] as const,   // dark neutral headers
+  imageScrim: ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.72)'] as const,
 } as const
 
 export type GradientName = keyof typeof gradients
 ```
 
 Store in `src/tokens/index.ts` (import via `@/tokens`) — used by both `<Gradient>` and `<Hero>`.
+
+Every rendered gradient must resolve to a key in this set and declare one
+source: `content`, `state`, `magnitude`, or `legibility`. Inline gradients and
+decorative industry defaults are forbidden. Never place a gradient on a button,
+chip, tab, or container that owns interactive chrome. Use at most two distinct
+gradient tokens app-wide.
 
 ## When to stop
 

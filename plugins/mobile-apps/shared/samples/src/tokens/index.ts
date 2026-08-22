@@ -1,11 +1,8 @@
 // Shared design tokens. Import via `@/tokens` — never hardcode hex in screen files.
 
 export const gradients = {
-  hero:    ['#0078d4', '#0a4f8f'] as const,
-  danger:  ['#d23a3a', '#b81e1e'] as const,
-  success: ['#107c10', '#054b05'] as const,
-  warm:    ['#ca5010', '#8a3500'] as const,
-  neutral: ['#323130', '#201f1e'] as const,
+  imageScrim: ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.72)'] as const,
+  chartArea: ['rgba(20, 125, 146, 0.32)', 'rgba(20, 125, 146, 0.02)'] as const,
 } as const;
 
 export type GradientName = keyof typeof gradients;

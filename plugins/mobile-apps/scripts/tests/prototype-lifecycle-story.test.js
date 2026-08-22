@@ -37,8 +37,26 @@ test('prototype plan edit preserves seed identity through real migration and cle
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-lifecycle-story-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   write(root, 'package.json', { name: 'task-prototype' });
-  write(root, 'brief.md', 'A task queue with priorities and completion states.');
+  write(root, 'brief.md', 'A task queue for operations coordinators with priorities and completion states.');
   write(root, 'native-app-plan.md', '# Task prototype\n\n## Data Model\n\nApproved contract.\n\n## Connectors\n\n_None._\n');
+  write(root, '.tmp/seed-vocabulary.json', {
+    domain: 'task queue',
+    rowCount: 12,
+    pools: {
+      person: ['Amina Okafor', 'Diego Morales', 'Haruka Sato', 'Lina Haddad', 'Mateo Silva', 'Priya Nair', 'Tomasz Kowalski', 'Zoe Laurent'],
+      company: ['Northstar Operations', 'Beacon Service Group', 'Citadel Workflow Systems', 'Harbor Delivery Partners', 'Summit Process Labs', 'Verity Coordination Works'],
+      location: ['North Operations Hub', 'Riverside Service Centre', 'West Annex Office', 'Central Dispatch Floor'],
+      door: ['Dispatch Zone A', 'Review Room', 'Planning Area', 'Intake Desk', 'Approval Gate', 'Completion Station'],
+      title: ['Review urgent service task', 'Coordinate delivery follow-up', 'Approve completion request', 'Investigate blocked work item', 'Schedule priority handoff', 'Close verified task'],
+      note: ['Priority needs confirmation', 'Coordinator review is recorded', 'Completion evidence is available', 'Follow-up is scheduled', 'Task owner has been notified'],
+      role: ['operations coordinators'],
+    },
+    idFormats: {
+      serial: 'TSK-{seq4}',
+      reference: 'TASK-{year}-{seq4}',
+      code: '{ALPHA2}-{seq3}',
+    },
+  });
 
   const contract = {
     schemaVersion: 1,

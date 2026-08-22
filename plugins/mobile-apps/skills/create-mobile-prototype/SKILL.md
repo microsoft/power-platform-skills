@@ -123,6 +123,64 @@ paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
 and validation stages. Ask Proceed / Revise / Cancel before planning.
 
+#### Step 2.1 - Derive Seed Vocabulary (Spike)
+
+After writing `brief.md` and before showing the impact preview, derive a seed
+vocabulary from that brief alone and write
+`<PROJECT_DIR>/.tmp/seed-vocabulary.json`. This is an LLM-authored planning
+artifact, not a selection from a bundled catalogue.
+
+```json
+{
+  "domain": "<short domain phrase copied from the brief>",
+  "rowCount": 12,
+  "pools": {
+    "person": ["8-10 plausible full names with varied origins"],
+    "company": ["6-8 domain-specific organisation names"],
+    "location": ["4-6 domain-specific sites or buildings"],
+    "door": ["6-8 domain-specific rooms, gates, zones, or sub-locations"],
+    "title": ["6-8 recognisable work-item titles"],
+    "note": ["5-6 short domain-real remarks"],
+    "role": ["roles using the wording present in the brief"]
+  },
+  "idFormats": {
+    "serial": "<domain prefix>-{seq4}",
+    "reference": "<domain prefix>-{year}-{seq4}",
+    "code": "{ALPHA2}-{seq3}"
+  }
+}
+```
+
+Hard rules:
+
+- Derive every pool value from the users, records, workflow, places, and
+  terminology in `brief.md`. Do not read, select, or copy a fixed domain pack.
+- Keep `domain` as a concise phrase that appears verbatim in the brief. Preserve
+  the brief's wording for `pools.role` so provenance is mechanically checkable.
+- Use stable ordering and unique values within each pool. Do not add generic
+  numbered strings such as `Item 1` or `<Entity> 1`.
+- Add extra string-array pools when the brief explicitly names another display
+  role that the base pools do not represent. Do not invent schema-only pools
+  before the data model exists.
+- Use `rowCount: 12` for this spike unless an approved input explicitly requires
+  a different density.
+
+Validate the artifact before the impact preview:
+
+```bash
+mkdir -p "$PROJECT_DIR/.tmp"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-seed-vocabulary.js" \
+  "$PROJECT_DIR/.tmp/seed-vocabulary.json" \
+  --brief "$PROJECT_DIR/brief.md"
+```
+
+If validation fails, repair only the vocabulary and rerun the command. Do not
+continue to planning with an invalid artifact.
+
+**Generator contract:** Step 5 consumes this validated vocabulary. Treat it as
+immutable seed intent for the approved brief; revise and revalidate it only when
+the brief changes.
+
 ### Step 3 - Plan In Prototype Mode
 
 Spawn `mobile-app:native-app-planner` with:
@@ -221,18 +279,26 @@ npm --prefix "$PROJECT_DIR" run type-check
 Run:
 
 ```bash
+test -f "$PROJECT_DIR/.tmp/seed-vocabulary.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-seed-vocabulary.js" \
+  "$PROJECT_DIR/.tmp/seed-vocabulary.json" \
+  --brief "$PROJECT_DIR/brief.md"
 node "${CLAUDE_SKILL_DIR}/scripts/gen-mock-services.js" "$PROJECT_DIR"
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-The generator reads `.tmp/dataverse-schema-contract.json` and writes:
+The generator reads `.tmp/dataverse-schema-contract.json` plus the validated
+`.tmp/seed-vocabulary.json` and writes:
 
 - one in-memory CRUD service and deterministic seed file per service-required
   table;
 - one prototype schema per table;
 - connector throw-stubs from `## Connectors`;
+- `src/generated/choiceLabels.ts`, with one contract-derived map per choice
+  column and a safe `choiceLabel()` helper;
 - `src/generated/services/index.ts`, `src/generated/index.ts`, and registries;
-- `src/generated/.prototype-manifest.json`, the exact cleanup inventory.
+- `src/generated/.prototype-manifest.json`, including the vocabulary hash and
+  exact cleanup inventory.
 
 Inspect seed density before screen construction. Require related parent IDs,
 multiple workflow/choice states, past and future dates where relevant, edge
@@ -244,15 +310,33 @@ approved structured contract or generator, regenerate, and rerun type-check.
 
 ### Step 6 - Apply Native Capabilities And Design
 
+Run `/design-system` in orchestrator mode unless `--no-design`. Pass
+`--working-dir` and `--from-design-intake` when supplied. Preserve its existing
+approval flow and wait for the approved `brand/tokens.ts` and
+`brand/design-system.md`; do not bypass or pre-answer its gate. With explicit
+`--no-design`, the deterministic helper below supplies the required baseline.
+
+After the design approval gate or explicit skip, add the prototype's schema
+semantics before invoking any screen planner or builder:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/generate-prototype-design-system.js" \
+  "$PROJECT_DIR"
+test -f "$PROJECT_DIR/brand/tokens.ts"
+test -f "$PROJECT_DIR/brand/design-system.md"
+npm --prefix "$PROJECT_DIR" run type-check
+```
+
+When approved brand artifacts already exist, the helper preserves their palette
+and design direction and updates only its managed status/date blocks. Without
+brand artifacts, it authors a deterministic app-specific baseline.
+`brand/tokens.ts` must exist before Step 7 creates a screen skeleton and before
+Step 8 spawns the first screen-builder.
+
 For every approved `## Native Capabilities` row, execute `/add-native`
 sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
 unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
-
-Run `/design-system` in orchestrator mode unless `--no-design`. Pass
-`--working-dir` and `--from-design-intake` when supplied. Even with
-`--no-design`, require app-specific semantic aliases/tokens; never leave the raw
-Tamagui starter palette as the product design.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
 `/create-mobile-app` brand-token integration contract, then type-check.
@@ -263,7 +347,15 @@ Reuse the current owning implementation in `/create-mobile-app`, in this order:
 
 1. Step 10.7 generated-service snapshot, using the prototype services now on
    disk.
-2. Step 10b navigation layout from the approved Screen Map.
+2. Generate navigation from the approved Screen Map plus Navigation Contracts:
+  ```bash
+  node "${CLAUDE_SKILL_DIR}/../../scripts/generate-prototype-navigation.js" \
+    "$PROJECT_DIR"
+  ```
+  Tab roots must use `navigate`, labels must be content nouns, and at most one
+  tab may be app furniture (`Home`, `Profile`, `Settings`, and equivalents).
+  The active/inactive tab colours and icon size must come from
+  `brand/tokens.ts`; status tokens are forbidden on navigation chrome.
 3. Step 10.8 app-specific shared code and typed skeletons.
 
 Prototype-specific rules:
@@ -289,10 +381,92 @@ in-memory implementations with deterministic seed data and the same app-facing
 CRUD contract that graduation will preserve through adapters when necessary.
 Do not import *.seed.json, call Dataverse, call connectors directly, or weaken
 the approved domain-specific first viewport.
+
+Prototype screen-builder rules (HARD):
+1. Tokens only - every colour, size, and radius resolves to brand/tokens.ts. No
+  raw colour, size, or radius literals in a screen file.
+2. testIDs by convention - use screen:<name> on the screen root; pinned:<what>
+  on every pinned layer; row:<entity>:<id> on each data row; row-meta on the
+  row fact container; cta-primary and cta-secondary on commands; hero on the
+  catalogue hero.
+3. Bottom inset - scroll content bottom padding is at least the sum of all
+  pinned-layer heights plus the current safe-area bottom inset.
+4. Catalogue hero - hero imagery comes only from a field explicitly marked
+  hero-eligible in the plan/schema. If no field is eligible, render no hero;
+  never substitute a mood or atmospheric asset.
+5. Attribute chains - every list row shows 3-4 data-bound facts in one fixed
+  order shared by all rows on that screen.
+6. Icons - use the approved icon family for every row and every labelled field.
+  Icons supplement visible labels and never replace them.
+7. Status micro-copy - every screen that writes data shows a provenance line,
+  such as "Saved locally - syncs automatically" or "Recorded locally -
+  <time>".
+8. Cardinality - implement every `Cardinality` decision from the screen spec
+  and put `testID="cardinality:<element-key>:<pattern-key>"` on the rendered
+  pattern root. Never choose chips, tabs, choice controls, lists, child lists,
+  action groups, stat layouts, or image layouts without using the recorded N.
+9. Images - every remote image has an explicit aspect ratio or fixed size and
+  `contentFit`/`resizeMode`; percentage dimensions are forbidden. Show a
+  token-based loading treatment and the local template placeholder on
+  failure/offline. Meaningful images use a data-bound accessible description;
+  decorative images are hidden from assistive technology. Image count follows
+  the approved Cardinality pattern.
+10. Discipline - use only `typeScale` roles and `shapeScale` radii from
+  `brand/tokens.ts`. A gradient must use a named `gradients` token and
+  `testID="gradient:<token>:<content|state|magnitude|legibility>"`; never put a
+  gradient on interactive chrome. State/magnitude gradients also set
+  `dataSet={{ gradientBound: '<schema-field>' }}` unless they wrap a
+  `chart:*`/`progress:*` component. Use one row icon size, one chrome icon
+  size, and at most one filled full-width `cta-primary` per screen.
+11. Conditional UX - implement `Field visibility`, `Warning remedies`, `Input
+  roles`, and `Entity icons` exactly. Rows expose `data-record-state`; use
+  `conditional-field:<field>`, sibling `warning:<key>` + interactive
+  `remedy:<key>`, `input-role:<field>:numeric-stepper` with decrement/increment
+  testIDs, and `entity-icon:<entity>:<icon>`. A selected cautionary/negative
+  option uses its status tone, never the accent. Compute every planned Rollup
+  from loaded child rows and render `rollup:<name>`.
+12. Sort - implement every `Sort options` contract with `sort-control`.
+  Use `sort-control:inline-chips` for 2-3 options or `sort-control:sheet` for
+  4+, and `sort-active:<field>:<direction>` on visible active-sort text.
+  Results use `sort-results` plus `dataSet={{ sortReset: 'top' }}`; applying a
+  sort resets to offset 0 and calls the declared service `orderBy`.
+13. Batch selection - implement `Batch actions` with `multi-select-list` and
+  `batch-action-bar`. Enter by long-press or visible Select, never permanent
+  checkboxes. Active mode exposes `selection-mode:active`, `selection-count`,
+  interactive `selection-select-all` and `selection-exit`, and exactly one
+  `pinned:batch-actions` replacing the normal CTA. Use `batch-actions:buttons`
+  for 1-3 actions or `batch-actions:primary-overflow` for 4+. Destructive
+  `batch-destructive:<key>` confirmation visibly/accessibly names the count.
+14. Carousel - implement `Carousel` only on a browsable non-queue image
+  collection with at least 3 items. Use `carousel:<entity>:carousel-row` and
+  `carousel-item:<id>`, trailing-edge bleed, snap-to-start, preserved offset,
+  no auto-advance, and accessible `<position> of <total>` labels. One or two
+  items fall back to a static row.
+15. Charts - implement approved `Chart` only with exact installed
+  `d3-scale@4.0.2` and its approved type companion. Use `chart:sparkline` or
+  `chart:series-chart:<bar|area>`, `chart-point:<index>`, chart token data
+  attributes, and a visible `chart-caption` plus accessible root summary.
+  Series charts render `chart-axis-label` elements in `labelSmall`, use at most
+  12 points and one series, and show the planned range-aware empty state. Area
+  form uses only `gradient:chartArea:magnitude`; colors never use accent/status.
 ```
 
 Run the screen-wave TypeScript gate after every wave. Group failures by root
 cause and cap retries at two per screen.
+
+After the cold builder wave, inspect its output without editing the screen
+files. For every applicable screen, require: conventional testIDs, one icon per
+row and labelled field, 3-4 ordered row facts, write provenance, token-only
+styling, and bottom padding that accounts for pinned layers plus safe area. If
+any rule is missed, return:
+
+```text
+BLOCKED: prompt-injection-failed - cold screen-builder output did not follow: <rules>
+```
+
+Do not hand-fix the generated screens in this failure path. Record the result
+so a later phase can decide whether rendered per-direction references are
+required instead of prose-only prompt injection.
 
 ### Step 9 - Final Validation
 
@@ -308,6 +482,49 @@ npm --prefix "$PROJECT_DIR" run type-check
 
 Stop at the first failing stage, repair that stage, and rerun it before moving
 on. Do not run real schema generation in prototype mode.
+
+Then run the direct-component harness. It bundles each signed-in screen without
+starting Expo web, renders it in headless Chrome through the required native
+shims, and blocks on each invariant independently:
+
+```bash
+for CHECK in \
+  scroll-padding \
+  contrast \
+  raw-values \
+  seed-hero \
+  interactive-overlap \
+  primary-label-truncation \
+  cardinality \
+  discipline \
+  conditional \
+  sort \
+  batch-selection \
+  carousel \
+  chart
+do
+  node "${CLAUDE_SKILL_DIR}/harness/run.js" \
+    --project "$PROJECT_DIR" \
+    --check "$CHECK"
+done
+```
+
+The harness must use the generated project's own `esbuild`, React, Tamagui,
+and React Native Web dependencies. Do not replace it with a full Expo web build
+or suppress a screen that fails to bundle/render.
+
+Finally, report first-viewport seed density without gating completion yet:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/harness/run.js" \
+  --project "$PROJECT_DIR" \
+  --check density | tee "$PROJECT_DIR/.tmp/density-report.txt"
+```
+
+`density` builds its oracle from every generated `*.seed.json`, counts matching
+visible text nodes in the first viewport, and reports the comparison floor:
+35 for List/queue screens, 8 for other data-backed screens. This phase is
+measurement-only: record `wouldMeetFloor`, but do not fail generation on it.
 
 Record every command, pass/fail result, issue count, and accepted concern in
 `.tmp/final-validation.md`. The file must name all five commands before the

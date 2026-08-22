@@ -52,6 +52,11 @@ test('prototype creation uses the current planner and non-executable schema cont
   assert.match(skill, /planningMode.*prototype/);
   assert.match(skill, /executionEligible.*false/);
   assert.match(skill, /gen-mock-services\.js/);
+  assert.match(skill, /\.tmp\/seed-vocabulary\.json/);
+  assert.match(skill, /validate-seed-vocabulary\.js/);
+  assert.match(skill, /Step 5 consumes this validated vocabulary/);
+  assert.match(skill, /src\/generated\/choiceLabels\.ts/);
+  assert.doesNotMatch(skill, /does not consume it yet/);
   assert.match(skill, /configure-prototype-runtime\.js[\s\S]*prototype/);
   assert.match(skill, /\.mobile-app\/state\.json/);
   assert.doesNotMatch(skill, /code-apps-native:/);

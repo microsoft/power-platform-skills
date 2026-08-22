@@ -5,9 +5,10 @@
  * Toggle the reversible runtime shell used by local prototypes.
  *
  * Prototype mode bypasses only route-level authentication, supplies the two
- * generated modules Metro needs, and prevents `npm run dev` from invoking real
- * connector schema generation. PowerAppsProvider remains mounted so Tamagui
- * and the native host surface stay identical to a real app.
+ * generated modules Metro needs, masks the zero-GUID lifecycle placeholder
+ * before it reaches PowerAppsProvider, and prevents `npm run dev` from invoking
+ * real connector schema generation. PowerAppsProvider remains mounted so
+ * Tamagui and the native host surface stay identical to a real app.
  *
  * Usage:
  *   node configure-prototype-runtime.js <project-dir> prototype [entry-route]
@@ -25,6 +26,7 @@ if (!projectArg || !['prototype', 'dataverse'].includes(mode)) {
 
 const projectDir = path.resolve(projectArg);
 const packagePath = path.join(projectDir, 'package.json');
+const rootLayoutPath = path.join(projectDir, 'app', '_layout.tsx');
 const indexPath = path.join(projectDir, 'app', 'index.tsx');
 const appLayoutPath = path.join(projectDir, 'app', '(app)', '_layout.tsx');
 const modePath = path.join(projectDir, 'src', 'config', 'dataMode.ts');
@@ -37,9 +39,13 @@ function fail(message) {
   process.exit(1);
 }
 
+function normalizeLineEndings(contents) {
+  return contents.replace(/\r\n?/g, '\n');
+}
+
 function readText(filePath) {
   try {
-    return fs.readFileSync(filePath, 'utf8');
+    return normalizeLineEndings(fs.readFileSync(filePath, 'utf8'));
   } catch (error) {
     fail(`cannot read ${path.relative(projectDir, filePath)}: ${error.message}`);
   }
@@ -55,7 +61,7 @@ function readJson(filePath) {
 
 function writeFile(filePath, contents) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, contents);
+  fs.writeFileSync(filePath, normalizeLineEndings(contents));
 }
 
 function writeJson(filePath, value) {
@@ -86,6 +92,36 @@ function patchAppLayout(contents) {
   return contents.replace(guard, "if (dataMode !== 'prototype' && !isLoading && !isSignedIn) {");
 }
 
+function patchRootLayout(contents) {
+  contents = ensureImport(contents, "import { dataMode } from '../src/config/dataMode';", "from '../tamagui.config';");
+  if (!contents.includes("const runtimePowerConfig = dataMode === 'prototype'")) {
+    const anchor = 'export default function RootLayout()';
+    if (!contents.includes(anchor)) fail('app/_layout.tsx RootLayout anchor not found');
+    contents = contents.replace(
+      anchor,
+      "// Keep the zero-GUID file as a lifecycle marker, but do not let the host\n"
+        + "// mistake a mock-only prototype for a Power Platform-bound app.\n"
+        + "const runtimePowerConfig = dataMode === 'prototype'\n"
+        + "  ? {\n"
+        + "      ...powerConfig,\n"
+        + "      appId: null,\n"
+        + "      environmentId: '',\n"
+        + "      connectionReferences: {},\n"
+        + "      databaseReferences: {},\n"
+        + "    }\n"
+        + "  : powerConfig;\n\n"
+        + anchor,
+    );
+  }
+  if (contents.includes('powerConfig={powerConfig}')) {
+    contents = contents.replace('powerConfig={powerConfig}', 'powerConfig={runtimePowerConfig}');
+  }
+  if (!contents.includes('powerConfig={runtimePowerConfig}')) {
+    fail('app/_layout.tsx PowerAppsProvider powerConfig prop not found');
+  }
+  return contents;
+}
+
 function packageDisplayName(packageJson) {
   return String(packageJson.name || 'mobile-prototype')
     .split(/[-_]+/)
@@ -94,8 +130,11 @@ function packageDisplayName(packageJson) {
     .join(' ');
 }
 
-if (!fs.existsSync(packagePath) || !fs.existsSync(indexPath) || !fs.existsSync(appLayoutPath)) {
-  fail('project must contain package.json, app/index.tsx, and app/(app)/_layout.tsx');
+if (!fs.existsSync(packagePath)
+  || !fs.existsSync(rootLayoutPath)
+  || !fs.existsSync(indexPath)
+  || !fs.existsSync(appLayoutPath)) {
+  fail('project must contain package.json, app/_layout.tsx, app/index.tsx, and app/(app)/_layout.tsx');
 }
 
 const packageJson = readJson(packagePath);
@@ -119,6 +158,7 @@ if (mode === 'prototype') {
   writeJson(packagePath, packageJson);
 
   writeFile(modePath, `// Managed by /create-mobile-prototype and /prototype-to-real-app.\nexport const dataMode: 'prototype' | 'dataverse' = 'prototype';\nexport const prototypeEntryRoute = ${JSON.stringify(entryRoute)} as const;\n`);
+  writeFile(rootLayoutPath, patchRootLayout(readText(rootLayoutPath)));
   writeFile(indexPath, patchIndex(readText(indexPath)));
   writeFile(appLayoutPath, patchAppLayout(readText(appLayoutPath)));
   writeFile(connectorSchemasPath, "// Prototype-only schema map. Real schema generation overwrites this file during graduation.\nexport const schemaMap = {};\n");

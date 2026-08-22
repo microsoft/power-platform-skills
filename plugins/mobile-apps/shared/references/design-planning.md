@@ -51,7 +51,7 @@ Also scan for industry signals and record the industry in `## Design`. This driv
 | "learning", "education", "course", "student", "training", "quiz" | Education | Bright playful palette, gamification, streak/progress patterns |
 | "productivity", "tasks", "projects", "workflow", "CRM", "tickets" | Productivity | Minimal near-monochrome, dense layout, strong grid, quick-actions |
 | "sales", "catalog", "products", "orders", "inventory", "retail" | E-commerce | Brand-forward color, product imagery, frictionless CTAs |
-| "IoT", "sensors", "telemetry", "dashboard", "monitoring" | Tech / IoT | Dark option with accent gradients, data-dense cards, real-time indicators |
+| "IoT", "sensors", "telemetry", "dashboard", "monitoring" | Tech / IoT | Dark option, data-dense cards, real-time indicators |
 
 If no industry signal is detected, default to **Productivity** (the most common Power Platform use case).
 

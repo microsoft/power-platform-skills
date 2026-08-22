@@ -61,6 +61,26 @@ The exact version and rationale are part of the screen-plan approval. Approval a
 
 A full month/week/agenda scheduling surface triggers candidate selection. Evaluate `react-native-calendars` first because it supplies established calendar and agenda primitives and is pure JavaScript; `1.1314.0` is the known-good version for the current template baseline. Confirm current metadata and compatibility before writing the row. A lightweight horizontal date strip plus `FlatList` does not require a new package.
 
+### Chart example
+
+For an approved `sparkline` or `series-chart`, use `d3-scale@4.0.2` with
+`@types/d3-scale@4.0.9`. `d3-scale` supplies maintained numeric/time/band scales
+while React Native Views render the geometry; this deliberately avoids chart
+packages that transitively require absent native `react-native-svg`, Skia,
+Canvas, WebView, or platform projects.
+
+Verified package evidence:
+
+- `d3-scale@4.0.2`: ISC, Node >=12, no peers, no install lifecycle hook, and
+	published files are JS source/dist only; dependencies are the JS-only D3
+	array/format/interpolate/time modules.
+- `@types/d3-scale@4.0.9`: MIT declaration-only package, no native artifacts or
+	lifecycle hooks; supplies `index.d.ts` for strict generated TypeScript.
+
+Emit both exact rows in `### JavaScript Dependencies`. Do not substitute a
+full chart library without rerunning the native-boundary and compatibility
+checks.
+
 ## Installation Contract
 
 Only `/create-mobile-app` or `/edit-app` installs approved rows, before screen builders run:

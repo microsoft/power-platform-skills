@@ -119,6 +119,27 @@ Per-screen specs may still override (a celebration screen can be expressive in a
 
 ---
 
+### Step 0c — Load Cardinality Inputs
+
+When `<working_dir>/.tmp/seed-vocabulary.json` exists, read its `rowCount` and
+pool lengths. When `<working_dir>/.tmp/dataverse-schema-contract.json` exists,
+read every choice column's exact option count and every image/file field. These
+are planning facts, not design suggestions. Resolve their patterns through
+`shared/references/screen-templates.md` → `Cardinality pattern defaults`.
+
+For each per-screen spec, count only elements the screen actually renders:
+
+- filter values, including `All` when the UX contract includes it;
+- each choice input by logical column name;
+- expected list rows (`seed-vocabulary.rowCount` in prototype mode);
+- visible user actions, excluding native Back;
+- child records, stat tiles, and images when present.
+
+Do not choose a component before computing its count. An override is allowed
+only when the spec appends `because <domain reason>`.
+
+---
+
 ## Step 1 — Decide Navigation Pattern
 
 **Print before starting:**
@@ -291,6 +312,13 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 
 **Density / motion / surface**
 - Inherits from `## Design Direction` block. Per-screen specs may NOT silently deviate.
+
+**Entity icons**
+- Assign one semantic Ionicons name per business entity and reuse it across all
+  rows, cards, headers, and screens for that entity. Different entities use
+  different icon names. Also write the primary mapping into the Screen Map's
+  `Entity icon` column as `<logicalName>=<icon-name>`; baseline/auth screens use
+  `-`.
 ```
 
 The screen-builders read this block alongside their own per-screen spec. If two builders write a List for different entities, they emit the same row style unless this block explicitly overrides one. This is what makes the per-screen spec generation safe to parallelize later, and — more importantly — keeps the app feeling like one app instead of N stitched-together screens.
@@ -371,8 +399,20 @@ For each screen the user adds, provide this compact shape:
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
 - **Operational pattern** (Home or workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Omit only for normal CRUD/business screens without a dashboard or workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
+- **Existing pattern selection:** if workflow entry depends on scanner/camera identity or location/geofence confidence, `Operational pattern: scan-geofence-gate` is mandatory. If an input role is `count-against-expected` or a bounded small-integer adjustment, emit `numeric-stepper` (or `line-item-stepper-row` for repeated rows) under Control patterns. Do not leave either decision implicit.
+- **Sort options** — REQUIRED on each List with more than one useful server-supported ordering. Emit semicolon-separated `<field> <asc|desc>=<visible label>` entries and mark exactly one `(default)`, for example: `cr_createdat desc=Newest (default); cr_validfrom asc=Valid from; cr_subjectname asc=Subject A-Z`. Queues default to the role-bearing date; catalogues default to the primary display field. Also emit `Control patterns: sort-control`. A sort change resets list offset to 0.
+- **Batch actions** — emit only when the Workflow mutation contract allows the action across multiple records. Syntax: `<key>=<visible label>` with optional `(destructive)`, separated by semicolons, for example `approve=Approve; reject=Reject (destructive)`. Also emit `Control patterns: multi-select-list, batch-action-bar`; record whether selection enters by `long-press` or visible `Select`. Never infer batch support from the presence of row actions alone.
+- **Carousel** — emit only for a browsable non-queue collection with a schema field explicitly marked `hero-eligible` and at least 3 expected records. Syntax: `<logical-entity>.<logical-image-field>; items=<N>`. Also emit `Row style override: carousel-row`. A working queue MUST NOT emit Carousel even when records have images; 1-2 images use a static row.
+- **Chart** — emit only when the data contract supplies a real ordered numeric series. Syntax: `sparkline; x=<logical-field>; y=<logical-field>; points=<4..12>; caption=<text summary>` for a stat-tile trend, or `series-chart; form=<bar|area>; x=<logical-field>; y=<logical-field>; points=<1..12>; caption=<text summary>; empty=No data for <range>` when comparison is the screen's primary task. V1 is exactly one series. Also add approved JavaScript Dependency rows for `d3-scale` `4.0.2` and `@types/d3-scale` `4.0.9` using the verified evidence in `javascript-dependency-planning.md`. No ordered numeric series means no chart.
 - **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList` when the app intentionally wants a lightweight schedule without another dependency). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
 - **Control patterns** (emit only for specialized controls) — use `checkbox-field` for boolean or checklist-like toggles, `numeric-stepper` for bounded plus/minus fields, `line-item-stepper-row` for product/order/cart/inventory rows with inline quantity/count adjustment, `searchable-lookup-sheet` for Dataverse lookup/ComboBox fields with many records, `segmented-control` for 2-5 bounded mutually-exclusive options, and `recurrence-rule-editor` for repeating schedules. Include the control-specific contract: checkbox boolean vs multi-select mapping; stepper min/max/step and commit behavior (`local draft until Save/Next` by default); lookup service/search/display fields/pagination and `@odata.bind`; segmented option source, selected state, optional counts, and generated option const mapping; recurrence pattern/start/end/date-time/weekday-mask fields, summary text, and validation rules.
+- **Cardinality** — REQUIRED when the screen has filters, choices, rows, child records, actions, stats, or images. Emit one semicolon-separated machine-readable line, for example: `filters=6 -> chips-overflow; choice-cr_status=6 -> inline-radio-list; listRows=12 -> plain-list; actions=3 -> button-row; images=1 -> image-hero`. Counts come from Step 0c. Use the exact pattern keys from `screen-templates.md`; append `because <domain reason>` only for an intentional override.
+- **Field visibility** — emit only for state-dependent fields, as a semicolon-separated line: `cr_journalref=status in (Posted); cr_rejectedreason=status in (Rejected)`. Use exact generated logical field names and exact choice labels from the schema contract.
+- **Warning remedies** — REQUIRED for every planned derived warning: `<warning-key> -> <action-or-route-key>`, separated by semicolons. A warning without a remedy is a planning failure.
+- **Input roles** — emit role-driven controls, especially `<logicalName>=count-against-expected -> numeric-stepper`; distinguish this from unrestricted numeric input using the approved field-role overlay or explicit expected/actual quantity pairing in the schema.
+- **Entity icons** — emit every entity rendered by the screen as `<logicalName>=<Ionicons-name>`, separated by semicolons, matching the Screen Map and Shared Conventions mappings exactly.
+- **Selection meaning** — builder rule for choice controls: list cautionary/negative options and their semantic tone, e.g. `Partial=warning; Fail=danger`; omit when every option is neutral/positive.
+- **Rollups** — emit planned child aggregates as `<name>=<operation>(<child-field>)`, for example `received=sum(lines.cr_receivedqty); damaged=sum(lines.cr_damagedqty)`. The builder computes them from the existing bounded child fetch and renders `rollup:<name>`.
 - **Archetype** — one of List / Detail / Form / Auth / Tab-root / Modal-Sheet / Empty-onboarding (see Step 2)
 - **Role** (omit if open to all signed-in users) — only when the screen is role-gated (e.g. `Supervisor only` for sign-off override, `Inspector (edit) / Supervisor (read) / Auditor (read)` for shared records). The builder uses this together with the UX contract to gate visible controls.
 - **Purpose** — one sentence
@@ -541,17 +581,17 @@ Section format (same in all phases):
 
 ### Screen Map
 
-| Screen | Route | File | Presentation | Purpose | Data | Native | Source |
-|---|---|---|---|---|---|---|---|
-| Splash | `/` | `app/index.tsx` | default | Auth-aware redirect | — | — | template (keep) |
-| Login | `/login` | `app/login.tsx` | default | MSAL sign-in | — | — | template (keep) |
-| OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Connector consent return | — | — | template (keep) |
-| Home | `/(app)/home` | `app/(app)/home.tsx` | default | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | replace template |
-| Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | new |
-| Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | new |
-| New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | new |
-| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | new |
-| Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | new |
+| Screen | Route | File | Presentation | Purpose | Data | Native | Entity icon | Source |
+|---|---|---|---|---|---|---|---|---|
+| Splash | `/` | `app/index.tsx` | default | Auth-aware redirect | — | — | — | template (keep) |
+| Login | `/login` | `app/login.tsx` | default | MSAL sign-in | — | — | — | template (keep) |
+| OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Connector consent return | — | — | — | template (keep) |
+| Home | `/(app)/home` | `app/(app)/home.tsx` | default | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | `cr123_inspection=clipboard-outline` | replace template |
+| Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | `cr123_inspection=clipboard-outline` | new |
+| Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | `cr123_inspection=clipboard-outline` | new |
+| New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | `cr123_inspection=clipboard-outline` | new |
+| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | `cr123_inspection=clipboard-outline` | new |
+| Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | — | new |
 
 > **Why the File column matters:** the orchestrator's Step 10b walks this column to (1) compute top-level tab/drawer entries (one per unique `app/(app)/<name>` — folder OR flat file) and (2) emit per-folder `_layout.tsx` files with the right modal options. Each builder reads its own row's File path as `target_file`. Without this column, the orchestrator falls back to flat `app/(app)/<screen-name>.tsx` for every screen — phantom tabs return.
 

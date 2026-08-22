@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "baseUrl": ".",
     "paths": {
+      "@/*": ["./src/*"],
       "react-native": ["node_modules/react-native"],
       "expo-auth-session": ["node_modules/expo-auth-session"],
       "expo-secure-store": ["node_modules/expo-secure-store"],

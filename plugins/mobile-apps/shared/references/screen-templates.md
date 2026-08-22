@@ -6,6 +6,45 @@ Detailed archetype specifications. The SKILL.md has the summary; this is the ful
 
 `agents/screen-planner.md` Step 4 emits row style, hero type, and operational pattern by **key only** (e.g. `Row style: status-stripe-card`). The descriptions live here so they're authored once and read by the screen-builder when it materializes the spec into TSX. Builders MUST resolve unknown keys by looking them up in this section before falling back to a generic layout.
 
+### Cardinality pattern defaults
+
+Choose interaction patterns from the number of values or records, not only the
+column type. A per-screen spec may override one default only when it states the
+domain reason; choosing a pattern without recording the relevant count is
+forbidden.
+
+| Element | Count | Pattern key |
+|---|---:|---|
+| Filters | 1-4 | `chips` |
+| Filters | 5-8 | `chips-overflow` |
+| Filters | >8 | `filter-sheet-search` |
+| Bottom tabs | 2-5 | `tab-bar` |
+| Bottom tabs | >5 | `four-tabs-more-or-drawer` |
+| Choice input | 2-3 | `segmented-control` |
+| Choice input | 4-6 | `inline-radio-list` |
+| Choice input | >6 | `picker-sheet-search` |
+| List rows | 0 | `empty-state-cta` |
+| List rows | 1-20 | `plain-list` |
+| List rows | 21-200 | `search-section-groups` |
+| List rows | >200 | `search-virtualized-sticky-index` |
+| Child records on a detail | 1-5 | `inline-child-list` |
+| Child records on a detail | >5 | `first-three-see-all` |
+| Actions | 1 | `single-primary` |
+| Actions | 2 | `primary-secondary-adjacent` |
+| Actions | 3-4 | `button-row` |
+| Actions | >4 | `primary-overflow-menu` |
+| Batch actions | 1-3 | `batch-buttons` |
+| Batch actions | >3 | `batch-primary-overflow` |
+| Stat tiles | 1-4 | `single-stat-row` |
+| Stat tiles | 5-8 | `stat-grid-2xn` |
+| Images | 1 | `image-hero` |
+| Images | 2-4 | `thumbnail-row` |
+| Images | >4 | `gallery-count-badge` |
+
+Screen implementations expose the selected pattern as
+`cardinality:<element-key>:<pattern-key>` so the prototype harness can compare
+the approved expectation with rendered output without inferring visual intent.
+
 ### Row style keys (List screens)
 
 Pick the row style that surfaces what matters for the entity. Never pick `status-stripe-card` by default just because it's most common.
@@ -19,6 +58,7 @@ Pick the row style that surfaces what matters for the entity. Never pick `status
 | `sentence-row` | Entity reads naturally as a sentence (activity, event, log entry) | No card border, full-width separator only, icon left, text right |
 | `timeline-row` | Entity is time-ordered with a date/time as primary signal | Date displayed prominently (left column or above title), no card bg |
 | `checklist-row` | Entity is a task or completable item | Checkbox left, title + metadata, strike-through on completed |
+| `carousel-row` | A browsable collection has a hero-eligible image and at least 3 items | Horizontal snap-to-start visual items with trailing-edge bleed and announced position; never auto-advances |
 
 ### Hero type keys (Detail screens)
 
@@ -33,6 +73,10 @@ Pick the hero treatment that matches the entity. Never default to "H2 title + In
 | `summary-card` | Entity has a rich description or long text | Prominent `Paragraph` block with pull-quote styling, details below |
 | `timeline-header` | Entity is an event or has a date range | Large date display at top, timeline indicator, status below |
 | `minimal-header` | Entity is data-dense with many fields | Standard title only — data speaks for itself through well-structured InfoRows |
+
+`image-hero` text overlays MUST use the approved `imageScrim` gradient for
+legibility. This is a source-derived gradient (legibility over content), not
+decoration. Image heroes without overlaid text render no gradient.
 
 ### Operational pattern keys (Home + workflow screens)
 
@@ -49,6 +93,27 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 | `severity-filtered-queue` | Users triage defects, tickets, exceptions, alerts, or incidents | Segmented severity chips, status chips, dense rows with ID + short description + related asset, clear active-filter count |
 | `dispatch-signoff-queue` | Final hand-off/sign-off locks records or sends work to another team | Submitted/ready queue, explicit lock/sign-off state, biometric/PIN gate if required, immutable audit message after completion |
 | `audit-timeline` | Users review who changed what and when | Toggle between domain grouping and chronological log, timestamp + actor + action rows, hash/verification status when relevant |
+
+### Data visualization keys
+
+| Key | Select when | Required form |
+|---|---|---|
+| `sparkline` | A stat tile has at least 4 ordered numeric observations and the trend changes the decision | Inline, no axes/labels, endpoint emphasized, text summary, no more than 12 points |
+| `series-chart` | The screen's primary job compares one numeric series over time or category | Bar by default; area only with approved `chartArea` magnitude gradient; labelled axes, max 12 points, text summary and range-aware empty state |
+
+Selection rules:
+
+- Do not chart a single current value, unordered categories with no comparison
+  task, or a capped page whose values do not represent the requested period.
+- V1 supports one series. More than one series is a planning block; do not
+  silently invent a legend or color scale.
+- A `series-chart` uses `bar` unless continuity/magnitude is the meaning and an
+  `area` form is explicitly approved. Axis labels use `labelSmall`; grid lines
+  use `chartTokens.grid`; series colors come only from `chartTokens`, never
+  accent or status tokens.
+- Every chart emits a text summary/caption and `No data for <range>` empty copy.
+  Select `d3-scale@4.0.2` plus `@types/d3-scale@4.0.9` through
+  `javascript-dependency-planning.md`.
 
 ### Calendar pattern keys (Calendar / schedule / appointment screens)
 
@@ -75,8 +140,62 @@ Use these keys when a screen needs a specialized control that is more specific t
 | `searchable-lookup-sheet` | A Dataverse lookup or ComboBox has too many records for an inline select: account, contact, product, owner, location, category, parent record | Trigger row, Sheet/modal with search input, `FlatList`, `RowPick` rows, selected ID state, display/subtitle fields, cursor pagination for unbounded tables, loading/empty/error states, lookup `@odata.bind` output |
 | `segmented-control` | 2-5 bounded mutually-exclusive options should be switched quickly: mode, status filter, calendar scope, order type, priority, view type | Horizontal buttons/chips, selected state, generated option const mapping for Dataverse choices, optional counts, accessible selected state, no wrapping into card grid |
 | `recurrence-rule-editor` | A user configures a repeating schedule: appointments, recurring visits, maintenance, tasks, classes, sessions | Recurrence pattern, start date, optional end date, start/end time when applicable, weekday selection for weekly recurrence, data-model mapping for explicit days or numeric weekday mask, summary text, invalid-combination validation |
+| `sort-control` | A List has at least 2 meaningful server-supported orderings | 2-3 options: visible inline chips beside filters; 4+ options: visible trigger opens a single-select sort sheet; active label always visible |
+| `multi-select-list` | The workflow contract allows the same transition/action across multiple List records | Enter via row long-press or explicit Select; selected count, Select all, and clear Exit; no permanent checkbox column |
+| `batch-action-bar` | `multi-select-list` is active | Pinned replacement for the normal CTA; 1-3 buttons or one primary + overflow for 4+; destructive actions confirm and name selected count |
 
 Prefer `line-item-stepper-row` for TWEED-style product/order rows. Prefer plain `numeric-stepper` for standalone form fields such as attendees, room count, serving count, or score.
+
+#### Existing-pattern selection rules
+
+- Select `scan-geofence-gate` whenever starting/continuing a workflow requires
+  a planned scanner, camera identity check, one-shot location check, or
+  geofence confidence. Emit the verification capability, manual fallback,
+  denied/unavailable state, and audited override. Do not reduce it to a generic
+  form with a Scan button.
+- Select `numeric-stepper` for every `count-against-expected` input and any
+  bounded small-integer adjustment where users compare the current value with
+  a known target. Select `line-item-stepper-row` when that adjustment lives in
+  repeated rows. Free/unbounded numeric values remain numeric inputs.
+- Select `sort-control` on every List with more than one useful sortable field.
+  Use 2-3 inline chips and a sheet for 4+. The default is explicit and the
+  active human-readable label remains visible. Applying a sort calls the
+  service's `orderBy` contract and resets the list to offset 0.
+- Select `multi-select-list` and `batch-action-bar` only when the approved
+  workflow mutation contract allows at least one transition/action across
+  multiple selected records. Enter with row long-press or a visible Select
+  affordance, never a permanent checkbox column. While active, show selected
+  count, Select all, and Exit; replace the normal pinned CTA with the batch bar.
+  One to three actions render as buttons; four or more use one primary plus
+  overflow. Destructive confirmation names the selected count.
+- Select `carousel-row` only when an entity has a `hero-eligible` image and the
+  screen's purpose is browsing a collection, not working a queue. Require at
+  least 3 items; one or two render a static image row. Items bleed beyond the
+  trailing viewport edge, snap to item start, preserve position on return,
+  never auto-advance, and announce `<position> of <total>`.
+
+### Conditional UX contracts
+
+Uniform rendering is incorrect when meaning changes by record state or field
+role. Per-screen specs use these structural contracts:
+
+- `Field visibility`: a field renders only for the listed choice labels. Rows
+  expose `data-record-state`; conditional values use
+  `conditional-field:<logical-name>`.
+- `Warning remedies`: each `warning:<key>` shares its immediate container with
+  the interactive `remedy:<action-key>` named by the plan.
+- `Input roles`: `count-against-expected` always renders a
+  `numeric-stepper` root plus `stepper-decrement:<field>` and
+  `stepper-increment:<field>` controls, never a bare numeric text input.
+- `Entity icons`: the Screen Map binds each business entity to one Ionicons
+  name. Every occurrence uses `entity-icon:<logical-name>:<icon-name>`. Two
+  entities may not share an icon within one app.
+- `Rollups`: compute the named aggregate from already-loaded child rows and
+  expose it as `rollup:<name>`. Never substitute a fabricated count.
+
+Selected cautionary/negative options inherit their semantic status tone, never
+the brand accent. This remains a builder rule because selected-state meaning is
+not reliably recoverable from the component DOM.
 
 When a per-screen spec emits `Operational pattern: <key>`, the screen-builder MUST include the listed layout pieces. The archetype (List/Detail/etc.) is the implementation shell; the operational pattern is the UX contract.
 
@@ -331,10 +450,19 @@ Every empty state should have a visual element beyond just text. In priority ord
 
 ### Image handling
 
-- Always use `expo-image` (not React Native `Image`) for remote images — it handles caching, progressive loading, and placeholder blur.
-- Provide `contentFit="cover"` for hero images, `contentFit="contain"` for logos.
-- Add a `$color4` background behind images so there's no flash of white during load.
-- For user avatars, always include a fallback with initials (see Avatar recipe in `tamagui-component-recipes.md`).
+- Every image has an explicit aspect ratio or fixed width and height. Percentage
+  dimensions are forbidden. Set `contentFit`/`resizeMode`: `cover` for heroes
+  and media tiles, `contain` for logos and inspectable objects.
+- Remote images use `expo-image` or the shared `EntityImage`, show a token-based
+  loading treatment, and fall back to the local template placeholder when
+  loading fails or the device is offline. Never substitute another stock URL.
+- Meaningful images have an accessible description from record data;
+  decorative images set `accessible={false}` and expose no label.
+- Image count selects `image-hero`, `thumbnail-row`, or
+  `gallery-count-badge` through the Cardinality table. Expose the rendered
+  choice as `cardinality:images:<pattern-key>`.
+- Add a semantic surface background behind images so loading never flashes
+  white. User avatars retain an initials fallback.
 
 ### Dark mode assets
 

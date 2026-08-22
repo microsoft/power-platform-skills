@@ -2,13 +2,13 @@
 
 Internal reference used by `/create-mobile-app` Step 9b after `/design-system` writes `brand/tokens.ts`. This is not a user-invocable skill.
 
-`/design-system` and this reference deliberately complement each other: `/design-system` captures the user's brand/design intent and writes artifacts; this reference translates those artifacts into Tamagui config/provider wiring. A default app still runs this reference in alias-only mode so generated screens have the same `$surface*` and `$accent*` token contract as a branded app.
+`/design-system` and this reference deliberately complement each other: `/design-system` captures the user's brand/design intent and writes artifacts; this reference overrides the neutral semantic values already owned by the template. Compilation never depends on design-system execution.
 
 ## Goal
 
 Keep generated screens on one stable token contract:
 
-- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
+- Preserve the template-owned `$surface*`, `$accent*`, `$status*`, and `$mono` names.
 - Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
 - Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` owns the provider and portal infrastructure. In Tamagui 2, `Toaster` is a sibling component rather than a provider wrapper.
 
@@ -16,15 +16,19 @@ Keep generated screens on one stable token contract:
 
 | Condition | Action |
 |---|---|
-| `brand/tokens.ts` exists | Import brand tokens into `tamagui.config.ts`, then add aliases. |
-| `## Design` says `tamagui-design-system: required` but no brand tokens exist | Create brand/custom tokens from the approved `## Design`, then add aliases. |
-| `## Design` says `tamagui-design-system: add-aliases` or no custom design tokens exist | Add aliases over `defaultConfig` only. |
+| `brand/tokens.ts` exists | Import brand tokens and override values through the template's `withSemanticAliases` helper. |
+| `## Design` says `tamagui-design-system: required` but no brand tokens exist | Create approved brand values, then override the existing aliases. |
+| `## Design` says `tamagui-design-system: add-aliases` or no custom design tokens exist | Verify the template baseline exists; make no value changes. Legacy templates only: restore the current neutral template block first. |
 
 Run `npx tsc --noEmit` after changing Tamagui config or root provider wiring.
 
 ## Alias Layer
 
 Extend the Config v5 `light` and `dark` themes; do not replace `defaultConfig`.
+Current templates already contain `lightStatusColors`, `darkStatusColors`,
+`withSemanticAliases`, root `themes`, and the `mono` font. Preserve those
+definitions. The baseline snippet below is a legacy-template recovery contract,
+not a step to repeat in every branded run.
 
 This integration targets Tamagui 2 with Config v5, matching the current standalone template. Tamagui components generated from this config must use v2 APIs (`transition`, ARIA props, web-standard input props, and `boxShadow`).
 
@@ -47,44 +51,56 @@ import { animations } from '@tamagui/config/v5-rn';
 type BrandColors = Partial<{
   bg: string;
   surface: string;
+  surfaceMuted: string;
   primary: string;
+  primaryStrong: string;
   accent: string;
+  onPrimary: string;
   border: string;
   statusSuccess: string;
+  statusSuccessSoft: string;
   statusWarning: string;
+  statusWarningSoft: string;
   statusDanger: string;
+  statusDangerSoft: string;
   statusInfo: string;
+  statusInfoSoft: string;
 }>;
 
 function withSemanticAliases(
   theme: typeof defaultConfig.themes.light,
+  statusColors: typeof lightStatusColors | typeof darkStatusColors,
   brand: BrandColors = {},
 ) {
   return {
     ...theme,
     surface0: brand.bg ?? theme.background,
     surface1: brand.surface ?? theme.color2,
-    surface2: theme.color3,
+    surface2: brand.surfaceMuted ?? theme.color3,
     surface3: brand.border ?? theme.color4,
-    accentDeep: brand.primary ?? theme.blue8,
+    accentDeep: brand.primaryStrong ?? theme.blue8,
     accentBase: brand.primary ?? theme.blue10,
     accentSoft: brand.accent ?? theme.blue3,
-    accentOnAccent: theme.color1,
-    statusComplete: brand.statusSuccess ?? theme.green10,
-    statusCompleteBg: theme.green3,
-    statusPending: brand.statusWarning ?? theme.yellow10,
-    statusPendingBg: theme.yellow3,
-    statusOverdue: brand.statusDanger ?? theme.red10,
-    statusOverdueBg: theme.red3,
-    statusInProgress: brand.statusInfo ?? theme.blue10,
-    statusInProgressBg: theme.blue3,
+    accentOnAccent: brand.onPrimary ?? theme.color1,
+    statusComplete: brand.statusSuccess ?? statusColors.statusComplete,
+    statusCompleteBg: brand.statusSuccessSoft ?? statusColors.statusCompleteBg,
+    statusPending: brand.statusWarning ?? statusColors.statusPending,
+    statusPendingBg: brand.statusWarningSoft ?? statusColors.statusPendingBg,
+    statusOverdue: brand.statusDanger ?? statusColors.statusOverdue,
+    statusOverdueBg: brand.statusDangerSoft ?? statusColors.statusOverdueBg,
+    statusInProgress: brand.statusInfo ?? statusColors.statusInProgress,
+    statusInProgressBg: brand.statusInfoSoft ?? statusColors.statusInProgressBg,
+    statusDraft: statusColors.statusDraft,
+    statusDraftBg: statusColors.statusDraftBg,
+    statusCancelled: statusColors.statusCancelled,
+    statusCancelledBg: statusColors.statusCancelledBg,
   };
 }
 
 const themes = {
   ...defaultConfig.themes,
-  light: withSemanticAliases(defaultConfig.themes.light),
-  dark: withSemanticAliases(defaultConfig.themes.dark),
+  light: withSemanticAliases(defaultConfig.themes.light, lightStatusColors),
+  dark: withSemanticAliases(defaultConfig.themes.dark, darkStatusColors),
 };
 
 const customConfig = {
@@ -122,19 +138,25 @@ const tokens = createTokens({
 
 const darkBrandColors = {
   primary: brandTokens.color.primary,
+  primaryStrong: brandTokens.color.primaryStrong,
   accent: brandTokens.color.accent,
+  onPrimary: brandTokens.color.onPrimary,
   statusSuccess: brandTokens.color.statusSuccess,
+  statusSuccessSoft: brandTokens.color.statusSuccessSoft,
   statusWarning: brandTokens.color.statusWarning,
+  statusWarningSoft: brandTokens.color.statusWarningSoft,
   statusDanger: brandTokens.color.statusDanger,
+  statusDangerSoft: brandTokens.color.statusDangerSoft,
   statusInfo: brandTokens.color.statusInfo,
+  statusInfoSoft: brandTokens.color.statusInfoSoft,
 };
 
 const themes = {
   ...defaultConfig.themes,
-  light: withSemanticAliases(defaultConfig.themes.light, brandTokens.color),
+  light: withSemanticAliases(defaultConfig.themes.light, lightStatusColors, brandTokens.color),
   // The generated schema has one palette: carry accents/status into dark mode,
   // but retain Config v5's dark surfaces and readable status backgrounds.
-  dark: withSemanticAliases(defaultConfig.themes.dark, darkBrandColors),
+  dark: withSemanticAliases(defaultConfig.themes.dark, darkStatusColors, darkBrandColors),
 };
 
 const customConfig = {

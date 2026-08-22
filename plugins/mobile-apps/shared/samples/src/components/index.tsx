@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { ScrollView, Image as RNImage } from 'react-native';
+import { ScrollView, Image as RNImage, type ColorValue } from 'react-native';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,19 +19,32 @@ import { gradients, shadows, type GradientName } from '@/tokens';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
+function webDataAttributes(values: Record<string, string | number>) {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [
+    `data-${key.replace(/[A-Z]/g, (character) => `-${character.toLowerCase()}`)}`,
+    String(value),
+  ])) as any;
+}
+
 // ─── Gradient ────────────────────────────────────────────────────────────────
 
 export function Gradient({
   name,
+  source,
   style,
   children,
 }: {
   name: GradientName;
+  source: 'content' | 'state' | 'magnitude' | 'legibility';
   style?: object;
   children?: React.ReactNode;
 }) {
   return (
-    <LinearGradient colors={[...gradients[name]]} style={[{ borderRadius: 12 }, style]}>
+    <LinearGradient
+      colors={gradients[name]}
+      testID={`gradient:${name}:${source}`}
+      style={[{ borderRadius: 12 }, style]}
+    >
       {children}
     </LinearGradient>
   );
@@ -47,14 +60,14 @@ export type StatusVariant =
   | 'draft'
   | 'cancelled';
 
-const STATUS_STYLES: Record<StatusVariant, { bg: string; text: string; label: string }> = {
+const STATUS_STYLES = {
   overdue:       { bg: '$statusOverdueBg',    text: '$statusOverdue',    label: 'Overdue' },
   complete:      { bg: '$statusCompleteBg',   text: '$statusComplete',   label: 'Complete' },
   'in-progress': { bg: '$statusInProgressBg', text: '$statusInProgress', label: 'In Progress' },
   pending:       { bg: '$statusPendingBg',    text: '$statusPending',    label: 'Pending' },
   draft:         { bg: '$statusDraftBg',      text: '$statusDraft',      label: 'Draft' },
   cancelled:     { bg: '$statusCancelledBg',  text: '$statusCancelled',  label: 'Cancelled' },
-};
+} as const satisfies Record<StatusVariant, { bg: string; text: string; label: string }>;
 
 export function StatusPill({
   status,
@@ -111,46 +124,148 @@ export function StatTile({
   );
 }
 
+// ─── Sparkline / SeriesChart ───────────────────────────────────────────────
+
+export type NormalizedChartPoint = {
+  key: string;
+  label: string;
+  value: number;
+  normalized: number;
+};
+
+export function Sparkline({
+  points,
+  summary,
+  seriesColor,
+}: {
+  points: NormalizedChartPoint[];
+  summary: string;
+  seriesColor: ColorValue;
+}) {
+  const rendered = points.slice(0, 12);
+  return (
+    <YStack
+      testID="chart:sparkline"
+      {...webDataAttributes({ chartSeriesToken: 'seriesPrimary', chartPointCount: rendered.length })}
+      aria-label={summary}
+      gap="$1"
+    >
+      <XStack height={36} items="flex-end" gap={3}>
+        {rendered.map((point, index) => (
+          <YStack
+            key={point.key}
+            testID={`chart-point:${index}`}
+            {...webDataAttributes({ chartEndpoint: index === rendered.length - 1 ? 'true' : 'false' })}
+            width={index === rendered.length - 1 ? 6 : 3}
+            height={Math.max(2, 4 + point.normalized * 30)}
+            style={{ backgroundColor: seriesColor }}
+            rounded="$1"
+          />
+        ))}
+      </XStack>
+      <Text testID="chart-caption" fontSize={11} lineHeight={16} fontWeight="500" color="$color10">
+        {summary}
+      </Text>
+    </YStack>
+  );
+}
+
+export function SeriesChart({
+  points,
+  summary,
+  emptyRange,
+  seriesColor,
+  gridColor,
+  form = 'bar',
+}: {
+  points: NormalizedChartPoint[];
+  summary: string;
+  emptyRange: string;
+  seriesColor: ColorValue;
+  gridColor: ColorValue;
+  form?: 'bar' | 'area';
+}) {
+  const rendered = points.slice(0, 12);
+  if (rendered.length === 0) {
+    return (
+      <EmptyState
+        icon="bar-chart-outline"
+        title={`No data for ${emptyRange}`}
+        message="Try another reporting period."
+      />
+    );
+  }
+
+  const plot = (
+    <XStack height={160} items="flex-end" gap="$2" borderBottomWidth={1} style={{ borderBottomColor: gridColor }}>
+      {rendered.map((point, index) => (
+        <YStack key={point.key} flex={1} items="center" justify="flex-end" gap="$1">
+          <YStack
+            testID={`chart-point:${index}`}
+            width="70%"
+            height={Math.max(4, 12 + point.normalized * 116)}
+            style={{ backgroundColor: seriesColor }}
+            rounded="$1"
+          />
+          <Text testID="chart-axis-label" fontSize={11} lineHeight={16} fontWeight="500" color="$color10">
+            {point.label}
+          </Text>
+        </YStack>
+      ))}
+    </XStack>
+  );
+
+  return (
+    <YStack
+      testID={`chart:series-chart:${form}`}
+      {...webDataAttributes({ chartSeriesToken: 'seriesPrimary', chartGridToken: 'grid', chartPointCount: rendered.length })}
+      aria-label={summary}
+      gap="$2"
+    >
+      {form === 'area' ? <Gradient name="chartArea" source="magnitude">{plot}</Gradient> : plot}
+      <Text testID="chart-caption" fontSize={14} lineHeight={20} fontWeight="400" color="$color11">
+        {summary}
+      </Text>
+    </YStack>
+  );
+}
+
 // ─── Hero ─────────────────────────────────────────────────────────────────────
 
 export function Hero({
   title,
   subtitle,
-  gradient = 'hero',
   action,
 }: {
   title: string;
   subtitle?: string;
-  gradient?: GradientName;
   action?: { label: string; iconName?: IoniconName; onPress: () => void };
 }) {
   return (
-    <Gradient name={gradient} style={{ borderRadius: 0 }}>
-      <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack items="center" justify="space-between">
-          <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
-              {title}
+    <YStack bg="$accentBase" px="$5" pt="$6" pb="$5" gap="$1">
+      <XStack items="center" justify="space-between">
+        <YStack gap="$1" flex={1}>
+          <Text fontSize="$7" fontWeight="700" color="$accentOnAccent" numberOfLines={1}>
+            {title}
+          </Text>
+          {subtitle && (
+            <Text fontSize="$3" color="$accentOnAccent" numberOfLines={2}>
+              {subtitle}
             </Text>
-            {subtitle && (
-              <Text fontSize="$3" color="white" numberOfLines={2}>
-                {subtitle}
-              </Text>
-            )}
-          </YStack>
-          {action && (
-            <Button
-              size="$3" chromeless
-              borderColor="rgba(255,255,255,0.7)" borderWidth={1.5}
-              onPress={action.onPress}
-              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
-            >
-              <Button.Text color="white">{action.label}</Button.Text>
-            </Button>
           )}
-        </XStack>
-      </YStack>
-    </Gradient>
+        </YStack>
+        {action && (
+          <Button
+            size="$3" chromeless
+            borderColor="$accentOnAccent" borderWidth={1}
+            onPress={action.onPress}
+            icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="currentColor" /> : undefined}
+          >
+            <Button.Text color="$accentOnAccent">{action.label}</Button.Text>
+          </Button>
+        )}
+      </XStack>
+    </YStack>
   );
 }
 
@@ -385,6 +500,65 @@ export function BottomActionBar({ children }: { children: React.ReactNode }) {
   );
 }
 
+// ─── BatchActionBar ────────────────────────────────────────────────────────
+
+export type BatchAction = {
+  key: string;
+  label: string;
+  destructive?: boolean;
+  onPress: () => void;
+};
+
+export function BatchActionBar({
+  selectedCount,
+  actions,
+  onSelectAll,
+  onExit,
+  onOpenOverflow,
+}: {
+  selectedCount: number;
+  actions: BatchAction[];
+  onSelectAll: () => void;
+  onExit: () => void;
+  onOpenOverflow?: () => void;
+}) {
+  const visibleActions = actions.length <= 3 ? actions : actions.slice(0, 1);
+  return (
+    <YStack
+      testID="selection-mode:active"
+      {...webDataAttributes({ selectionEntry: 'long-press-or-select', selectionExitRestores: 'primary' })}
+    >
+      <XStack px="$4" py="$2" items="center" justify="space-between">
+        <Text testID="selection-count" fontWeight="600">{selectedCount} selected</Text>
+        <XStack gap="$2">
+          <Button testID="selection-select-all" chromeless onPress={onSelectAll}>Select all</Button>
+          <Button testID="selection-exit" chromeless onPress={onExit}>Done</Button>
+        </XStack>
+      </XStack>
+      <YStack testID="pinned:batch-actions">
+        <BottomActionBar>
+          <XStack testID={actions.length <= 3 ? 'batch-actions:buttons' : 'batch-actions:primary-overflow'} gap="$2">
+            {visibleActions.map((action) => (
+              <Button
+                key={action.key}
+                testID={action.destructive ? `batch-destructive:${action.key}` : `batch-action:${action.key}`}
+                flex={1}
+                onPress={action.onPress}
+                aria-label={action.destructive ? `${action.label} ${selectedCount} records` : action.label}
+              >
+                {action.label}
+              </Button>
+            ))}
+            {actions.length > 3 && (
+              <Button testID="batch-overflow" onPress={onOpenOverflow} aria-label="More batch actions">More</Button>
+            )}
+          </XStack>
+        </BottomActionBar>
+      </YStack>
+    </YStack>
+  );
+}
+
 // ─── FloatingActionButton ───────────────────────────────────────────────────
 
 export function FloatingActionButton({
@@ -467,6 +641,103 @@ export function FilterChipRow({
           </Button>
         );
       })}
+    </ScrollView>
+  );
+}
+
+// ─── SortControl ───────────────────────────────────────────────────────────
+
+export type SortOption = {
+  key: string;
+  label: string;
+  orderBy: string;
+};
+
+export function SortControl({
+  options,
+  selectedKey,
+  onChange,
+  onOpenSheet,
+}: {
+  options: SortOption[];
+  selectedKey: string;
+  onChange: (key: string) => void;
+  onOpenSheet?: () => void;
+}) {
+  const selected = options.find((option) => option.key === selectedKey) ?? options[0];
+  if (!selected) return null;
+
+  if (options.length <= 3) {
+    return (
+      <YStack testID="sort-control:inline-chips" gap="$2">
+        <Text testID={`sort-active:${selected.key}`} fontSize="$2" color="$color10">
+          Sort: {selected.label}
+        </Text>
+        <FilterChipRow
+          options={options.map((option) => ({ key: option.key, label: option.label }))}
+          selectedKey={selected.key}
+          onChange={onChange}
+        />
+      </YStack>
+    );
+  }
+
+  return (
+    <Button testID="sort-control:sheet" onPress={onOpenSheet} minH={48} aria-label={`Sort: ${selected.label}`}>
+      <Button.Text testID={`sort-active:${selected.key}`}>Sort: {selected.label}</Button.Text>
+    </Button>
+  );
+}
+
+// ─── CarouselRow ───────────────────────────────────────────────────────────
+
+export function CarouselRow<T>({
+  entity,
+  items,
+  keyExtractor,
+  renderItem,
+  itemWidth = 280,
+  initialOffset = 0,
+  onOffsetChange,
+}: {
+  entity: string;
+  items: T[];
+  keyExtractor: (item: T) => string;
+  renderItem: (item: T, index: number) => React.ReactNode;
+  itemWidth?: number;
+  initialOffset?: number;
+  onOffsetChange?: (offset: number) => void;
+}) {
+  const gap = 12;
+  const ref = React.useRef<ScrollView>(null);
+
+  React.useEffect(() => {
+    if (initialOffset > 0) ref.current?.scrollTo({ x: initialOffset, animated: false });
+  }, [initialOffset]);
+
+  return (
+    <ScrollView
+      ref={ref}
+      testID={`carousel:${entity}:carousel-row`}
+      {...webDataAttributes({ carouselSnap: 'start', autoAdvance: 'false', preservePosition: 'true' })}
+      horizontal
+      snapToInterval={itemWidth + gap}
+      snapToAlignment="start"
+      decelerationRate="fast"
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap, paddingHorizontal: 16, paddingRight: 48 }}
+      onMomentumScrollEnd={(event) => onOffsetChange?.(event.nativeEvent.contentOffset.x)}
+    >
+      {items.map((item, index) => (
+        <YStack
+          key={keyExtractor(item)}
+          testID={`carousel-item:${keyExtractor(item)}`}
+          width={itemWidth}
+          accessibilityLabel={`${index + 1} of ${items.length}`}
+        >
+          {renderItem(item, index)}
+        </YStack>
+      ))}
     </ScrollView>
   );
 }
@@ -604,8 +875,8 @@ export function EntityImage({
   fallbackIcon = 'image-outline',
 }: {
   source?: string | null;
-  width: number | string;
-  height: number | string;
+  width: number;
+  height: number;
   borderRadius?: number;
   fallbackIcon?: IoniconName;
 }) {
@@ -613,8 +884,8 @@ export function EntityImage({
   
   if (!source) {
     return (
-      <YStack width={width} height={height} borderRadius={borderRadius} bg="$surface2" items="center" justify="center" overflow="hidden">
-        <Ionicons name={fallbackIcon} size={24} color={theme.text3.val} />
+      <YStack width={width} height={height} style={{ borderRadius }} bg="$surface2" items="center" justify="center" overflow="hidden">
+        <Ionicons name={fallbackIcon} size={24} color={theme.color10.val} />
       </YStack>
     );
   }
@@ -623,7 +894,7 @@ export function EntityImage({
   const uri = source.startsWith('http') || source.startsWith('data:') ? source : `data:image/jpeg;base64,${source}`;
 
   return (
-    <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$surface2">
+    <YStack width={width} height={height} overflow="hidden" style={{ borderRadius }} bg="$surface2">
       <RNImage
         source={{ uri }}
         style={{ width: '100%', height: '100%', resizeMode: 'cover' }}

@@ -4,6 +4,7 @@ Copy-paste snippets for mobile-app screens.
 
 > **Prefer `src/components/`, `src/hooks/`, `src/utils/`** — the scaffold creates:
 > - `src/components/index.tsx` — UI primitives: `StatusPill`, `StatTile`, `Hero`, `SectionHeader`, `AvatarInitials`, `InfoRow`, `ActionRow`, `Gradient`, `LoadingState`, `ErrorState`, `EmptyState`, `BottomActionBar`, `ScreenHeader`, `ModalHeader`, `FormField`, `RowPick`
+>   plus `FloatingActionButton`, `FilterChipRow`, and `EntityImage`
 > - `src/hooks/` — `useListData`, `useSearchFilter`
 > - `src/utils/` — `formatDate`, `formatDateTime`, `formatRelative`, `truncate`, `pluralize`, `choiceLabel`, `STATUS_TONES`, `lookupName`, `formattedValue`, `newId`
 > - `src/tokens/` — `gradients`, `shadows`
@@ -26,22 +27,30 @@ import { gradients, type GradientName } from '@/tokens'
 
 export function Gradient({
   name,
+  source,
   style,
   children,
 }: {
   name: GradientName
+  source: 'content' | 'state' | 'magnitude' | 'legibility'
   style?: object
   children?: React.ReactNode
 }) {
   return (
-    <LinearGradient colors={gradients[name]} style={[{ borderRadius: 12 }, style]}>
+    <LinearGradient
+      colors={gradients[name]}
+      testID={`gradient:${name}:${source}`}
+      style={[{ borderRadius: 12 }, style]}
+    >
       {children}
     </LinearGradient>
   )
 }
-```
 
-Usage: `<Gradient name="hero" style={{ height: 180 }}><Hero ... /></Gradient>`
+Usage for an image scrim only:
+`<Gradient name="imageScrim" source="legibility"><EntityImage testID="hero" ... /></Gradient>`.
+State/magnitude gradients additionally bind `data-gradient-bound` to the source
+field or wrap a `chart:*` / `progress:*` component.
 
 ---
 
@@ -143,54 +152,103 @@ Usage:
 
 ---
 
+### `<Sparkline>`
+
+Inline trend for a stat tile. Use approved `d3-scale` to normalize 4–12
+ordered numeric observations; the shared component renders View geometry, no
+axes, an emphasized endpoint, and a text equivalent.
+
+```tsx
+import { scaleLinear } from 'd3-scale'
+
+const scale = scaleLinear()
+  .domain([Math.min(...values), Math.max(...values)])
+  .range([0, 1])
+
+<Sparkline
+  points={values.map((value, index) => ({
+    key: String(index), label: labels[index], value, normalized: scale(value),
+  }))}
+  summary="Completions rose 18% over 7 days"
+  seriesColor={chartTokens.seriesPrimary}
+/>
+```
+
+No axes or auto-animation. If the trend does not change a decision, show the
+number without a sparkline.
+
+---
+
+### `<SeriesChart>`
+
+One-series bar/area comparison with at most 12 points, `labelSmall` axes, chart
+tokens, a visible caption, accessible root summary, and range-named empty state.
+
+```tsx
+import { scaleLinear } from 'd3-scale'
+
+const scale = scaleLinear().domain([0, Math.max(...values)]).range([0, 1])
+
+<SeriesChart
+  form="bar"
+  points={values.map((value, index) => ({
+    key: labels[index], label: labels[index], value, normalized: scale(value),
+  }))}
+  summary="42 inspections completed in the last 6 months"
+  emptyRange="the last 6 months"
+  seriesColor={chartTokens.seriesPrimary}
+  gridColor={chartTokens.grid}
+/>
+```
+
+Area form uses only `gradient:chartArea:magnitude`. More than one series is out
+of v1 scope; do not hand-roll legends or additional colors.
+
+---
+
 ### `<Hero>`
 
-Gradient header for list and dashboard screens. Renders inside a `<Gradient>`.
+Flat brand header for list and dashboard screens. Generic headers have no
+derived gradient source, so they use a solid semantic accent surface.
 
 ```tsx
 import { YStack, XStack, Text, Button } from 'tamagui'
 import { Ionicons } from '@expo/vector-icons'
-import type { GradientName } from '@/tokens'
-
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
 export function Hero({
   title,
   subtitle,
-  gradient = 'hero',
   action,
 }: {
   title: string
   subtitle?: string
-  gradient?: GradientName
   action?: { label: string; iconName?: IoniconName; onPress: () => void }
 }) {
   return (
-    <Gradient name={gradient} style={{ borderRadius: 0 }}>
-      <YStack px="$5" pt="$6" pb="$5" gap="$1">
+    <YStack bg="$accentBase" px="$5" pt="$6" pb="$5" gap="$1">
         <XStack items="center" justify="space-between">
           <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
+            <Text fontSize="$7" fontWeight="700" color="$accentOnAccent" numberOfLines={1}>
               {title}
             </Text>
             {subtitle && (
-              <Text fontSize="$3" color="rgba(255,255,255,0.8)" numberOfLines={2}>
+              <Text fontSize="$3" color="$accentOnAccent" numberOfLines={2}>
                 {subtitle}
               </Text>
             )}
           </YStack>
           {action && (
             <Button
-              size="$3" chromeless borderColor="rgba(255,255,255,0.4)"
+              size="$3" chromeless borderColor="$accentOnAccent"
               borderWidth={1} onPress={action.onPress}
-              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="white" /> : undefined}
+              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color="currentColor" /> : undefined}
             >
-              <Button.Text color="white">{action.label}</Button.Text>
+              <Button.Text color="$accentOnAccent">{action.label}</Button.Text>
             </Button>
           )}
         </XStack>
-      </YStack>
-    </Gradient>
+    </YStack>
   )
 }
 ```
@@ -200,7 +258,6 @@ Usage:
 <Hero
   title="Field Inspections"
   subtitle="14 open · 3 overdue"
-  gradient="hero"
   action={{ label: 'New', iconName: 'add', onPress: () => router.push('/inspections/new') }}
 />
 ```
@@ -366,6 +423,275 @@ export function ActionRow({
   )
 }
 ```
+
+---
+
+### `<LoadingState>`
+
+Skeleton state that mirrors list, detail, or form geometry. Use it while the
+first data request is pending; never replace a populated list with a spinner.
+
+```tsx
+<LoadingState variant="list" rows={6} />
+<LoadingState variant="detail" rows={5} />
+<LoadingState variant="form" rows={4} />
+```
+
+Choose `rows` from the expected first viewport, not the total result count.
+
+---
+
+### `<ErrorState>`
+
+Full-screen recoverable failure with a visible retry. Pass user-facing copy;
+log raw connector/service errors separately.
+
+```tsx
+<ErrorState
+  title="Inspections unavailable"
+  message="We couldn't load this queue."
+  onRetry={refetch}
+/>
+```
+
+---
+
+### `<EmptyState>`
+
+Domain-named empty result with an optional useful action. Filter-empty states
+name the active filter and use a clear/reset action.
+
+```tsx
+<EmptyState
+  icon="clipboard-outline"
+  title="No inspections scheduled"
+  message="This site has no visits in the selected range."
+  actionLabel="Clear date range"
+  onAction={clearRange}
+/>
+```
+
+---
+
+### `<BottomActionBar>`
+
+Safe-area-aware pinned action surface. Scroll content bottom padding must equal
+this rendered height plus the safe-area inset. Selection mode replaces the
+normal bar; never stack two bottom bars.
+
+```tsx
+<BottomActionBar>
+  <Button testID="cta-primary" onPress={save}>Save inspection</Button>
+</BottomActionBar>
+```
+
+---
+
+### `<FloatingActionButton>`
+
+One obvious create/quick action above native bottom chrome. Prefer `extended`
+with a visible label; icon-only still requires the `label` accessibility name.
+
+```tsx
+<FloatingActionButton
+  label="New inspection"
+  iconName="add"
+  extended
+  onPress={openCreate}
+/>
+```
+
+Do not use a FAB when a pinned bottom primary action already owns the screen.
+
+---
+
+### `<BatchActionBar>`
+
+Selection-mode replacement for the normal pinned CTA. The screen owns selected
+IDs and confirmation; the component owns count, Select all, Exit, safe area,
+and 1–3 versus 4+ action layout.
+
+```tsx
+{selectionMode ? (
+  <BatchActionBar
+    selectedCount={selectedIds.size}
+    actions={[
+      { key: 'approve', label: 'Approve', onPress: approveSelected },
+      { key: 'reject', label: 'Reject', destructive: true, onPress: confirmRejectSelected },
+    ]}
+    onSelectAll={selectAllVisible}
+    onExit={exitSelection}
+  />
+) : (
+  <BottomActionBar>{normalPrimaryAction}</BottomActionBar>
+)}
+```
+
+Enter via row long-press or a visible Select header action. Never render a
+permanent checkbox column, and never mount this bar beside the normal bar.
+
+---
+
+### `<FilterChipRow>`
+
+Single-select horizontal filter row for 1–4 values. For 5–8 values add the
+planned More overflow; above 8 use a searchable filter sheet instead.
+
+```tsx
+<FilterChipRow
+  options={[
+    { key: 'all', label: 'All', count: 12 },
+    { key: 'critical', label: 'Critical', count: 3 },
+  ]}
+  selectedKey={filter}
+  onChange={setFilter}
+/>
+```
+
+---
+
+### `<CarouselRow>`
+
+Browsable visual collection with snap-to-start, trailing bleed, announced
+position, and caller-owned offset persistence. Use only for 3+ hero-eligible
+images on a non-queue screen.
+
+```tsx
+const [carouselOffset, setCarouselOffset] = React.useState(0)
+
+<CarouselRow
+  entity="cr_product"
+  items={products}
+  keyExtractor={(product) => product.cr_productid}
+  itemWidth={280}
+  initialOffset={carouselOffset}
+  onOffsetChange={setCarouselOffset}
+  renderItem={(product) => (
+    <YStack>
+      <EntityImage source={product.cr_imageurl} width={280} height={180} />
+      <Text>{product.cr_name}</Text>
+    </YStack>
+  )}
+/>
+```
+
+Never auto-advance. One or two items use a static row. Working queues use their
+normal scan-efficient list even when records have images.
+
+---
+
+### `<ScreenHeader>`
+
+Compact in-content header for a non-modal screen. Title, status, metadata, and
+the optional right action remain one hierarchy; do not wrap this in a card.
+
+```tsx
+<ScreenHeader
+  title="North Dock Inspection"
+  subtitle="Loading Gate A"
+  status={<StatusPill status="in-progress" />}
+  rightAction={<Button chromeless onPress={openMore}>More</Button>}
+/>
+```
+
+---
+
+### `<ModalHeader>`
+
+Balanced Cancel/title/Save row for modal or form-sheet workflows. Keep Save
+disabled while submitting and preserve entered values after failure.
+
+```tsx
+<ModalHeader
+  title="New request"
+  onCancel={confirmCancel}
+  onSave={submit}
+  saving={isSubmitting}
+/>
+```
+
+---
+
+### `<FormField>`
+
+Consistent visible label wrapper for one input/control. The child owns helper
+and validation copy; never use placeholder text as the only field label.
+
+```tsx
+<FormField label="Received quantity">
+  <Input value={quantity} keyboardType="number-pad" onChangeText={setQuantity} />
+</FormField>
+```
+
+Use the planner's field-role control instead of defaulting every value to
+`Input`.
+
+---
+
+### `<RowPick>`
+
+Single-select row used inside lookup/choice sheets. Store the record ID, not a
+display label or Dataverse bind string.
+
+```tsx
+<RowPick
+  label={site.cr_name}
+  subtitle={site.cr_address}
+  selected={site.cr_siteid === selectedSiteId}
+  onPress={() => setSelectedSiteId(site.cr_siteid)}
+/>
+```
+
+---
+
+### `<EntityImage>`
+
+Safe display boundary for Dataverse base64/data URIs and remote URLs. Always
+pass fixed numeric dimensions or an explicit aspect-ratio container, plus a
+meaningful accessible description on the surrounding image control.
+
+```tsx
+<YStack aspectRatio={4 / 3} width="100%">
+  <EntityImage
+    source={product.cr_imageurl}
+    width={320}
+    height={240}
+    borderRadius={12}
+    fallbackIcon="image-outline"
+  />
+</YStack>
+```
+
+Use the shipped local placeholder for failure/offline; never replace a missing
+domain image with another remote stock URL.
+
+---
+
+### `<SortControl>`
+
+Visible sort state for a List. Keys use `<logical-field>:<asc|desc>`; labels are
+domain copy. Two or three options render inline; four or more use the sheet
+trigger and the screen owns the single-select `RowPick` sheet.
+
+```tsx
+const sorts = [
+  { key: 'cr_createdat:desc', label: 'Newest', orderBy: 'cr_createdat desc' },
+  { key: 'cr_validfrom:asc', label: 'Valid from', orderBy: 'cr_validfrom asc' },
+]
+
+<SortControl
+  options={sorts}
+  selectedKey={sortKey}
+  onChange={(key) => {
+    setSortKey(key)
+    listRef.current?.scrollToOffset({ offset: 0, animated: false })
+  }}
+/>
+```
+
+The results container uses `testID="sort-results"` and
+`dataSet={{ sortReset: 'top' }}`. Never hide the active sort behind an unlabeled
+icon.
 
 ---
 
