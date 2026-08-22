@@ -336,7 +336,7 @@ call `detect-publisher-prefix.js`.
 
 Set tentative defaults (used by Step 3b before `/design-system` runs):
 
-- `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
+- `<visual_companion> = yes` — open the persistent live plan panel once by default. `/design-system` may downgrade this to `no`, persisted to memory-bank for future explicit `/preview-screens` runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
@@ -408,7 +408,7 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 >  • Gate 1 (data model) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
 >  • Gate 2 (native capabilities) — ~10s (quick)
 >  • Gate 3 (connectors) — ~30–60s
->  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
+>  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design direction if opted in, then per-screen specs and panel refresh)
 >
 > For Dataverse-required apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
@@ -793,36 +793,23 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
-#### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
+#### Step 3b — Install the live plan panel (orchestrator-owned)
 
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before each Gate 4 plan-mode entry. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
+Once `native-app-plan.md` and `.tmp/dataverse-schema-contract.json` exist, install
+the panel middleware and open it once. Re-run the installer after every rejected
+gate or successful plan edit; the URL remains stable and must not be reopened.
 
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
+```bash
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/panel/install.js" "<working_dir>"
+open "http://localhost:8081/panel" 2>/dev/null \
+  || xdg-open "http://localhost:8081/panel" 2>/dev/null \
+  || powershell.exe -NoProfile -Command "Start-Process 'http://localhost:8081/panel'" 2>/dev/null \
+  || echo "Plan panel: http://localhost:8081/panel"
+```
 
-**What to do:**
-
-1. Print the link in a dedicated message so the user always has the fallback (clickable in most terminals):
-
-   > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
-
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
-
-3. **Else** attempt to open in the user's default browser via the OS-portable chain:
-
-   ```bash
-   open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<abs-path>\_plan_preview.html'" 2>/dev/null \
-     || echo "Auto-open failed. Use the link above."
-   ```
-
-4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
-
-If the planner returns without emitting a `PLAN_PREVIEW_PATH:` line, that is **expected** — the planner passes `skip_preview: true` to screen-planner since `/design-system` (always installed) renders the single visual preview at Step 6.75 after brand locks. Print:
-
-> "→ Gate 4 reviewed structurally. Visual preview will appear at Step 6.75 after `/design-system` locks your brand tokens (~5 min from now after scaffold)."
-
-…and continue without attempting any browser open. **Do not warn or treat this as an error** — it is the documented behavior.
+The seven panel sections are What I understood, Data model, Native
+capabilities, Connectors, Screen map, Progress, and Issues. Do not create or
+open any plan/design HTML preview. The running device is visual truth.
 
 #### 3.9 — Post-plan publisher-prefix gate
 
@@ -1200,10 +1187,10 @@ Immediately after creating `memory-bank.md`, flush any queued planner concerns f
 **Also persist the Visual Companion preference** so re-runs (`/edit-app`, `/preview-screens`, future `/design-system` runs) honor it without re-asking. Append to the Project facts section:
 
 ```
-visual_companion: <yes|no>   # set in Step 2b — controls whether browser previews open automatically
+visual_companion: <yes|no>   # controls explicit /preview-screens auto-open only
 ```
 
-`/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
+`/preview-screens` reads this flag only when explicitly invoked; if `no`, it prints the file path instead of opening. `/edit-app` refreshes the live panel after a re-plan. The flag is per-project and does not leak across apps.
 
 ### Step 6.75 — Design system
 
@@ -1229,38 +1216,10 @@ Handle the return per the status protocol (AGENTS.md rule #10):
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
 
-If the user picked path (c) Skip in the cost picker, the skill returns immediately with `DONE` and no `brand/` files. Screen-builders fall back to `## Design Direction` — same as today's behavior. **But the user still needs a visual preview before code is written** — fall through to the "Skip path preview" block below.
-
-**After `/design-system` returns `DONE` — two branches:**
-
-#### Branch A — `brand/` files exist (user picked path a, b, or d)
-
-This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
-
-#### Branch B — Skip path preview (user picked path c — no `brand/` files)
-
-The user skipped the design system but still deserves to see their screens before code is written. Render a preview with Field/Ops defaults:
-
-1. **Print:**
-   > "→ Design system skipped — rendering screen preview with Field/Ops defaults so you can validate the layout before code is written."
-
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
-
-3. **Open in browser** (if `<visual_companion> = yes`):
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
-
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
-
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
-
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
-
-**Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
+If the user picked path (c) Skip, the skill returns `DONE` with no `brand/`
+files and screen-builders use the plan direction defaults. In every path,
+refresh the live panel after `/design-system` returns. Do not render a plan or
+design preview; visual verification starts on the running device.
 
 ### Step 6.85 — Offline profile (always asked)
 
@@ -2260,23 +2219,9 @@ npx tsc --noEmit
 
 Then continue only if TypeScript is clean. Step 11.5 may leave remaining qualitative concerns, but it may not leave the app in a broken TypeScript state.
 
-#### Optional static preview
-
-After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
-
-> "→ N screens built and type-checked. The live app starts next.
->
-> Want a static HTML preview first, or go straight to the live app?
->
-> (a) Preview all screens — HTML phone frames for every screen
-> (b) Preview key screens — List + Form + Detail archetypes only
-> (c) Skip preview
->
-> [default: c]"
-
-- **(a)** → invoke `/preview-screens` (all screens)
-- **(b)** → invoke `/preview-screens` with only List + Form + Detail screen files (skip Login, Splash, Profile, OAuth)
-- **(c)** → proceed directly to Step 12
+After `tsc` passes, proceed directly to Step 12. The running device is the
+visual verification surface; static HTML screen previews are available only
+when the user explicitly invokes `/preview-screens`.
 
 ---
 

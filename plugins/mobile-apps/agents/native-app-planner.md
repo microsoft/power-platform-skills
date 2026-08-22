@@ -270,11 +270,11 @@ Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references
 
 1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
 2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
-3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. Design confirmation happens visually at Gate 4 when the user sees `_plan_preview.html` — not via a text question upfront.
+3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. The live plan panel exposes this context while the running device remains visual truth.
 
 Store the design decision — you will pass it to `screen-planner` in Step 5b so per-screen specs use the right tokens.
 
-**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design approval happens at Gate 4 via the preview, not here.
+**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design adjustment happens through the panel and `/design-system`.
 
 ### Industry inference confidence
 
@@ -439,7 +439,7 @@ See Step 5b + Step 5 Gate 4 below. Numbering shifts by one because Gates 2+3 are
 
 Only run after Gate 3 is approved. Gate 4 is split into two cheaper gates:
 - **Gate 4a (graph)** — user approves the screen list, navigation, and shared conventions BEFORE any per-screen spec text is generated. Catches missing/extra screens cheaply.
-- **Gate 4b (specs)** — user approves expanded per-screen specs + Open Questions + (optional) HTML preview. Re-uses the locked graph; never regenerates it.
+- **Gate 4b (specs)** — user approves expanded per-screen specs + Open Questions in the live panel. Re-uses the locked graph; never regenerates it.
 
 This cuts the cost of a screen-list rejection from "regenerate everything" to "regenerate just the specs."
 
@@ -471,7 +471,7 @@ Follow your agent file. In `phase: graph`, you write ONLY:
   - Screen Map (table)
   - Navigation Contracts (table)
   - Shared Conventions (Step 3.5)
-Do NOT write per-screen specs, Open Questions, Standard Imports, or any preview. Stop after Step 3.5 and return.
+Do NOT write per-screen specs, Open Questions, Standard Imports, or any visual artifact. Stop after Step 3.5 and return.
 
 Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your one-line summary.
 ```
@@ -514,56 +514,24 @@ Expand each screen in the locked graph into a compact delta spec. Do NOT repeat 
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 
-Style-picker + preview rules unchanged — honour the same `skip_preview` policy as the legacy single-pass mode (default `skip_preview: true` when `Design vibe opt-in: deferred`).
+Do not render HTML. The orchestrator installs the live panel after the structured plan exists.
 
 Return per AGENTS.md rule #10.
 ```
 
-Wait for return; apply the Step 3.0 status switch. The planner appends specs + (optional) markdown screen-graph or HTML preview to `_screens_section.md` and `native-app-plan.md`.
+Wait for return; apply the Step 3.0 status switch. The planner appends specs to `_screens_section.md` and `native-app-plan.md`.
 
-#### Gate 4b — Screen Specs (visual + spec review)
+#### Gate 4b — Screen Specs (panel-backed review)
 
-Proceed to the existing Gate 4 logic below (preview-path emission, plan-mode entry, reject loop). The only difference is the gate's name in the user-facing prompt: print `## Gate 4b of 4 — Screen specs` instead of `## Gate 3 of 3 — Screens`. Reject loop in 4b re-spawns with `phase: specs` only; the locked graph from 4a is preserved unless the user explicitly asks to revise screens (in which case bounce back to 4a).
+Install/refresh the panel and EnterPlanMode with `## Gate 4b of 4 — Screen specs`.
+The panel shows the editable data model and removable Screen Map, live build
+progress, dropped native/connectors, and issues. It contains no embedded app
+render; the running device is the single source of visual truth.
 
-### Gate 4 — Screen Plan (structural review, no HTML preview)
-
-**Step 0 — Design context.** Design vibe selection has moved to `/design-system` (Step 6.75 of the orchestrator), which runs AFTER planning completes. **Gate 3 (screen plan) is a STRUCTURAL review only — no HTML preview.** The visual preview lives at Step 6.75 after brand tokens are locked, so the user only ever sees one render with the right colors instead of a default-tokens render here that gets overwritten in 5 minutes.
-
-Branch on the orchestrator's `Design vibe opt-in:` value:
-
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — spawn `screen-planner` with **`skip_preview: true`**. It writes only `_screens_section.md` (specs + markdown screen-graph) — no `_plan_preview.html`. The orchestrator's Step 6.75 will spawn screen-planner again WITHOUT `skip_preview` after `/design-system` locks the brand, so the single HTML preview gets rendered with real tokens. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
-
-- **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
-
-- **`Design vibe opt-in: no`** (or absent) — backwards-compat path for installs without `/design-system`. Skip the picker. No `## Design Direction` block exists. Spawn `screen-planner` WITHOUT `skip_preview`. It generates HTML using industry-inferred defaults. Continue to Step A.
-
-- **`Design vibe opt-in: skip`** — the user opted out of design entirely (`--no-design` flag). Spawn `screen-planner` with `skip_preview: true`. No HTML at any stage; no `/design-system` run later. Skip Step A; jump to Step B.
-
-After `screen-planner` returns: if it wrote `_plan_preview.html` (the legacy/no-design-system path), the orchestrator owns the browser open. Sub-agent shells often lose `DISPLAY`/GUI context and the open silently no-ops, so the planner never opens it itself.
-
-**Step A — Emit the preview path** (ONLY when `screen-planner` generated `_plan_preview.html` — i.e. `skip_preview` was NOT set). Before EnterPlanMode, print exactly this line on its own (no surrounding prose, no nested bullets):
-
-```
-PLAN_PREVIEW_PATH: file://<absolute-working-dir>/_plan_preview.html
-```
-
-The orchestrator greps for the `PLAN_PREVIEW_PATH:` prefix in the planner's return value to know which file to open. **Skip this emission entirely when `skip_preview: true` was passed** — the orchestrator's Step 3b is wired to short-circuit on no-token-emitted; emitting a path that doesn't exist would cause the open to fail with a confusing 404.
-
-**Step B — Enter plan mode** with the screen table + per-screen specs prefixed with `## Gate 3 of 3 — Screens`. Note text differs by mode:
-
-- **`skip_preview` mode (deferred / skip)**: Use this note at the top:
-
-> "This is a STRUCTURAL review only — confirm the screen list, archetypes, and navigation pattern. Visuals (palette, typography, real layouts with brand tokens) come at Step 6.75 after `/design-system` locks the design. Suggest changes to the screens, archetypes, or navigation; I'll re-spawn the planner. Approve when the structure is right."
-
-- **HTML-preview mode (done / no)**: Use the original note about reviewing the browser preview:
-
-> "The browser preview shows what each screen will look like with the planned design. Review both layout and visual style. Suggest changes to screens, navigation, or design and I'll regenerate the preview before you approve.
->
-> Note: Native navigation chrome (iOS large-title collapsing headers, search bars, swipe-to-delete gestures) cannot be shown in the HTML preview — these will appear in the built app. The preview approximates layout, colors, and typography."
-
-In `skip_preview` mode, this gate covers **screen plan only** — design is approved separately at Step 6.75. In HTML-preview mode, this gate covers **both** (legacy combined gate).
-
-Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen names, navigation, and — in HTML-preview mode — design). Re-emit the `PLAN_PREVIEW_PATH:` line before re-entering plan mode if you generated HTML; skip the emission if `skip_preview` was set. If the user requests data-model or connector changes via screen feedback, re-approve those gates first — never silently revise an already-approved section. **After re-approving an earlier gate, MUST re-spawn `screen-planner` with the updated data model/connector sections before re-entering Gate 4** — otherwise screen specs are stale and reference the old service list.
+Reject loop in 4b re-spawns `phase: specs` only; the locked graph from 4a is
+preserved unless the user explicitly asks to revise screens, which returns to
+4a. If feedback changes data or connectors, re-approve those gates and refresh
+the panel before re-entering 4b.
 
 ### Step 5c — Cross-entity Read Audit (Round 2 data-model pass)
 

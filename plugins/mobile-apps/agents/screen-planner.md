@@ -63,7 +63,7 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 - `<working_dir>/native-app-plan.md` (your `phase: specs` append target)
 - `<working_dir>/_screens_section.md` (your `phase: graph` write target)
-- `<working_dir>/_plan_preview.html` (only when `skip_preview` is unset/false)
+- `<working_dir>/.mobile-build/panel-state.json` (only through the panel installer)
 - `<working_dir>/.tmp/*` (scratch)
 
 If you discover a real issue in `app/`, `src/`, `package.json`, `tamagui.config.ts`, `tsconfig.json`, `power.config.json`, `node_modules/`, or `memory-bank.md`, return `DONE_WITH_CONCERNS: <issue>` — DO NOT silently edit. Those paths are owned by the orchestrator's bg pipeline and writing to them races `cp -R`, `npx power-apps init`, or `npm install`.
@@ -90,7 +90,7 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 4. Identify data + capability dependencies per screen
 5. Check industry-specific patterns
 6. Produce the `## Screens` section
-7. Generate `_plan_preview.html`
+7. Refresh the live plan panel
 
 ### Progress streaming (MANDATORY)
 
@@ -102,7 +102,7 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 | Before Step 2 (graph) or before Step 4 (specs) | `echo "→ [screen-planner] phase=<phase>, N=<screen_count> screens, est ~$((N * 60))s"` |
 | Per screen during Step 4 (specs phase only) | `echo "→ [screen-planner] spec <i>/<N>: <screen_name>"` |
 | Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens append'}"` |
-| Before Step 6 preview (if not skipped) | `echo "→ [screen-planner] rendering _plan_preview.html"` |
+| Before Step 6 panel refresh | `echo "→ [screen-planner] refreshing live plan panel"` |
 
 These are pure progress signals — never block on or check echo output. Use a single `Bash` call per milestone, not batched at the end (defeats the point).
 
@@ -739,11 +739,12 @@ If the matrix has gaps, add the missing screens NOW — do not return a partial 
 Emit a one-line confirmation in your final summary so the orchestrator can verify:
 > "Coverage: <F> features / <E> entities / <V> actions all mapped to screens."
 
-## Step 6 — Generate Plan-Time Preview
+## Step 6 — Refresh The Live Plan Panel
 
-**If the planner passed `skip_preview: true` in your prompt, do NOT generate `_plan_preview.html`** — instead, append a markdown **Screen Graph** subsection to the same write target as Step 5 (`plan_path` in `phase: specs`, `_screens_section.md` otherwise) so the planner has structural content to show at Gate 4. Then jump to Return.
-
-The markdown screen graph replaces the HTML preview's role at Gate 4 in `skip_preview` mode. It communicates *structure* (screen list, archetype, navigation hierarchy) without misleading visuals — the real branded HTML preview gets rendered later at Step 6.75 by the orchestrator after `/design-system` locks the brand tokens.
+Never generate a one-shot HTML preview. Append the markdown Screen Graph to the
+same write target as Step 5 (`plan_path` in `phase: specs`,
+`_screens_section.md` otherwise), then run the panel installer. The device shows
+the app; the panel shows editable plan structure and live progress.
 
 **Markdown screen-graph format** (append after the per-screen specs in the same write target as Step 5):
 
@@ -772,35 +773,12 @@ New: 5
 
 The Hierarchy block should reflect the actual nav pattern — for `Stack`, render a flat list; for `Tabs`, render the tab roots with their pushed sub-screens nested below; for `Drawer`, render the drawer items with their stacks. Use Ionicons-name hints inline (📋 / 🔍 / 👤 / ⚙️) keyed off the screen-name → icon map in the orchestrator's Step 10b table.
 
-**Print before starting (`skip_preview: true` branch):**
-> "→ Skipping HTML preview (Step 6.75 will render it with locked brand). Writing markdown screen-graph for Gate 4 structural review."
-
-Then append the markdown block to the Step 5 write target (`plan_path` in `phase: specs`, `_screens_section.md` otherwise — NEVER both) and **return — do NOT generate any HTML**.
-
----
-
-**Otherwise (`skip_preview` is false or unset)** — the legacy HTML preview branch — continue to render `_plan_preview.html`:
-
 **Print before starting:**
-> "→ Generating _plan_preview.html so you can see each screen visually before code is written…"
+> "→ Refreshing the live plan panel…"
 
-After writing `_screens_section.md`, generate a `preview.html` from the plan specs — before any TSX exists. This gives the planner a visual to show the user at Gate 4.
-
-Load the phone frame template from `${PLUGIN_ROOT}/shared/references/tamagui-html-mapping.md` Section 4. Then for each screen in the Screen Map (excluding baseline screens marked "keep"), synthesize representative HTML using the per-screen spec:
-
-- **Layout:** translate the `YStack`/`XStack`/`Card`/`Button` structure described in the spec to HTML/CSS using the component mapping (Section 1) and token tables (Section 2).
-- **Data:** for list screens, generate 3–4 plausible placeholder items based on the entity name (e.g. "Inspection #1042", "Inspection #1043"). For detail screens, populate fields with one representative placeholder record.
-- **State:** show the happy-path populated state only. No loading spinners, no error states.
-- **Actions:** render buttons with their labels. No click behavior needed.
-- **Baseline screens** (Login, OAuth callback, Splash): skip — users know what those look like.
-
-Write the file:
-
-```text
-Write file_path="<working_dir>/_plan_preview.html"
+```bash
+node "${PLUGIN_ROOT}/skills/create-mobile-prototype/panel/install.js" "<working_dir>"
 ```
-
-Use `_plan_preview.html` (not `preview.html`) so it does not collide with the post-build preview generated by `/preview-screens`.
 
 ## Return Status
 
@@ -808,14 +786,13 @@ You MUST return your final message with one of these four status codes as the **
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | Section written cleanly to the phase-appropriate target (`plan_path` for `phase: specs`; `_screens_section.md` for `phase: graph` / legacy) and — in legacy with `skip_preview: false` — `_plan_preview.html` also written | `DONE` |
+| `DONE` | Section written cleanly to the phase-appropriate target and panel refreshed | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Wrote section but had to fall back — e.g. design tokens missing so used Tamagui defaults, navigation pattern conflicts with template, screen count exceeded reasonable cap | `DONE_WITH_CONCERNS: $brandPrimary token not found, used $blue10 in preview` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete without more info — e.g. data model section references entities the planner did not pass, or connector list is empty but spec requires services | `NEEDS_CONTEXT: spec references CrInspectionService but Generated Services table is empty` |
-| `BLOCKED: <reason>` | Hit a hard wall — cannot read `native-app-plan.md`, cannot write the preview, design-planning reference unreadable. The planner MUST escalate, never silently retry | `BLOCKED: cannot read <working_dir>/native-app-plan.md (file not found)` |
+| `BLOCKED: <reason>` | Hit a hard wall — cannot read the plan, write its section, or refresh the panel. The planner MUST escalate, never silently retry | `BLOCKED: cannot read <working_dir>/native-app-plan.md (file not found)` |
 
 **Hard rules:**
 - Status code is the literal first line. Nothing before it.
-- If `skip_preview: true` was set and the section wrote cleanly, that is `DONE` (no concern needed).
 - Never silently downgrade `BLOCKED` to `DONE_WITH_CONCERNS` — the planner handles blocks.
 - `DONE_WITH_CONCERNS` requires at least one concern. If you have none, use `DONE`.
 
@@ -823,11 +800,7 @@ You MUST return your final message with one of these four status codes as the **
 
 After the status line and a blank line, write:
 
-> Screens section written to `<working_dir>/_screens_section.md`. Preview written to `<working_dir>/_plan_preview.html`. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
-
-If `skip_preview: true` was set, write instead:
-
-> Screens section written to `<working_dir>/_screens_section.md`. Preview skipped per skip_preview flag. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
+> Screens section written to `<working_dir>/_screens_section.md`. Live panel refreshed. Navigation: <pattern>. Total screens: <N> (<M> baseline kept from template, <K> new).
 
 If `phase: specs` was set, write instead (note: target is `plan_path`, not `_screens_section.md`):
 

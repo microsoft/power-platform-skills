@@ -8,6 +8,16 @@ try {
   // Build progress is optional outside /create-mobile-prototype.
 }
 
+function loadPanelHandler() {
+  try {
+    const modulePath = require.resolve('./.mobile-build/panel-middleware.cjs');
+    delete require.cache[modulePath];
+    return require(modulePath);
+  } catch {
+    return null;
+  }
+}
+
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
 // Add Metro config changes in this function only.
 function customizeMetroConfig(config) {
@@ -22,6 +32,7 @@ config.server = {
   ...config.server,
   enhanceMiddleware: (middleware) => withPowerNativeMetroLogging(
     (req, res, next) => {
+      if (loadPanelHandler()?.(req, res)) return;
       if (handleBuildEvents?.(req, res)) return;
       if (req.url === '/__pawrap_verify') {
         res.setHeader('Content-Type', 'application/json');

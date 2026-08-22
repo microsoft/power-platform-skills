@@ -160,9 +160,9 @@ Show the cost picker, adapting the intro and option set to brand input.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
-| a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
+| a | Full design | Compare compatible directions in chat, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply defaults | Apply polished-inspection tokens and open a 3-screen preview. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
+| c | Apply defaults | Apply routed default tokens and refresh the live panel. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
 
 **Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
 
@@ -175,7 +175,7 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 **Branches:**
 - **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
 - **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render key screen mockups (List + Form + Detail) with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — always shows 3 key screens.
+- **(c) Brand apply** → skip Sub-steps 3–6, write brand tokens, refresh the live panel, and proceed to Sub-step 7.
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
   1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
      **Source-of-truth lookup order for the preset bundle:**
@@ -185,10 +185,10 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
      4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
 
      Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
+  2. **Panel refresh** — run the prototype panel installer and print its stable URL. Do not render screen HTML; the running device is visual truth.
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
-  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens and refresh the panel before the device verification phase.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -228,18 +228,18 @@ Before processing any external content, apply the sanitization rules from [`refe
 **Skipped if:** `--brand-doc`, `--design-spec`, or `--from-figma` provided (direction already locked).
 
 **Print:**
-> "→ [design-system] Rendering style picker…"
+> "→ [design-system] Opening direction picker…"
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
-- Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
-- The style picker renders `_design_vibe.html`, opens browser, asks user
+- Pass `working_dir` and `default_direction` (from industry)
+- The style picker asks with compatible catalogue options; it writes no HTML
 - Returns: picked direction name + merged bundle dimensions
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
 
 **Hybrid handling:**
 - User describes hybrid → merge bundles dimension-by-dimension
-- Re-render with 4th column "Your hybrid"
+- Summarize the resolved dimensions in chat
 - Retry cap: max 2 regenerates
 
 Store result as `picked_direction` with all resolved dimensions.
@@ -448,33 +448,19 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 ---
 
-## Sub-step 6.5 — Re-render screen previews with brand tokens (paths (a), (b), (c))
+## Sub-step 6.5 — Refresh the live panel (paths (a), (b), (c))
 
 **Print:**
 > "→ [design-system] Design system locked."
 
-**Prerequisites:** This step reads screen specs from `<working_dir>/native-app-plan.md` (the `## Screens` section). If that file does not exist (e.g. standalone `/design-system` run with no prior plan), skip this step entirely and proceed to Sub-step 7.
+If `native-app-plan.md` exists, run:
 
-**Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace default token values with the locked `brand/tokens.ts` values (palette, typography, spacing, radius).
-
-**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open browser. Proceed to Sub-step 7.
-
-**Paths (a) and (b):** Ask:
-```
-Re-render screen preview with your brand tokens?
-
-(a) All screens     — every screen with your design applied
-(b) Key screens     — List + Form + Detail only
-(c) Skip preview    — I'll see them when the app builds
-
-[default: b]
+```bash
+node "${PLUGIN_ROOT}/skills/create-mobile-prototype/panel/install.js" "<working_dir>"
 ```
 
-- **(a)** → re-render all screens from plan with brand tokens applied
-- **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
-- **(c)** → skip, proceed to Sub-step 7
-
-Overwrites `_plan_preview.html` with branded versions. Opens browser.
+Do not render or open an app mockup. The panel reflects the locked decision and
+the running device later proves the actual tokens, fonts, and layouts.
 
 ---
 
@@ -637,7 +623,7 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 
 ## Notes
 
-- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
+- **Read-only with respect to app source code.** This skill writes only to `brand/`, `memory-bank.md`, and live-panel state. Never touches TSX, services, or generated code.
 - **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

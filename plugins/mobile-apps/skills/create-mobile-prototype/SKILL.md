@@ -265,6 +265,25 @@ Native Capabilities, Connectors, Design Direction, Screen Map, Navigation
 Contracts, or screen specs. The planner may normalize missing machine contract
 details, but any semantic change returns to the relevant approval gate.
 
+Install the single live review panel now that the data model and Screen Map
+exist. It is review-and-adjust only: rename/retype/drop/add a simple field, or
+remove a screen. It is non-blocking but opens itself and remains available for
+the rest of the run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/panel/install.js" "$PROJECT_DIR"
+open "http://localhost:8081/panel" 2>/dev/null \
+  || xdg-open "http://localhost:8081/panel" 2>/dev/null \
+  || powershell.exe -NoProfile -Command "Start-Process 'http://localhost:8081/panel'" 2>/dev/null \
+  || echo "Plan panel: http://localhost:8081/panel"
+```
+
+The panel contains exactly seven sections: What I understood, Data model,
+Native capabilities, Connectors, Screen map, Progress, and Issues. It embeds no
+app preview; the running device is visual truth. Dropped native/connector items
+sort to the top. Field edits are impact-checked before mutation and any orphaned
+screen blocks the edit with its name and reason.
+
 ### Step 4 - Prepare The Existing Template
 
 Read and apply `/create-mobile-app` Step 5's current template preparation
