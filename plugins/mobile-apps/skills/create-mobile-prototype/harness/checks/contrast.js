@@ -38,7 +38,7 @@ function contrastRatio(foreground, background) {
 function run(snapshot) {
   const failures = [];
   for (const element of snapshot.elements) {
-    if (!element.visible || !element.text.trim()) continue;
+    if (!element.visible || (!element.harnessIcon && !element.text.trim())) continue;
     const rawForeground = parseColor(element.style.color);
     const background = parseColor(element.style.backgroundColor);
     if (!rawForeground || !background) {
@@ -50,7 +50,7 @@ function run(snapshot) {
     const fontSize = Number.parseFloat(element.style.fontSize) || 0;
     const fontWeight = Number.parseInt(element.style.fontWeight, 10) || 400;
     const large = fontSize >= 24 || (fontSize >= 18.66 && fontWeight >= 700);
-    const threshold = large ? 3 : 4.5;
+    const threshold = element.harnessIcon ? 3 : large ? 3 : 4.5;
     if (ratio + 0.01 < threshold) {
       const identity = element.harnessIcon
         ? `icon ${element.harnessIcon}`

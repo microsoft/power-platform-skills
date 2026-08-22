@@ -260,6 +260,22 @@ function relativeLuminance(hex) {
     .reduce((total, channel, index) => total + channel * [0.2126, 0.7152, 0.0722][index], 0);
 }
 
+function contrastRatio(first, second) {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function darkenToContrast(hue, saturation, initialLightness, backgrounds, minimum = 4.5) {
+  for (let lightness = initialLightness; lightness >= 0; lightness -= 1) {
+    const candidate = hslToHex(hue, saturation, lightness);
+    if (backgrounds.every((background) => contrastRatio(candidate, background) >= minimum)) {
+      return candidate;
+    }
+  }
+  return '#000000';
+}
+
 function hueFromHex(hex) {
   let value = String(hex || '').replace(/^#/, '');
   if (value.length === 3) value = value.split('').map((character) => `${character}${character}`).join('');
@@ -287,18 +303,23 @@ function warningAccentFromTokens(source, fallback) {
 function derivePalette(domain) {
   const hue = hashNumber(domain) % 360;
   const accentBase = hslToHex(hue, 62, 36);
+  const surface0 = hslToHex(hue, 24, 99);
+  const surface1 = hslToHex(hue, 22, 96);
+  const surface2 = hslToHex(hue, 20, 91);
+  const surfaces = [surface0, surface1, surface2];
+  const accentCandidates = ['#10202C', '#FFFFFF'];
   return {
     hue,
     accentIsWarningHue: hue <= 20 || hue >= 340,
     accentBase,
     accentSoft: hslToHex(hue, 45, 91),
-    accentOn: relativeLuminance(accentBase) > 0.45 ? '#10202C' : '#FFFFFF',
-    surface0: hslToHex(hue, 24, 99),
-    surface1: hslToHex(hue, 22, 96),
-    surface2: hslToHex(hue, 20, 91),
-    ink: hslToHex(hue, 28, 14),
-    inkMuted: hslToHex(hue, 16, 35),
-    inkFaint: hslToHex(hue, 12, 48),
+    accentOn: accentCandidates.sort((left, right) => contrastRatio(right, accentBase) - contrastRatio(left, accentBase))[0],
+    surface0,
+    surface1,
+    surface2,
+    ink: darkenToContrast(hue, 28, 14, surfaces),
+    inkMuted: darkenToContrast(hue, 16, 35, surfaces),
+    inkFaint: darkenToContrast(hue, 12, 48, surfaces),
     warnFg: '#7A3700',
     warnBg: '#FBEAD9',
   };
@@ -569,6 +590,7 @@ if (require.main === module) main();
 module.exports = {
   collectStatusFields,
   collectStatusOptions,
+  contrastRatio,
   deriveFontStack,
   derivePalette,
   hueFromHex,

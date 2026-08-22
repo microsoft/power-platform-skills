@@ -87,6 +87,17 @@ test('contrast enforces WCAG AA thresholds from computed colours', () => {
   })] });
   assert.equal(failure.pass, false);
   assert.match(failure.failures[0], /below 4\.5:1/);
+
+  const icon = element({
+    harnessIcon: 'cube-outline',
+    style: { color: 'rgb(140, 140, 140)', backgroundColor: 'rgb(255, 255, 255)', fontSize: '16px', fontWeight: '400' },
+    text: '',
+  });
+  assert.equal(contrast.run({ elements: [icon] }).pass, true, 'icons use the 3:1 non-text threshold');
+  icon.style.color = 'rgb(160, 160, 160)';
+  const iconFailure = contrast.run({ elements: [icon] });
+  assert.equal(iconFailure.pass, false);
+  assert.match(iconFailure.failures[0], /icon cube-outline.*below 3:1/);
 });
 
 test('raw values block exception text and optionset integers', () => {

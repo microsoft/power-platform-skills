@@ -10,7 +10,7 @@ const test = require('node:test');
 const script = path.resolve(__dirname, '..', 'generate-prototype-design-system.js');
 const templateRoot = path.resolve(__dirname, '..', '..', 'template');
 const templateTsc = path.join(templateRoot, 'node_modules', 'typescript', 'bin', 'tsc');
-const { statusTone } = require(script);
+const { contrastRatio, derivePalette, statusTone } = require(script);
 
 function write(root, relativePath, value) {
   const filePath = path.join(root, relativePath);
@@ -84,6 +84,20 @@ test('maps common workflow and inventory labels to semantic tones', () => {
   assert.equal(statusTone('Confirmed'), 'success');
   assert.equal(statusTone('Low stock'), 'warning');
   assert.equal(statusTone('Sold out'), 'alarm');
+});
+
+test('every generated ink meets 4.5:1 on every generated surface', () => {
+  for (const domain of ['corporate access control', 'onboard retail', 'wildlife rehabilitation']) {
+    const palette = derivePalette(domain);
+    for (const ink of ['ink', 'inkMuted', 'inkFaint']) {
+      for (const surface of ['surface0', 'surface1', 'surface2']) {
+        assert.ok(
+          contrastRatio(palette[ink], palette[surface]) >= 4.5,
+          `${domain} ${ink} on ${surface}: ${palette[ink]} / ${palette[surface]}`,
+        );
+      }
+    }
+  }
 });
 
 test('generated status colors type-check as Tamagui color props', {
