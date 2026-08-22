@@ -8,6 +8,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const script = path.resolve(__dirname, '..', 'generate-prototype-design-system.js');
+const templateRoot = path.resolve(__dirname, '..', '..', 'template');
+const templateTsc = path.join(templateRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 const { statusTone } = require(script);
 
 function write(root, relativePath, value) {
@@ -48,6 +50,9 @@ test('writes semantic tokens and schema-keyed status colours before screens', (t
     assert.match(tokens, new RegExp(`["']?${token}["']?\\s*:`));
   }
   assert.match(tokens, /statusByValue: Record<string, StatusToken>/);
+  assert.match(tokens, /fg: `#\$\{string\}`;/);
+  assert.match(tokens, /bg: `#\$\{string\}`;/);
+  assert.match(tokens, /stripe: `#\$\{string\}`;/);
   assert.match(tokens, /"100000000"/);
   assert.match(tokens, /"label":"Draft"|label:\s*"Draft"/);
   assert.match(tokens, /export function day\(/);
@@ -75,6 +80,43 @@ test('maps common workflow and inventory labels to semantic tones', () => {
   assert.equal(statusTone('Confirmed'), 'success');
   assert.equal(statusTone('Low stock'), 'warning');
   assert.equal(statusTone('Sold out'), 'alarm');
+});
+
+test('generated status colors type-check as Tamagui color props', {
+  skip: !fs.existsSync(templateTsc),
+}, (t) => {
+  const root = project(t);
+  const generation = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+  assert.equal(generation.status, 0, generation.stderr);
+  write(root, 'status-colors.tsx', `import { Text, YStack } from 'tamagui';
+import { statusByValue } from './brand/tokens';
+
+const status = statusByValue['100000000'];
+export const statusColors = (
+  <YStack backgroundColor={status.bg} borderColor={status.stripe}>
+    <Text color={status.fg}>{status.label}</Text>
+  </YStack>
+);
+`);
+  write(root, 'tsconfig.json', {
+    compilerOptions: {
+      allowSyntheticDefaultImports: true,
+      jsx: 'react-jsx',
+      module: 'ESNext',
+      moduleResolution: 'Bundler',
+      noEmit: true,
+      skipLibCheck: true,
+      strict: true,
+      target: 'ES2022',
+    },
+    include: ['brand/**/*.ts', 'status-colors.tsx'],
+  });
+  fs.symlinkSync(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+
+  const result = spawnSync(process.execPath, [templateTsc, '--project', path.join(root, 'tsconfig.json')], {
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
 test('preserves conflicting local-choice labels in field-scoped maps', (t) => {
