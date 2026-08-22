@@ -46,6 +46,7 @@ test('writes semantic tokens and schema-keyed status colours before screens', (t
   assert.equal(result.status, 0, result.stderr);
   const tokens = fs.readFileSync(path.join(root, 'brand/tokens.ts'), 'utf8');
   const design = fs.readFileSync(path.join(root, 'brand/design-system.md'), 'utf8');
+  const tamaguiConfig = fs.readFileSync(path.join(root, 'tamagui.config.ts'), 'utf8');
   for (const token of ['accentBase', 'accentSoft', 'accentOn', 'surface0', 'surface1', 'surface2', 'ink', 'inkMuted', 'inkFaint', 'warnFg', 'warnBg']) {
     assert.match(tokens, new RegExp(`["']?${token}["']?\\s*:`));
   }
@@ -73,6 +74,9 @@ test('writes semantic tokens and schema-keyed status colours before screens', (t
   assert.match(design, /## Discipline/);
   assert.match(design, /https:\/\/m3\.material\.io\/styles\/typography\/type-scale-tokens/);
   assert.match(design, /no gradient without a declared source/);
+  assert.match(tamaguiConfig, /import \* as brand from '\.\/brand\/tokens'/);
+  assert.match(tamaguiConfig, /4: shapeScale\.sm/);
+  assert.match(tamaguiConfig, /4: typeScale\.bodyLarge\.lineHeight/);
 });
 
 test('maps common workflow and inventory labels to semantic tones', () => {
@@ -93,7 +97,7 @@ import { statusByValue } from './brand/tokens';
 
 const status = statusByValue['100000000'];
 export const statusColors = (
-  <YStack backgroundColor={status.bg} borderColor={status.stripe}>
+  <YStack bg={status.bg} borderColor={status.stripe}>
     <Text color={status.fg}>{status.label}</Text>
   </YStack>
 );
@@ -109,7 +113,7 @@ export const statusColors = (
       strict: true,
       target: 'ES2022',
     },
-    include: ['brand/**/*.ts', 'status-colors.tsx'],
+    include: ['brand/**/*.ts', 'status-colors.tsx', 'tamagui.config.ts'],
   });
   fs.symlinkSync(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
 
@@ -117,6 +121,34 @@ export const statusColors = (
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test('generated Tamagui config applies Material font tuples and shape radii', {
+  skip: !fs.existsSync(path.join(templateRoot, 'node_modules', 'esbuild')),
+}, (t) => {
+  const root = project(t);
+  const generation = spawnSync(process.execPath, [script, root], { encoding: 'utf8' });
+  assert.equal(generation.status, 0, generation.stderr);
+  fs.symlinkSync(path.join(templateRoot, 'node_modules'), path.join(root, 'node_modules'), 'dir');
+  const outfile = path.join(root, 'tamagui.config.cjs');
+  const esbuild = require(path.join(templateRoot, 'node_modules', 'esbuild'));
+  esbuild.buildSync({
+    bundle: true,
+    entryPoints: [path.join(root, 'tamagui.config.ts')],
+    format: 'cjs',
+    outfile,
+    packages: 'external',
+    platform: 'node',
+  });
+  const generated = require(outfile).default;
+  const value = (variable) => variable?.val ?? variable;
+
+  assert.equal(value(generated.fonts.body.size['4']), 16);
+  assert.equal(value(generated.fonts.body.lineHeight['4']), 24);
+  const allowedRadii = new Set([4, 8, 12, 16, 24]);
+  for (const key of ['1', '2', '3', '4', 'true', '5', '6', '7', '8', '9', '10', '11', '12']) {
+    assert.equal(allowedRadii.has(value(generated.tokens.radius[key])), true, `radius ${key}`);
+  }
 });
 
 test('preserves conflicting local-choice labels in field-scoped maps', (t) => {

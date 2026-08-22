@@ -3,6 +3,210 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+
+function renderTamaguiConfig() {
+  return `import { createTamagui, createTokens } from '@tamagui/core';
+import { createSystemFont, defaultConfig } from '@tamagui/config/v5';
+import { animations } from '@tamagui/config/v5-rn';
+
+import * as brand from './brand/tokens';
+
+type HexColor = \`#\${string}\`;
+type BrandColors = Partial<{
+  bg: HexColor;
+  surface: HexColor;
+  surfaceMuted: HexColor;
+  border: HexColor;
+  primary: HexColor;
+  primaryStrong: HexColor;
+  accent: HexColor;
+  onPrimary: HexColor;
+  statusSuccess: HexColor;
+  statusSuccessSoft: HexColor;
+  statusWarning: HexColor;
+  statusWarningSoft: HexColor;
+  statusDanger: HexColor;
+  statusDangerSoft: HexColor;
+  statusInfo: HexColor;
+  statusInfoSoft: HexColor;
+}>;
+type OptionalTokenGroups = typeof brand.tokens & {
+  color: BrandColors;
+  size?: Record<string, number>;
+  space?: Record<string, number>;
+  typography?: Partial<Record<'body' | 'heading' | 'display' | 'mono', { family?: string }>>;
+};
+type OptionalBrandModule = typeof brand & {
+  fontStack?: Partial<Record<'body' | 'heading' | 'display' | 'mono', string>>;
+};
+
+const brandModule = brand as OptionalBrandModule;
+const brandTokens = brand.tokens as OptionalTokenGroups;
+const { shapeScale, typeScale } = brand;
+const systemSans = '-apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const systemMono = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+const fontSize = {
+  1: typeScale.labelSmall.fontSize,
+  2: typeScale.bodyMedium.fontSize,
+  3: typeScale.bodyLarge.fontSize,
+  4: typeScale.bodyLarge.fontSize,
+  true: typeScale.bodyLarge.fontSize,
+  5: typeScale.titleLarge.fontSize,
+  6: typeScale.headlineSmall.fontSize,
+  7: typeScale.headlineMedium.fontSize,
+  8: typeScale.headlineLarge.fontSize,
+  9: typeScale.headlineLarge.fontSize,
+  10: typeScale.headlineLarge.fontSize,
+  11: typeScale.headlineLarge.fontSize,
+  12: typeScale.headlineLarge.fontSize,
+  13: typeScale.headlineLarge.fontSize,
+  14: typeScale.headlineLarge.fontSize,
+  15: typeScale.headlineLarge.fontSize,
+  16: typeScale.headlineLarge.fontSize,
+} as const;
+const lineHeight = {
+  1: typeScale.labelSmall.lineHeight,
+  2: typeScale.bodyMedium.lineHeight,
+  3: typeScale.bodyLarge.lineHeight,
+  4: typeScale.bodyLarge.lineHeight,
+  true: typeScale.bodyLarge.lineHeight,
+  5: typeScale.titleLarge.lineHeight,
+  6: typeScale.headlineSmall.lineHeight,
+  7: typeScale.headlineMedium.lineHeight,
+  8: typeScale.headlineLarge.lineHeight,
+  9: typeScale.headlineLarge.lineHeight,
+  10: typeScale.headlineLarge.lineHeight,
+  11: typeScale.headlineLarge.lineHeight,
+  12: typeScale.headlineLarge.lineHeight,
+  13: typeScale.headlineLarge.lineHeight,
+  14: typeScale.headlineLarge.lineHeight,
+  15: typeScale.headlineLarge.lineHeight,
+  16: typeScale.headlineLarge.lineHeight,
+} as const;
+const fontWeight = {
+  1: typeScale.labelSmall.fontWeight,
+  2: typeScale.bodyMedium.fontWeight,
+  3: typeScale.bodyLarge.fontWeight,
+  4: typeScale.bodyLarge.fontWeight,
+  true: typeScale.bodyLarge.fontWeight,
+  5: typeScale.titleLarge.fontWeight,
+  6: typeScale.headlineSmall.fontWeight,
+  7: typeScale.headlineMedium.fontWeight,
+  8: typeScale.headlineLarge.fontWeight,
+  9: typeScale.headlineLarge.fontWeight,
+  10: typeScale.headlineLarge.fontWeight,
+  11: typeScale.headlineLarge.fontWeight,
+  12: typeScale.headlineLarge.fontWeight,
+  13: typeScale.headlineLarge.fontWeight,
+  14: typeScale.headlineLarge.fontWeight,
+  15: typeScale.headlineLarge.fontWeight,
+  16: typeScale.headlineLarge.fontWeight,
+} as const;
+const visualFont = { size: fontSize, lineHeight, weight: fontWeight } as const;
+const bodyFamily = brandModule.fontStack?.body ?? brandTokens.typography?.body?.family ?? systemSans;
+const headingFamily = brandModule.fontStack?.heading
+  ?? brandTokens.typography?.heading?.family
+  ?? brandModule.fontStack?.display
+  ?? brandTokens.typography?.display?.family
+  ?? bodyFamily;
+const monoFamily = brandModule.fontStack?.mono ?? brandTokens.typography?.mono?.family ?? systemMono;
+
+const bodyFont = createSystemFont({ font: { family: bodyFamily, ...visualFont } });
+const headingFont = createSystemFont({ font: { family: headingFamily, ...visualFont } });
+const monoFont = createSystemFont({ font: { family: monoFamily, ...visualFont } });
+
+const lightStatusColors = {
+  statusOverdueBg: '#FDECEA', statusCompleteBg: '#E6F4EA', statusInProgressBg: '#E8F0FE',
+  statusPendingBg: '#FEF7E0', statusDraftBg: '#F1F3F4', statusCancelledBg: '#F1F3F4',
+  statusOverdue: '#C5221F', statusComplete: '#137333', statusInProgress: '#1A73E8',
+  statusPending: '#B06000', statusDraft: '#5F6368', statusCancelled: '#5F6368',
+} as const;
+const darkStatusColors = {
+  statusOverdueBg: '#3B1210', statusCompleteBg: '#12351F', statusInProgressBg: '#102A43',
+  statusPendingBg: '#3A2A0A', statusDraftBg: '#28282C', statusCancelledBg: '#28282C',
+  statusOverdue: '#FF8A84', statusComplete: '#75D69C', statusInProgress: '#8EC8FF',
+  statusPending: '#F5C46B', statusDraft: '#B4B4BC', statusCancelled: '#B4B4BC',
+} as const;
+
+function withSemanticAliases(
+  theme: typeof defaultConfig.themes.light,
+  statusColors: typeof lightStatusColors | typeof darkStatusColors,
+  colors: BrandColors = {},
+) {
+  return {
+    ...theme,
+    surface0: colors.bg ?? theme.background,
+    surface1: colors.surface ?? theme.color2,
+    surface2: colors.surfaceMuted ?? theme.color3,
+    surface3: colors.border ?? theme.color4,
+    accentDeep: colors.primaryStrong ?? colors.primary ?? theme.blue8,
+    accentBase: colors.primary ?? theme.blue10,
+    accentSoft: colors.accent ?? theme.blue3,
+    accentOnAccent: colors.onPrimary ?? theme.color1,
+    statusComplete: colors.statusSuccess ?? statusColors.statusComplete,
+    statusCompleteBg: colors.statusSuccessSoft ?? statusColors.statusCompleteBg,
+    statusPending: colors.statusWarning ?? statusColors.statusPending,
+    statusPendingBg: colors.statusWarningSoft ?? statusColors.statusPendingBg,
+    statusOverdue: colors.statusDanger ?? statusColors.statusOverdue,
+    statusOverdueBg: colors.statusDangerSoft ?? statusColors.statusOverdueBg,
+    statusInProgress: colors.statusInfo ?? statusColors.statusInProgress,
+    statusInProgressBg: colors.statusInfoSoft ?? statusColors.statusInProgressBg,
+    statusDraft: statusColors.statusDraft,
+    statusDraftBg: statusColors.statusDraftBg,
+    statusCancelled: statusColors.statusCancelled,
+    statusCancelledBg: statusColors.statusCancelledBg,
+  };
+}
+
+const radius = {
+  ...defaultConfig.tokens.radius,
+  1: shapeScale.xs, 2: shapeScale.xs,
+  3: shapeScale.sm, 4: shapeScale.sm, true: shapeScale.sm,
+  5: shapeScale.md, 6: shapeScale.md,
+  7: shapeScale.lg, 8: shapeScale.lg,
+  9: shapeScale.xl, 10: shapeScale.xl, 11: shapeScale.xl, 12: shapeScale.xl,
+  xs: shapeScale.xs, sm: shapeScale.sm, md: shapeScale.md, lg: shapeScale.lg,
+  xl: shapeScale.xl, full: shapeScale.xl,
+};
+const tokens = createTokens({
+  ...defaultConfig.tokens,
+  radius,
+  size: { ...defaultConfig.tokens.size, ...(brandTokens.size ?? {}) },
+  space: { ...defaultConfig.tokens.space, ...(brandTokens.space ?? {}) },
+});
+const darkBrandColors: BrandColors = {
+  primary: brandTokens.color.primary,
+  primaryStrong: brandTokens.color.primaryStrong,
+  accent: brandTokens.color.accent,
+  onPrimary: brandTokens.color.onPrimary,
+  statusSuccess: brandTokens.color.statusSuccess,
+  statusWarning: brandTokens.color.statusWarning,
+  statusDanger: brandTokens.color.statusDanger,
+  statusInfo: brandTokens.color.statusInfo,
+};
+const themes = {
+  ...defaultConfig.themes,
+  light: withSemanticAliases(defaultConfig.themes.light, lightStatusColors, brandTokens.color),
+  dark: withSemanticAliases(defaultConfig.themes.dark, darkStatusColors, darkBrandColors),
+};
+const tamaguiConfig = createTamagui({
+  ...defaultConfig,
+  animations,
+  fonts: { ...defaultConfig.fonts, body: bodyFont, heading: headingFont, mono: monoFont },
+  themes,
+  tokens,
+});
+
+export { tamaguiConfig };
+export default tamaguiConfig;
+export type Conf = typeof tamaguiConfig;
+
+declare module 'tamagui' {
+  interface TamaguiCustomConfig extends Conf {}
+}
+`;
+}
 const path = require('node:path');
 
 const TOKEN_BLOCK_START = '// PROTOTYPE SEMANTICS START - managed by generate-prototype-design-system.js';
@@ -316,6 +520,7 @@ function main() {
   fs.mkdirSync(brandDir, { recursive: true });
   const tokenPath = path.join(brandDir, 'tokens.ts');
   const designPath = path.join(brandDir, 'design-system.md');
+  const tamaguiConfigPath = path.join(projectDir, 'tamagui.config.ts');
   const existingTokenSource = fs.existsSync(tokenPath) ? fs.readFileSync(tokenPath, 'utf8') : '';
   const generatedBaseline = !existingTokenSource
     || existingTokenSource.startsWith('// Generated by generate-prototype-design-system.js');
@@ -354,6 +559,7 @@ function main() {
   );
   fs.writeFileSync(tokenPath, disciplinedTokenSource);
   fs.writeFileSync(designPath, disciplinedDesignSource);
+  fs.writeFileSync(tamaguiConfigPath, renderTamaguiConfig());
   const statusCount = statusFields.reduce((total, field) => total + field.options.length, 0);
   console.log(`prototype-design-system: ${generatedBaseline ? 'generated baseline' : 'augmented approved artifacts'} (${statusCount} status option(s))`);
 }
@@ -372,6 +578,7 @@ module.exports = {
   renderDisciplineTokens,
   renderTokenSemantics,
   renderTokens,
+  renderTamaguiConfig,
   replaceManagedBlock,
   statusColors,
   statusTone,
