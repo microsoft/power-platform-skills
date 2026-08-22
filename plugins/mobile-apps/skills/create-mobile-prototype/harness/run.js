@@ -183,6 +183,12 @@ function carouselContract(projectDir, screenRelative) {
   };
 }
 
+function heroContract(projectDir, screenRelative) {
+  const body = screenSpecBody(projectDir, screenRelative);
+  const key = body.match(/^- \*\*Hero:\*\*\s*(state-hero|metric-hero|media-hero|queue-hero)\s*$/m)?.[1] || null;
+  return key ? { key } : null;
+}
+
 function chartContract(projectDir, screenRelative) {
   const body = screenSpecBody(projectDir, screenRelative);
   const value = body.match(/^- \*\*Chart:\*\*\s*(.+)$/m)?.[1] || '';
@@ -373,6 +379,7 @@ function captureSnapshot() {
         role,
         text: directText(element),
         ariaLabel: element.getAttribute('aria-label') || '',
+        src: element.getAttribute('src') || '',
         attributes,
         harnessIcon: element.getAttribute('data-harness-icon') || '',
         rendered: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0,
@@ -690,6 +697,7 @@ async function main() {
       batchActions: batchActions(projectDir, screenRelative),
       carouselContract: carouselContract(projectDir, screenRelative),
       chartContract: chartContract(projectDir, screenRelative),
+      heroContract: heroContract(projectDir, screenRelative),
     },
   }));
   const renderFailures = rendered.flatMap((item) => item.snapshot.errors.map((error) => `${item.context.screenRelative}: render error: ${error}`));
@@ -720,4 +728,4 @@ async function main() {
 
 if (require.main === module) main().catch((error) => fail(error.stack || error.message));
 
-module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, parseArgs, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions };
+module.exports = { batchActions, cardinalityExpectations, carouselContract, chartContract, collectStrings, conditionalContracts, decodeSnapshot, discoverProviders, discoverScreens, entrySource, heroContract, parseArgs, renderScreens, screenMetadata, screenSpecBody, seedOracle, sortOptions };

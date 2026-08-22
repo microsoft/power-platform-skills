@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, parentId: null, visible: true, testId: 'screen:home', style: { ownBackgroundColor: 'rgb(255,255,255)' } }, { id: 2, parentId: 1, visible: true, testId: 'hero:state-hero', style: { ownBackgroundColor: 'rgb(255,255,255)' }, rect: { top: 0, bottom: 300 } }] }, context: { heroContract: { key: 'state-hero' } } };

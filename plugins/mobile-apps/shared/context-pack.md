@@ -5,7 +5,7 @@ Use this as the first and normally only plugin-reference read in prototype mode.
 Project-local plans, contracts, vocabulary, and brand artifacts remain authoritative.
 
 ## Source Digests
-- `shared/references/screen-templates.md`: `08e2d349e28654a5313d3fa3e996e8b201894f91429a68ededacc3fc7227391a`
+- `shared/references/screen-templates.md`: `72adee275c56279ec92624d063ece9384fcc9e109730c5e4d4a8a3bf369caf27`
 - `shared/samples/src/components/index.tsx`: `d90ada8a57fa22ae5665bd7e84799da820f1af4f1378598be7558176ac8c6ee5`
 - `template/package.json`: `3ed4b2976f4f97dcc21e8acdbaad9551ea54049c2c091184a07636c4901e10c0`
 - `template/tamagui.config.ts`: `71e73e9d5d37ee6cec472c419df24f4623450cfb11bd58056e20ebe7b72ada48`
@@ -109,11 +109,14 @@ Runtime-banned even if present: `expo-haptics`. Missing native packages are drop
 - `identity-block`
 - `image-hero`
 - `line-item-stepper-row`
+- `media-hero`
 - `media-tile`
+- `metric-hero`
 - `minimal-header`
 - `month-agenda`
 - `multi-select-list`
 - `numeric-stepper`
+- `queue-hero`
 - `recurrence-rule-editor`
 - `scan-geofence-gate`
 - `searchable-lookup-sheet`
@@ -125,6 +128,7 @@ Runtime-banned even if present: `expo-haptics`. Missing native packages are drop
 - `sparkline`
 - `stat-card`
 - `stat-grid`
+- `state-hero`
 - `status-header-band`
 - `status-stripe-card`
 - `summary-card`
@@ -197,7 +201,7 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 
 | Key | Use when | Required layout pieces |
 |---|---|---|
-| `home-dashboard` | The first screen after sign-in needs to summarize current state, progress, recent/upcoming activity, and next action | Context header, current/next item card, progress/status/priority strip, 2–4 summary tiles, 3–5 recent/upcoming/recommended rows, one bottom primary CTA |
+| `home-dashboard` | The first screen after sign-in needs to summarize current state, progress, recent/upcoming activity, and next action | One selected Home hero, progress/status/priority strip, 3–5 recent/upcoming/recommended rows, one bottom primary CTA |
 | `assignment-dashboard` | A worker starts from one active assignment, route, job, visit, or flight | Current assignment hero, progress/step bar, 2–4 KPI tiles, recent activity rows, one bottom primary CTA |
 | `walkaround-stepper` | A task has ordered zones/steps that can be revisited | Sticky step header with Step N / total, previous/next controls, evidence section, per-step defect chips, completion gate copy |
 | `wizard-progress-stepper` | A workflow is split into multiple form-like steps: onboarding, appointment creation, quote/order creation, request forms | Current step and total steps, optional step labels, Back/Next/Save or Finish, current-step validation gate, draft preservation across steps, dirty-cancel confirmation, final save action |

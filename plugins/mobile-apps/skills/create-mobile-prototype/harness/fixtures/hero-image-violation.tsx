@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, parentId: null, visible: true, testId: 'hero:media-hero', rect: { top: 0, bottom: 300 } }, { id: 2, parentId: 1, visible: true, tag: 'img', src: 'mood-photo.jpg', rect: { top: 0, bottom: 250 } }] }, context: { heroContract: { key: 'media-hero' }, seedTexts: ['record-photo.jpg'] } };

@@ -78,13 +78,34 @@ Pick the hero treatment that matches the entity. Never default to "H2 title + In
 legibility. This is a source-derived gradient (legibility over content), not
 decoration. Image heroes without overlaid text render no gradient.
 
+### Home hero keys (Home and dashboard tab roots)
+
+Every Home/tab-root dashboard selects exactly one key. The hero root uses
+`testID="hero:<key>"`; its largest text names a seed-backed record, never a
+category or slogan.
+
+| Key | Use when | Required pieces |
+|---|---|---|
+| `state-hero` | The app has one dominant computed state | Filled tinted ground covering at least 40% of the fold; eyebrow; 2-3 line sentence headline naming a record; one-line action subhead; metric object right; three nested light stat cards crossing the bottom edge |
+| `metric-hero` | The app is about a number moving toward a target | Oversized numeral; delta pill; progress bar/ring; reference value; ground tinted by state |
+| `media-hero` | The record is its media | Full-bleed record image; scrim over the bottom 40%; title on the scrim; metadata row; two actions |
+| `queue-hero` | The app is about what is waiting | Count as oversized numeral; the single next seed-backed item as a nested card; one CTA |
+
+Home hero rules:
+
+1. Hero ground differs from the page surface.
+2. Largest text names a specific record.
+3. Every hero contains a numeric metric object rendered at 32 px or larger.
+4. At least one nested element crosses the hero boundary; use layering, not shadow.
+5. A hero image is the record's own seed image or there is no image. Without a record image, use `state-hero`.
+
 ### Operational pattern keys (Home + workflow screens)
 
 Use these pattern names when the user's app has dashboard or workflow behavior. These are still implemented as the normal archetypes (List/Detail/Form/Tab-root), but naming the pattern prevents builders from reducing them to generic CRUD. `home-dashboard` is cross-domain; the rest are common in inspection, dispatch, safety, warehouse, maintenance, aviation, and field-service workflows.
 
 | Key | Use when | Required layout pieces |
 |---|---|---|
-| `home-dashboard` | The first screen after sign-in needs to summarize current state, progress, recent/upcoming activity, and next action | Context header, current/next item card, progress/status/priority strip, 2–4 summary tiles, 3–5 recent/upcoming/recommended rows, one bottom primary CTA |
+| `home-dashboard` | The first screen after sign-in needs to summarize current state, progress, recent/upcoming activity, and next action | One selected Home hero, progress/status/priority strip, 3–5 recent/upcoming/recommended rows, one bottom primary CTA |
 | `assignment-dashboard` | A worker starts from one active assignment, route, job, visit, or flight | Current assignment hero, progress/step bar, 2–4 KPI tiles, recent activity rows, one bottom primary CTA |
 | `walkaround-stepper` | A task has ordered zones/steps that can be revisited | Sticky step header with Step N / total, previous/next controls, evidence section, per-step defect chips, completion gate copy |
 | `wizard-progress-stepper` | A workflow is split into multiple form-like steps: onboarding, appointment creation, quote/order creation, request forms | Current step and total steps, optional step labels, Back/Next/Save or Finish, current-step validation gate, draft preservation across steps, dirty-cancel confirmation, final save action |

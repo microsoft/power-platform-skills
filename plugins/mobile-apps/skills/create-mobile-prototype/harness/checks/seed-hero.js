@@ -10,7 +10,7 @@ function normalize(value) {
 
 function run(snapshot, context) {
   const visible = snapshot.elements.filter((element) => element.visible);
-  const dataBacked = visible.some((element) => element.testId === 'hero' || element.testId.startsWith('row:'));
+  const dataBacked = visible.some((element) => element.testId.startsWith('hero') || element.testId.startsWith('row:'));
   if (!dataBacked) return { pass: true, failures: [] };
   const candidates = visible
     .filter((element) => String(element.text || '').trim() && Number.parseFloat(element.style.fontSize) > 0)

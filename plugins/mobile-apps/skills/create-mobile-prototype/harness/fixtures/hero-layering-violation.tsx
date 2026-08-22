@@ -1,0 +1,1 @@
+export const fixture = { snapshot: { elements: [{ id: 1, parentId: null, visible: true, testId: 'hero:state-hero', rect: { top: 0, bottom: 300 } }, { id: 2, parentId: 1, visible: true, text: '12', style: { fontSize: '32px' }, rect: { top: 20, bottom: 70 } }] }, context: { heroContract: { key: 'state-hero' } } };
