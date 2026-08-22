@@ -1056,6 +1056,8 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
 ### Native polish rules (safe-area)
 
+37a. **Every bottom-anchored layer MUST use `testID="pinned:<purpose>"`.** This applies to sticky CTA bars, batch-action bars, FAB containers, snackbars, custom tab bars, and any fixed/absolute layer touching the viewport bottom. The ID is mandatory even when safe-area math is correct; tier 1 blocks the write without it and tier 2 discovers the layer structurally to prevent silent passes.
+
 37. **`SafeAreaView` MUST include the bottom edge whenever the screen has any bottom-anchored UI.** Use `edges={['top', 'bottom']}` for: forms with action rows at the bottom of a `ScrollView`, lists where the last row should clear the home indicator, dashboards/detail with a primary CTA bar. Use `edges={['top']}` ONLY when an embedded tab bar (in `(app)/_layout.tsx`) already eats the bottom inset for you — and even then, prefer `['top', 'bottom']` and let the tab bar reserve its own space. The default (`edges` omitted = all four) is also acceptable.
 
   For full-screen capture/scanner modals, the header row (`Cancel`, title, close icon) MUST be inside the same safe-area wrapper as the preview/content. Never render modal header chrome above/outside `SafeAreaView`.

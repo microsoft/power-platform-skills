@@ -89,6 +89,15 @@ test('scroll padding includes all pinned heights and safe-area bottom', () => {
   assert.equal(missingScroll.pass, false);
   assert.equal(missingScroll.notRun, true);
   assert.match(missingScroll.failures[0], /scroll:<screen> testID is absent/);
+
+  const structuralFailure = scrollPadding.run({ viewport: { height: 844 }, elements: [
+    element({ id: 1, testId: 'scroll:items', rect: { top: 0, bottom: 844, height: 844 }, style: { overflowY: 'auto', paddingBottom: '20px' } }),
+    element({ id: 2, tag: 'div', rect: { top: 788, bottom: 844, height: 56 }, style: { position: 'absolute', bottom: '0px' } }),
+  ] }, { safeAreaBottom: 20 });
+  assert.equal(structuralFailure.pass, false);
+  assert.equal(structuralFailure.notRun, undefined);
+  assert.match(structuralFailure.failures.join('\n'), /missing required pinned:<layer> testID/);
+  assert.match(structuralFailure.failures.join('\n'), /20px.*76px/);
 });
 
 test('contrast enforces WCAG AA thresholds from computed colours', () => {
@@ -139,6 +148,15 @@ test('largest text on a data-backed screen must come from seed data', () => {
   const failure = seedHero.run(snapshot, { seedTexts: ['Different record'] });
   assert.equal(failure.pass, false);
   assert.match(failure.failures[0], /absent from generated seed data/);
+
+  const slogan = { elements: [
+    element({ id: 1, testId: 'row:item:1', rect: { width: 300, height: 80 }, style: { fontSize: '16px' } }),
+    element({ id: 2, text: 'Big finds. Sky-high style.', rect: { width: 300, height: 60 }, style: { fontSize: '32px' } }),
+    element({ id: 3, text: 'North Dock Inspection', rect: { width: 280, height: 30 }, style: { fontSize: '16px' } }),
+  ] };
+  const sloganFailure = seedHero.run(slogan, { seedTexts: ['North Dock Inspection'] });
+  assert.equal(sloganFailure.pass, false);
+  assert.match(sloganFailure.failures[0], /Big finds/);
 });
 
 test('separate interactive controls cannot overlap', () => {
@@ -530,7 +548,7 @@ export default function HomeScreen() {
   return (
     <View testID="screen:items" style={{ flex: 1, height: '100%', backgroundColor: tokens.color.bg }} dataSet={{ fontAsset }}>
       <StatusBar />
-      <ScrollView testID="scroll:items" style={{ flex: 1, marginBottom: previewItem.batchMode ? 156 : 76 }} contentContainerStyle={{ padding: tokens.space.lg, paddingBottom: previewItem.batchMode ? 100 : 76 }}>
+      <ScrollView testID="scroll:items" style={{ flex: 1, marginBottom: previewItem.batchMode ? 156 : 76 }} contentContainerStyle={{ padding: tokens.space.lg, paddingBottom: previewItem.batchMode ? 156 : 76 }}>
         <View testID="cardinality:filters:chips-overflow" style={{ height: 1 }} />
         <View testID="cardinality:choice-cr_status:inline-radio-list" style={{ height: 1 }} />
         <View testID="cardinality:listRows:plain-list" style={{ height: 1 }} />
@@ -623,7 +641,7 @@ export default function HomeScreen() {
       </ScrollView>
       {previewItem.batchMode ? (
         <View testID="selection-mode:active" dataSet={{ selectionEntry: 'long-press', selectionExitRestores: 'primary' }} style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}>
-          <View style={{ position: 'absolute', left: 16, right: 16, bottom: 108, height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View testID="pinned:selection-toolbar" style={{ position: 'absolute', left: 16, right: 16, bottom: 108, height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <Text testID="selection-count" style={{ color: tokens.color.text, fontSize: 14, lineHeight: 20, fontWeight: '500' }}>2 selected</Text>
             <Pressable testID="selection-select-all" accessibilityRole="button" style={{ minWidth: 96, height: 48, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: tokens.color.text, fontSize: 14, lineHeight: 20, fontWeight: '500' }}>Select all</Text></Pressable>
             <Pressable testID="selection-exit" accessibilityRole="button" style={{ minWidth: 64, height: 48, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: tokens.color.text, fontSize: 14, lineHeight: 20, fontWeight: '500' }}>Done</Text></Pressable>

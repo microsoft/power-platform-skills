@@ -22,12 +22,11 @@ function run(snapshot, context) {
     .sort((left, right) => right.fontSize - left.fontSize || right.area - left.area);
   if (candidates.length === 0) return { pass: false, failures: ['data-backed screen has no measurable visible text'] };
   const oracle = new Set(context.seedTexts.map(normalize).filter(Boolean));
-  const seedBacked = candidates.find(({ element }) => oracle.has(normalize(element.text)));
-  if (seedBacked) return { pass: true, failures: [] };
   const largest = candidates[0].element.text;
+  if (oracle.has(normalize(largest))) return { pass: true, failures: [] };
   return {
     pass: false,
-    failures: [`no visible text is backed by generated seed data; largest visible text is ${JSON.stringify(largest)}`],
+    failures: [`largest visible text ${JSON.stringify(largest)} is absent from generated seed data`],
   };
 }
 

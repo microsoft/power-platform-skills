@@ -396,6 +396,7 @@ function captureSnapshot() {
           overflow: style.overflow,
           overflowX: style.overflowX,
           overflowY: style.overflowY,
+          bottom: style.bottom,
           paddingBottom: style.paddingBottom,
           position: style.position,
           textOverflow: style.textOverflow,
