@@ -109,9 +109,14 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 Read `${PLUGIN_ROOT}/shared/references/screen-templates.md` (short kit API only). Bind every screen from those 24 exports. Do **not** read `universal-patterns.md`, `mobile-design-philosophy.md`, `tamagui-component-recipes.md`, `typography-and-tone.md`, or vibe brand-clone files. Industry never adds a component.
 
-### Step 0b — Load Design Direction (if present)
+### Step 0b — Load Planner Design Recommendation (if present)
 
-Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
+Read `<working_dir>/native-app-plan.md`. If `## Design -> ### Planner
+Recommendation` exists, parse its YAML-style fields and use them as
+**provisional defaults** for the per-screen design fields produced in Step 4.
+They are not user-confirmed design; `/design-system` may override them before
+builders run. For backwards compatibility, use a legacy `## Design Direction`
+block only when the recommendation subsection is absent.
 
 - `density` → `comfortable` | `compact`
 - `radius` → `rounded` (12–16) | `sharp` (4–8)

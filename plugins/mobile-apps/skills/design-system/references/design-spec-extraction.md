@@ -1,6 +1,6 @@
 # Design Spec Extraction (`--design-spec`)
 
-Imports a pre-structured design specification file and converts it to our `brand/design-system.md` format. Highest-fidelity input mode — skips both the style picker (Sub-step 3) AND spec-writing (Sub-step 4).
+Imports a pre-structured design specification file and converts it to our `brand/design-system.md` format. Highest-fidelity input mode: it skips the style picker and creative spec generation, but it still completes the common artifact, confirmation, and receipt flow.
 
 ## Supported formats
 
@@ -20,9 +20,9 @@ Imports a pre-structured design specification file and converts it to our `brand
 1. Read file (200 KB cap; .md / .mdx / .json accepted)
 2. Auto-detect format via markers (table above)
 3. Route to format-specific parser
-4. Emit ## Design Direction block with provenance line
-5. SKIP Sub-step 3 (style picker) AND Sub-step 4 (write spec)
-6. Jump to Sub-step 5 (gallery render)
+4. Normalize or copy the input into `brand/design-system.md` with provenance
+5. Skip Sub-step 3 (style picker); in Sub-step 4 derive `brand/tokens.ts` from the normalized spec
+6. Continue through Sub-step 5 gallery, Sub-step 6 confirmation, and Sub-step 7 `brand/design-decision.json` finalization
 ```
 
 ## Format-specific parsing

@@ -245,8 +245,9 @@ test('generate path binds the 24-export kit and does not invent entity widgets',
   assert.doesNotMatch(builder, /look up the required layout pieces/);
 
   assert.match(createApp, /Do \*\*not\*\* generate `<Entity>Row\.tsx`/);
-  assert.match(createApp, /reason from the brief/);
-  assert.match(createApp, /brief-recommended/);
+  assert.match(createApp, /reuses the planner recommendation/);
+  assert.match(createApp, /no second orchestrator classification/);
+  assert.doesNotMatch(createApp, /brief-recommended/);
   assert.doesNotMatch(createApp, /preview with Field\/Ops defaults/);
   assert.doesNotMatch(createApp, /cat > "<working_dir>\/src\/components\/InspectionRow\.tsx"/);
   assert.doesNotMatch(createApp, /industry-inferred defaults from `universal-patterns\.md`/);

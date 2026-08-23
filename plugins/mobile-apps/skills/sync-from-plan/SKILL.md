@@ -82,7 +82,7 @@ Read:
   `docs/plan-artifacts/.datamodel-manifest.json`
 - `src/generated/.prototype-manifest.json`
 - `power.config.json` and `.resolved-environment.json`
-- `brand/design-system.md` and `brand/tokens.ts`
+- `brand/design-system.md`, `brand/tokens.ts`, and `brand/design-decision.json`
 - `memory-bank.md`
 - `.mobile-app/plan-change.json` when present
 
@@ -230,6 +230,18 @@ from the brand palette rather than an unrelated hard-coded palette. Typography
 roles that cannot be represented as root Tamagui tokens must still be consumed
 by shared branded primitives; do not claim automatic integration while they
 remain unused.
+
+Before builders, require `brand/design-decision.json` whenever any brand
+artifact exists and run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../design-system/scripts/finalize-design-decision.js" \
+  "$PROJECT_DIR" check
+```
+
+Missing or stale hashes block sync. For a legacy project with brand artifacts
+but no receipt, run `/design-system` through its common confirmation and
+persistence ending first; do not synthesize approval inside sync.
 
 Run the TypeScript gate and the changed-file dispatcher for repaired shared
 files before builders.

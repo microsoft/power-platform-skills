@@ -285,15 +285,19 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 ## Step 3c — Plan Design Inline
 
 **Print before starting:**
-> "→ Recommending a look from this brief (no gate — design is reviewed visually at Gate 4)…"
+> "→ Recommending a look from this brief (recommendation only — /design-system owns confirmation)…"
 
 Do **not** follow `design-planning.md` as a required generate-time table. Reason from the brief and recommend one named direction. Brand/doc is opt-in only.
 
 1. **Detect** — who uses it, indoor vs outdoor, photo-led vs data-led, urgency. If the user named a brand (ICRC, Chanel, Red Cross) or attached a design doc, lock that. Otherwise do not invent a brand and do not WebFetch.
 2. **Recommend** — pick `product` (gym / pantry / shop / photo consumer), `saas` (work queue / Microsoft 365 family), `polished-inspection` (indoor field / asset tracking), `inspection` (gloves / full sun), or `airline` only when the brief is actually commercial aviation. Never write "default Field/Ops" or "default Clean + Professional".
-3. **Write a Theme card** into `## Design Direction` (required, from the brief — not a user questionnaire):
+3. **Write a recommendation block** under `## Design -> ### Planner Recommendation` (required, from the brief — not a user questionnaire):
 
 ```
+status: recommendation-only
+direction: <product | saas | polished-inspection | inspection | airline>
+rationale: <one sentence tied to users, environment, workflow, and urgency>
+confidence: <high | user-confirmed-industry>
 tone: <professional | friendly | calm | bold>
 primary: <#hex + name>
 support: <#hex>, <#hex>
@@ -303,10 +307,32 @@ feeling: <one sentence>
 ```
 
 Brand/doc overrides this card. If they named ICRC/Chanel, primary comes from that name. Otherwise reason it (gym → bold + warm; pantry → friendly + cream; indoor ops → professional + green/navy). Do not WebFetch. Do not ask five theme questions.
-4. **Summarise** — do NOT ask a question here. Write `## Design` + the Theme card and move on. Confirmation is the Gate 4 / design-system preview. UX rails stay the kit. Tokens carry the look. The Theme card has **one** `primary`. Do not add a second filled brand color later.
-5. **Nav cap** — if recommending Tabs, write 3–5 roots. Never six.
+4. **Persist the handoff** — write `<working_dir>/.tmp/design-recommendation.json` with the exact shape below. If `brief.md` exists, hash its bytes and include `briefSha256`; otherwise omit that field. Planner recommendation is not design approval. Do not write brand files, mark confirmation, or reinterpret user-provided design files.
 
-Store the recommendation — pass it to `screen-planner` in Step 5b. Screen-planner binds kit components; it does not reopen industry prose.
+```json
+{
+  "schemaVersion": 1,
+  "status": "recommendation-only",
+  "direction": "<named direction>",
+  "rationale": "<same one-sentence rationale as the plan>",
+  "confidence": "<high|user-confirmed-industry>",
+  "source": "brief",
+  "briefSha256": "<optional sha256 of brief.md>",
+  "theme": {
+    "tone": "<value>",
+    "primary": "<value>",
+    "support": ["<value>", "<value>"],
+    "radius": "<value>",
+    "density": "<value>",
+    "feeling": "<value>"
+  }
+}
+```
+
+5. **Summarise** — do NOT ask a design question here. Write the provisional recommendation and move on. `/design-system` reads the JSON record, applies any higher-priority user design input, shows the preview, records confirmation, and writes the canonical decision. UX rails stay the kit. The Theme card has **one** `primary`. Do not add a second filled brand color later.
+6. **Nav cap** — if recommending Tabs, write 3–5 roots. Never six.
+
+Store the recommendation — pass it to `screen-planner` in Step 5b as provisional context. Screen-planner binds kit components; it does not reopen industry prose or treat the recommendation as confirmed design.
 
 ### Industry inference confidence
 
@@ -419,7 +445,7 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 ## Approval Status
 - [ ] Data model approved
 - [ ] Native capabilities approved
-- [ ] Design approved (via screen preview at Gate 4)
+- [ ] Design confirmation pending (`/design-system` owns approval and `brand/design-decision.json`)
 - [ ] Connectors approved
 - [ ] Screen plan approved
 - [ ] Cross-entity reads approved (Gate 1 addendum — auto-skipped if no `related_entity_fields` in plan)
@@ -519,7 +545,7 @@ Plugin root: ${PLUGIN_ROOT}
 Approved data model:
 [paste ## Data Model section verbatim]
 
-Approved design:
+Planner design recommendation (provisional; /design-system confirms later):
 [paste ## Design section verbatim]
 
 Approved connectors:
@@ -571,7 +597,7 @@ The screen graph + shared conventions are already locked in <working_dir>/_scree
 
 Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
-Approved design: [paste ## Design section verbatim]
+Planner design recommendation (provisional): [paste ## Design section verbatim]
 Approved connectors: [paste ## Connectors section verbatim]
 Delivery scope: [paste ## Delivery Scope verbatim, or "full"]
 Working directory: [absolute path]
@@ -885,5 +911,6 @@ You have `Bash` only to run read-only file/HTTP/helper checks such as `node scri
 You have `Write` only for planning artifacts owned by this workflow:
 `native-app-plan.md`, `_dm_section.md`, `_screens_section.md`, the normalized
 schema contract, `.tmp/mobile-plan-status.json`, and, in vertical-slice mode,
-`.tmp/vertical-slice-contract.json`. You MUST NOT write app source, runtime
+`.tmp/vertical-slice-contract.json`, plus the recommendation-only
+`.tmp/design-recommendation.json`. You MUST NOT write app source, runtime
 configuration, generated services, package files, or any other project file.

@@ -337,9 +337,12 @@ call `detect-publisher-prefix.js`.
 Set tentative defaults (used by Step 3b before `/design-system` runs):
 
 - `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
-- `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
+- `<design_vibe_opt_in> = deferred` — the planner recommends a direction without
+  prompting and writes `## Design -> ### Planner Recommendation` plus
+  `.tmp/design-recommendation.json`. Step 6.75 owns final selection and
+  confirmation.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders reason from the brief, pick `saas` / `product` / `polished-inspection`, and bind the kit — no internet search, no brand unless the user supplied one).
+**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no` and skips brand-input/style-picker exploration, but Step 6.75 still invokes `/design-system --apply-recommendation`. The skill reuses the planner recommendation, writes complete brand artifacts, runs the common confirmation/persistence ending, and produces `brand/design-decision.json`; screen-builders never classify the app independently.
 
 ### Step 2c — Plan preview (rough, always shown)
 
@@ -787,9 +790,15 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 `/design-system` ships with this plugin and always runs at Step 6.75, so the style-picker handoff at Gate 4 is a no-op. Behavior:
 
-- The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
-- If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders reason from the brief, pick a named direction, and bind the kit. Do not WebFetch a look. Use a brand/design doc only if the user supplied one.
+- The planner writes `## Design -> ### Planner Recommendation` and
+  `.tmp/design-recommendation.json`, then proceeds without asking a visual
+  approval question. Step 6.75 owns overrides and confirmation.
+- If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line,
+  re-spawn it with `Design vibe opt-in: done`; do not run a vibe picker here.
+- If `--no-design` is in `$ARGUMENTS`, mark `<design_vibe_opt_in> = skip` so
+  optional exploration is suppressed, then invoke the recommendation-only fast
+  path at Step 6.75. Do not leave a placeholder or let screen-builders choose a
+  direction.
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
@@ -1210,55 +1219,47 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan. Screen-builders reason from the brief, pick `saas` / `product` / `polished-inspection`, and bind the kit. No internet search unless the user gave `--from-url` or a brand site.
-
-**Otherwise**, invoke `/design-system` (ships with this plugin):
+Always invoke `/design-system` (ships with this plugin). With `--no-design`,
+pass `--apply-recommendation` so it skips brand-input/style-picker exploration
+but still runs common confirmation and persistence:
 
 ```
 Invoke skill: /design-system
 
 Arguments:
   --working-dir <working_dir>
+  [--apply-recommendation when --no-design was requested]
 ```
 
-The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
+The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), reads
+the planner recommendation, applies any higher-priority user input, writes all
+four brand artifacts, runs one confirmation gate, finalizes
+`brand/design-decision.json`, and returns with status.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
-- `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
+- `DONE` → require and verify all four artifacts, then continue to Step 7. Record `brand_path`, `tokens_path`, `decision_path`, and `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
 
-If the user picked path (c) Skip in the cost picker, the skill returns immediately with `DONE` and no `brand/` files. Screen-builders fall back to `## Design Direction` — same as today's behavior. **But the user still needs a visual preview before code is written** — fall through to the "Skip path preview" block below.
+After `DONE`, require and verify the canonical decision before any screen or
+shared UI generation:
 
-**After `/design-system` returns `DONE` — two branches:**
+```bash
+test -f "<working_dir>/brand/design-system.md"
+test -f "<working_dir>/brand/tokens.ts"
+test -f "<working_dir>/brand/design-system.html"
+test -f "<working_dir>/brand/design-decision.json"
+node "${CLAUDE_SKILL_DIR}/../design-system/scripts/finalize-design-decision.js" \
+  "<working_dir>" check
+```
 
-#### Branch A — `brand/` files exist (user picked path a, b, or d)
-
-This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
-
-#### Branch B — Skip path preview (user picked path c — no `brand/` files)
-
-The user skipped the design system but still deserves to see their screens before code is written. Render a preview from the **brief-recommended** named direction (gym/pantry/shop → `product`, work queue → `saas`, field inspection → `polished-inspection`). Do **not** force Field/Ops green.
-
-1. **Print:**
-   > "→ Design system skipped — rendering screen preview from the brief-recommended direction so you can validate the layout before code is written."
-
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and the recommended direction from the brief / `## Design`. Write to `<working_dir>/_plan_preview.html`.
-
-3. **Open in browser** (if `<visual_companion> = yes`):
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
-
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
-
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
-
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
+There is no no-brand fallback and no second orchestrator classification. A
+missing, stale, or invalid receipt blocks screen builders. A draft receipt is
+allowed only when the user explicitly selected "skip — use as draft" in the
+common confirmation gate. `/design-system` owns the first and only visual
+preview according to the selected path and persisted visual-companion
+preference.
 
 **Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
 
