@@ -658,6 +658,60 @@ Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with t
 
 ## Step 6 — Validate written artifacts
 
+Before validation, require `screen-planner` to write
+`<working_dir>/.tmp/screen-contract.json` from the approved Screen Map,
+Navigation Contracts, and per-screen specs. The contract is the structured
+source for deterministic navigation, service inventory, skeleton generation,
+builder packets, and complexity-packed waves. It must contain:
+
+```json
+{
+  "schemaVersion": 1,
+  "approvedPlanSha256": "<sha256 of final native-app-plan.md bytes>",
+  "navigation": {
+    "pattern": "<stack|tabs|drawer>",
+    "roots": ["<screen id>"],
+    "hidden": ["<screen id>"]
+  },
+  "screens": [
+    {
+      "id": "<stable kebab id>",
+      "name": "<screen label>",
+      "title": "<navigation title>",
+      "icon": "<Ionicons name>",
+      "route": "</(app)/route>",
+      "file": "<app/(app)/route.tsx>",
+      "source": "<new|replace|keep>",
+      "presentation": "<default|modal|formSheet|tab-root>",
+      "archetype": "<list|detail|form|dashboard|scanner|custom>",
+      "services": ["<exact service filename without .ts>"],
+      "nativeCapabilities": ["<normalized capability>"],
+      "scaffold": {
+        "componentName": "<PascalCase component>",
+        "imports": ["<complete deterministic import statement>"],
+        "statements": ["<typed hook/state statement>"]
+      }
+    }
+  ]
+}
+```
+
+Baseline `keep` screens may omit `scaffold`; every `new` or `replace` screen
+requires it. Deferred or speculative routes are forbidden. After the final
+plan hash is known, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-screen-artifacts.js" "<working_dir>" check
+```
+
+Also write `<working_dir>/.tmp/native-capabilities-contract.json` from the
+approved Native Capabilities section. Each row contains the normalized
+capability, exact shipped package, expected `src/native/*.ts[x]` wrapper files,
+and optional shared group (camera/image/scanner share `camera-suite`). Run
+`plan-native-batches.js <working_dir> plan` before returning. If either
+structured contract cannot be proven from the approved plan, return `BLOCKED`;
+do not fall back to Markdown parsing downstream.
+
 Run the mobile changed-file dispatcher against every file this planner wrote or edited, including `native-app-plan.md` and temporary section files that remain in the project:
 
 ```bash
@@ -797,5 +851,6 @@ You have `Bash` only to run read-only file/HTTP/helper checks such as `node scri
 You have `Write` only for planning artifacts owned by this workflow:
 `native-app-plan.md`, `_dm_section.md`, `_screens_section.md`, the normalized
 schema contract, `.tmp/mobile-plan-status.json`, plus the recommendation-only
-`.tmp/design-recommendation.json`. You MUST NOT write app source, runtime
+`.tmp/design-recommendation.json`, `.tmp/screen-contract.json`, and
+`.tmp/native-capabilities-contract.json`. You MUST NOT write app source, runtime
 configuration, generated services, package files, or any other project file.

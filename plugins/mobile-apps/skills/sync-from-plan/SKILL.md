@@ -178,6 +178,20 @@ the target set when the helper's behavior changes.
 
 ### Step 3 - Reconcile Services And Navigation
 
+After any required screen-planner rebind updates and approvals, require the
+current `.tmp/screen-contract.json` and run the optimized deterministic owner:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-screen-artifacts.js" \
+  "$PROJECT_DIR" generate
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate navigation-skeleton
+```
+
+This supersedes Markdown-driven service snapshot and navigation writes in the
+normal path. The detailed algorithm below is repair guidance for extending the
+script, not a second execution path.
+
 Refresh the `## Generated Services (snapshot at <ISO timestamp>)` section using
 the exact service files and exported methods on disk. In Dataverse mode this
 snapshot must contain no mock marker; in prototype mode it must agree with
@@ -197,7 +211,8 @@ navigation algorithm:
 Run:
 
 ```bash
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate navigation-skeleton
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 ```
 
@@ -246,6 +261,15 @@ persistence ending first; do not synthesize approval inside sync.
 Run the TypeScript gate and the changed-file dispatcher for repaired shared
 files before builders.
 
+Then rebuild immutable builder packets and complexity waves:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-builder-context.js" \
+  "$PROJECT_DIR" build
+node "${CLAUDE_SKILL_DIR}/../../scripts/pack-screen-waves.js" \
+  "$PROJECT_DIR" --max-concurrency 5
+```
+
 ### Step 5 - Determine And Rebuild Targets
 
 Select targets in this order:
@@ -259,27 +283,25 @@ Select targets in this order:
 | Prototype to Dataverse transition or manifest hash changed | Every data-bound screen or shared data helper whose imports/field bindings changed, plus screens consuming changed helpers |
 | Only lifecycle hashes are missing | Run gates first; rebuild only failures |
 
-Spawn `mobile-app:screen-builder` in waves of at most five. Prompts include the
-existing file, approved per-screen spec, current generated-service snapshot,
-data mode, and exact target path. In Dataverse mode include the manifest facts
-for that screen.
+Read `.tmp/screen-waves.json` and spawn `mobile-app:screen-builder` in its
+complexity-balanced waves of at most five. Every prompt includes
+`builder_context_path: <PROJECT_DIR>/.tmp/builder-context/<screen-id>.json`.
+The packet supplies exact route, services, design, target hash, and manifest
+facts. Do not make each builder rediscover the full plan/reference surface.
 
 Parse each first-line status using the plugin protocol. Retry
 `NEEDS_CONTEXT` once with concrete service/manifest context. Stop on
-`BLOCKED`. After each wave, run `npm --prefix "$PROJECT_DIR" run type-check`;
+`BLOCKED`. After each wave, run `run-tsc-gate.js --project-root
+"$PROJECT_DIR" --gate wave-<N>`;
 group errors by root cause and cap repair attempts at two per screen.
 
 ### Step 6 - Final Gates
 
-Run in this order:
+Run independent read-only hard gates concurrently and persist repair order:
 
 ```bash
-cd "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
-  "$PROJECT_DIR/native-app-plan.md"
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-final-checks.js" \
+  --project-root "$PROJECT_DIR" --all-source
 ```
 
 In Dataverse mode, then run:
@@ -290,11 +312,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
   --project-root "$PROJECT_DIR" --all-source
 ```
 
-Finally, in both modes:
-
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
+The runner includes a clean TypeScript gate and the batched changed-file
+validator (`run-tsc-gate.js --clean` and `run-validation-batch.js`). Require `.tmp/final-checks-receipt.json`,
+`.tmp/validation-receipt.json`, and `.tmp/final-validation.md`.
 
 Repair one stage at a time and rerun that stage before advancing. Route,
 contract, auto-fixable quality/contrast, and TypeScript failures are hard
@@ -319,18 +339,36 @@ Invoke the design skill:
 ```
 Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, you MUST run a final TypeScript gate:
+Wait for it to complete. If it modifies UI files, builder packets and all final
+receipts are stale. Rebuild and rerun:
 ```bash
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-builder-context.js" \
+  "$PROJECT_DIR" build
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-final-checks.js" \
+  --project-root "$PROJECT_DIR" --all-source
 ```
 
 ### Step 7 - Preview
 
-Unless `--no-preview`, invoke:
+Unless `--no-preview`, begin a preview lock, then invoke `/preview-screens` and
+`run-final-checks.js` in the same parallel tool message:
 
 ```text
 /preview-screens --working-dir <PROJECT_DIR>
 ```
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/preview-lock.js" \
+  "$PROJECT_DIR" begin preview.html
+# Run preview + final checks concurrently.
+node "${CLAUDE_SKILL_DIR}/../../scripts/preview-lock.js" \
+  "$PROJECT_DIR" finalize preview.html
+```
+
+If source changes, finalize deletes the stale preview on the same pass and
+blocks regeneration.
+With `--no-preview`, delete any old `preview.html` and `.tmp/preview-lock.json`
+so stale output is never reported.
 
 Preview is a review artifact; it never replaces static gates and must not add a
 React Native Web target or runtime route crawl.
@@ -345,7 +383,18 @@ Only after all hard gates pass, update `.mobile-app/state.json`:
 - `lastSyncedPlanHash`: current plan SHA-256;
 - `lastDataverseManifestHash`: current manifest SHA-256 in Dataverse mode,
   otherwise `null`;
+- `optimizationReceipts`: current artifact hashes from
+  `optimized-generation-pipeline.md`, using null only for intentionally absent
+  optional artifacts;
 - `lastSyncAt`: current ISO timestamp.
+
+Use the atomic owner rather than hand-editing these fields:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-optimization-state.js" \
+  "$PROJECT_DIR" --data-mode <prototype|dataverse> \
+  [--clear-transition for the approved Dataverse transition commit]
+```
 
 Append a memory-bank entry with data mode, target screens, service/manifest
 changes, validation result, concerns, and preview path.

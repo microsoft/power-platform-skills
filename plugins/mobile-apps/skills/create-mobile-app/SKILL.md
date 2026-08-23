@@ -881,6 +881,22 @@ This step is template-only and foreground-only. Do not clone/copy templates, do 
 **Print before starting:**
 > "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
 
+Run the deterministic owner:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
+  --project-root "<working_dir>" \
+  --display-name "<displayName>" \
+  --slug "<slug>" \
+  --mode real
+test -f "<working_dir>/.tmp/template-prep-receipt.json"
+```
+
+Do not repeat Fixes 1–8 manually after this command. The detailed checks and
+fix blocks below are troubleshooting guidance only when the script fails on a
+new upstream template shape; repair the script and rerun so both real and
+prototype creation retain one implementation.
+
 Required checks:
 
 ```bash
@@ -1189,7 +1205,8 @@ echo "✓ [Step 6.5b] SafeAreaProvider verified"
 With `node_modules/` populated, run the scaffold TypeScript gate. Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
 
 ```bash
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate scaffold
 ```
 
 `tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 (Fixes 1–7) is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes against the current working dir contents and reapply any missed edit.
@@ -1546,7 +1563,8 @@ After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate generated-services
 ```
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
@@ -1574,7 +1592,34 @@ If the seeding step fails (network drop, permission error, etc.), surface the fa
 ### Step 9 — Apply native capabilities
 
 **Print before starting:**
-> "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
+> "→ [Step 9/13] Wiring <N> native capabilities in independent batches: <list>."
+
+The planner already wrote `.tmp/native-capabilities-contract.json`. Run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-native-batches.js" \
+  "<working_dir>" plan
+```
+
+Read `.tmp/native-batches.json` and spawn one
+`mobile-app:native-batch-builder` per batch in one Task message, capped at four
+concurrent batches. Each batch owns disjoint `src/native/` files; related
+camera/image/scanner capabilities stay in `camera-suite`, so package checks and
+wrapper generation are not duplicated. Parse every first-line status with the
+standard protocol and stop on `BLOCKED`.
+
+After all batches return, run the mandatory join gate and one TypeScript gate:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-native-batches.js" \
+  "<working_dir>" verify
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate native-join
+```
+
+The sequential instructions below are fallback/repair guidance only if Task is
+unavailable. Do not execute both paths; in fallback mode process batches, not
+the raw capability list, and still run the join gate.
 
 Read the `## Native Capabilities` section from `native-app-plan.md`. For each capability, invoke `/add-native` — it routes to nested helpers for camera/PDF/pen controls when needed, otherwise generates a generic wrapper:
 
@@ -1586,7 +1631,7 @@ Arguments:
   --capability <name>
 ```
 
-Run sequentially. Each writes a single file under `src/native/` and does not touch `package.json` or `app.config.js`, so they could in principle run in parallel — but sequential keeps the orchestration log readable.
+Run sequentially only in the explicit fallback described above.
 
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
 
@@ -1609,7 +1654,7 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 | `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
 | Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. After Tamagui config changes run `run-tsc-gate.js --project-root <working_dir> --gate design-integration`.
 
 **Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
 
@@ -1662,6 +1707,30 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 **Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
 ### Step 10b — Wire navigation layout
+
+The optimized structured pipeline owns Steps 10b, 10.7, and 10.8. After all
+Dataverse and connector service mutations finish, run exactly:
+
+Require the planner-owned `.tmp/screen-contract.json`; never reconstruct it
+from Markdown.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-screen-artifacts.js" \
+  "<working_dir>" generate
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate navigation-skeleton
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-builder-context.js" \
+  "<working_dir>" build
+node "${CLAUDE_SKILL_DIR}/../../scripts/pack-screen-waves.js" \
+  "<working_dir>" --max-concurrency 5
+```
+
+Require `.tmp/service-inventory.json`, `.tmp/navigation-contract.json`,
+`.tmp/screen-artifacts-receipt.json`, `.tmp/builder-context/index.json`, and
+`.tmp/screen-waves.json`. Missing services, route/file drift, invalid
+scaffolds, or stale hashes block builders. The manual Steps 10b.1–10.8 below
+are troubleshooting reference only for extending the deterministic scripts;
+do not execute both paths.
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
 
@@ -1779,7 +1848,7 @@ return (
 );
 ```
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `run-tsc-gate.js --project-root <working_dir> --gate navigation-repair` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 **How to build the `<Drawer>` block (Drawer pattern only):**
 
@@ -1820,7 +1889,7 @@ return (
 - `drawerType: 'front'` — standard mobile pattern (drawer slides over content)
 - Icon prop is `drawerIcon` (not `tabBarIcon`)
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `run-tsc-gate.js --project-root <working_dir> --gate navigation-repair` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 ### Step 10.7 — Snapshot generated services into the plan
 
@@ -2091,7 +2160,8 @@ This sub-step previously appended `### Standard Imports` + per-screen `#### Reso
 After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/skeletons are all written, run the **Navigation/skeleton gate**:
 
 ```bash
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate navigation-skeleton
 ```
 
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.
@@ -2102,20 +2172,27 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 **Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
 
-#### 11.0 — `Task` preflight (silent)
+#### 11.0 — First real wave is the availability check
 
-Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-app:screen-builder`. Spawn ONE no-op builder via `Task` with `screen_name: __preflight__` and `target_file: <working_dir>/.preflight-probe.tsx` (the probe agent should return `DONE` immediately and the orchestrator deletes the file).
+Read `.tmp/screen-waves.json`. It is complexity-packed by
+`pack-screen-waves.js` with a hard cap of five. Do not reorder it by plan order
+or create an additional probe wave.
 
-- **Probe returns `DONE` (any status code)** → parallel mode. Proceed with normal fan-out below. Do not downgrade later because there are many screens or because inline writing seems faster.
-- **Probe errors with `Agent type … not found`, tool unavailable, or any nested-Task failure** → silent inline fallback. Print **once**:
+Dispatch the first real wave. If it returns normal builder statuses, continue
+in parallel mode. If the dispatch itself errors with `Agent type … not found`,
+tool unavailable, or a nested-Task failure before any builder writes, use the
+silent inline fallback. Print **once**:
   > "→ Parallel screen-builders unavailable in this host — building screens inline. (No action needed; this is automatic.)"
   Then iterate the screen list and apply the full screen-builder workflow inline (the orchestrator becomes the builder, reading the same per-screen specs and writing TSX directly). Inline does NOT mean "concise but functional" — it must still satisfy `screen-builder.md` quality gates, operational pattern requirements, safe-area/contrast/a11y rules, resolved imports, and the final checklist for every screen. Do NOT prompt the user.
 
-**Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run (rare), treat the next failure the same way: silently downgrade to inline and continue.
+**Hard rule — never ask the user about build mode.** The real dispatch result
+is the only decision input. If the host changes mid-run, treat the next
+dispatch failure the same way after reconciling which target files were
+actually written.
 
 **Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
 
-**Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
+**Print before spawning** using exact values from `.tmp/screen-waves.json`:
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
 > Wave 1/<W> starting: <comma-separated screen names in this wave>."
 
@@ -2130,6 +2207,7 @@ Each prompt:
   route: <route>
   target_file: <working_dir>/<File from Screen Map>
   plan_path: <working_dir>/native-app-plan.md
+  builder_context_path: <working_dir>/.tmp/builder-context/<screen-id>.json
   skeleton_exists: true
 
   Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
@@ -2137,7 +2215,8 @@ Each prompt:
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
 
-**Cap at 5 concurrent.** If the plan has more than 5 new screens, batch them in waves of 5.
+**Cap at 5 concurrent.** Use the precomputed complexity-balanced wave membership
+and scores; do not simply slice the Screen Map into consecutive groups.
 
 **Progress streaming — print one line per builder as the wave returns, then a wave summary.** The `Task` tool returns all parallel results together, but you can still narrate per-builder by iterating the returned results in order before doing the status-switch branching. Format:
 
@@ -2163,7 +2242,8 @@ After the wave's TypeScript gate passes, and only then, print the next wave star
 After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
 
 ```bash
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate "wave-<wave-number>"
 ```
 
 If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
@@ -2176,7 +2256,9 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
-**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+**After all waves return and the last wave gate is clean**, run
+`run-tsc-gate.js --project-root <working_dir> --gate post-waves` to catch
+cross-screen issues. The later final runner performs an additional clean gate.
 
 Then run the canonical route-contract gate from the app root:
 
@@ -2206,6 +2288,20 @@ Run one controlled stylistic debt sweep after all screen-builder waves and TypeS
 **Print before starting:**
 > "→ [Step 11.4/13] Running stylistic validators in batch + auto-fixing contrast / accessibility / token issues across all screens (~2-3 min)"
 
+Run all changed-file validators through the bounded parallel driver, passing
+the exact generated screen/layout/shared files:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-validation-batch.js" \
+  --project-root "<working_dir>" \
+  --file <changed-file> [--file <changed-file> ...]
+```
+
+Read `.tmp/validation-receipt.json`, repair in its fixed order, and rerun the
+same command. Hash-identical PASS results are reused; changed files or changed
+validator code execute again. The detailed manual report flow below is repair
+guidance only and must not be run in addition to the batch driver.
+
 **Scope:** generated screen files only: every file from the Screen Map plus any `app/(app)/**/*.tsx` screen written by Step 10.8/Step 11. Exclude layout files unless the reported issue is clearly inside generated screen chrome for that route group. Do not scan `src/generated/`, `brand/`, `node_modules/`, `.expo/`, or sample files.
 
 **Available validators in v0:**
@@ -2232,7 +2328,8 @@ These validators are invoked explicitly by this mobile workflow. They are not re
 After all validators report no auto-fixable issues, run:
 
 ```bash
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "<working_dir>" --gate style-sweep
 ```
 
 If `tsc` fails, use the existing TypeScript batch-repair policy. If stylistic issues remain after 2 retries or are judgement calls, do not keep looping. Record them in `memory-bank.md` and surface them as:
@@ -2254,9 +2351,13 @@ Invoke the design skill against the project:
 ```
 Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
 
-Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
+Wait for the design skill to complete. If it made any changes, rebuild builder
+contexts and run the complete final checks; TypeScript alone is insufficient:
 ```bash
-npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-builder-context.js" \
+  "<working_dir>" build
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-final-checks.js" \
+  --project-root "<working_dir>" --all-source
 ```
 
 Then continue only if TypeScript is clean. Step 11.5 may leave remaining qualitative concerns, but it may not leave the app in a broken TypeScript state.
@@ -2277,7 +2378,29 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 - **(a)** → invoke `/preview-screens` (all screens)
 - **(b)** → invoke `/preview-screens` with only List + Form + Detail screen files (skip Login, Splash, Profile, OAuth)
-- **(c)** → proceed directly to Step 12
+- **(c)** → delete any old `preview.html` and `.tmp/preview-lock.json`, run
+  final checks, then proceed to Step 12
+
+For (a) or (b), run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/preview-lock.js" \
+  "<working_dir>" begin preview.html
+```
+
+Then invoke the selected `/preview-screens` operation and
+`run-final-checks.js --project-root <working_dir> --all-source` in the same
+parallel tool message. Both read the frozen source surface. After both return:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/preview-lock.js" \
+  "<working_dir>" finalize preview.html
+```
+
+If a builder, repair, or polish changes sources during that window, finalize
+deletes the stale preview and blocks until preview and final checks are rerun.
+Require `.tmp/preview-lock.json`, `.tmp/final-checks-receipt.json`, and
+`.tmp/validation-receipt.json` before reporting a preview.
 
 ---
 
@@ -2297,10 +2420,26 @@ This skill **launches** Metro in an async/background terminal so:
 ```bash
 cd <working_dir>
 npm run generate-schemas    # refresh schema map for any data sources added since last run (idempotent)
-npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-final-checks.js" \
+  --project-root "<working_dir>" --all-source
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro async:
+Run schema regeneration and final checks synchronously. The final runner uses a
+clean TypeScript gate (`run-tsc-gate.js --clean`) and records canonical repair
+order. If either fails, do
+not launch Metro. Repair and rerun; continue only when receipts say PASS. Then
+launch Metro async:
+
+Before launch, create or update `.mobile-app/state.json` with `dataMode:
+"dataverse"`, current plan and manifest hashes, `lastSyncAt`, and
+`optimizationReceipts` hashes from
+`shared/references/optimized-generation-pipeline.md`. Do not commit state when
+any required final receipt is missing or failed.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-optimization-state.js" \
+  "<working_dir>" --data-mode dataverse --clear-transition
+```
 
 ```bash
 # Async / background — DO NOT block on this. Capture the terminal id.

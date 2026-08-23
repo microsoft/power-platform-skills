@@ -755,6 +755,20 @@ Use `_plan_preview.html` (not `preview.html`) so it does not collide with the po
 
 ## Return Status
 
+Before returning from `phase: specs` or legacy full mode, write
+`<working_dir>/.tmp/screen-contract.json` using the exact structured schema in
+`native-app-planner` Step 6. Derive it from the locked graph and approved specs,
+not by reparsing arbitrary prose. Every non-baseline screen includes a minimal
+typed `scaffold`: complete import statements and hook/state statements that
+compile with `return null`. This moves mechanical imports, routes, and skeleton
+code out of the orchestrator while leaving visual JSX to `screen-builder`.
+
+The `approvedPlanSha256` is the hash after specs are appended. The planner may
+restamp only this hash after a later approved addendum changes plan bytes but
+does not change screens. Validate the file with
+`build-screen-artifacts.js <working_dir> check` before returning. Never write
+navigation layouts or TSX here.
+
 You MUST return your final message with one of these four status codes as the **literal first line** (no markdown, no preamble, no `Status:` prefix, no backticks). The planner parses the first line to decide what to do next. After the status line, leave a blank line, then write your summary.
 
 | Code | When to use | Example first line |

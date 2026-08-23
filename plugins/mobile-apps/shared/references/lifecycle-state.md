@@ -15,6 +15,18 @@ local paths.
   "transition": null,
   "lastSyncedPlanHash": null,
   "lastDataverseManifestHash": null,
+  "optimizationReceipts": {
+    "templatePrep": null,
+    "screenContract": null,
+    "serviceInventory": null,
+    "designDecision": null,
+    "nativeBundleValidation": null,
+    "screenWaves": null,
+    "tscCacheManifest": null,
+    "validation": null,
+    "finalChecks": null,
+    "previewLock": null
+  },
   "lastSyncAt": null
 }
 ```
@@ -75,6 +87,12 @@ mode. It is `null` in prototype mode.
 
 Hash file bytes. A missing file maps to `null`, not the hash of an empty
 string.
+
+`optimizationReceipts` stores SHA-256 hashes of the corresponding files listed
+in [`optimized-generation-pipeline.md`](optimized-generation-pipeline.md) after
+the latest successful creation or sync. They are resume/drift evidence, not a
+license to skip gates. A changed plan or source invalidates dependent receipts;
+their owner regenerates them before state is committed.
 
 ## Creation And Inference
 

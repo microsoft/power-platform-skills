@@ -24,8 +24,28 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - `route` — the Expo Router route path (e.g., `/(app)/inspections`)
 - `target_file` — the absolute path of the file to write (e.g., `<working_dir>/app/(app)/inspections.tsx`)
 - `plan_path` — absolute path to `<working_dir>/native-app-plan.md`
+- `builder_context_path` — required path under
+  `<working_dir>/.tmp/builder-context/<screen-id>.json`
 
 ## Hard Rules
+
+- **Verify context before reading or writing.** Run:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/build-builder-context.js" \
+    "<working_dir>" check "<builder_context_path>"
+  ```
+
+  Any stale plan, target skeleton, service inventory, navigation, design, or
+  reference hash returns exit `2`. Respond `BLOCKED: builder context hash
+  mismatch for <screen_name>` and write nothing. Never regenerate or restamp
+  your own packet.
+- **Packet-first context.** Read `builder_context_path` once. It supplies the
+  exact screen record, route contract, service signatures, design direction,
+  target skeleton hash, and hashes of shared references. Read only the target
+  skeleton plus a referenced source file when an implementation detail is not
+  embedded in the packet. Do not reread the full plan, glob all services, or
+  reload the same kit/design references merely to rediscover packet facts.
 
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the orchestrator before doing the step's work, prefixed with `[<screen_name>]` so parallel builds can be told apart. Do not skip, do not paraphrase. Without these prints, the user sees nothing for 30–60 seconds while N screens build in parallel.
 - **Write exactly one screen file.** No new hooks, no new services beyond your assigned screen file. **`src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/` are guaranteed to exist** — the orchestrator creates them at Step 7 before any builder runs. NEVER create or modify these shared files from a builder. If `src/components/index.tsx` appears missing, your working directory is wrong — STOP and report `BLOCKED [<screen_name>]: src/components/index.tsx is missing — orchestrator should have created it at Step 7`.
@@ -423,10 +443,10 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 ---
 
-## Step 1 — Read Your Spec
+## Step 1 — Read Your Hash-Bound Context
 
 **Print before starting** (so the orchestrator sees which screen you're on — N builders run in parallel, this is how the user follows along):
-> "→ [<screen_name>] Reading spec from native-app-plan.md…"
+> "→ [<screen_name>] Verifying and reading builder context packet…"
 
 Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## Screens` → `### Per-Screen Specs`. Capture **all** of the following — every field is a build instruction, not decoration:
 

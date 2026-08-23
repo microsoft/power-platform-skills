@@ -284,8 +284,8 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, applies data/native/connectors, then uses deterministic prep/screen scaffolding, hash-bound builder packets, cached gates, complexity waves, concurrent final checks, and preview locking before Metro. |
+| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — uses the same optimized generation pipeline with environment-free approval gates, deterministic local CRUD services/seed data and connector throw-stubs, full screen/design quality, and no Power Platform provisioning. |
 | `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, rebases placeholder publisher names, live-reconciles and applies Dataverse, replaces connector stubs, optionally reuses seed scenarios, proves all mocks are gone, restores auth/runtime, and commits Dataverse state after one final sync. |
 | `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from `native-app-plan.md`; refreshes service/field bindings, routes, shared code, affected screens, quality gates, preview, and lifecycle hashes. Conversion uses its target-mode gate to commit `dataverse`. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
@@ -318,6 +318,7 @@ Example edit flows:
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |
+| `native-batch-builder` | Mutation — owns one disjoint native wrapper batch; related camera/image/scanner work is deduplicated before one parent join gate |
 | `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
 
 ## Known blockers

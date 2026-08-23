@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 26 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 26 skills + 6 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -74,6 +74,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
 13. **Lifecycle state** — Mock/real mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Conversion uses `prototype → transitioning → dataverse`; only `/sync-from-plan --target-data-mode dataverse` commits the final mode after cleanup and validation. The legacy `.code-apps-native/state.json` path is migration input only.
+14. **Shared optimized generation pipeline** — real creation, prototype
+    creation, and sync use the same deterministic preparation, screen contract,
+    builder packet, native batch, TypeScript cache, validation receipt, final
+    check, wave packing, and preview-lock scripts. Read
+    [`shared/references/optimized-generation-pipeline.md`](shared/references/optimized-generation-pipeline.md).
+    Hashes accelerate repeated work but never bypass approvals or hard gates;
+    final TypeScript always runs clean.
 
 ## Decisions made
 
@@ -89,6 +96,13 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
 - ✅ Template is supplied as a fresh `pa-wrap-tools/templates/expo-app-standalone` folder before either creation skill runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. Real creation runs `npx power-apps init`; prototype creation installs a reversible local runtime and defers init until graduation.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), `brand/design-system.html` (visual gallery), and `brand/design-decision.json` (hash-bound recommendation, final selection, and confirmation receipt). The planner only writes `.tmp/design-recommendation.json`; `/design-system` alone owns confirmation. Screen-builders MUST read `brand/design-system.md`; `## Negatives` = HARD RULES. Creation/edit/sync verifies `brand/design-decision.json` before screen work. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`.
+- ✅ Screen generation is contract-first: `screen-planner` writes
+    `.tmp/screen-contract.json`; deterministic tooling owns layouts, service
+    inventory, and typed skeletons; builders receive one hash-bound packet and
+    waves are complexity-balanced with a cap of five.
+- ✅ Independent native wrapper groups run through
+    `mobile-app:native-batch-builder`; Dataverse and connector generation remains
+    sequential because those steps share generated state.
 - ✅ Offline profile creation is **author-only in v0.1** — `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` to the project, but do NOT scaffold offline runtime code (SQLite store, sync engine, write queue) into the generated app. Runtime support is gated on upstream `@microsoft/power-apps-native-host` confirmation.
 - ✅ Custom filter mode (`recorddistributioncriteria=3`, `profileitemrule` → `savedquery`) is **deferred to v0.5**. v0.1 supports Related-rows-only / All-records / Organization-rows radio options only.
 - ✅ `offline-profile-architect` agent follows the existing `mobile-app:` namespace + status-code protocol (`DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`). Read-only — proposes scope; never mutates Dataverse. Mutation lives in `/setup-offline-profile` after the 3 gates.

@@ -167,6 +167,21 @@ details, but any semantic change returns to the relevant approval gate.
 
 ### Step 4 - Prepare The Existing Template
 
+The optimized deterministic runner owns template preparation. Run it once;
+do not repeat the inherited manual Step 5 edits afterward:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
+  --project-root "$PROJECT_DIR" \
+  --display-name "<approved display name>" \
+  --slug "<approved slug>" \
+  --mode prototype
+test -f "$PROJECT_DIR/.tmp/template-prep-receipt.json"
+```
+
+The legacy preparation bullets below are repair guidance only when this script
+fails on an unsupported template shape. Do not execute both paths.
+
 Read and apply `/create-mobile-app` Step 5's current template preparation
 contract, with these prototype-specific overrides:
 
@@ -213,7 +228,8 @@ Write `.mobile-app/state.json` per
 Run the scaffold gate:
 
 ```bash
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate scaffold
 ```
 
 ### Step 5 - Generate Typed Mocks
@@ -222,7 +238,8 @@ Run:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/gen-mock-services.js" "$PROJECT_DIR"
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate generated-services
 ```
 
 The generator reads `.tmp/dataverse-schema-contract.json` and writes:
@@ -244,10 +261,13 @@ approved structured contract or generator, regenerate, and rerun type-check.
 
 ### Step 6 - Apply Native Capabilities And Design
 
-For every approved `## Native Capabilities` row, execute `/add-native`
-sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
-unchanged. A capability absent from the bundled template is a blocker; do not
-install native code or fake a wrapper.
+Use the planner-owned `.tmp/native-capabilities-contract.json`. Run
+`plan-native-batches.js <PROJECT_DIR> plan`, then dispatch one
+`mobile-app:native-batch-builder` per row in `.tmp/native-batches.json` in one
+parallel Task call (cap four). Each batch owns disjoint wrapper files; related
+camera/image/scanner work stays inside one batch and is not duplicated. After
+all statuses pass, run `plan-native-batches.js <PROJECT_DIR> verify` as the one
+mandatory join gate. A missing wrapper or unshipped package is a blocker.
 
 Always run `/design-system` in orchestrator mode. Pass `--working-dir` and
 `--from-design-intake` when supplied. With `--no-design`, pass
@@ -269,9 +289,35 @@ A missing or stale decision is a blocker. Screen builders consume the final
 brand artifacts; they never choose or reclassify a design direction.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
-`/create-mobile-app` brand-token integration contract, then type-check.
+`/create-mobile-app` brand-token integration contract, then run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate design-integration
+```
 
 ### Step 7 - Navigation, Shared Code, And Skeletons
+
+The structured screen contract owns this phase. Do not reinterpret Markdown or
+run the manual Step 10b/10.7/10.8 implementation in the normal path:
+
+Require `.tmp/screen-contract.json`; never reconstruct it from Markdown.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-screen-artifacts.js" \
+  "$PROJECT_DIR" generate
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-tsc-gate.js" \
+  --project-root "$PROJECT_DIR" --gate navigation-skeleton
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-builder-context.js" \
+  "$PROJECT_DIR" build
+node "${CLAUDE_SKILL_DIR}/../../scripts/pack-screen-waves.js" \
+  "$PROJECT_DIR" --max-concurrency 5
+```
+
+Require `.tmp/service-inventory.json`, `.tmp/navigation-contract.json`,
+`.tmp/screen-artifacts-receipt.json`, `.tmp/builder-context/index.json`, and
+`.tmp/screen-waves.json`. The inherited implementation notes below are repair
+guidance only if deterministic generation reports an unsupported contract.
 
 Reuse the current owning implementation in `/create-mobile-app`, in this order:
 
@@ -289,15 +335,18 @@ Prototype-specific rules:
 - Skeleton service imports come from `@/generated/services` and use only the
   generated methods/types on disk.
 
-Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
+The `navigation-skeleton` gate above must pass before builders.
 
 ### Step 8 - Build Screens
 
-Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
-status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
+Read waves from `.tmp/screen-waves.json`; they are complexity-balanced and each
+contains at most five screens. Spawn `mobile-app:screen-builder` for one wave in
+one Task call. The first real wave is also the availability check; there is no
+separate no-op probe. Each prompt must include:
 
 ```text
 Data mode: prototype.
+builder_context_path: <PROJECT_DIR>/.tmp/builder-context/<screen-id>.json
 Use only the typed services exported from @/generated/services. They are
 in-memory implementations with deterministic seed data and the same app-facing
 CRUD contract that graduation will preserve through adapters when necessary.
@@ -305,27 +354,31 @@ Do not import *.seed.json, call Dataverse, call connectors directly, or weaken
 the approved domain-specific first viewport.
 ```
 
-Run the screen-wave TypeScript gate after every wave. Group failures by root
-cause and cap retries at two per screen.
+Run `run-tsc-gate.js --project-root "$PROJECT_DIR" --gate
+wave-<wave-number>` after every wave. Group failures by root cause and cap
+retries at two per screen. Do not launch the next complexity-packed wave until
+the gate passes.
 
 ### Step 9 - Final Validation
 
-Run in this order from `PROJECT_DIR`:
+Run final read-only gates concurrently, while preserving canonical repair order
+in the receipt:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md"
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-final-checks.js" \
+  --project-root "$PROJECT_DIR" --all-source
 ```
 
 Stop at the first failing stage, repair that stage, and rerun it before moving
 on. Do not run real schema generation in prototype mode.
 
-Record every command, pass/fail result, issue count, and accepted concern in
-`.tmp/final-validation.md`. The file must name all five commands before the
-prototype can be reported complete or converted.
+Require `.tmp/final-checks-receipt.json`, `.tmp/validation-receipt.json`, and
+`.tmp/final-validation.md`. Repair failures in the receipt order and rerun the
+same command. The final TypeScript gate is always `--clean`; incremental state
+accelerates earlier gates but never skips compilation.
+
+`run-final-checks.js` invokes `run-validation-batch.js` internally for the full
+source surface; do not run the legacy serial changed-file dispatcher afterward.
 
 Run the mandatory changed-file dispatcher against every file written by this
 workflow or its agents. Pass explicit files, not directories:
@@ -349,14 +402,18 @@ Invoke the design skill:
 ```
 Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, run:
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
-to guarantee it didn't break TS typing.
+Wait for it to complete. If it modifies UI files, rebuild builder contexts and
+rerun `run-final-checks.js`; polish may not leave stale hashes or validation
+receipts.
 
-After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
-the user opted out of visual companion output.
+After polish, begin a hash lock with `preview-lock.js "$PROJECT_DIR" begin
+preview.html`. Unless the user opted out, invoke `/preview-screens` and
+`run-final-checks.js` in the same parallel tool message because both are
+read-only over frozen sources. Then run `preview-lock.js "$PROJECT_DIR"
+finalize preview.html`. If any source changed, the command deletes the stale
+preview and blocks until regeneration. If preview is skipped, delete any old
+`preview.html` and `.tmp/preview-lock.json` so stale output cannot be reported.
+Hard rule: delete stale preview output before reporting completion.
 
 ### Step 10 - Record State And Start Metro
 
@@ -367,10 +424,24 @@ Update `.mobile-app/state.json`:
 - `transition: null`
 - `lastSyncedPlanHash`: SHA-256 of `native-app-plan.md`
 - `lastDataverseManifestHash: null`
+- `optimizationReceipts`: SHA-256 (or null when intentionally absent) for
+  template prep, screen contract, service inventory, design decision, native
+  join, screen waves, TypeScript cache manifest, validation receipt, final
+  checks receipt, and preview lock per
+  `shared/references/optimized-generation-pipeline.md`
 - `lastSyncAt`: current ISO timestamp
 
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
+
+Record lifecycle and optimization hashes atomically:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-optimization-state.js" \
+  "$PROJECT_DIR" --data-mode prototype
+```
+
+Do not hand-compute or partially append receipt hashes.
 
 Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
 or crawl routes in a browser. Return the Metro URL/QR handoff to the user.
