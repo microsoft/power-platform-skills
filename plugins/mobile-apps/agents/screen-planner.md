@@ -100,9 +100,14 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
 
-### Step 0b — Load Design Direction (if present)
+### Step 0b — Load Planner Design Recommendation (if present)
 
-Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
+Read `<working_dir>/native-app-plan.md`. If `## Design -> ### Planner
+Recommendation` exists, parse its YAML-style fields and use them as
+**provisional defaults** for the per-screen design fields produced in Step 4.
+They are not user-confirmed design; `/design-system` may override them before
+builders run. For backwards compatibility, use a legacy `## Design Direction`
+block only when the recommendation subsection is absent.
 
 - `density` → defaults `Density mode`
 - `surface` → defaults `Surface style`

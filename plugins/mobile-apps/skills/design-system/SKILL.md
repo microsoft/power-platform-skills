@@ -10,13 +10,28 @@ model: opus
 
 # Design System
 
-Source of truth for every screen built in a Power Apps mobile app. Produces three artifacts:
+Source of truth for every screen built in a Power Apps mobile app. Produces four artifacts:
 
 1. `brand/design-system.md` — full spec (palette, typography, spacing, components, negatives)
 2. `brand/tokens.ts` — importable Tamagui token export
 3. `brand/design-system.html` — deterministic visual gallery (zero LLM cost)
+4. `brand/design-decision.json` — canonical recommendation, selected source,
+   user confirmation, provenance, and file hashes
 
 Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9b applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
+
+## Decision Ownership
+
+- `native-app-planner` recommends one direction and records its rationale and
+  confidence in `.tmp/design-recommendation.json`. It never confirms design.
+- `/design-system` is the only owner of final selection, user confirmation,
+  brand artifacts, and `brand/design-decision.json`.
+- User-provided design input overrides the recommendation. Preserve the planner
+  recommendation in the decision receipt as provenance; do not erase it.
+- Do not reclassify the app when a valid planner recommendation exists. With no
+  user design input, reuse its direction, rationale, confidence, and Theme card
+  exactly. A second model classification can drift from the approved product
+  context without adding quality.
 
 ## When to use
 
@@ -36,6 +51,9 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 - `working_dir` — absolute path to project root (auto-detected or passed by orchestrator)
 - Optional flags: `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`, `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- Optional: `--apply-recommendation` — orchestrator fast path: skip brand-input
+  and style-picker exploration, reuse `.tmp/design-recommendation.json`
+  exactly, then run the normal artifact, confirmation, and persistence ending.
 - Optional: `--refresh <dimension>` — palette | typography | components | density | negatives | motion
 - Optional: `--reskin` — full theme swap
 - Optional: `--add-dark-mode` — derive + wire dark theme
@@ -74,13 +92,40 @@ Detect invocation mode:
 
 For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
 
+**Recommendation handoff:**
+
+1. Look for `<working_dir>/.tmp/design-recommendation.json`.
+2. In orchestrated Mode A, require it and validate `schemaVersion: 1`, `status:
+  recommendation-only`, non-empty `direction`, `rationale`, `confidence`, and
+  `source`. When `briefSha256` is present, verify it against `brief.md`.
+3. Store the recommendation as immutable provenance for this run. Do not
+  reinterpret its industry or choose another preset unless the user supplies
+  design input or explicitly chooses a different direction in the style
+  picker.
+4. In standalone Mode B/C without a recommendation sidecar, infer exactly one
+  recommendation from the available brief/project context and carry it as
+  `standaloneRecommendation` into Sub-step 7. This is the only fallback where
+  `/design-system` classifies the app itself.
+5. A missing or stale recommendation in orchestrated Mode A is `BLOCKED`; do
+  not silently classify again.
+
+When `--apply-recommendation` is present, skip Sub-steps 1 and 3 and choose path
+`(c) Apply recommended`. Do not skip Sub-steps 4–7 or the confirmation gate.
+
 **Drift detection (Mode B only — existing brand/ present):**
 
 If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 1. Parse current tokens.ts palette + typography tokens
 2. Parse current design-system.md ## Palette and ## Typography
 3. Compute diff
-4. If divergent → surface drift, ask user to resolve before proceeding (see [refresh-flow.md](./references/refresh-flow.md) § Drift)
+4. If `brand/design-decision.json` exists, run
+  `scripts/finalize-design-decision.js <working_dir> check`; include any stale
+  artifact hash in the drift report.
+5. If divergent or stale → surface drift, ask user to resolve before proceeding
+  (see [refresh-flow.md](./references/refresh-flow.md) § Drift).
+6. If brand artifacts predate the receipt feature, allow the user to review and
+  confirm the current design, then create the receipt through Sub-step 7. Do
+  not fabricate prior confirmation.
 
 ---
 
@@ -99,12 +144,14 @@ You're building {{app_name}} — a {{industry}} app.
 
 Do you have any brand input? (skip with Enter):
 
-(1) Skip — use Field/Ops industry defaults
-    No brand assets. I'll pick a direction from 3 visual styles (or you can skip style-picking entirely). High
-    contrast, large tap targets, safety-first colors.
+(1) Skip — I'll recommend a look from your brief
+    No brand required. Gym, pantry, flight, inspection, shop, etc. get a
+    recommended named direction from the prompt (not a Field/Ops default).
+    You can attach a brand/doc later if you don't want that recommendation.
 
-(2) Free-text notes
-    > "Slate-blue accent, no orange. Must look at home next to ServiceTitan."
+(2) Named brand or free-text
+    > "Chanel" / "Red Cross" / "Slate-blue, must sit next to ServiceTitan."
+    Use this only when the user named a brand or described a look.
 
 (3) Logo PNG / JPG
     > --logo ~/Downloads/logo.png
@@ -122,15 +169,21 @@ Do you have any brand input? (skip with Enter):
 Skip? [Enter to skip — same as option 1]
 ```
 
-If flag was passed on invocation, skip asking — process directly.
+If a flag or a named brand was already in the user prompt (`Chanel`, `Red Cross`, `--brand-doc`, `--logo`, `--from-url`, `--design-spec`), skip asking and process that input. Do not invent a brand they did not name. Do not WebFetch a brand site they did not give.
 
-**On input provided:** Extract palette/typography tokens immediately (~3-5k tokens). Print extracted summary:
+**On input provided:** User-provided design input overrides the recommendation.
+Extract palette/typography tokens immediately (~3-5k tokens), retain the
+planner recommendation as receipt provenance, and set `selectionSource` to the
+actual input kind. Print extracted summary:
 > "→ [design-system] Extracted from {{input}}: {{primary color}}, {{font family}}, {{N}} tokens."
 
-**On skip:** Continue with no brand context.
+**On skip:** Reuse the valid planner recommendation exactly. Do not reclassify
+the app when a valid planner recommendation exists. In standalone mode only,
+reuse the one fallback recommendation already inferred in Sub-step 0.
 
 **Priority order** when multiple inputs given:
-1. `--design-spec` (highest — skips Sub-steps 3 AND 4)
+1. `--design-spec` (highest — skips creative direction generation in Sub-step
+  3; Sub-step 4 still normalizes/copies the spec and generates tokens)
 2. `--brand-doc` (locks direction, skips Sub-step 3)
 3. `--from-figma` (locks palette + typography + components)
 4. `--from-code-app` (highest fidelity sibling)
@@ -155,41 +208,60 @@ Show the cost picker, adapting the intro and option set to brand input.
 | a | Full design | See 3 browser styles, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~8k tokens |
 | c | Brand preview | Apply brand to List + Form + Detail mockups; skip style picker and component sheets. | ~30 sec, ~2k tokens |
-| d | Skip everything | Use palette with industry defaults; no previews. | <5 sec, ~0 tokens |
+| d | Fast apply | Write complete artifacts from the selected source; do not open browser previews. | <10 sec, ~0 tokens |
 
-**If NO brand input, print:** `No brand input — defaulting to polished-inspection (white surface + Power-Platform green accent + status-stripe cards + soft-tinted pills; source: references/vibe/direction-polished-inspection.md).` Default: **c**.
+**If NO brand input, print the planner-recommended direction and its recorded
+rationale first**, then the cost picker. Default: **c**. Do not derive another
+direction from keywords at this point.
+
+```
+No brand or design doc — planner recommendation: <saas | product | polished-inspection | inspection | airline>.
+Reason: <verbatim rationale from .tmp/design-recommendation.json>.
+Enter applies that recommendation. Attach a brand/doc or pick (a)/(b) only if you want something else.
+```
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply defaults | Apply polished-inspection tokens and open a 3-screen preview. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
+| c | Apply recommended | Apply the planner-recommended named direction and open a 3-screen preview. | ~30 sec, ~3k tokens |
 
-**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
+**Default rationale:** `(c)` applies the recorded planner recommendation, not a
+fixed Field/Ops look and not a second classification. The planner already
+reasoned from users, environment, workflow, and urgency. Users who dislike the
+recommendation can attach design input or use path (a) to select another
+direction; that becomes an explicit override in the canonical receipt.
 
-**Outdoor-only opt-in:** for true field-utility apps (full sun, full shift, gloves), pass `--direction inspection` to use the dark slate + safety-orange preset instead. The MVP default is light + green because that demos better and remains usable; the outdoor-dark preset is a deliberate opt-in.
+**Outdoor-only:** recommend `inspection` (dark slate + safety orange) only when the brief is clearly outdoor / gloves / full-shift field work. Do not treat every ops app as outdoor.
 
 **Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
 
-Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
+Persist the visual-companion choice only at the common Sub-step 7 ending.
+
+**Every creation branch converges on Sub-step 6 and Sub-step 7.** No branch may
+return `DONE`, update the memory bank, or claim the design is locked before the
+shared confirmation and canonical receipt finalization complete.
 
 **Branches:**
-- **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
-- **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render key screen mockups (List + Form + Detail) with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — always shows 3 key screens.
-- **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
-  1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
-     **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (sourced from `pa-wrap-tools-1/templates/equipment-inspector`), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
-     4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
+- **(a) Full design** — run Sub-steps 3–7. A style-picker choice is an explicit
+  user override when it differs from the planner recommendation.
+- **(b) Spec + reference** — skip Sub-step 3; run Sub-steps 4–7 using the
+  selected user input or planner recommendation.
+- **(c) Brand preview** — skip the style picker. Run Sub-step 4 to write the
+  complete spec and tokens, generate `brand/design-system.html`, render the
+  fixed List + Form + Detail preview, then continue to Sub-step 6. Do not ask a
+  second preview-size question in Sub-step 6.5.
+- **(c) Apply recommended** — reuse `.tmp/design-recommendation.json` exactly.
+  Run Sub-step 4 for the complete spec and tokens, generate
+  `brand/design-system.html`, render the fixed List + Form + Detail preview,
+  then continue to Sub-step 6. Do not re-run industry inference.
+- **(d) Fast apply** — write the same complete spec, tokens, and deterministic
+  gallery without opening a browser preview, then continue to Sub-step 6.
 
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
-  3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
-
-  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+All paths must produce `brand/design-system.md`, `brand/tokens.ts`, and
+`brand/design-system.html` before confirmation. The paths differ only in how
+the direction is selected and which preview is opened; artifact completeness,
+confirmation, decision persistence, and downstream quality are identical.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -252,7 +324,11 @@ Store result as `picked_direction` with all resolved dimensions.
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
 
-Generate the full spec deterministically from the locked direction. Follow the schema in [`references/design-system-schema.md`](./references/design-system-schema.md).
+Run this step for every creation branch. Generate the full spec deterministically
+from the selected direction and source. When no user design input exists, use
+the planner recommendation's direction and Theme card exactly; do not
+reclassify. Follow the schema in
+[`references/design-system-schema.md`](./references/design-system-schema.md).
 
 **Sections (required):**
 
@@ -299,7 +375,8 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 - These are enforced downstream — violations = build failure
 
 ## Provenance
-- Direction, industry, brand notes, generator version, source
+- Planner recommendation direction/rationale/confidence, final direction,
+  selection source, user overrides, brand notes, and generator version
 ```
 
 **Write `brand/tokens.ts`:**
@@ -370,7 +447,7 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 
 ---
 
-## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
+## Sub-step 5 — Render brand/design-system.html (all creation paths)
 
 **Print:**
 > "→ [design-system] Rendering design system gallery (deterministic, 0 tokens)…"
@@ -393,7 +470,13 @@ The HTML gallery includes:
 
 Write to `brand/design-system.html`.
 
-**Open in browser:**
+Every path writes this file because the canonical decision hashes it. Path (d)
+skips opening browser previews, not artifact generation. Path (c) may open its
+fixed three-screen preview instead of this gallery, but the gallery still
+exists for later review and drift checks.
+
+**Open in browser for paths (a) and (b); path (c) opens its fixed screen
+preview; path (d) opens nothing:**
 
 ```bash
 open "brand/design-system.html" 2>/dev/null \
@@ -442,17 +525,23 @@ If user says "change palette AND typography" → refuse, ask which first.
 5. Show summary again
 
 **On [confirm]:**
-Continue to Sub-step 6.5.
+Set `confirmationStatus: confirmed`, then continue to Sub-step 6.5.
+
+**On [skip — use as draft]:**
+Set `confirmationStatus: draft`, then continue to Sub-step 6.5. Draft is an
+explicit user choice recorded in the canonical receipt; it is not permission
+to skip persistence.
 
 **On [regenerate]:**
-Go back to Sub-step 3 (counts against retry cap of 2).
+Set the selection source to `style-picker`, go back to Sub-step 3 (counts
+against retry cap of 2), then return to this same confirmation gate.
 
 ---
 
 ## Sub-step 6.5 — Re-render screen previews with brand tokens (paths (a), (b), (c))
 
 **Print:**
-> "→ [design-system] Design system locked."
+> "→ [design-system] Design review complete — rendering the selected preview."
 
 **Prerequisites:** This step reads screen specs from `<working_dir>/native-app-plan.md` (the `## Screens` section). If that file does not exist (e.g. standalone `/design-system` run with no prior plan), skip this step entirely and proceed to Sub-step 7.
 
@@ -482,7 +571,51 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 ## Sub-step 7 — Persist + return
 
 **Print:**
-> "→ [design-system] Done. Design system locked."
+> "→ [design-system] Finalizing the canonical design decision…"
+
+Before updating memory or returning, require all three design artifacts and
+write `<working_dir>/.tmp/design-decision-input.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "selectedDirection": "<final direction>",
+  "selectionSource": {
+    "kind": "<planner-recommendation|design-spec|brand-doc|figma|code-app|canvas-app|logo|url|stylesheet|free-text|style-picker|refresh|reskin|standalone-recommendation>",
+    "label": "<short non-sensitive label; basename only for files>"
+  },
+  "confirmationStatus": "<confirmed|draft>",
+  "standaloneRecommendation": {
+    "direction": "<standalone fallback direction>",
+    "rationale": "<standalone fallback rationale>",
+    "confidence": "<confidence>",
+    "source": "standalone-context",
+    "theme": {}
+  }
+}
+```
+
+Omit `standaloneRecommendation` when
+`.tmp/design-recommendation.json` exists. Use `planner-recommendation` only
+when no user input or style-picker override changed the recommendation. Never
+store an absolute local path, URL query string, user identity, or document
+contents in `selectionSource.label`.
+
+Finalize and immediately verify the canonical receipt:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/finalize-design-decision.js" \
+  "<working_dir>" finalize
+node "${CLAUDE_SKILL_DIR}/scripts/finalize-design-decision.js" \
+  "<working_dir>" check
+```
+
+The helper writes `brand/design-decision.json` with the immutable planner
+recommendation, rationale and confidence, final selected direction/source,
+user confirmation status, hashes for the recommendation, brief/plan when
+present, all three design artifacts, and an integrity hash. Any missing or
+stale artifact is `BLOCKED`. Do not update memory or return `DONE` when either
+command fails.
 
 **Update memory-bank.md:**
 
@@ -490,27 +623,35 @@ Overwrites `_plan_preview.html` with branded versions. Opens browser.
 ## Design history
 - {{ISO date}} — /design-system v0.1 — {{direction}} — {{confirmed|draft}}
 - visual_companion: {{yes|no|skip}}
-- design_system_locked: {{ISO timestamp}}
+- design_system_status: {{confirmed|draft}}
+- design_system_locked: {{ISO timestamp when confirmed; omitted for draft}}
 - brand_notes: "{{notes or 'none'}}"
-- design_system_files: brand/design-system.md, brand/design-system.html, brand/tokens.ts
+- design_system_files: brand/design-system.md, brand/design-system.html, brand/tokens.ts, brand/design-decision.json
+- design_decision: {{direction}} — {{selection source}} — {{confirmed|draft}}
 ```
 
-**Return to orchestrator (Mode A):**
+After successful finalization, return `DONE` for `confirmed`. For `draft`,
+return `DONE_WITH_CONCERNS: design decision recorded as draft` so the
+orchestrator surfaces the state without discarding the user's explicit choice.
+
+**Return to orchestrator (Mode A, confirmed form):**
 
 ```
 DONE
 brand_path: brand/design-system.md
 tokens_path: brand/tokens.ts
 preview_path: brand/design-system.html
+decision_path: brand/design-decision.json
 direction: {{direction name}}
 visual_companion: {{yes|no|skip}}
 ```
 
 **Return to user (Mode B/C):**
 
-> Design system locked at `brand/design-system.md`.
+> Design system {{locked|recorded as draft}} at `brand/design-system.md`.
 > Preview: `brand/design-system.html`
 > Tokens: `brand/tokens.ts`
+> Decision: `brand/design-decision.json`
 > Direction: {{direction name}}
 >
 > Downstream screen builders will use this as their source of truth. Negatives are HARD RULES.
@@ -531,10 +672,17 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 6. Regenerate `brand/tokens.ts`
 7. Snapshot to `brand/.history/`
 8. Re-render `brand/design-system.html`
-9. Confirmation gate
-10. Append to `## Design history` in memory-bank
+9. Common Sub-step 6 confirmation gate
+10. Common Sub-step 7 decision finalization and verification
+11. Append to `## Design history` in memory-bank
 
 **Allowed dimensions:** `palette`, `typography`, `components`, `density`, `negatives`, `motion`
+
+Every mutating mode (`--refresh`, `--reskin`, `--add-dark-mode`, `--add-theme`,
+and `--rollback`) must converge on Sub-steps 6 and 7. For an existing project,
+carry the prior receipt's recommendation as `standaloneRecommendation` when
+the original `.tmp/design-recommendation.json` is unavailable. No mutating
+mode may return with stale hashes in `brand/design-decision.json`.
 
 **Cost table:**
 

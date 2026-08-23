@@ -146,7 +146,9 @@ Read if present:
 
 - `memory-bank.md` — project facts, target environment, visual companion flag, prior blocks
 - `.datamodel-manifest.json` — existing Dataverse tables/columns
-- `brand/design-system.md` and `brand/tokens.ts` — design constraints and token availability
+- `brand/design-system.md`, `brand/tokens.ts`, and
+  `brand/design-decision.json` — design constraints, token availability, and
+  hash-bound recommendation/confirmation provenance
 - `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
 
 Run these existing-app health checks before any mutation:
@@ -469,7 +471,7 @@ mode.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
-6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
+6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Require the common confirmation ending, then run `finalize-design-decision.js <working_dir> check` before sync. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
 

@@ -249,10 +249,24 @@ sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
 unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
 
-Run `/design-system` in orchestrator mode unless `--no-design`. Pass
-`--working-dir` and `--from-design-intake` when supplied. Even with
-`--no-design`, require app-specific semantic aliases/tokens; never leave the raw
-Tamagui starter palette as the product design.
+Always run `/design-system` in orchestrator mode. Pass `--working-dir` and
+`--from-design-intake` when supplied. With `--no-design`, pass
+`--apply-recommendation`: this skips optional brand/style exploration but still
+reuses the planner recommendation, writes all design artifacts, runs the common
+confirmation/persistence ending, and never leaves the raw Tamagui starter
+palette as the product design.
+
+Before integrating tokens or generating navigation/skeletons, require and
+verify the canonical decision:
+
+```bash
+test -f "$PROJECT_DIR/brand/design-decision.json"
+node "${CLAUDE_SKILL_DIR}/../design-system/scripts/finalize-design-decision.js" \
+  "$PROJECT_DIR" check
+```
+
+A missing or stale decision is a blocker. Screen builders consume the final
+brand artifacts; they never choose or reclassify a design direction.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
 `/create-mobile-app` brand-token integration contract, then type-check.

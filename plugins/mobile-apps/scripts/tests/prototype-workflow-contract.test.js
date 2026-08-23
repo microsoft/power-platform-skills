@@ -150,3 +150,74 @@ test('Open and legacy plugin metadata remain exact mirrors', () => {
   assert.deepEqual(legacyPlugin, openPlugin);
   assert.equal(openPlugin.keywords.includes('prototype'), true);
 });
+
+test('generate path binds the 24-export kit and does not invent entity widgets', () => {
+  const kit = read('shared/samples/src/components/index.tsx');
+  const templates = read('shared/references/screen-templates.md');
+  const planner = read('agents/screen-planner.md');
+  const builder = read('agents/screen-builder.md');
+  const createApp = read('skills/create-mobile-app/SKILL.md');
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+
+  const kitExports = kit.match(/^export function \w+/gm) || [];
+  assert.equal(kitExports.length, 24, 'public kit must stay at 24 exports');
+  for (const name of ['ImageHero', 'ProgressMeter', 'EntityRow', 'NumericStepper', 'Callout']) {
+    assert.match(kit, new RegExp(`export function ${name}\\(`));
+  }
+  assert.match(kit, /variant\?: 'banner' \| 'endpoint-pair'/);
+  assert.match(kit, /safeArea = true/);
+  assert.match(kit, /bg=\{selected \? '\$accentBase' : '\$surface2'\}/);
+  assert.doesNotMatch(kit, /\$blue10/);
+
+  assert.match(templates, /Finite public kit/);
+  assert.match(templates, /Home stack/);
+  assert.match(templates, /UX rails/);
+  assert.match(templates, /Chip count is whatever the domain needs/);
+  assert.match(templates, /Generic names → kit/);
+  assert.match(templates, /Do not fork/);
+  assert.match(templates, /Theme card/);
+  assert.match(templates, /tone: professional \| friendly \| calm \| bold/);
+  assert.match(templates, /BottomActionBar safeArea=\{false\}/);
+  assert.match(templates, /No FAB over tabs/);
+  assert.match(templates, /Hero stays secondary/);
+  assert.match(templates, /Tabs ≤ 5/);
+  assert.match(templates, /Header \+ footer/);
+  assert.match(templates, /Stepper style B only/);
+  assert.match(templates, /Qty \/ line row/);
+  assert.match(templates, /soft card/);
+  assert.match(templates, /bg="\$surface1"/);
+  assert.doesNotMatch(templates, /not a heavy card per row/);
+  assert.match(builder, /wrap each line in a soft card/);
+  assert.match(templates, /Summary footer/);
+  assert.match(templates, /Button shapes/);
+  assert.match(templates, /Photo-led browse/);
+  assert.match(kit, /fontSize="\$2" fontWeight="600"/);
+  assert.match(kit, /circular/);
+  assert.match(kit, /bg="\$surface2"/);
+  assert.doesNotMatch(templates, /Catalogue keys \(resolve/);
+  assert.doesNotMatch(planner, /FilterChipRow` for 2-5 mutually-exclusive/);
+
+  assert.match(planner, /Bind every screen from those 24 exports/);
+  assert.match(planner, /Do \*\*not\*\* read `universal-patterns\.md`/);
+  assert.doesNotMatch(planner, /Operational pattern: home-dashboard` for the Home screen/);
+  assert.doesNotMatch(planner, /\*\*Row style override\*\*/);
+
+  assert.match(builder, /Finite kit only/);
+  assert.match(builder, /Do \*\*not\*\* read `mobile-design-philosophy\.md`/);
+  assert.match(builder, /import \{ LoadingState, ErrorState, EmptyState, ScreenHeader, ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick, StatusPill, StatTile, Hero, ImageHero, ProgressMeter, EntityRow, NumericStepper, Callout, AvatarInitials, InfoRow, ActionRow, SectionHeader, EntityImage \} from '@\/components'/);
+  assert.match(builder, /BottomActionBar safeArea=\{false\}/);
+  assert.match(builder, /Never render `FloatingActionButton` on a tab-root screen/);
+  assert.match(builder, /Header and footer are required chrome/);
+  assert.doesNotMatch(builder, /look up the required layout pieces/);
+
+  assert.match(createApp, /Do \*\*not\*\* generate `<Entity>Row\.tsx`/);
+  assert.match(createApp, /reuses the planner recommendation/);
+  assert.match(createApp, /no second orchestrator classification/);
+  assert.doesNotMatch(createApp, /brief-recommended/);
+  assert.doesNotMatch(createApp, /preview with Field\/Ops defaults/);
+  assert.doesNotMatch(createApp, /cat > "<working_dir>\/src\/components\/InspectionRow\.tsx"/);
+  assert.doesNotMatch(createApp, /industry-inferred defaults from `universal-patterns\.md`/);
+
+  assert.match(prototype, /service methods \(getAll\/get\/create\/update\/delete\)/);
+  assert.doesNotMatch(prototype, /CRUD contract that graduation will preserve/);
+});

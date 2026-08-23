@@ -1,6 +1,6 @@
 # Refresh Flow — `/design-system --refresh <dimension>`
 
-Single-dimension edit to an existing design system. Changes one section of `brand/design-system.md`, regenerates `brand/tokens.ts`, optionally re-renders the HTML gallery.
+Single-dimension edit to an existing design system. Changes one section of `brand/design-system.md`, regenerates `brand/tokens.ts`, always re-renders the hash-bound HTML gallery, and refreshes `brand/design-decision.json` after confirmation.
 
 ## Allowed dimensions
 
@@ -76,14 +76,14 @@ How do you want to resolve?
 This will:
   - Re-run palette extraction with new input
   - Update brand/tokens.ts (1 file)
-  - Re-render brand/design-system.html (~25k tokens, optional)
+  - Re-render brand/design-system.html (deterministic, required for receipt hash)
   - Snapshot current to brand/.history/
 
 Estimated cost: ~3k tokens (refresh-only) OR ~28k (with HTML preview)
 Estimated time: ~30 sec OR ~2 min
 Affects screens: NO — primitives auto-pick up tokens
 
-Render HTML preview after? [y/N]
+Open HTML preview after rendering? [y/N]
 Continue? [y/N]
 ```
 
@@ -97,7 +97,7 @@ Continue? [y/N]
 | `--refresh density` | ~3k | ~30 sec | no |
 | `--refresh negatives` | ~2k | ~20 sec | no |
 | `--refresh motion` | ~3k | ~30 sec | no |
-| HTML preview render | +25k | +90 sec | no |
+| HTML gallery render | deterministic | ~5 sec | no |
 
 ### Step 4 — Prompt for specific change
 
@@ -169,11 +169,10 @@ cp brand/design-system.md "brand/.history/${ts}-refresh-${dimension}.md"
 cp brand/tokens.ts "brand/.history/${ts}-refresh-${dimension}.tokens.ts"
 ```
 
-### Step 8 — Re-render HTML (if requested)
+### Step 8 — Re-render HTML (always)
 
-If user said yes to HTML preview:
-1. Re-render `brand/design-system.html` using updated spec
-2. Open in browser
+1. Re-render `brand/design-system.html` using the updated spec.
+2. Open it only when the user requested a preview.
 
 ### Step 9 — Confirmation gate
 
@@ -185,7 +184,13 @@ Updated: ## {{dimension}}
 Confirm? [y/N/edit again]
 ```
 
-### Step 10 — Update memory bank
+### Step 10 — Finalize canonical decision
+
+Run the common `/design-system` Sub-step 7 with selection source `refresh` and
+the confirmation result. This rewrites and verifies
+`brand/design-decision.json` against the refreshed spec, tokens, and gallery.
+
+### Step 11 — Update memory bank
 
 ```markdown
 ## Design history
