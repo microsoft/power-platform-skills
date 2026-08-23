@@ -308,11 +308,19 @@ function findSafeAreaProblems(content) {
 
   const bottomActionBar = /<BottomActionBar\b/.test(content);
   const safeAreaTopOnly = /<SafeAreaView\b[^>]*edges=\{\s*\[\s*['"]top['"]\s*\]\s*\}/.test(content);
-  if (bottomActionBar && safeAreaTopOnly) {
+  // BottomActionBar owns the home-indicator inset when safeArea is left at its
+  // default (true). Tab-root screens pass safeArea={false} because Tabs already
+  // reserved that inset. The only remaining miss is a modal/stack that covers
+  // the tab bar, opts the bar out, and still uses a top-only SafeAreaView —
+  // the CTA then sits under the home indicator.
+  const bottomBarOptsOutOfInset = /<BottomActionBar\b[^>]*\bsafeArea=\{false\}/.test(content)
+    || /<BottomActionBar\b[\s\S]{0,240}?\bsafeArea=\{false\}/.test(content);
+  const looksLikeCoveringModal = /<ModalHeader\b|presentation:\s*['"]modal['"]/.test(content);
+  if (bottomActionBar && safeAreaTopOnly && bottomBarOptsOutOfInset && looksLikeCoveringModal) {
     violations.push({
       rule: 'bottom-ui-safe-area-top-only',
-      match: '<SafeAreaView edges={[\'top\']}> ... <BottomActionBar>',
-      fix: 'Use edges={[\'top\', \'bottom\']} whenever the screen has BottomActionBar, sticky form actions, or other bottom-anchored UI.',
+      match: '<SafeAreaView edges={[\'top\']}> ... <BottomActionBar safeArea={false}>',
+      fix: 'On stack/modal screens that cover the tab bar, keep BottomActionBar\'s default safeArea (true) or pass edges={[\'top\', \'bottom\']}. Use safeArea={false} only on tab-root screens where Tabs already own the home-indicator inset.',
     });
   }
 
@@ -480,7 +488,55 @@ function findAllViolations(content) {
     ...findScannerOverlayProblems(content),
     ...findA11yControlProblems(content),
     ...findStatusVisualProblems(content),
+    ...findMissingChrome(content),
   ];
+}
+
+// ─── Rule 8: Header + sticky footer on every screen ──────────────────────────
+// Screens that are only a scroll of rows feel unfinished. Title (where am I)
+// and BottomActionBar (what next) are required chrome. Login/onboarding keep
+// the template layout.
+
+function findMissingChrome(content) {
+  const violations = [];
+  const looksLikeScreen = /export\s+default\s+function\s+\w+/.test(content);
+  if (!looksLikeScreen) return violations;
+  // Template chrome: root redirect, OAuth bounce, login, onboarding.
+  if (/\bLoginScreen\b|function Login\b|function Index\b|OAuthCallback/.test(content)) return violations;
+  if (/completePowerAppsAuthSession|<Redirect\b/.test(content)) return violations;
+  if (/Empty-onboarding|EmptyOnboarding/.test(content)) return violations;
+
+  const hasHeader = /<ScreenHeader\b/.test(content)
+    || /<ModalHeader\b/.test(content)
+    || /<Stack\.Screen\b/.test(content)
+    || /headerShown:\s*true/.test(content);
+  const hasFooter = /<BottomActionBar\b/.test(content);
+
+  if (!hasHeader) {
+    violations.push({
+      rule: 'missing-screen-header',
+      match: 'screen without ScreenHeader, ModalHeader, or Stack.Screen title',
+      fix: 'Add <ScreenHeader title="…"> on tab-root/list, <ModalHeader> on modal/form, or <Stack.Screen options={{ headerShown: true, title: "…" }} /> on a pushed detail.',
+    });
+  }
+  if (!hasFooter) {
+    violations.push({
+      rule: 'missing-bottom-action-bar',
+      match: 'screen without BottomActionBar',
+      fix: 'Add <BottomActionBar> with one labeled CTA. Tab-root: safeArea={false}. Do not leave the primary action mid-scroll.',
+    });
+  }
+
+  const headerIdx = content.search(/<ScreenHeader\b/);
+  const scrollIdx = content.search(/<(ScrollView|FlatList)\b/);
+  if (headerIdx >= 0 && scrollIdx >= 0 && headerIdx > scrollIdx) {
+    violations.push({
+      rule: 'header-inside-scroll',
+      match: '<ScrollView> ... <ScreenHeader>',
+      fix: 'Move <ScreenHeader> above ScrollView/FlatList so the title stays pinned as chrome. A header that scrolls away does not count.',
+    });
+  }
+  return violations;
 }
 
 function buildBlockMessage(filePath, violations) {
@@ -520,6 +576,9 @@ function buildBlockMessage(filePath, violations) {
     'dynamic-type-disabled': 'Dynamic type disabled on readable text',
     'redundant-status-cues': 'Noisy redundant status styling',
     'dominant-red-detail-header': 'Over-dominant failure/error header treatment',
+    'missing-screen-header': 'Screen is missing a title header',
+    'missing-bottom-action-bar': 'Screen is missing a sticky BottomActionBar',
+    'header-inside-scroll': 'ScreenHeader is inside the scroll and will disappear',
   };
 
   for (const ruleName of Object.keys(byRule)) {
@@ -577,7 +636,6 @@ function isAutoFixable(violation) {
     'custom-pressable-missing-role',
     'nested-touch-targets',
     'dynamic-type-disabled',
-    'bottom-ui-safe-area-top-only',
   ].includes(violation.rule);
 }
 

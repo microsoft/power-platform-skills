@@ -247,7 +247,7 @@ Run this scorer mentally on `<description>` (the prompt the user gave with `/cre
 | **Word count** | description has ≥ 60 words |
 | **Distinct nouns** | description names ≥ 5 distinct domain nouns (people, things, documents, places — e.g. "inspector", "aircraft", "gate", "defect", "evidence") |
 | **Action verbs** | description uses ≥ 3 workflow verbs from this set: log, track, submit, assign, notify, scan, upload, approve, verify, complete, capture, override, dispatch, review, sign |
-| **Domain phrase** | description names a known industry domain — match against the industry table in [`shared/references/universal-patterns.md`](../../shared/references/universal-patterns.md) (airline, hospital, retail, manufacturing, field-service, finance, logistics, …) OR explicitly says "field operations" / "ground operations" / "site visit" / similar |
+| **Domain phrase** | description names a known industry domain (airline, hospital, retail, manufacturing, field-service, finance, logistics, …) OR explicitly says "field operations" / "ground operations" / "site visit" / similar |
 
 Tier the result:
 
@@ -339,7 +339,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 - `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
+**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders reason from the brief, pick `saas` / `product` / `polished-inspection`, and bind the kit — no internet search, no brand unless the user supplied one).
 
 ### Step 2c — Plan preview (rough, always shown)
 
@@ -789,7 +789,7 @@ This fires before Gate 1 — it's not a gate, just a confidence check so the wro
 
 - The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
 - If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders reason from the brief, pick a named direction, and bind the kit. Do not WebFetch a look. Use a brand/design doc only if the user supplied one.
 
 If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
 
@@ -1210,7 +1210,7 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan. Screen-builders reason from the brief, pick `saas` / `product` / `polished-inspection`, and bind the kit. No internet search unless the user gave `--from-url` or a brand site.
 
 **Otherwise**, invoke `/design-system` (ships with this plugin):
 
@@ -1239,12 +1239,12 @@ This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Ga
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 
-The user skipped the design system but still deserves to see their screens before code is written. Render a preview with Field/Ops defaults:
+The user skipped the design system but still deserves to see their screens before code is written. Render a preview from the **brief-recommended** named direction (gym/pantry/shop → `product`, work queue → `saas`, field inspection → `polished-inspection`). Do **not** force Field/Ops green.
 
 1. **Print:**
-   > "→ Design system skipped — rendering screen preview with Field/Ops defaults so you can validate the layout before code is written."
+   > "→ Design system skipped — rendering screen preview from the brief-recommended direction so you can validate the layout before code is written."
 
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
+2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and the recommended direction from the brief / `## Design`. Write to `<working_dir>/_plan_preview.html`.
 
 3. **Open in browser** (if `<visual_companion> = yes`):
    ```bash
@@ -1861,7 +1861,7 @@ If the directory is empty (no data sources added yet), still write the section w
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 
 **Print before starting:**
-> "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
+> "→ [Step 10.8/13] Generating shared hooks, utils, and screen skeletons from the plan (kit already copied)…"
 
 This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders then fill in the JSX rather than starting from zero. This cuts builder output by ~50% and eliminates import-path guessing errors.
 
@@ -1871,7 +1871,7 @@ This step analyzes the per-screen specs and generates **shared code that multipl
 
 Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
-1. **Entity cards/rows** — if 2+ screens render the same entity (same Service) in a card/row format, generate a shared component.
+1. **Entity cards/rows** — if 2+ screens render the same entity, bind `EntityRow` (or `Hero` / `ImageHero`) from `@/components`. Do **not** generate `<Entity>Row.tsx` or `<Entity>Card.tsx`.
 2. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
 3. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
 4. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
@@ -1880,22 +1880,15 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
 | Pattern in specs | Generate | Where |
 |---|---|---|
-| Same entity shown as list-item on 2+ screens | `<Entity>Card.tsx` or `<Entity>Row.tsx` | `src/components/` |
+| Same entity shown as list-item on 2+ screens | reuse `EntityRow` from `@/components` | do not add a file |
 | Same choice column referenced on 2+ screens | `constants.ts` with `ENTITY_STATUS` map + tone mapping | `src/utils/` |
 | Same bounded service + similar `.getAll()` params on 2+ screens | `use<Entity>List.ts` wrapping `useListData` | `src/hooks/` |
 | Same cursor-paginated service on 1+ unbounded screens | `use<Entity>CursorList.ts` wrapping `useCursorListData` | `src/hooks/` |
 | Entity detail + edit screens for same entity | `use<Entity>.ts` with get + save + delete | `src/hooks/` |
 
-**Write the files directly into the project** (not into samples — these are app-specific):
+Write hooks/constants/formatters into the project. Never write a new visual component under `src/components/` — Fix 7 already copied the 24-export kit there. UX rails in `shared/references/screen-templates.md` apply to every app: pill primary in `BottomActionBar`, circular `NumericStepper`, small-type `FilterChipRow`, photo-led 2-col `EntityImage` tiles for merch/food/look, `EntityRow` for queues/carts, soft `$surface1` card around each qty/line. Do not add a skill or file for + / − / Remove / availability.
 
-```bash
-# Example — if plan has "Inspections" entity used on list + detail + home screens:
-cat > "<working_dir>/src/components/InspectionRow.tsx" << 'EOF'
-... generated component ...
-EOF
-```
-
-If no cross-screen patterns are found (e.g. only 2 screens total with no overlap), skip this sub-step — the shared scaffold is sufficient.
+If no cross-screen hook/constant patterns are found, skip this sub-step — the kit plus generated services are sufficient.
 
 ---
 
@@ -1916,13 +1909,12 @@ import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Input, Spinner } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LoadingState, ErrorState, EmptyState, ScreenHeader } from '@/components';
+import { LoadingState, ErrorState, EmptyState, ScreenHeader, EntityRow } from '@/components';
 import { useCursorListData } from '@/hooks';
 import { containsFilter, formatDate, choiceLabel } from '@/utils';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 // App-specific imports (if generated at 10.8a):
-import { <Entity>Row } from '@/components/<Entity>Row';
 import { <ENTITY>_STATUS } from '@/utils/constants';
 
 export default function <ScreenName>() {
@@ -1955,14 +1947,13 @@ import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Input } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { LoadingState, ErrorState, EmptyState, ScreenHeader } from '@/components';
+import { LoadingState, ErrorState, EmptyState, ScreenHeader, EntityRow } from '@/components';
 import { RefreshControl } from 'react-native';
 import { useListData, useSearchFilter } from '@/hooks';
 import { formatDate, choiceLabel } from '@/utils';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 // App-specific imports (if generated at 10.8a):
-import { <Entity>Row } from '@/components/<Entity>Row';
 import { <ENTITY>_STATUS } from '@/utils/constants';
 
 export default function <ScreenName>() {
@@ -2108,7 +2099,7 @@ Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-a
 - **Probe returns `DONE` (any status code)** → parallel mode. Proceed with normal fan-out below. Do not downgrade later because there are many screens or because inline writing seems faster.
 - **Probe errors with `Agent type … not found`, tool unavailable, or any nested-Task failure** → silent inline fallback. Print **once**:
   > "→ Parallel screen-builders unavailable in this host — building screens inline. (No action needed; this is automatic.)"
-  Then iterate the screen list and apply the full screen-builder workflow inline (the orchestrator becomes the builder, reading the same per-screen specs and writing TSX directly). Inline does NOT mean "concise but functional" — it must still satisfy `screen-builder.md` quality gates, operational pattern requirements, safe-area/contrast/a11y rules, resolved imports, and the final checklist for every screen. Do NOT prompt the user.
+  Then iterate the screen list and apply the full screen-builder workflow inline (the orchestrator becomes the builder, reading the same per-screen specs and writing TSX directly). Inline does NOT mean "concise but functional" — it must still satisfy `screen-builder.md` quality gates, kit-bind requirements, safe-area/contrast/a11y rules, resolved imports, and the final checklist for every screen. Do NOT prompt the user.
 
 **Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run (rare), treat the next failure the same way: silently downgrade to inline and continue.
 
@@ -2251,7 +2242,7 @@ Invoke the design skill against the project:
 ```text
 /design-react-native-app
 ```
-Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
+Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. **INSTRUCTION FOR DESIGN SKILL:** Tell it to prioritize the existing kit in `@/components`, but to freely create and extract new app-specific custom components (e.g., into `src/components/custom/`) if the app requires unique visual widgets, charts, or tailored interactive layouts not available in the base kit. The skill will autonomously apply visual polish, build custom UI elements, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies.
 
 Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
 ```bash

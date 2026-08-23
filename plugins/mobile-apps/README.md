@@ -58,6 +58,18 @@ connector wiring.
     /create-mobile-prototype
     ```
 
+    To get one polished, working end-to-end journey running first and defer the
+    remaining product breadth until review, use:
+
+    ```text
+    /create-mobile-prototype --vertical-slice
+    ```
+
+    This mode builds and fully validates 3–6 business screens, records omitted
+    requirements in `.mobile-app/vertical-slice.json`, and starts Metro. After
+    the user approves the slice, build the recorded backlog with
+    `/edit-app --expand-vertical-slice`.
+
     Both commands use the same installed template, planner, design system,
     native wrappers, screen builders, and quality gates. The prototype path
     writes no Dataverse metadata and can later be converted in place with
@@ -285,7 +297,7 @@ Example edit flows:
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. |
+| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. Pass `--vertical-slice` to deliver one fully validated 3–6-screen journey first and preserve the remaining scope for `/edit-app --expand-vertical-slice`. |
 | `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, rebases placeholder publisher names, live-reconciles and applies Dataverse, replaces connector stubs, optionally reuses seed scenarios, proves all mocks are gone, restores auth/runtime, and commits Dataverse state after one final sync. |
 | `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from `native-app-plan.md`; refreshes service/field bindings, routes, shared code, affected screens, quality gates, preview, and lifecycle hashes. Conversion uses its target-mode gate to commit `dataverse`. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |

@@ -3,7 +3,9 @@ name: screen-planner
 description: Use when an orchestrator needs a screen graph + per-screen specs (navigation pattern, components, data, native capabilities) and a plan-time HTML preview or screen-plan delta for a Power Apps mobile app. Read-only — does NOT write TSX. Called by native-app-planner and /edit-app; not invoked directly by users.
 user-invocable: false
 color: cyan
-model: sonnet
+model:
+  - opus
+  - GPT-5.6 Sol
 tools:
   - Read
   - Write
@@ -25,7 +27,12 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **No questions.** The planner runs the approval gate. Make confident decisions from the inputs provided. If a detail is genuinely ambiguous, list it under "Open Questions" in your output for the planner to surface.
 - **Return a section, not a doc.** Output is a markdown `## Screens` section the planner embeds verbatim.
-- **Screens only.** Do not design shared components, hooks, or services. The `screen-builder` writes shared UI inline first; refactoring happens later.
+- **Screens only.** Do not invent new shared components, hooks, or services. Bind the finite `@/components` kit (`ImageHero`, `Hero`, `ProgressMeter`, `EntityRow`, `StatTile`, `Callout`, `NumericStepper`, chrome). Domain is props + tokens + image URLs.
+- **Vertical-slice fidelity.** When the prompt includes `Delivery scope` with
+  `Mode: vertical-slice`, emit exactly its 3-6 included business screens plus
+  required baseline auth/Profile screens. Deferred Expansion is context only:
+  do not create a route, spec, navigation target, dependency, placeholder,
+  disabled control, or Open Question for it. Full mode remains unchanged.
 - **MANDATORY progress reporting.** Every step in the workflow below has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
 
 ## Inputs You Can Rely On
@@ -37,6 +44,8 @@ The planner gives you:
 - Aesthetic direction
 - Features the user listed
 - **`phase`** — one of `graph` | `specs` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
+- **Delivery scope** — `full`, or the approved `## Delivery Scope` section for
+  a vertical slice
 
 ## Two-phase mode (Gate 4 split — PREFERRED)
 
@@ -96,26 +105,30 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ---
 
-### Step 0 — Load Industry Patterns
+### Step 0 — Load the kit (not industry prose)
 
-If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
+Read `${PLUGIN_ROOT}/shared/references/screen-templates.md` (short kit API only). Bind every screen from those 24 exports. Do **not** read `universal-patterns.md`, `mobile-design-philosophy.md`, `tamagui-component-recipes.md`, `typography-and-tone.md`, or vibe brand-clone files. Industry never adds a component.
 
 ### Step 0b — Load Design Direction (if present)
 
 Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
 
-- `density` → defaults `Density mode`
+- `density` → `comfortable` | `compact`
+- `radius` → `rounded` (12–16) | `sharp` (4–8)
+- `tone` → `professional` | `friendly` | `calm` | `bold` (copy + contrast)
+- `accent_color` / `support_colors` / `feeling` → tokens + one-sentence mood
 - `surface` → defaults `Surface style`
 - `motion` → defaults `Animations` policy (none / subtle / liberal-tasteful)
 - `list_style` → defaults the row pattern in any List screen's spec
-- `tone` → defaults the copy register for button labels and empty-state text
 - `primary_action_shape` + `primary_action_position` → defaults primary action treatment
 
 Per-screen specs may still override (a celebration screen can be expressive in a restrained direction) — overrides MUST be explicit annotations, not silent contradictions.
 
 **Also check for `<working_dir>/brand/design-system.md`** — if it exists, it takes priority over `## Design Direction` for palette, typography, components, and negatives. Read its `## Palette`, `## Typography`, `## Components`, and `## Negatives` sections and use them as the authoritative design defaults for all per-screen specs. The `## Negatives` section contains HARD RULES — no per-screen spec may violate them.
 
-**If neither `## Design Direction` nor `brand/design-system.md` exists**, fall back to today's industry-inferred logic from `universal-patterns.md` and `mobile-design-philosophy.md`. Do not block on their absence.
+**Brand / design doc is opt-in.** Use a brand, logo, live site, or design spec only when the user mentioned it, attached it, or passed `--brand-doc` / `--from-url` / `--logo` / `--design-spec`. Do not search the internet for a look.
+
+**If neither `## Design Direction` nor `brand/design-system.md` exists**, reason from the brief (who uses it, indoor vs outdoor, photo-led vs data-led, urgency) and pick one named direction (`saas` / `product` / `polished-inspection`). Then bind the kit. Do not block, do not default to CRUD, and do not WebFetch.
 
 ---
 
@@ -129,18 +142,18 @@ Pick exactly one based on screen count + user role:
 | Pattern | When to use |
 |---|---|
 | **Stack** (Expo Router default) | 1–3 screens, linear flow, or single workflow (e.g., wizard) |
-| **Tabs** | 3–5 top-level destinations all roughly equal in importance |
+| **Tabs** | 3–5 top-level destinations all roughly equal in importance. Hard cap: 5. Extra destinations go behind Profile or a "More" list — never a 6th tab. |
 | **Drawer** | 5+ destinations, or admin-style apps with deep navigation. See `shared/samples/_layout-drawer.tsx` for file pattern. |
-| **Tabs + Stack** | Tabs at top level, push detail screens onto each tab's stack — most common for CRUD apps |
+| **Tabs + Stack** | Tabs at top level, push detail screens onto each tab's stack — default for most multi-destination apps |
 
-Default for a typical CRUD app: **Tabs + Stack**.
+Default when the app has a Home plus 2–4 peer destinations: **Tabs + Stack**. Do not default the UI to entity CRUD.
 
 ## Step 2 — List Screens
 
 **Print before starting:**
 > "→ Listing screens by archetype (List / Detail / Form / Auth / Tab-root / Modal-Sheet / Onboarding)…"
 
-Every user-facing screen must map to one of seven **screen archetypes** defined in `${PLUGIN_ROOT}/shared/references/screen-templates.md`:
+Every user-facing screen must map to one of seven **screen archetypes**. The kit API in `${PLUGIN_ROOT}/shared/references/screen-templates.md` lists the shell for each; specs name kit components + props, not catalogue keys:
 
 | Archetype | When to use | Required elements |
 |---|---|---|
@@ -152,13 +165,13 @@ Every user-facing screen must map to one of seven **screen archetypes** defined 
 
 **Home is a dashboard by default.** The template home at `app/(app)/home.tsx` MUST be replaced with the user's real first screen. For most mobile apps, Home is not a generic welcome page and not just the first entity list. It should answer: "What matters now, what changed recently, and what should I do next?"
 
-Use `Operational pattern: home-dashboard` for the Home screen whenever the app has any meaningful current state: tasks, inspections, work orders, approvals, dispatch, schedules, assignments, learning progress, requests, alerts, goals, balances, projects, bookings, recommendations, or saved activity. The Home layout delta should include:
-- A compact greeting/context header using the user's domain cue (role, date, route, team, account, goal, course, trip, project, etc.)
-- One primary current/next item card, tailored to the domain, with a clear object label and why it matters now
-- A progress, status, priority, SLA, or freshness strip when the domain has workflow, steps, goals, risk, due times, countdowns, or approvals
-- 2–4 KPI/stat/summary tiles that matter today
-- Recent, upcoming, or recommended rows limited to 3–5 items
-- One bottom primary CTA for the most common next action, plus disabled-state reason copy if prerequisites can block it
+Home is always the kit Home stack. Spec it as named `@/components` plus domain props, not as `Operational pattern: home-dashboard`:
+- `ScreenHeader` — greeting/context using the user's domain cue (role, date, route, team, account, goal, course, trip, project, etc.)
+- `Hero` or `ImageHero` — one current/next item, with a clear object label and why it matters now
+- optional `ProgressMeter` (`ring` | `bar` | `segments`) and/or `Callout` when the domain has steps, goals, risk, due times, or a blocked reason
+- `StatTile` × 2–4 that matter today
+- `SectionHeader` + `EntityRow[]` limited to 3–5 recent/upcoming/recommended items
+- `BottomActionBar` with one labeled CTA, plus disabled-state reason copy if prerequisites can block it
 
 Make the dashboard generic in structure but domain-specific in content: an inspection app shows assignment/progress/defects; a learning app shows next lesson/streak/progress; a finance app shows balance/due items/recent activity; a healthcare app shows next appointment/tasks; a CRM app shows pipeline/follow-ups. Only use a simple feed/list Home when the user explicitly asks for feed-first navigation or the app has no meaningful current state, progress, or next action.
 
@@ -207,12 +220,15 @@ Always include these baseline screens (already in template — keep them):
 
 **Hard constraint — home screen route is always `/(app)/home`:** `app/index.tsx` in the template redirects signed-in users to `/(app)/home`. This is fixed and never changes. The home screen MUST be at file `app/(app)/home.tsx` with route `/(app)/home`. Never use `/(app)` (index route) for the home screen — that would cause an "Unmatched route" error on launch. If you are tempted to name the home screen `index.tsx`, name it `home.tsx` instead.
 
-Then design the user's screens. For a typical CRUD app:
+Then design the user's screens from the workflow, not from entity CRUD:
 
-- **List screen** per primary entity (e.g., `accounts/index.tsx`)
-- **Detail screen** per primary entity (e.g., `accounts/[id].tsx` when it has no children, or `accounts/[id]/index.tsx` when it owns child workflows)
-- **Create/edit form screen** per primary entity (e.g., `accounts/new.tsx`, `accounts/[id]/edit.tsx`)
-- Plus any workflow-specific screens (e.g., `capture-receipt.tsx`)
+- **Home** first (`app/(app)/home.tsx`) using the Home stack
+- **List / queue / library** only when the user needs to browse many of one thing
+- **Detail** when one record has a dedicated view
+- **Form / stepper** when the user captures or updates work
+- Plus any workflow-specific screens (e.g., walkaround, handoff, recap)
+
+Do not emit a List+Detail+Form trio per table unless the brief actually needs all three.
 
 **Folder rule (HARD — prevents phantom tabs):** any entity that has children (`[id]`, `new`, `edit`, sub-screens) becomes a **folder** with `<entity>/index.tsx` for the list/root view and the children inside. Never use a flat `accounts.tsx` AND a sibling `accounts/[id].tsx` — expo-router auto-registers every top-level `.tsx` under `app/(app)/` as a tab/drawer entry, so a flat `accounts.tsx` next to an `accounts/` folder produces both a phantom "accounts" tab AND the real "accounts" tab. Folders collapse the whole stack into one navigable entry.
 
@@ -249,7 +265,7 @@ Every generated signed-in app MUST include a Profile screen and place sign-out t
 ## Step 3.5 — Shared Conventions (graph phase output)
 
 **Print before starting:**
-> "→ Locking shared conventions (row style, field order, hero treatments) before specs…"
+> "→ Locking shared conventions (EntityRow variant, field order, Hero/ImageHero) before specs…"
 
 Before any per-screen spec is written, decide and lock the cross-screen conventions. These travel with the graph through Gate 4a so the user reviews them ONCE — every spec then expands within these locked rails.
 
@@ -259,14 +275,14 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 ### Shared Conventions
 
 **List rows**
-- Default row style: `<status-stripe-card | avatar-row | stat-card | media-tile | sentence-row | timeline-row | checklist-row>`
+- Default row: `EntityRow variant="<status | media | check | timeline | avatar | sentence>"`
 - Per-entity overrides (only if justified):
-  - `<Entity>` → `<row-style>` (reason: …)
+  - `<Entity>` → `EntityRow variant="<…>"` (reason: …)
 
 **Detail hero**
-- Default hero type: `<status-header-band | stat-grid | image-hero | identity-block | summary-card | timeline-header | minimal-header>`
+- Default hero: `<Hero | ImageHero | Hero variant="endpoint-pair">`
 - Per-entity overrides (only if justified):
-  - `<Entity>` → `<hero-type>` (reason: …)
+  - `<Entity>` → `<Hero | ImageHero>` (reason: …)
 
 **Field order (Detail + Form, per entity)**
 - `<Entity>`: `[fieldA, fieldB, fieldC, …]` — same order in Detail display and Form inputs
@@ -285,15 +301,15 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 - Empty: use the empty-state pattern above; per-screen specs only name the domain noun/icon/CTA when different
 
 **Action placement**
-- Primary actions: `<bottom CTA | extended FAB | icon-only FAB | native header | inline row action>`
-- Home/dashboard primary actions must use a visible text label. List icon-only FABs are allowed only for a single obvious create action and must still specify the accessible label.
+- Primary actions: `<bottom CTA | native header | inline row action>`. Use `extended FAB` / `icon-only FAB` only on a pushed list whose tab bar is hidden. Never on a tab-root.
+- Home/dashboard primary actions must use a visible text label in `BottomActionBar`. Do not put a filled `ImageHero`/`Hero` action on the same screen as that bar.
 - Destructive actions: `<swipe + confirm | overflow + confirm | detail confirm>`
 
 **Density / motion / surface**
 - Inherits from `## Design Direction` block. Per-screen specs may NOT silently deviate.
 ```
 
-The screen-builders read this block alongside their own per-screen spec. If two builders write a List for different entities, they emit the same row style unless this block explicitly overrides one. This is what makes the per-screen spec generation safe to parallelize later, and — more importantly — keeps the app feeling like one app instead of N stitched-together screens.
+The screen-builders read this block alongside their own per-screen spec. If two builders write a List for different entities, they emit the same `EntityRow` variant unless this block explicitly overrides one. This is what makes the per-screen spec generation safe to parallelize later, and — more importantly — keeps the app feeling like one app instead of N stitched-together screens.
 
 ## Step 3 — Layout Strategy Per Screen
 
@@ -343,23 +359,25 @@ Calendar management is one example, not a special ownership path. Full month/wee
 2. **What is the single most important thing on this screen?** Drives the hero element decision. Do not say "nothing" unless the spec explicitly calls for a content-led minimal layout.
    _Examples:_ `List → overdue badge on each row.` · `Detail → approval status header band.` · `Dashboard → completion-rate stat with ring graph.`
 
-3. **What makes this screen look different from a vanilla CRUD screen for this archetype?** If you cannot answer this, the spec is too generic. At least one visual decision must be domain-specific.
-   _Examples:_ `Status color bleeds into left border of every row, not just a pill.` · `Form groups fields into Required (top) and Optional (collapsed under "More details").` · `Empty state shows a domain-specific illustration prompt.`
+3. **Which kit components + props make this screen this domain, not a generic list?** If you cannot name them, the spec is too generic.
+   _Examples:_ `EntityRow variant="status"` with site + due date. · `ImageHero` photo + one Start CTA. · `ProgressMeter variant="segments"` for ordered zones.
 
 Write these three answers as a `**Domain layout decisions:**` block at the top of each screen's spec — the screen-builder reads this block first. Concise sentences only; no bullet lists, no sub-paragraphs.
 
 ---
 
-### Catalogue keys (resolve in the screen-templates reference, do NOT inline descriptions)
+### Kit bind (name components + props — no catalogue keys)
 
-The full descriptions for row styles, hero types, and operational patterns live in [`${PLUGIN_ROOT}/shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Catalogue keys". Per-screen specs reference them by key only — never paste the description into the plan. Both you AND the screen-builder resolve the description from the reference at read time.
+Specs name `@/components` exports and the domain props they receive. The short API lives in [`${PLUGIN_ROOT}/shared/references/screen-templates.md`](../shared/references/screen-templates.md). Do not invent a 25th component. Do not emit `Row style:` / `Hero type:` / `Operational pattern:` catalogue keys on new plans.
 
-- **Row style keys** (List screens): `status-stripe-card` · `avatar-row` · `stat-card` · `media-tile` · `sentence-row` · `timeline-row` · `checklist-row`
-- **Hero type keys** (Detail screens): `status-header-band` · `stat-grid` · `image-hero` · `identity-block` · `summary-card` · `timeline-header` · `minimal-header`
-- **Operational pattern keys** (Home + workflow screens): `home-dashboard` · `assignment-dashboard` · `walkaround-stepper` · `wizard-progress-stepper` · `floating-action-menu` · `scan-geofence-gate` · `severity-filtered-queue` · `dispatch-signoff-queue` · `audit-timeline`
-- **Control pattern keys** (fields/rows): `checkbox-field` · `numeric-stepper` · `line-item-stepper-row` · `searchable-lookup-sheet` · `segmented-control` · `recurrence-rule-editor`
+- **Rows:** `EntityRow variant="status|media|check|timeline|avatar|sentence"` for queues, carts, work lists
+- **Photo browse:** 2-col `EntityImage` + `StatusPill` + name + price when the object is merch / food / look
+- **Heroes:** `Hero` · `Hero variant="endpoint-pair"` · `ImageHero`
+- **Meters / banners / steppers:** `ProgressMeter` · `Callout` · `NumericStepper` (circular style B only)
+- **Chrome:** `ScreenHeader` · `StatTile` · `FilterChipRow` · `BottomActionBar` · `FloatingActionButton`
+- **Shapes:** pill primary in `BottomActionBar`; chromeless secondary; small chips; no new + / − / Remove widget
 
-**Hard rule:** if you find yourself writing more than the key + a one-clause reason, stop — that means the description belongs in `screen-templates.md` instead. Add new keys to the reference; never inline a one-off description into a per-screen spec.
+**Hard rule:** if you need a new visual, bind an existing export with different props. Never add a key to a markdown catalogue. If a brief says `StatusBadge`, `StickyBottomBar`, `Banner`, `SearchBar`, `Card`, or `Toast`, map them with the generic-names table in `screen-templates.md`. Do not create those files and do not fork a Field/Logistics skill.
 
 **Hard rule — NO sub-section wrappers.** Emit the bullets below FLAT under the screen heading. Do NOT group them under sub-headings like `**Header block**`, `**Data flow**`, `**UI structure**`, `**Component shapes**`, etc. Those wrappers add ~7 lines per screen of pure formatting overhead and obscure what the builder actually reads. Bold-as-bullet-prefix only (`- **Field name** — value`), never bold-as-heading.
 
@@ -368,11 +386,11 @@ The full descriptions for row styles, hero types, and operational patterns live 
 For each screen the user adds, provide this compact shape:
 
 - **Domain layout decisions:** (answer the 3 questions above — required)
-- **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
-- **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
-- **Operational pattern** (Home or workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Omit only for normal CRUD/business screens without a dashboard or workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
+- **Kit bind** — required. Name the `@/components` used on this screen and the domain props (title, image URL, meter variant, CTA label). Home must list the Home stack. Lists name `EntityRow` variant. Details name `Hero` or `ImageHero`.
+- **Row bind** (List screens only, omit if Shared Conventions default applies): `EntityRow variant="…"` plus the 2–3 fields on the row
+- **Hero bind** (Detail screens only, omit if Shared Conventions default applies): `Hero` / `ImageHero` / `Hero variant="endpoint-pair"` plus title/subtitle/image source
 - **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList` when the app intentionally wants a lightweight schedule without another dependency). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
-- **Control patterns** (emit only for specialized controls) — use `checkbox-field` for boolean or checklist-like toggles, `numeric-stepper` for bounded plus/minus fields, `line-item-stepper-row` for product/order/cart/inventory rows with inline quantity/count adjustment, `searchable-lookup-sheet` for Dataverse lookup/ComboBox fields with many records, `segmented-control` for 2-5 bounded mutually-exclusive options, and `recurrence-rule-editor` for repeating schedules. Include the control-specific contract: checkbox boolean vs multi-select mapping; stepper min/max/step and commit behavior (`local draft until Save/Next` by default); lookup service/search/display fields/pagination and `@odata.bind`; segmented option source, selected state, optional counts, and generated option const mapping; recurrence pattern/start/end/date-time/weekday-mask fields, summary text, and validation rules.
+- **Control bind** (emit only for specialized controls) — `EntityRow variant="check"` for toggles, `NumericStepper` for counts/qty/sets (prefer over a keyboard), `EntityRow variant="media"` + `NumericStepper` inside a soft `$surface1` card for line items (qty left, Remove right), `RowPick` in a Sheet for lookups, `FilterChipRow` for **any number** of filter/sort chips (horizontal scroll — do not cap at 5). Photo strips are a horizontal `ScrollView` of `EntityImage`. Include min/max/step, lookup service/search/display fields, and option source. Do not invent new control components.
 - **Archetype** — one of List / Detail / Form / Auth / Tab-root / Modal-Sheet / Empty-onboarding (see Step 2)
 - **Role** (omit if open to all signed-in users) — only when the screen is role-gated (e.g. `Supervisor only` for sign-off override, `Inspector (edit) / Supervisor (read) / Auditor (read)` for shared records). The builder uses this together with the UX contract to gate visible controls.
 - **Purpose** — one sentence
@@ -380,7 +398,7 @@ For each screen the user adds, provide this compact shape:
 - **File** — absolute file path under `app/`. Folder children use `<folder>/<name>.tsx`; folder roots use `<folder>/index.tsx`; flat top-level screens use `<name>.tsx`. The orchestrator and screen-builder both read this — wrong path = wrong file written.
 - **Presentation** — `default` (push onto stack) | `modal` (slide-up sheet, full-screen) | `formSheet` (iOS form-sheet — partial overlay). Use `modal` for create/edit forms reached from a list, `formSheet` for confirmations or short pickers, `default` for everything else. Inner `_layout.tsx` files use this to set `<Stack.Screen options={{ presentation }}>`.
 - **Layout delta** — only the screen-specific structure not implied by archetype + Shared Conventions. Name custom/app-specific components and the one primary visual arrangement; do NOT restate safe area, skeleton, default row wrappers, default buttons, or universal chrome.
-- **UX contract** — required for Home, workflow, queue, picker, review, audit, and form screens; omit only for simple read-only CRUD screens. Include only fields that apply: header title source + subtitle/context source; primary action label + placement (`bottom CTA` unless read-only); whether a create action is `visible-label`, `extended FAB`, or `icon-only FAB with accessibility label`; disabled reason text; filter chips and counts; selected-state cue; severity/status/urgency fields; countdown/SLA field; tab/section badge count source; timeline event fields (`timestamp`, `actor`, `action`, `status`).
+- **UX contract** — required for Home, workflow, queue, picker, review, audit, form, list, and detail screens. Always name the header (`ScreenHeader` / `ModalHeader` / native stack title) and the `BottomActionBar` CTA label. Omit the bar only for Login/onboarding. Include only other fields that apply: subtitle/context source; whether a create action is `visible-label` (never a tab-root FAB); disabled reason text; filter chips and counts; selected-state cue; severity/status/urgency fields; countdown/SLA field; tab/section badge count source; timeline event fields (`timestamp`, `actor`, `action`, `status`).
 - **Profile content** — REQUIRED on the Profile screen only. List 2-4 app-specific profile sections based on the app requirements and target users, for example `Role + team`, `Assigned site/territory`, `Default queue filters`, `App support/contact`, `Environment/app version`. Include any generated service needed for those sections; otherwise use local/static app context plus `useAuth()`.
 - **Sign-out affordance** — REQUIRED on the Profile screen and omitted from every other screen. Write `visible Button "Sign out" using useAuth().signOut with confirm`; sign-out returns to `/login` after completion.
 - **Data** — which generated services it calls, with method names (e.g., bounded lookup: `AccountsService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`; cursor list: `InspectionsService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'inspectionid asc'], select: [...] })` plus `skipToken` continuation support)
@@ -406,7 +424,7 @@ For each screen the user adds, provide this compact shape:
   | `detail` | `1:many` | `chained-fetch` |
   | `detail` | `M:N` | `external-projection-required` unless a generated intersect-table service and exact bounded query contract are already named in the approved data model |
 
-  **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
+  **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if the spec binds the Home stack); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
   Full reference: [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads).
 
@@ -475,15 +493,15 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 ```markdown
 ### Screen 4 — Walkaround (`/(app)/inspections/[id]/walkaround`)
 
-**Domain layout decisions:** Status badge per zone (Pending / In progress / Done) + photo-required indicator + defect count chip. Visual emphasis: the active zone hero with progress dots. Looks different from CRUD: sticky step header + previous/next controls instead of a free-form list.
+**Domain layout decisions:** Status badge per zone (Pending / In progress / Done) + photo-required indicator + defect count chip. Visual emphasis: the active zone hero with progress dots. Kit bind: `ProgressMeter variant="segments"` + `Callout` when photo is required + `BottomActionBar`.
 
-- **Operational pattern:** `walkaround-stepper`
+- **Kit bind:** `ScreenHeader` + `ProgressMeter variant="segments"` + `Callout` + `BottomActionBar`
 - **Archetype:** Form
 - **Purpose:** Drive inspector through 6 ordered zones, capture per-zone evidence and defects.
 - **Route:** `/(app)/inspections/[id]/walkaround`
 - **File:** `app/(app)/inspections/[id]/walkaround.tsx`
 - **Presentation:** `default`
-- **Layout delta:** sticky `XStack` step header (Step N of 6 + dots) → photo-evidence section (3 capture tiles, "Required" pill if zone requires evidence) → inspector notes (`Textarea`, autosaves on blur) → defects card (FAB + count) → bottom `XStack` (← Previous · Save & Continue →).
+- **Layout delta:** `ProgressMeter` segments (Step N of 6) → photo-evidence tiles → inspector notes (`Textarea`, autosaves on blur) → defects `EntityRow[]` + `FloatingActionButton` → `BottomActionBar` (Previous · Save & Continue).
 - **UX contract:** header title = current zone name; primary action = `Save & Continue` bottom CTA; disabled reason = "Capture required photo first" when evidence missing; FAB = `extended FAB` on defects, label "Add defect"; badge count = `defects.filter(d => d.zone === currentZone).length`.
 - **Data:** `Cr3e9_zoneprogressService.getAll({ filter: 'cr3e9_inspectionid eq <id>', orderBy: 'cr3e9_zone asc' })`, `Cr3e9_zoneprogressService.update(...)` on save.
 - **Audit:** On zone Save: event 100000001 (Zone Step Completed); payload: zoneIndex, zoneName, completedAt, evidenceCount, defectCount.
@@ -586,12 +604,12 @@ Section format (same in all phases):
 ### Shared Conventions
 
 **List rows**
-- Default row style: `status-stripe-card`
+- Default row: `EntityRow variant="status"`
 - Per-entity overrides: none for v0
 
 **Detail hero**
-- Default hero type: `summary-card`
-- `Inspection` → `status-header-band` (status is the primary operational signal)
+- Default hero: `Hero`
+- `Inspection` → `Hero` + `StatusPill` (status is the primary operational signal)
 
 **Field order (Detail + Form, per entity)**
 - `Inspection`: `[site, scheduledDate, status, notes, photo]`
@@ -628,9 +646,9 @@ None.
   2. Visual emphasis: the two stat tiles — open + overdue counts — are the first thing a field tech checks each morning
   3. Different from generic: domain-specific stat tiles with color (overdue = red), not a generic list of recent items
 - **Archetype:** Tab-root
-- **Operational pattern:** `home-dashboard`
+- **Kit bind:** `ScreenHeader` + `Hero` + `ProgressMeter variant="bar"` + `StatTile` ×2 + `EntityRow variant="status"` ×3 + `BottomActionBar`
 - **Purpose:** Today dashboard showing current inspection work, progress, open/overdue counts, and quick "new inspection" CTA
-- **Layout delta:** current assignment card at top, progress/status strip, `StatTile` pair for Open/Overdue, "Upcoming today" rows capped at 3, recent inspections rows capped at 3, bottom CTA "New inspection"
+- **Layout delta:** `Hero` current assignment, `ProgressMeter` strip, `StatTile` pair for Open/Overdue, "Upcoming today" `EntityRow` capped at 3, recent `EntityRow` capped at 3, `BottomActionBar` "New inspection"
 - **Data:** open/overdue counts must come from a real count/aggregate/rollup source if available, not from counting a capped first page; upcoming rows use `cr123_inspectionService.getAll({ filter: "today", top: 3, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status'] })`
 - **State delta:** empty `calendar-outline`, "No inspections scheduled today", CTA "Schedule one"
 
@@ -638,7 +656,7 @@ None.
 - **Domain layout decisions:**
   1. Key fields: status (colored badge), site name, scheduled date
   2. Visual emphasis: the status badge — Pending/In Progress/Complete are the primary scan signal in a list
-  3. Different from generic: `status-stripe-card` rows with a left border in the status color, not plain title+date cards
+  3. Different from generic: `EntityRow variant="status"` with site + scheduled date, not plain title+date cards
 - **Archetype:** List
 - **Purpose:** Filterable inspection queue
 - **Data:** `cr123_inspectionService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status', '_cr123_siteid_value'] })` plus generated-service `skipToken` continuation support
@@ -676,7 +694,7 @@ What you DO emit per screen: the `**Data**` field listing service+method calls (
 
 Before writing the section (to `plan_path` in `phase: specs`, or to `_screens_section.md` in `phase: graph` / legacy) and returning to the planner, verify the screen graph is complete. Build a coverage matrix in your head (or scratch buffer):
 
-1. **Features** — every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
+1. **Features** — in full mode, every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception under "Open Questions"). In vertical-slice mode, every included requirement must map to an included screen and every omitted requirement must already appear in `## Delivery Scope -> Deferred Expansion`; do not copy deferred work into Open Questions. Walk the applicable scope feature-by-feature and confirm.
 2. **Primary entities** — every entity from the data-model architect's `## Data Model` section MUST have at least a List + Detail pair (or a documented exception, e.g. lookup-only entities like `User`, `Status`, `Category`).
 3. **User actions** — every verb in the brief (create, edit, assign, approve, capture, export, …) MUST have a target screen or a Form/Sheet that hosts it. A verb with no host = a missing screen.
 

@@ -23,6 +23,7 @@ data/auth integration layer.
 |---|---|
 | Real environment, Dataverse, connectors, auth, deployment | `/create-mobile-app` |
 | Local UX prototype with mock business data | `/create-mobile-prototype` |
+| Fastest validated working journey; defer breadth until review | `/create-mobile-prototype --vertical-slice` |
 | Turn an existing prototype into a real app | `/prototype-to-real-app` |
 
 ## Non-Negotiables
@@ -45,7 +46,15 @@ data/auth integration layer.
   render, but an attempted connector operation must fail clearly until
   graduation.
 - Preserve the full real-app screen quality bar. Prototype means local data,
-  not placeholder UI.
+  not placeholder UI. Follow `shared/references/screen-templates.md` UX rails
+  for every app: one pill primary, circular `NumericStepper`, small-type
+  `FilterChipRow`, photo-led 2-col tiles when the object is merch/food/look,
+  `EntityRow` for queues/carts, soft `$surface1` card around each qty/line.
+  Do not invent a 25th component for + / − / Remove / availability.
+- Vertical-slice mode changes delivery breadth, never screen quality. Every
+  included screen still passes the full screen-wave and final validation gates.
+  Do not generate placeholder screens or dead controls for deferred scope;
+  omit those routes and actions until an approved expansion builds them.
 - Do not create an offline profile. Record offline intent in the plan and offer
   `/setup-offline-profile` only after graduation creates real tables.
 
@@ -59,6 +68,17 @@ data/auth integration layer.
   `/design-to-app`.
 - `--no-design` - skip the interactive picker only. App-specific semantic
   tokens are still mandatory.
+- `--vertical-slice` - build the fastest validated end-to-end journey: 3-6
+  user-visible screens for the core business workflow, with typed local data,
+  required native capabilities, full validation, Metro, and an explicit
+  deferred backlog for `/edit-app`.
+- `--full` - force the complete approved screen/data scope in the first run.
+
+`--vertical-slice` and `--full` are mutually exclusive. Use vertical-slice
+mode when the request says vertical slice, quick working app, first usable
+version, MVP, or show something quickly. Otherwise preserve the existing full
+mode. Never ask a separate mode question when the request or flag is clear.
+When neither is clear, default to full mode for backwards compatibility.
 
 Do not accept an environment argument. A request to choose an environment
 belongs to `/create-mobile-app` or `/prototype-to-real-app`.
@@ -118,10 +138,37 @@ important records, native device features, external integrations, and visual
 direction.
 ```
 
-Write `<PROJECT_DIR>/brief.md`. Mark `Mode: prototype` and preserve the source
-paths of approved design/plan inputs. Show a compact impact preview containing
-the expected entities, native capabilities, connectors, screens, design work,
-and validation stages. Ask Proceed / Revise / Cancel before planning.
+Write `<PROJECT_DIR>/brief.md`. Mark `Mode: prototype`, record `Delivery:
+full` or `Delivery: vertical-slice`, and preserve the source paths of approved
+design/plan inputs.
+
+In full mode, show the existing compact impact preview containing expected
+entities, native capabilities, connectors, screens, design work, and
+validation stages. Ask Proceed / Revise / Cancel before planning.
+
+In vertical-slice mode, propose one observable journey before planning:
+
+```text
+First working slice
+Goal: <one user outcome>
+Journey: <entry> -> <find/select> -> <detail> -> <mutation> -> <visible result>
+Business screens (3-6): <names>
+Required entities: <only records needed by those screens>
+Required native capabilities/connectors: <only what the journey executes>
+Deferred until review: <remaining requirements, screens, entities, caps, connectors>
+Quality gates: design confirmation, per-wave TypeScript, routes, contracts,
+screen quality, contrast, changed-file validation, preview, Metro
+
+Proceed / Revise slice / Build full scope / Cancel
+```
+
+The slice must let a user complete a real task and observe the saved result in
+another included screen. A dashboard-only, read-only tour, disconnected mockup,
+or collection of shallow screens is not a vertical slice. Keep template auth
+routes and the required Profile route as baseline screens outside the 3-6
+business-screen cap. If no coherent journey fits in six business screens,
+propose the smallest coherent six and defer the next journey; do not weaken
+individual screens.
 
 ### Step 3 - Plan In Prototype Mode
 
@@ -137,6 +184,9 @@ Publisher prefix: cr (prototype placeholder only)
 Normalized Dataverse foreground planning snapshot: NOT SUPPLIED
 Dataverse planning evidence: NOT SUPPLIED
 Structured schema contract output: <PROJECT_DIR>/.tmp/dataverse-schema-contract.json
+Prototype delivery mode: <full|vertical-slice>
+Approved vertical-slice scope: <verbatim approved Step 2 scope, or NOT SUPPLIED>
+Structured vertical-slice contract output: <PROJECT_DIR>/.tmp/vertical-slice-contract.json (vertical-slice only; otherwise NOT SUPPLIED)
 Design vibe opt-in: deferred (or skip when --no-design)
 
 This is a mock-backed prototype. Run the normal approval gates and write the
@@ -145,6 +195,15 @@ Dataverse discovery. The schema sidecar must be complete enough for typed local
 mocks and must be marked planningMode=prototype, executionEligible=false.
 External connector rows remain requirements; prototype generation will create
 throw-stubs at their expected service paths.
+
+In vertical-slice mode, plan and approve only the included journey. The schema
+contract contains exactly the service-required entities used by included or
+baseline screens. `## Screens` contains only included and baseline screens.
+Record everything else under `## Delivery Scope -> Deferred Expansion`; those
+items are product intent, not approved schema or screen specifications. Write
+the structured vertical-slice contract at the supplied path. Do not create
+placeholder routes, disabled calls-to-action, speculative columns, or services
+for deferred work.
 ```
 
 Parse the agent's literal first line using the status protocol in
@@ -159,6 +218,21 @@ test -f "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
 test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
 ```
+
+In vertical-slice mode, also require and validate the machine-readable delivery
+contract before mutating the template:
+
+```bash
+test -f "$PROJECT_DIR/.tmp/vertical-slice-contract.json"
+node "${CLAUDE_SKILL_DIR}/scripts/finalize-vertical-slice.js" \
+  "$PROJECT_DIR" check
+```
+
+The contract records the approved goal and journey, 3-6 included business
+screen route/file triples, baseline screens, exact included service-table
+logical names, included capabilities/connectors, and deferred requirements,
+screens, entities, capabilities, and connectors. The helper fails closed when
+the included service-table set differs from the prototype schema contract.
 
 When `--from-plan` was supplied, do not silently replace approved Data Model,
 Native Capabilities, Connectors, Design Direction, Screen Map, Navigation
@@ -244,8 +318,10 @@ approved structured contract or generator, regenerate, and rerun type-check.
 
 ### Step 6 - Apply Native Capabilities And Design
 
-For every approved `## Native Capabilities` row, execute `/add-native`
-sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
+For every approved `## Native Capabilities` row in full mode, or every
+`included.nativeCapabilities` row in the vertical-slice contract, execute
+`/add-native` sequentially from `PROJECT_DIR`. Do not generate wrappers for
+deferred capabilities. The template allowlist and runtime bans remain
 unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
 
@@ -274,6 +350,9 @@ Prototype-specific rules:
   package files, lifecycle state, or the plan.
 - Skeleton service imports come from `@/generated/services` and use only the
   generated methods/types on disk.
+- In vertical-slice mode, generate layouts and skeletons only for Screen Map
+  rows included in `.tmp/vertical-slice-contract.json` plus its baseline
+  screens. A deferred screen appearing in a layout or skeleton is a blocker.
 
 Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
@@ -286,9 +365,12 @@ status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
 Data mode: prototype.
 Use only the typed services exported from @/generated/services. They are
 in-memory implementations with deterministic seed data and the same app-facing
-CRUD contract that graduation will preserve through adapters when necessary.
+service methods (getAll/get/create/update/delete) that graduation will preserve through adapters when necessary.
 Do not import *.seed.json, call Dataverse, call connectors directly, or weaken
 the approved domain-specific first viewport.
+In vertical-slice mode this target must be listed under included.screens or
+included.baselineScreens in .tmp/vertical-slice-contract.json. Never build a
+deferred screen or a placeholder for it.
 ```
 
 Run the screen-wave TypeScript gate after every wave. Group failures by root
@@ -310,8 +392,11 @@ Stop at the first failing stage, repair that stage, and rerun it before moving
 on. Do not run real schema generation in prototype mode.
 
 Record every command, pass/fail result, issue count, and accepted concern in
-`.tmp/final-validation.md`. The file must name all five commands before the
-prototype can be reported complete or converted.
+`.tmp/final-validation.md`. Start the file with `Overall: PASS` only after all
+five commands and the changed-file dispatcher pass. Record the current
+`native-app-plan.md` SHA-256 in the file. The file must name all five commands
+plus `validate-mobile-files.js` before the prototype can be reported complete
+or converted.
 
 Run the mandatory changed-file dispatcher against every file written by this
 workflow or its agents. Pass explicit files, not directories:
@@ -327,21 +412,22 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
 After the script-based stylistic sweep, apply the final layer of context-aware design polish to the generated prototype screens.
 
 **Print before starting:**
-> "-> [prototype 9.6/10] Running automated design refinement pass to polish UI, typography, RTL layouts, and accessibility..."
+> "-> [prototype 9.6/10] Running automated design refinement pass to polish UI..."
 
 Invoke the design skill:
 ```text
 /design-react-native-app
 ```
-Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
+Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. In vertical-slice mode, pass the exact included and baseline screen files rather than the whole app directory; deferred scope must not trigger UI generation. **INSTRUCTION FOR DESIGN SKILL:** Tell it to prioritize the existing kit, but to freely create new app-specific custom components (e.g., into `src/components/custom/`) if the prototype needs unique visual widgets or layouts not available in the base kit.
 
-Wait for it to complete. If it modifies any UI files, run:
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
-to guarantee it didn't break TS typing.
+Wait for it to complete. If it modifies any UI or shared component file, rerun
+all of Step 9 against the polished project: routes, screen contracts, screen
+quality, contrast, TypeScript, and the changed-file dispatcher. Rewrite
+`.tmp/final-validation.md` with the post-polish results and current plan hash.
+A TypeScript-only rerun is insufficient because polish can introduce route,
+accessibility, contrast, or write-safety regressions.
 
-After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
+After validation and polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.
 
 ### Step 10 - Record State And Start Metro
@@ -358,6 +444,24 @@ Update `.mobile-app/state.json`:
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
 
+In vertical-slice mode, finalize the durable delivery receipt only after final
+validation and changed-file validation pass:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/finalize-vertical-slice.js" \
+  "$PROJECT_DIR" finalize
+```
+
+This promotes the approved temporary contract to
+`<PROJECT_DIR>/.mobile-app/vertical-slice.json`, binds it to the approved plan
+hash and `.tmp/final-validation.md`, and sets `status: "validated"`. Record the
+slice goal, included screens, and deferred counts in `memory-bank.md`. Expansion
+later uses exactly:
+
+```text
+/edit-app --working-dir <PROJECT_DIR> --expand-vertical-slice
+```
+
 Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
 or crawl routes in a browser. Return the Metro URL/QR handoff to the user.
 
@@ -370,6 +474,12 @@ The prototype is ready for `/prototype-to-real-app` only when:
 - `src/generated/.prototype-manifest.json` exists;
 - `.tmp/final-validation.md` records all final gates as passing;
 - screens import generated services through the barrel rather than seed JSON.
+
+For a vertical slice, also require `.mobile-app/vertical-slice.json` with
+`status: "validated"` or `status: "expanded"`. A validated slice is complete
+for its approved journey, not for its deferred product backlog. Graduation must
+surface that backlog and ask whether to expand first or graduate only the
+validated slice; it must never imply deferred requirements were implemented.
 
 Graduation may rename or reuse real Dataverse tables. It must preserve the
 screen-facing service contract through explicit adapters when real generated
@@ -390,6 +500,20 @@ Screens: <count/list>
 Validation: PASS
 Preview: <path>
 Next: iterate with /edit-app, or run /prototype-to-real-app when the data model is ready for a real environment.
+```
+
+Vertical-slice mode uses this summary instead:
+
+```text
+DONE
+
+Validated vertical-slice prototype created.
+Journey: <goal + observable outcome>
+Included screens: <count/list>
+Deferred scope: <counts by requirements/screens/entities/caps/connectors>
+Validation: PASS (full gates for every included screen)
+Preview: <path>
+Next: review the working app, then run /edit-app --working-dir <PROJECT_DIR> --expand-vertical-slice to build the deferred scope.
 ```
 
 Use `DONE_WITH_CONCERNS: <concerns>` when a non-blocking connector stub or

@@ -55,6 +55,10 @@ handoff only after success.
 - `--apply-plan` - apply the existing approved pending plan change without
   re-planning or asking the user to repeat the request.
 - `--plan-only` - compatibility alias that invokes `/edit-plan`.
+- `--expand-vertical-slice` - in a validated prototype, consume every deferred
+  item from `.mobile-app/vertical-slice.json` as one explicit expansion edit.
+  The normal impact preview, affected-section approvals, implementation, and
+  sync gates still apply.
 - `--no-preview` - forward to the one final `/sync-from-plan` invocation.
 
 ## Workflow
@@ -117,6 +121,25 @@ Route by lifecycle state before any mutation:
 In prototype mode, a request to add a real environment, connection, or live
 Dataverse table is graduation intent even when the user did not use the word
 "convert".
+
+If `$ARGUMENTS` contains `--expand-vertical-slice`, require prototype mode and
+`<app-root>/.mobile-app/vertical-slice.json`. Parse it before ordinary intent
+discovery and require:
+
+- `schemaVersion === 1` and `deliveryMode === "vertical-slice"`;
+- `status === "validated"`;
+- its `approvedPlanSha256` equals the current `native-app-plan.md` SHA-256;
+- at least one array under `deferred` is non-empty.
+
+Set the edit request from the receipt's deferred requirements, screens,
+entities, native capabilities, and connectors. Skip the generic "What should
+this app edit change?" question, but continue through the normal impact preview
+and affected-section approval gates; the user asked to expand, not to accept an
+ungated implementation. Re-plan deferred items against the current app, merge
+them into the existing approved sections, regenerate the prototype schema and
+mocks, and build only new or affected screens. Do not recreate already
+validated slice screens unless their shared contract changes. A missing,
+stale, already-expanded, or malformed receipt is `BLOCKED`.
 
 If `$ARGUMENTS` contains `--plan-only`, or the user explicitly asks to change
 only the plan and not the app, invoke `/edit-plan --working-dir <app-root>` with
@@ -548,7 +571,7 @@ Before spawning builders:
 - Update route layout files using the `/create-mobile-app` Step 10b layout rules if navigation changed.
 - Create missing route folders for new screens.
 - Refresh the `## Generated Services` table using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
-- Generate or refresh app-specific shared code from `/create-mobile-app` Step 10.8a when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper.
+- Generate or refresh app-specific shared code from `/create-mobile-app` Step 10.8a when two or more affected screens share a choice map, cursor hook, or save helper. Reuse `EntityRow` / `Hero` / `ImageHero` — do not generate a new entity widget.
 - For brand-new screens, write typed skeleton files using `/create-mobile-app` Step 10.8b patterns before calling builders.
 - For existing screens, do not overwrite with skeletons. Pass the current file content and the change request to the builder in edit mode. If imports/data hooks changed, update them surgically before the builder fills or revises JSX.
 - For removed screens, delete route files and remove layout entries only when the user approved deletion in Step 3.
@@ -662,6 +685,20 @@ If verification fails because the edit exposed stale generated services, rerun t
 Read validation, changed-screen, concern, and preview results from the Step 6
 `/sync-from-plan` return. Do not rerun TypeScript, route, style, contrast, or
 preview work unless sync explicitly returned a targeted retry instruction.
+
+After an `--expand-vertical-slice` run returns a clean sync result, require the
+refreshed `.tmp/final-validation.md`, then run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/finalize-vertical-slice.js" \
+  "<working_dir>" expand
+```
+
+This atomically sets `status: "expanded"`, archives the former deferred scope
+under `expandedScope`, clears the active deferred arrays, and binds the receipt
+to the final approved plan hash. If sync or this helper fails, leave the
+receipt at `status: "validated"` so the same expansion command can resume; do
+not report the backlog as implemented.
 
 If the user gives a concrete runtime symptom and Metro is already running from the native dev-client flow, you may invoke `/debug-app "<symptom>"` after the static verification and preview steps. This is an optional symptom-debug handoff, not a verification gate: do not run screen-by-screen runtime checks, do not crawl routes, do not use React Native Web, and do not call Metro HTTP endpoints directly.
 

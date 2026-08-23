@@ -117,6 +117,34 @@ Check that app code does not import `*.seed.json` directly. Record the current
 plan hash, prototype manifest, connector stubs, and generated service names for
 the later replacement audit.
 
+If `.mobile-app/vertical-slice.json` exists, read it before environment
+selection. When it has `status: "validated"` and any deferred item remains,
+show the slice goal, included screens, and deferred counts, then ask:
+
+```text
+This prototype is a validated vertical slice. Deferred requirements are not
+implemented.
+
+(a) Expand the deferred scope first (recommended)
+(b) Graduate the validated slice only
+(c) Cancel
+```
+
+- **Expand first:** invoke
+  `/edit-app --working-dir <PROJECT_DIR> --expand-vertical-slice` and stop this
+  conversion. Restart `/prototype-to-real-app` only after expansion passes.
+- **Graduate the validated slice only:** proceed with only the schema, screens,
+  capabilities, and connectors already included in the receipt. Record the
+  explicit choice and deferred backlog in `memory-bank.md`; do not add deferred
+  items during live reconciliation. After conversion, those items require an
+  ordinary Dataverse-mode `/edit-app` change because the prototype expansion
+  transaction no longer applies.
+- **Cancel:** stop without mutation.
+
+Never describe option (b) as graduating the complete product, and never infer
+that deferred scope was rejected or implemented. A malformed receipt is a hard
+block until repaired.
+
 ### Step 2 - Resolve And Confirm Environment
 
 Use current CLI auth handling from shared instructions:
@@ -484,6 +512,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
 Run the changed-file dispatcher against every orchestrator-owned file as the
 separate ownership/provenance gate.
 
+When the user chose to graduate the validated slice only, preserve
+`.mobile-app/vertical-slice.json` as the durable deferred-product record and
+append `graduated_slice_only: true`, the final environment-free deferred lists,
+and the conversion timestamp to `memory-bank.md`. Do not clear or mark the
+deferred arrays expanded.
+
 If final sync fails, leave state `transitioning` at phase `sync`. Do not restore
 prototype mode: real metadata/services may already be live and mock artifacts
 have been removed. Repair and rerun this skill to resume safely.
@@ -504,6 +538,13 @@ Offline profile: <not requested / created / reconciled / concern>
 Sync and validation: PASS
 Preview: <path>
 Next: /deploy
+```
+
+For a slice-only graduation, add:
+
+```text
+Delivery scope: validated vertical slice only
+Deferred product work: <counts>; use ordinary /edit-app in Dataverse mode
 ```
 
 Use `DONE_WITH_CONCERNS` for skipped app registration, non-critical sample-data

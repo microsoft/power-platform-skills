@@ -3,6 +3,9 @@ name: native-app-planner
 description: Use when the orchestrator needs a full plan + approval gates (data model → native capabilities/connectors → screens) for a real or mock-backed Power Apps mobile app. Read-only — proposes everything, mutates nothing. Called by /create-mobile-app and /create-mobile-prototype; not invoked directly by users.
 user-invocable: false
 color: cyan
+model:
+  - opus
+  - GPT-5.6 Sol
 tools:
   - Read
   - Write
@@ -28,6 +31,8 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - The foreground-generated normalized Dataverse planning snapshot path, when available
 - The deterministic Dataverse planning evidence appendix path, when available
 - Dataverse planning mode: `required`, `prototype`, or `connector-only`
+- Prototype delivery mode: `full` or `vertical-slice`, plus the approved slice
+  scope and `.tmp/vertical-slice-contract.json` output path when applicable
 
 ## Hard Rules
 
@@ -58,6 +63,16 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   exists to generate mocks and preserve screen/data intent. It must never be
   passed to the real operation-manifest fast path. `/prototype-to-real-app`
   archives it and runs live environment reconciliation before `/add-dataverse`.
+- **Vertical-slice scope is an approved boundary.** Only when the prompt says
+  `Prototype delivery mode: vertical-slice`, consume the orchestrator's
+  approved slice verbatim. Plan 3-6 business screens that complete its one
+  observable journey, plus required baseline auth/Profile screens. Model only
+  service-required tables, native capabilities, and connectors those included
+  screens execute. Record all other product intent under `## Delivery Scope ->
+  Deferred Expansion` and in `.tmp/vertical-slice-contract.json`; do not emit
+  deferred screen specs, routes, columns, services, wrappers, connector stubs,
+  placeholder controls, or disabled calls-to-action. Full mode remains the
+  existing behavior.
 - **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
   rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
@@ -104,6 +119,10 @@ From the planner prompt extract:
   screen contract but do not resolve an environment or request target metadata.
   Connector rows remain requirements; `/create-mobile-prototype` generates
   throw-stubs and `/prototype-to-real-app` provisions the real connectors.
+- **Prototype delivery mode** — `full` unless the prompt explicitly says
+  `vertical-slice`. In vertical-slice mode, require an `Approved
+  vertical-slice scope` and a structured output path. If either is missing,
+  return `NEEDS_CONTEXT` rather than inventing or broadening the slice.
 
 Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
 
@@ -134,8 +153,15 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 > Structured schema contract output: [absolute
 > `<working_dir>/.tmp/dataverse-schema-contract.json` in required or prototype
 > mode, or NOT SUPPLIED in connector-only mode]
+> Prototype delivery mode: [full | vertical-slice]
+> Approved vertical-slice scope: [paste verbatim, or NOT SUPPLIED]
 >
 > Follow the instructions in your agent file. You are read-only — do NOT create tables. In required or prototype mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. In prototype mode, perform no environment discovery, mark the contract `planningMode: "prototype"` and `executionEligible: false`, and use placeholder `cr_` names solely for local mocks. Include a Mermaid ER diagram, a reconciliation/assumption table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
+> In vertical-slice mode, model only entities required by the approved included
+> business and baseline screens. Deferred entities stay out of the Markdown
+> Data Model and structured schema contract; they are backlog intent, not
+> approved mock schema. Do not add speculative fields to make later expansion
+> easier.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
 
 After spawning, proceed immediately to Step 3 without waiting. Then, before writing the plan doc (Step 4), check the architect's result and parse its first line per AGENTS.md rule #10:
@@ -162,6 +188,10 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
 > "→ [2/4] Building native capabilities matrix from requirements (allowlist-bounded against template/package.json)…"
 
 Build the native capabilities matrix yourself (this is a small enough surface to keep in-house). Cross-reference the screen-planner output to know which screens use which capability.
+
+In vertical-slice mode, include only capabilities executed by an included
+screen. Put all other requested capabilities in Deferred Expansion without an
+`/add-native` row; downstream creation must not generate their wrappers yet.
 
 **Important:** the upstream template owns iOS Info.plist keys, Android permissions, and config plugins for every shipped module. Do NOT specify those here — the planner does not pick permission strings, and downstream `/add-native` helpers do not edit `app.config.js` or `package.json`. The matrix only records *which* capabilities the app uses and *why*.
 
@@ -255,17 +285,28 @@ If the app needs zero allowlisted native capabilities, include a `## Native Capa
 ## Step 3c — Plan Design Inline
 
 **Print before starting:**
-> "→ Inferring design direction from industry signals (no gate — design is reviewed visually at Gate 4)…"
+> "→ Recommending a look from this brief (no gate — design is reviewed visually at Gate 4)…"
 
-Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
+Do **not** follow `design-planning.md` as a required generate-time table. Reason from the brief and recommend one named direction. Brand/doc is opt-in only.
 
-1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
-2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
-3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. Design confirmation happens visually at Gate 4 when the user sees `_plan_preview.html` — not via a text question upfront.
+1. **Detect** — who uses it, indoor vs outdoor, photo-led vs data-led, urgency. If the user named a brand (ICRC, Chanel, Red Cross) or attached a design doc, lock that. Otherwise do not invent a brand and do not WebFetch.
+2. **Recommend** — pick `product` (gym / pantry / shop / photo consumer), `saas` (work queue / Microsoft 365 family), `polished-inspection` (indoor field / asset tracking), `inspection` (gloves / full sun), or `airline` only when the brief is actually commercial aviation. Never write "default Field/Ops" or "default Clean + Professional".
+3. **Write a Theme card** into `## Design Direction` (required, from the brief — not a user questionnaire):
 
-Store the design decision — you will pass it to `screen-planner` in Step 5b so per-screen specs use the right tokens.
+```
+tone: <professional | friendly | calm | bold>
+primary: <#hex + name>
+support: <#hex>, <#hex>
+radius: <rounded | sharp>
+density: <comfortable | compact>
+feeling: <one sentence>
+```
 
-**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design approval happens at Gate 4 via the preview, not here.
+Brand/doc overrides this card. If they named ICRC/Chanel, primary comes from that name. Otherwise reason it (gym → bold + warm; pantry → friendly + cream; indoor ops → professional + green/navy). Do not WebFetch. Do not ask five theme questions.
+4. **Summarise** — do NOT ask a question here. Write `## Design` + the Theme card and move on. Confirmation is the Gate 4 / design-system preview. UX rails stay the kit. Tokens carry the look. The Theme card has **one** `primary`. Do not add a second filled brand color later.
+5. **Nav cap** — if recommending Tabs, write 3–5 roots. Never six.
+
+Store the recommendation — pass it to `screen-planner` in Step 5b. Screen-planner binds kit components; it does not reopen industry prose.
 
 ### Industry inference confidence
 
@@ -293,7 +334,7 @@ INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-comm
 INDUSTRY_CONFIRM_REQUESTED: field-ops|ambiguous-match|e-commerce,productivity,tech-iot
 ```
 
-The orchestrator will surface a one-question picker, write the chosen industry into the working dir as a hint file, and re-spawn this planner with `Industry confirmed: <industry>` added to the prompt. On the re-spawn, treat that as the locked industry — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
+The orchestrator will surface a one-question picker, write the chosen industry into the working dir as a hint file, and re-spawn this planner with `Industry confirmed: <industry>` added to the prompt. On the re-spawn, treat that as a **hint for the brief**, not a locked Field/Ops look. Still recommend a named direction from who/where/urgency. Do not map every confirmed industry onto polished-inspection tokens.
 
 ## Step 3b — Plan Connectors Inline (Gate 3)
 
@@ -306,6 +347,10 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 2. **Confirm** — present the inferred list via `AskUserQuestion`. Let the user add, remove, or confirm. If nothing was inferred, ask cold ("Does your app need any external services?").
 3. **Record** — build the `## Connectors` section (table or "None" line).
 
+In vertical-slice mode, confirm and record only connectors executed by the
+included journey. Preserve all other requested integrations in Deferred
+Expansion; do not generate prototype throw-stubs until expansion is approved.
+
 **Key rule:** Dataverse is NOT a connector. If requirements mention custom business data / tables, that belongs in `## Data Model`, not `## Connectors`.
 
 Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
@@ -315,7 +360,7 @@ Store the confirmed connector list — you will pass it to `screen-planner` in S
 Write `<working_dir>/native-app-plan.md` with this structure. Use the architects' output verbatim for their sections. Leave `## Screens` empty for now — it is filled after Gate 3 approval (Step 5, screen-planner).
 
 **HARD RULES — plan structure (read before writing):**
-1. **Top-level headings are EXACTLY the eight below.** Do NOT invent a `## Brief` super-section that nests the data model, discovery notes, or sample notes under it. Each section is its own `## ` heading.
+1. **Top-level headings are exactly those below.** Full mode uses the existing headings. Vertical-slice mode adds `## Delivery Scope` immediately after `## App Requirements`; no other heading changes are allowed. Do NOT invent a `## Brief` super-section that nests the data model, discovery notes, or sample notes under it. Each section is its own `## ` heading.
 2. **`## App Requirements` is the user's confirmed brief verbatim, capped at ~80 lines.** No expansion, no rewriting, no embedded data model preview. If the brief is longer, summarize — do NOT inline.
 3. **Discovery failure notes (e.g. "az login is on wrong tenant, returned 401, all entities classified as Create") go to `memory-bank.md` under `## Discovery Notes`, NOT into the plan.** The plan is the source of truth for the screen-builder; discovery failure context is operational noise the builder doesn't need. Keep at most a single line in `## Data Model` like `> Discovery skipped — all entities classified Create. See memory-bank.md for details.` if it's relevant to the user's review.
 4. **Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules, etc.** go in `## Data Model` under a single `### Notes` subsection — NOT scattered as inline `> ` blockquotes. Cap each note at 2 sentences. If a note is longer, link to a file in `<working_dir>/` (e.g. `> See post-deployment-tasks.md for the dispatch-block plug-in.`) rather than inlining.
@@ -332,6 +377,29 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 
 ## App Requirements
 <verbatim $ARGUMENTS>
+
+## Delivery Scope
+<!-- vertical-slice mode only -->
+- **Mode:** vertical-slice
+- **Slice goal:** <approved one-outcome goal>
+- **Acceptance journey:** <entry -> find/select -> detail -> mutation -> visible result>
+
+### Included In First Working Slice
+- Business screens: <3-6 names with route/file>
+- Baseline screens: <template auth/callback and required Profile routes>
+- Service tables: <exact prototype logical names>
+- Native capabilities: <included or none>
+- Connectors: <included or none>
+
+### Deferred Expansion
+- Requirements: <explicit list>
+- Screens: <names only; no route/spec contract yet>
+- Entities: <names only; not present in the schema contract>
+- Native capabilities: <names only; no wrappers yet>
+- Connectors: <names only; no throw-stubs yet>
+
+> Deferred items are not implemented or approved schema/screen contracts. Use
+> `/edit-app --expand-vertical-slice` after reviewing the working slice.
 
 ## Data Model
 <verbatim from data-model-architect>
@@ -457,6 +525,13 @@ Approved design:
 Approved connectors:
 [paste ## Connectors section verbatim]
 
+Delivery scope:
+[paste ## Delivery Scope verbatim in vertical-slice mode, otherwise "full"]
+
+In vertical-slice mode, emit exactly the approved included business screens
+plus required baseline screens. Do not emit routes, navigation targets, specs,
+or disabled controls for Deferred Expansion.
+
 Follow your agent file. In `phase: graph`, you write ONLY:
   - Navigation Pattern
   - Screen Map (table)
@@ -498,10 +573,15 @@ Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
 Approved design: [paste ## Design section verbatim]
 Approved connectors: [paste ## Connectors section verbatim]
+Delivery scope: [paste ## Delivery Scope verbatim, or "full"]
 Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 
 Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
+
+In vertical-slice mode, expand only included and baseline screens from the
+locked graph. Deferred Expansion is context only and must not become a screen,
+route, import, service call, JavaScript dependency, or open question.
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 
@@ -621,6 +701,49 @@ Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with t
 
 ## Step 6 — Validate written artifacts
 
+In vertical-slice mode, write
+`<working_dir>/.tmp/vertical-slice-contract.json` from only the approved
+Delivery Scope, final Screen Map, and normalized prototype schema contract:
+
+```json
+{
+  "schemaVersion": 1,
+  "deliveryMode": "vertical-slice",
+  "sliceGoal": "<one observable user outcome>",
+  "acceptanceJourney": ["<entry>", "<find/select>", "<detail>", "<mutation>", "<visible result>"],
+  "included": {
+    "screens": [{ "name": "<business screen>", "route": "</route>", "file": "<app/...tsx>" }],
+    "baselineScreens": [{ "name": "<auth/profile screen>", "route": "</route>", "file": "<app/...tsx>" }],
+    "entityLogicalNames": ["<exact logical name from schema contract>"],
+    "nativeCapabilities": ["<normalized capability>"],
+    "connectors": ["<connector API name>"]
+  },
+  "deferred": {
+    "requirements": ["<unimplemented requirement>"],
+    "screens": ["<unplanned screen name>"],
+    "entities": ["<unmodeled entity name>"],
+    "nativeCapabilities": ["<unadded capability>"],
+    "connectors": ["<unprovisioned connector>"]
+  }
+}
+```
+
+The included business-screen array has 3-6 rows. Template auth/callback and
+required Profile routes belong in `baselineScreens` and do not count toward
+that cap. The exact `included.entityLogicalNames` set equals every non-deferred
+service-required table in `.tmp/dataverse-schema-contract.json`. At least one
+deferred item must remain; otherwise use full delivery mode. Validate before
+returning:
+
+```bash
+node "${PLUGIN_ROOT}/skills/create-mobile-prototype/scripts/finalize-vertical-slice.js" \
+  "<working_dir>" check
+```
+
+Do not flatten or paraphrase the deferred scope: `deferred.requirements`,
+`deferred.screens`, `deferred.entities`, `deferred.nativeCapabilities`, and
+`deferred.connectors` are the durable expansion inputs.
+
 Run the mobile changed-file dispatcher against every file this planner wrote or edited, including `native-app-plan.md` and temporary section files that remain in the project:
 
 ```bash
@@ -735,6 +858,7 @@ Plan approved.
 Plan document: <absolute path to native-app-plan.md>
 Dataverse schema contract: <absolute path, or "not applicable">
 Mobile plan approval receipt: <absolute path, or "not applicable">
+Vertical-slice contract: <absolute path, or "not applicable">
 
 Sections approved:
   ✓ Data model      — <N tables: M reuse, K extend, L create>
@@ -742,6 +866,7 @@ Sections approved:
   ✓ Design          — <"default" | font + brand token + theme + animation>
   ✓ Connectors      — <list connector API names, or "none">
   ✓ Screen plan     — <N screens, navigation: stack|tabs|drawer>
+  ✓ Delivery        — <full | vertical-slice: N included business screens, M deferred items>
 
 Next steps for the orchestrator:
   1. Auth + environment selection
@@ -757,4 +882,8 @@ Next steps for the orchestrator:
 
 You have `Bash` only to run read-only file/HTTP/helper checks such as `node scripts/resolve-environment.js <environment-id-or-url>` when needed for context. You MUST NOT run mutating Power Apps CLI commands such as `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, `npx power-apps add-data-source ...`, `npx power-apps add-flow --flow-id <flow-guid> --non-interactive`, `npx power-apps push --non-interactive`, `npm install`, or any other mutation command.
 
-You have `Write` only to create `native-app-plan.md`. You MUST NOT write any other file in the project.
+You have `Write` only for planning artifacts owned by this workflow:
+`native-app-plan.md`, `_dm_section.md`, `_screens_section.md`, the normalized
+schema contract, `.tmp/mobile-plan-status.json`, and, in vertical-slice mode,
+`.tmp/vertical-slice-contract.json`. You MUST NOT write app source, runtime
+configuration, generated services, package files, or any other project file.

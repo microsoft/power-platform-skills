@@ -257,9 +257,9 @@ Layout: question whether cards are needed — see Section 14 (edge-to-edge rows 
 Data values: use fontFamily="$mono" for IDs, timestamps, currency, coordinates.
 Peak moments: note which screens have task-completion flows that deserve celebration.
 Anti-patterns: ensure no items from Section 16 checklist are present.
-Universal patterns: screen-builder will read universal-patterns.md for industry-specific
-patterns (sparklines for finance, offline sync for field, etc.). Include the industry in
-per-screen specs so the builder knows which sections to apply.
+Universal patterns: optional background only. Screen-builder binds the kit; do not
+require universal-patterns.md at generate time. Domain lives in kit props (title,
+image URL, meter variant, CTA), not in extra industry sections.
 ```
 
 ---

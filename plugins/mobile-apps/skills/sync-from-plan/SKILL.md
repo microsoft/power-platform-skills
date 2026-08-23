@@ -307,10 +307,11 @@ Invoke the design skill:
 ```
 Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
 
-Wait for it to complete. If it modifies any UI files, you MUST run a final TypeScript gate:
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
+Wait for it to complete. If it modifies any UI or shared component file, rerun
+all Step 6 final gates against the polished project, including the changed-file
+dispatcher, before preview or state commit. A TypeScript-only rerun is
+insufficient because polish can introduce route, accessibility, contrast, or
+write-safety regressions.
 
 ### Step 7 - Preview
 
@@ -324,6 +325,22 @@ Preview is a review artifact; it never replaces static gates and must not add a
 React Native Web target or runtime route crawl.
 
 ### Step 8 - Record State
+
+Before updating lifecycle state, write `.tmp/final-validation.md` from the
+gates completed by this sync. It must start with `Overall: PASS`, record the
+current `native-app-plan.md` SHA-256, and name the pass result and issue count
+for all of:
+
+- `check-routes.js`
+- `validate-screen-contracts.js`
+- `validate-screen-quality.js --report`
+- `validate-color-contrast.js --report`
+- `npm run type-check` (the post-polish run when polish changed files)
+- `validate-mobile-files.js` (changed-file pass, plus `--all-source` when run)
+
+Do not write `Overall: PASS` when any hard gate failed. This receipt is used by
+prototype graduation and `.mobile-app/vertical-slice.json` expansion
+finalization; stale or partial reports must fail closed.
 
 Only after all hard gates pass, update `.mobile-app/state.json`:
 

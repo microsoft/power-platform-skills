@@ -1,6 +1,6 @@
 # Mobile Design Philosophy
 
-Required reading for `screen-builder` and `native-app-planner`. Defines **why** screens look a certain way. Companion docs: `screen-templates.md` (archetypes), `tamagui-component-recipes.md` (snippets), `accessibility-checklist.md` (a11y).
+Optional background on **why** screens look a certain way. Generate-time required reading is the kit (`shared/samples/src/components/index.tsx`) plus the short kit API in `screen-templates.md`. This file is not a screen-builder required-read.
 
 ---
 

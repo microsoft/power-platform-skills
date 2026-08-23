@@ -46,7 +46,7 @@ Before doing anything else, load the direction bundles. These are the source of 
 
 - [`design-directions.md`](./design-directions.md) — overview + reference-app gestalts
 - [`direction-inspection.md`](./direction-inspection.md) — full Inspection bundle (dark slate + safety orange — outdoor-only opt-in)
-- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — MVP default for zero-click flow, NOT shown in 3-up picker)
+- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — Polished-Inspection bundle (white + Power-Platform green). Recommend only when the brief is indoor field / asset tracking — not a zero-click default for every app.
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
 - [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan

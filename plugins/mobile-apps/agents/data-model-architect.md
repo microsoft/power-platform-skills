@@ -32,6 +32,9 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   Dataverse-style schema for local mocks, assumes net-new `cr_` names, and
   records that every reuse/create/extend decision must be reconciled again by
   `/prototype-to-real-app` before any real metadata write.
+- **Prototype delivery mode and approved scope (optional)** — `full` or
+  `vertical-slice`. A vertical-slice prompt includes the already-approved
+  journey and included/deferred entities from the creation impact gate.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
 - **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
 
@@ -53,6 +56,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   `prototype` means a complete schema contract but zero environment
   resolution, authentication, metadata discovery, collision checks, or API
   calls. Prototype output exists only to generate local typed mocks.
+- **Vertical-slice fidelity.** In prototype vertical-slice mode, infer and
+  model only entities needed by the approved included business and baseline
+  screens. Deferred entities are not `Defer` rows in the executable mock
+  contract; they are absent product backlog owned by `## Delivery Scope`.
+  Never add speculative entities, columns, choices, or relationships for later
+  expansion. Full prototype mode retains the complete-schema behavior.
 - **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or `Unverified` (target metadata could not be read). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
@@ -105,7 +114,8 @@ environment-free path:
   `power.config.json`, `.resolved-environment.json`, a planning snapshot, or a
   planning evidence appendix.
 2. Run requirement/entity inference, dependency ordering, and relationship
-  design from the supplied brief only.
+  design from the supplied brief. In vertical-slice mode, apply the approved
+  included scope as a hard filter and ignore deferred entities for this pass.
 3. Use publisher prefix `cr`. Model every required business entity as an
   app-owned placeholder table with `plannedDecision: "create"`; do not
   propose standard-table reuse because no target was inspected.

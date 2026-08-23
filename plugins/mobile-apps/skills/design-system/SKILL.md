@@ -99,12 +99,14 @@ You're building {{app_name}} — a {{industry}} app.
 
 Do you have any brand input? (skip with Enter):
 
-(1) Skip — use Field/Ops industry defaults
-    No brand assets. I'll pick a direction from 3 visual styles (or you can skip style-picking entirely). High
-    contrast, large tap targets, safety-first colors.
+(1) Skip — I'll recommend a look from your brief
+    No brand required. Gym, pantry, flight, inspection, shop, etc. get a
+    recommended named direction from the prompt (not a Field/Ops default).
+    You can attach a brand/doc later if you don't want that recommendation.
 
-(2) Free-text notes
-    > "Slate-blue accent, no orange. Must look at home next to ServiceTitan."
+(2) Named brand or free-text
+    > "Chanel" / "Red Cross" / "Slate-blue, must sit next to ServiceTitan."
+    Use this only when the user named a brand or described a look.
 
 (3) Logo PNG / JPG
     > --logo ~/Downloads/logo.png
@@ -122,12 +124,12 @@ Do you have any brand input? (skip with Enter):
 Skip? [Enter to skip — same as option 1]
 ```
 
-If flag was passed on invocation, skip asking — process directly.
+If a flag or a named brand was already in the user prompt (`Chanel`, `Red Cross`, `--brand-doc`, `--logo`, `--from-url`, `--design-spec`), skip asking and process that input. Do not invent a brand they did not name. Do not WebFetch a brand site they did not give.
 
 **On input provided:** Extract palette/typography tokens immediately (~3-5k tokens). Print extracted summary:
 > "→ [design-system] Extracted from {{input}}: {{primary color}}, {{font family}}, {{N}} tokens."
 
-**On skip:** Continue with no brand context.
+**On skip:** Continue with no brand context. Recommend a named direction from the brief (next sub-step).
 
 **Priority order** when multiple inputs given:
 1. `--design-spec` (highest — skips Sub-steps 3 AND 4)
@@ -157,17 +159,23 @@ Show the cost picker, adapting the intro and option set to brand input.
 | c | Brand preview | Apply brand to List + Form + Detail mockups; skip style picker and component sheets. | ~30 sec, ~2k tokens |
 | d | Skip everything | Use palette with industry defaults; no previews. | <5 sec, ~0 tokens |
 
-**If NO brand input, print:** `No brand input — defaulting to polished-inspection (white surface + Power-Platform green accent + status-stripe cards + soft-tinted pills; source: references/vibe/direction-polished-inspection.md).` Default: **c**.
+**If NO brand input, print the recommended direction first**, then the cost picker. Default: **c**.
+
+```
+No brand or design doc — recommended default from your brief: <saas | product | polished-inspection | inspection>.
+Reason: <one sentence from the prompt — gym/photo-led, pantry/home cook, flight/ops, inspection/field, SaaS dashboard, etc.>.
+Enter applies that recommendation. Attach a brand/doc or pick (a)/(b) only if you want something else.
+```
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply defaults | Apply polished-inspection tokens and open a 3-screen preview. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
+| c | Apply recommended | Apply the brief-recommended named direction and open a 3-screen preview. | ~30 sec, ~3k tokens |
 
-**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
+**Default rationale:** `(c)` applies the **recommended** named direction, not a fixed Field/Ops look. Reason from the brief (who uses it, indoor vs outdoor, photo-led vs data-led, urgency). Examples: gym / pantry / shop → `product`; Teams-like work queue → `saas`; field inspection → `polished-inspection`; gloves / full sun → `inspection`. Do not default every app to polished-inspection. Do not search the internet. Users who dislike the recommendation can attach a brand/doc or run path (a).
 
-**Outdoor-only opt-in:** for true field-utility apps (full sun, full shift, gloves), pass `--direction inspection` to use the dark slate + safety-orange preset instead. The MVP default is light + green because that demos better and remains usable; the outdoor-dark preset is a deliberate opt-in.
+**Outdoor-only:** recommend `inspection` (dark slate + safety orange) only when the brief is clearly outdoor / gloves / full-shift field work. Do not treat every ops app as outdoor.
 
 **Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
 
@@ -180,13 +188,18 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
   1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
      **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (sourced from `pa-wrap-tools-1/templates/equipment-inspector`), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
-     4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
+    1. If the user passed `--direction <name>` or named a brand/doc, honor that. Load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` when the name is a known direction.
+    2. If they named a real brand (Chanel, Red Cross, airline livery they own, etc.) and did not attach a doc, apply that named look from the brief — do not invent a 25th component and do not WebFetch unless they gave `--from-url`.
+    3. **Else recommend from the brief** (keywords + workflow, not a keyword table that always wins). Load the matching direction file:
+       - photo-led consumer (gym, pantry, shop, recipe, coach) → `direction-product.md`
+       - dashboard / work-queue / Microsoft 365 family → `direction-saas.md`
+       - indoor inspection / asset tracking / enterprise field demo → `direction-polished-inspection.md`
+       - outdoor / gloves / full-sun field utility → `direction-inspection.md`
+       - commercial aviation when the brief is actually airline ops → `direction-airline.md`
+    4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
 
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
+     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: <recommended> (from brief — not a forced polished-inspection default)` so future runs know what was picked and why.
+  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Recommended <direction> preview ready at file://<working_dir>/_design_preview.html — confirm, attach a brand/doc, or re-run /design-system --direction <inspection|saas|product>."`
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
   **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).

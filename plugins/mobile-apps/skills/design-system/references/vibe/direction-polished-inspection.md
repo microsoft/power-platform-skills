@@ -152,7 +152,7 @@ The owning mobile workflow checks these rules explicitly with the contrast and s
 - Field-ops apps where the demo audience is enterprise IT / stakeholders (not field workers)
 - Apps that need to look polished out-of-the-box for first-run impressions
 - Inspection / asset-tracking / equipment apps with status-driven workflows
-- ~70% of mobile-app traffic (the new MVP default)
+- Indoor inspection / asset-tracking / enterprise field-demo apps (recommend from the brief — not a global MVP default)
 
 ## When this misfits
 

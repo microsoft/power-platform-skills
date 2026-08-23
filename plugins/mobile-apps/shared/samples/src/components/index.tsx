@@ -1,11 +1,12 @@
 /**
- * Shared UI components — scaffolded at project creation.
- * Import from here. Never re-define inline in screen files.
+ * Shared UI kit — 24 public components. Scaffolded at project creation.
+ * Import from here. Never re-define inline and never add industry widgets.
  *
  * Usage:
  *   import { LoadingState, ErrorState, EmptyState, ScreenHeader,
  *            ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick,
- *            StatusPill, StatTile, Hero, SectionHeader, EntityImage,
+ *            StatusPill, StatTile, Hero, ImageHero, ProgressMeter, EntityRow,
+ *            NumericStepper, Callout, SectionHeader, EntityImage,
  *            AvatarInitials, InfoRow, ActionRow, Gradient } from '@/components';
  */
 
@@ -47,14 +48,14 @@ export type StatusVariant =
   | 'draft'
   | 'cancelled';
 
-const STATUS_STYLES: Record<StatusVariant, { bg: string; text: string; label: string }> = {
+const STATUS_STYLES = {
   overdue:       { bg: '$statusOverdueBg',    text: '$statusOverdue',    label: 'Overdue' },
   complete:      { bg: '$statusCompleteBg',   text: '$statusComplete',   label: 'Complete' },
   'in-progress': { bg: '$statusInProgressBg', text: '$statusInProgress', label: 'In Progress' },
   pending:       { bg: '$statusPendingBg',    text: '$statusPending',    label: 'Pending' },
   draft:         { bg: '$statusDraftBg',      text: '$statusDraft',      label: 'Draft' },
   cancelled:     { bg: '$statusCancelledBg',  text: '$statusCancelled',  label: 'Cancelled' },
-};
+} as const satisfies Record<StatusVariant, { bg: string; text: string; label: string }>;
 
 export function StatusPill({
   status,
@@ -93,7 +94,7 @@ export function StatTile({
 
   return (
     <YStack
-      bg="$color2" rounded="$4" p="$4" gap="$1" flex={1}
+      bg="$surface1" rounded="$4" p="$4" gap="$1" flex={1}
       {...shadows.sm}
       aria-label={`${label}: ${value}${trend ? ', trend ' + trend : ''}`}
     >
@@ -101,7 +102,9 @@ export function StatTile({
         {iconName && <Ionicons name={iconName} size={14} color={theme.color10.val} />}
         <Text fontSize="$2" color="$color10" numberOfLines={1}>{label}</Text>
       </XStack>
-      <Text fontSize="$8" fontWeight="700" color="$color12">{String(value)}</Text>
+      <Text fontFamily="$heading" fontSize="$8" fontWeight="700" color="$color12">
+        {String(value)}
+      </Text>
       {trend && (
         <Text fontSize="$1" color={trendUp ? '$statusComplete' : '$statusOverdue'} fontWeight="600">
           {trend}
@@ -118,18 +121,43 @@ export function Hero({
   subtitle,
   gradient = 'hero',
   action,
+  variant = 'banner',
+  origin,
+  destination,
 }: {
   title: string;
   subtitle?: string;
   gradient?: GradientName;
   action?: { label: string; iconName?: IoniconName; onPress: () => void };
+  variant?: 'banner' | 'endpoint-pair';
+  origin?: { label: string; value: string };
+  destination?: { label: string; value: string };
 }) {
+  const pair = variant === 'endpoint-pair' && origin && destination;
+
   return (
     <Gradient name={gradient} style={{ borderRadius: 0 }}>
-      <YStack px="$5" pt="$6" pb="$5" gap="$1">
-        <XStack items="center" justify="space-between">
+      <YStack px="$5" pt="$6" pb="$5" gap="$3">
+        {pair ? (
+          <XStack items="center" justify="space-between" gap="$3">
+            <YStack flex={1} gap="$1">
+              <Text fontFamily="$heading" fontSize="$8" fontWeight="700" color="white" numberOfLines={1}>
+                {origin.value}
+              </Text>
+              <Text fontSize="$2" color="white" numberOfLines={1}>{origin.label}</Text>
+            </YStack>
+            <Ionicons name="arrow-forward" size={20} color="white" />
+            <YStack flex={1} items="flex-end" gap="$1">
+              <Text fontFamily="$heading" fontSize="$8" fontWeight="700" color="white" numberOfLines={1}>
+                {destination.value}
+              </Text>
+              <Text fontSize="$2" color="white" numberOfLines={1}>{destination.label}</Text>
+            </YStack>
+          </XStack>
+        ) : null}
+        <XStack items="center" justify="space-between" gap="$3">
           <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
+            <Text fontFamily="$heading" fontSize={pair ? '$5' : '$7'} fontWeight="700" color="white" numberOfLines={1}>
               {title}
             </Text>
             {subtitle && (
@@ -165,10 +193,10 @@ export function SectionHeader({
 }) {
   return (
     <XStack items="center" justify="space-between" mb="$2">
-      <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
+      <Text fontFamily="$heading" fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
-        <Button size="$2" chromeless onPress={action.onPress}>
-          <Text fontSize="$3" color="$blue10">{action.label}</Text>
+        <Button size="$3" chromeless onPress={action.onPress}>
+          <Text fontSize="$3" color="$accentBase">{action.label}</Text>
         </Button>
       )}
     </XStack>
@@ -193,8 +221,8 @@ export function AvatarInitials({
 
   return (
     <ZStack width={dim} height={dim}>
-      <YStack width={dim} height={dim} rounded={dim / 2} bg="$blue3" items="center" justify="center" aria-label={name}>
-        <Text fontSize={fontSize} fontWeight="600" color="$blue10">{initials}</Text>
+      <YStack width={dim} height={dim} rounded={dim / 2} bg="$accentSoft" items="center" justify="center" aria-label={name}>
+        <Text fontSize={fontSize} fontWeight="600" color="$accentDeep">{initials}</Text>
       </YStack>
       {statusDot && (
         <YStack
@@ -224,7 +252,7 @@ export function InfoRow({
       <Text color="$color10" fontSize="$4" flex={1}>{label}</Text>
       <Text
         fontSize="$4" fontWeight="500"
-        fontFamily={mono ? '$mono' : undefined}
+        fontFamily={mono ? '$body' : undefined}
         color="$color12" text="right" flex={1}
         numberOfLines={1}
       >
@@ -358,8 +386,8 @@ export function EmptyState({
       <Text fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
       <Text color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
-        <Button bg="$blue10" onPress={onAction}>
-          <Button.Text color="$color1">{actionLabel}</Button.Text>
+        <Button bg="$accentBase" onPress={onAction}>
+          <Button.Text color="$accentOnAccent">{actionLabel}</Button.Text>
         </Button>
       )}
     </YStack>
@@ -368,13 +396,19 @@ export function EmptyState({
 
 // ─── BottomActionBar ─────────────────────────────────────────────────────────
 
-export function BottomActionBar({ children }: { children: React.ReactNode }) {
+export function BottomActionBar({
+  children,
+  safeArea = true,
+}: {
+  children: React.ReactNode;
+  safeArea?: boolean;
+}) {
   const insets = useSafeAreaInsets();
   return (
     <YStack
       px="$4"
       pt="$3"
-      pb={insets.bottom > 0 ? insets.bottom + 20 : 20}
+      pb={safeArea && insets.bottom > 0 ? insets.bottom + 20 : 12}
       bg="$surface1"
       borderTopWidth={1}
       borderTopColor="$borderColor"
@@ -399,6 +433,7 @@ export function FloatingActionButton({
   extended?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const theme = useTheme();
   return (
     <Button
       position="absolute"
@@ -408,15 +443,15 @@ export function FloatingActionButton({
       height={56}
       px={extended ? '$4' : 0}
       rounded="$10"
-      bg="$blue10"
+      bg="$accentBase"
       boxShadow="0 4px 16px rgba(0, 0, 0, 0.12)"
       onPress={onPress}
       role="button"
       aria-label={label}
-      icon={<Ionicons name={iconName} size={22} color="white" />}
+      icon={<Ionicons name={iconName} size={22} color={theme.accentOnAccent.val} />}
       pressStyle={{ scale: 0.96 }}
     >
-      {extended ? <Button.Text color="$color1">{label}</Button.Text> : null}
+      {extended ? <Button.Text color="$accentOnAccent">{label}</Button.Text> : null}
     </Button>
   );
 }
@@ -450,11 +485,11 @@ export function FilterChipRow({
         return (
           <Button
             key={option.key}
-            size="$3"
+            size="$2"
             rounded="$10"
             px="$3"
-            minH={36}
-            bg={selected ? '$blue10' : '$surface2'}
+            minH={40}
+            bg={selected ? '$accentBase' : '$surface2'}
             borderWidth={selected ? 0 : 1}
             borderColor="$borderColor"
             onPress={() => onChange(option.key)}
@@ -463,7 +498,9 @@ export function FilterChipRow({
             aria-label={label}
             pressStyle={{ scale: 0.98 }}
           >
-            <Button.Text color={selected ? '$color1' : '$color11'}>{label}</Button.Text>
+            <Button.Text fontSize="$2" fontWeight="600" color={selected ? '$accentOnAccent' : '$color11'}>
+              {label}
+            </Button.Text>
           </Button>
         );
       })}
@@ -489,15 +526,27 @@ export function ScreenHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <YStack px="$5" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
+    <YStack
+      px="$5"
+      pt="$3"
+      pb="$3"
+      gap="$2"
+      bg="$surface0"
+      borderBottomWidth={1}
+      borderBottomColor="$borderColor"
+    >
       <XStack items="center" justify="space-between" gap="$3">
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            <Text fontFamily="$heading" fontSize={28} fontWeight="700" letterSpacing={0}>
+              {title}
+            </Text>
             {status}
           </XStack>
           {subtitle && (
-            <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
+            <Text fontFamily="$body" fontSize={14} color="$color10" fontWeight="500">
+              {subtitle}
+            </Text>
           )}
         </YStack>
         {rightAction}
@@ -577,6 +626,9 @@ export function RowPick({
       borderColor={selected ? '$color12' : '$borderColor'}
       bg={selected ? '$color12' : '$background'}
       onPress={onPress}
+      role="radio"
+      aria-label={label}
+      aria-checked={selected}
       pressStyle={{ opacity: 0.7 }}
     >
       <YStack>
@@ -613,7 +665,7 @@ export function EntityImage({
   
   if (!source) {
     return (
-      <YStack width={width} height={height} borderRadius={borderRadius} bg="$surface2" items="center" justify="center" overflow="hidden">
+      <YStack style={{ width, height, borderRadius }} bg="$surface2" items="center" justify="center" overflow="hidden">
         <Ionicons name={fallbackIcon} size={24} color={theme.text3.val} />
       </YStack>
     );
@@ -623,7 +675,7 @@ export function EntityImage({
   const uri = source.startsWith('http') || source.startsWith('data:') ? source : `data:image/jpeg;base64,${source}`;
 
   return (
-    <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$surface2">
+    <YStack style={{ width, height, borderRadius }} overflow="hidden" bg="$surface2">
       <RNImage
         source={{ uri }}
         style={{ width: '100%', height: '100%', resizeMode: 'cover' }}
@@ -631,5 +683,322 @@ export function EntityImage({
         accessibilityRole="image"
       />
     </YStack>
+  );
+}
+
+// ─── ImageHero ────────────────────────────────────────────────────────────────
+
+export function ImageHero({
+  source,
+  title,
+  subtitle,
+  overlay,
+  height = 220,
+  action,
+  fallbackIcon = 'image-outline',
+}: {
+  source?: string | null;
+  title: string;
+  subtitle?: string;
+  overlay?: React.ReactNode;
+  height?: number;
+  action?: { label: string; iconName?: IoniconName; onPress: () => void };
+  fallbackIcon?: IoniconName;
+}) {
+  const theme = useTheme();
+
+  return (
+    <ZStack height={height} overflow="hidden">
+      <EntityImage source={source} width="100%" height={height} fallbackIcon={fallbackIcon} />
+      <YStack
+        position="absolute"
+        l={0}
+        r={0}
+        b={0}
+        pt="$8"
+        px="$5"
+        pb="$4"
+        gap="$2"
+        bg="rgba(0,0,0,0.45)"
+      >
+        <XStack items="flex-end" justify="space-between" gap="$3">
+          <YStack flex={1} gap="$1">
+            <Text fontFamily="$heading" fontSize="$7" fontWeight="700" color="white" numberOfLines={2}>
+              {title}
+            </Text>
+            {subtitle ? (
+              <Text fontSize="$3" color="white" numberOfLines={2}>{subtitle}</Text>
+            ) : null}
+          </YStack>
+          {action ? (
+            <Button
+              size="$3"
+              bg="$accentBase"
+              onPress={action.onPress}
+              icon={action.iconName ? <Ionicons name={action.iconName} size={16} color={theme.accentOnAccent.val} /> : undefined}
+            >
+              <Button.Text color="$accentOnAccent">{action.label}</Button.Text>
+            </Button>
+          ) : null}
+        </XStack>
+        {overlay}
+      </YStack>
+    </ZStack>
+  );
+}
+
+// ─── ProgressMeter ────────────────────────────────────────────────────────────
+
+export function ProgressMeter({
+  value,
+  max = 100,
+  variant = 'bar',
+  label,
+  segments,
+}: {
+  value: number;
+  max?: number;
+  variant?: 'ring' | 'bar' | 'segments';
+  label?: string;
+  segments?: Array<{ key: string; complete: boolean; label?: string }>;
+}) {
+  const ratio = max <= 0 ? 0 : Math.max(0, Math.min(1, value / max));
+  const percent = Math.round(ratio * 100);
+
+  if (variant === 'segments' && segments?.length) {
+    return (
+      <YStack gap="$2" aria-label={label ?? `Progress ${percent} percent`}>
+        <XStack gap="$1.5">
+          {segments.map((segment) => (
+            <YStack
+              key={segment.key}
+              flex={1}
+              height={8}
+              rounded="$10"
+              bg={segment.complete ? '$accentBase' : '$color4'}
+            />
+          ))}
+        </XStack>
+        {label ? <Text fontSize="$2" color="$color10">{label}</Text> : null}
+      </YStack>
+    );
+  }
+
+  if (variant === 'ring') {
+    return (
+      <YStack items="center" justify="center" width={72} height={72} aria-label={label ?? `Progress ${percent} percent`}>
+        <YStack
+          width={72}
+          height={72}
+          rounded={36}
+          borderWidth={6}
+          borderColor="$color4"
+          items="center"
+          justify="center"
+        >
+          <YStack
+            position="absolute"
+            width={72}
+            height={72}
+            rounded={36}
+            borderWidth={6}
+            borderColor="$accentBase"
+            opacity={ratio === 0 ? 0 : 1}
+          />
+          <Text fontSize="$5" fontWeight="700" color="$color12">{percent}</Text>
+        </YStack>
+        {label ? <Text fontSize="$1" color="$color10" mt="$2">{label}</Text> : null}
+      </YStack>
+    );
+  }
+
+  return (
+    <YStack gap="$2" aria-label={label ?? `Progress ${percent} percent`}>
+      <XStack justify="space-between" items="center">
+        {label ? <Text fontSize="$2" color="$color10">{label}</Text> : <YStack />}
+        <Text fontSize="$2" fontWeight="600" color="$color11">{percent}%</Text>
+      </XStack>
+      <YStack height={8} rounded="$10" bg="$color4" overflow="hidden">
+        <YStack height={8} width={`${percent}%`} bg="$accentBase" />
+      </YStack>
+    </YStack>
+  );
+}
+
+// ─── EntityRow ────────────────────────────────────────────────────────────────
+
+export function EntityRow({
+  title,
+  subtitle,
+  meta,
+  variant = 'status',
+  status,
+  statusLabel,
+  imageSource,
+  checked,
+  onCheckedChange,
+  avatarName,
+  onPress,
+}: {
+  title: string;
+  subtitle?: string;
+  meta?: string;
+  variant?: 'status' | 'media' | 'check' | 'timeline' | 'avatar' | 'sentence';
+  status?: StatusVariant;
+  statusLabel?: string;
+  imageSource?: string | null;
+  checked?: boolean;
+  onCheckedChange?: (next: boolean) => void;
+  avatarName?: string;
+  onPress?: () => void;
+}) {
+  const theme = useTheme();
+  const stripe = status ? STATUS_STYLES[status].text : undefined;
+
+  return (
+    <XStack
+      items="center"
+      gap="$3"
+      py="$3"
+      px="$4"
+      minH={56}
+      borderLeftWidth={variant === 'status' && status ? 4 : 0}
+      borderLeftColor={stripe}
+      pressStyle={onPress || onCheckedChange ? { bg: '$color3' } : undefined}
+      onPress={onCheckedChange ? () => onCheckedChange(!checked) : onPress}
+      role={onPress || onCheckedChange ? 'button' : undefined}
+      aria-label={title}
+    >
+      {variant === 'check' ? (
+        <Ionicons
+          name={checked ? 'checkbox' : 'square-outline'}
+          size={22}
+          color={theme.color11.val}
+        />
+      ) : null}
+      {variant === 'media' ? (
+        <EntityImage source={imageSource} width={48} height={48} borderRadius={8} />
+      ) : null}
+      {variant === 'avatar' ? (
+        <AvatarInitials name={avatarName || title} size="md" />
+      ) : null}
+      {variant === 'timeline' ? (
+        <YStack width={10} items="center">
+          <YStack width={10} height={10} rounded={5} bg="$accentBase" />
+        </YStack>
+      ) : null}
+      <YStack flex={1} gap="$0.5">
+        <Text
+          fontSize="$4"
+          fontWeight="600"
+          color="$color12"
+          textDecorationLine={variant === 'check' && checked ? 'line-through' : undefined}
+          numberOfLines={variant === 'sentence' ? 2 : 1}
+        >
+          {title}
+        </Text>
+        {subtitle ? <Text fontSize="$2" color="$color10" numberOfLines={1}>{subtitle}</Text> : null}
+      </YStack>
+      {status ? <StatusPill status={status} label={statusLabel} /> : null}
+      {meta ? <Text fontSize="$2" color="$color10" fontFamily="$body">{meta}</Text> : null}
+      {onPress ? <Ionicons name="chevron-forward" size={16} color={theme.color10.val} /> : null}
+    </XStack>
+  );
+}
+
+// ─── NumericStepper ───────────────────────────────────────────────────────────
+
+export function NumericStepper({
+  value,
+  onChange,
+  min = 0,
+  max = 99,
+  step = 1,
+  label,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  label?: string;
+}) {
+  const theme = useTheme();
+  const decrement = () => onChange(Math.max(min, value - step));
+  const increment = () => onChange(Math.min(max, value + step));
+
+  return (
+    <XStack items="center" gap="$3" aria-label={label ?? 'Quantity'}>
+      <Button
+        size="$4"
+        circular
+        minH={48}
+        minW={48}
+        bg="$surface2"
+        disabled={value <= min}
+        onPress={decrement}
+        aria-label={`Decrease ${label ?? 'value'}`}
+        icon={<Ionicons name="remove" size={18} color={theme.color12.val} />}
+      />
+      <Text fontSize="$6" fontWeight="700" color="$color12" minW={28} text="center">
+        {value}
+      </Text>
+      <Button
+        size="$4"
+        circular
+        minH={48}
+        minW={48}
+        bg="$surface2"
+        disabled={value >= max}
+        onPress={increment}
+        aria-label={`Increase ${label ?? 'value'}`}
+        icon={<Ionicons name="add" size={18} color={theme.color12.val} />}
+      />
+    </XStack>
+  );
+}
+
+// ─── Callout ──────────────────────────────────────────────────────────────────
+
+export function Callout({
+  title,
+  message,
+  tone = 'info',
+  action,
+}: {
+  title: string;
+  message?: string;
+  tone?: 'info' | 'warning' | 'danger' | 'success';
+  action?: { label: string; onPress: () => void };
+}) {
+  const toneStyles = {
+    info: { bg: '$accentSoft', icon: 'information-circle' as IoniconName, color: '$accentDeep' },
+    warning: { bg: '$statusPendingBg', icon: 'warning' as IoniconName, color: '$statusPending' },
+    danger: { bg: '$statusOverdueBg', icon: 'alert-circle' as IoniconName, color: '$statusOverdue' },
+    success: { bg: '$statusCompleteBg', icon: 'checkmark-circle' as IoniconName, color: '$statusComplete' },
+  } as const;
+  const tones = toneStyles[tone];
+  const theme = useTheme();
+
+  return (
+    <XStack
+      bg={tones.bg}
+      rounded="$4"
+      p="$4"
+      gap="$3"
+      items="flex-start"
+      aria-label={`${tone}: ${title}`}
+    >
+      <Ionicons name={tones.icon} size={20} color={theme.color12.val} />
+      <YStack flex={1} gap="$1">
+        <Text fontSize="$4" fontWeight="700" color="$color12">{title}</Text>
+        {message ? <Text fontSize="$3" color="$color11">{message}</Text> : null}
+        {action ? (
+          <Button size="$3" chromeless onPress={action.onPress}>
+            <Text fontSize="$3" color={tones.color} fontWeight="600">{action.label}</Text>
+          </Button>
+        ) : null}
+      </YStack>
+    </XStack>
   );
 }
