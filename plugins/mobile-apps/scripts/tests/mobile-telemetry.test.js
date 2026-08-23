@@ -11,6 +11,7 @@ const {
   createTelemetryContext,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
+const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -29,6 +30,14 @@ function tempConfig(config) {
   const ikeyPath = path.join(dir, 'ikey.json');
   fs.writeFileSync(ikeyPath, JSON.stringify(config));
   return { dir, ikeyPath };
+}
+
+// An empty directory keeps app-identity lookup out of the repo checkout, so
+// event assertions do not depend on where the suite happens to run.
+function tempProject(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-app-project-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
 }
 
 function contextFor(config) {
@@ -159,13 +168,14 @@ test('expired Copilot alias does not outlive unavailable host state', (t) => {
   assert.equal(expired.sessionId, nestedSessionId);
 });
 
-test('started event is allowlisted and carries no user, tenant, prompt, or path data', () => {
+test('started event is allowlisted and carries no user, tenant, prompt, or path data', (t) => {
   const context = contextFor(provisioned);
   let captured;
   const event = emitSkillStarted(context, invocation, {
     emit: (value) => { captured = value; },
     readAiAgent: () => ({ aiAgentName: 'GitHub Copilot', aiAgentVersion: '1.2.3' }),
     correlationId: 'correlation-1',
+    cwd: tempProject(t),
   });
   assert.equal(captured, event);
   assert.equal(event.data.eventName, 'skill_started');
@@ -173,10 +183,87 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
   assert.equal(event.data.skillName, 'deploy');
   assert.equal(event.data.sessionId, 'session-1');
   assert.equal(event.data.correlationId, 'correlation-1');
-  assert.deepEqual(event.data.eventInfo, { invocationSource: 'pretool' });
+  assert.deepEqual(event.data.eventInfo, { invocationSource: 'pretool', appInstanceId: null });
   for (const forbidden of ['orgId', 'tenantId', 'pacCliVersion', 'aadObjectId', 'prompt', 'cwd', 'path']) {
     assert.equal(Object.prototype.hasOwnProperty.call(event.data, forbidden), false);
   }
+});
+
+test('app instance id is minted once and reused by later skill runs', (t) => {
+  const project = tempProject(t);
+  fs.writeFileSync(
+    path.join(project, 'app.json'),
+    JSON.stringify({
+      expo: {
+        extra: {
+          powerappsNative: {
+            schemaVersion: 1,
+            templateVersion: 1,
+          },
+        },
+      },
+    }),
+  );
+  const appInstanceId = ensureAppInstanceId(project);
+  assert.match(appInstanceId, /^[0-9a-f-]{36}$/);
+  assert.equal(ensureAppInstanceId(project), appInstanceId);
+  assert.equal(findAppInstanceId(project), appInstanceId);
+  assert.equal(findAppInstanceId(path.join(project, 'src', 'screens')), '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(project, 'app.json'), 'utf8')), {
+    expo: {
+      extra: {
+        powerappsNative: {
+          schemaVersion: 1,
+          templateVersion: 1,
+        },
+        telemetry: { appInstanceId },
+      },
+    },
+  });
+});
+
+test('events outside a project carry no app identity', (t) => {
+  assert.equal(findAppInstanceId(tempProject(t)), '');
+});
+
+test('a hand-edited app identity is ignored rather than emitted', (t) => {
+  const project = tempProject(t);
+  fs.writeFileSync(
+    path.join(project, 'app.json'),
+    JSON.stringify({
+      expo: {
+        extra: {
+          telemetry: {
+            appInstanceId: 'contoso-field-inspections',
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(findAppInstanceId(project), '');
+});
+
+test('two apps in one session emit distinct app identities', (t) => {
+  const context = contextFor(provisioned);
+  const emitFrom = (project) => emitSkillStarted(context, invocation, {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    cwd: project,
+  }).data;
+
+  const first = emitFrom(tempProject(t));
+  const second = emitFrom(tempProject(t));
+  assert.equal(first.sessionId, second.sessionId);
+  assert.equal(first.eventInfo.appInstanceId, null);
+
+  const projectA = tempProject(t);
+  const projectB = tempProject(t);
+  ensureAppInstanceId(projectA);
+  ensureAppInstanceId(projectB);
+  const a = emitFrom(projectA);
+  const b = emitFrom(projectB);
+  assert.notEqual(a.eventInfo.appInstanceId, b.eventInfo.appInstanceId);
+  assert.equal(a.sessionId, b.sessionId);
 });
 
 test('bundled telemetry library is byte-identical to the canonical shared source', (t) => {

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
+const { withStableDispatchCwd } = require('../../hooks/run-telemetry');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const HOOKS = path.join(PLUGIN_ROOT, 'hooks');
@@ -100,6 +101,18 @@ function toolPayload(context) {
   };
 }
 
+test('hook dispatch runs outside the caller project and restores its cwd', () => {
+  const originalCwd = process.cwd();
+  let dispatchCwd;
+
+  withStableDispatchCwd(() => {
+    dispatchCwd = fs.realpathSync(process.cwd());
+  });
+
+  assert.equal(dispatchCwd, fs.realpathSync(os.tmpdir()));
+  assert.equal(process.cwd(), originalCwd);
+});
+
 test('prompt and pretool paths emit independent start signals', (t) => {
   const context = fixture(t);
   assert.equal(runHook('prompt', {
@@ -147,7 +160,11 @@ test('nested Copilot agents log under their own owning root session', (t) => {
     cwd: context.projectRoot,
     sessionId: current.nested,
     tool_input: { skill: current.skill },
-  }, context, { HOME: homeDir }).status, 0);
+  }, context, {
+    HOME: homeDir,
+    // os.homedir() uses USERPROFILE rather than HOME on Windows.
+    USERPROFILE: homeDir,
+  }).status, 0);
 
   for (const current of sessions) {
     seedCopilotSession(homeDir, current.root, current.nested);
@@ -243,7 +260,10 @@ test('prompt hook builds the Mobile Apps CS4 envelope without real network acces
   assert.match(envelope.data.nodeVersion, /^v\d+$/);
   assert.equal(envelope.data.skillName, 'deploy');
   assert.equal(typeof envelope.data.eventInfo, 'string');
-  assert.deepEqual(JSON.parse(envelope.data.eventInfo), { invocationSource: 'prompt' });
+  assert.deepEqual(JSON.parse(envelope.data.eventInfo), {
+    invocationSource: 'prompt',
+    appInstanceId: null,
+  });
   for (const forbidden of [
     'orgId',
     'tenantId',
@@ -275,6 +295,7 @@ test('bare command outside a mobile project emits a start', (t) => {
   assert.equal(records.length, 1);
   assert.equal(records[0].data.skillName, 'deploy');
   assert.equal(records[0].data.eventInfo.invocationSource, 'prompt');
+  assert.equal(records[0].data.eventInfo.appInstanceId, null);
 });
 
 test('manual Copilot slash command emits after host expansion', (t) => {
@@ -289,6 +310,71 @@ test('manual Copilot slash command emits after host expansion', (t) => {
   assert.equal(records.length, 1);
   assert.equal(records[0].data.skillName, 'add-connector');
   assert.equal(records[0].data.eventInfo.invocationSource, 'prompt');
+  assert.equal(records[0].data.eventInfo.appInstanceId, null);
+});
+
+test('hook attaches app identity from app.json when cwd is a project root', (t) => {
+  const context = fixture(t);
+  fs.writeFileSync(
+    path.join(context.projectRoot, 'app.json'),
+    JSON.stringify({
+      expo: {
+        extra: {
+          telemetry: {
+            appInstanceId: '5d7e71b1-61d6-4a91-9c2e-cba5db983e38',
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(runHook('pretool', {
+    cwd: context.projectRoot,
+    session_id: 'session-1',
+    tool_input: { skill: 'deploy' },
+  }, context).status, 0);
+
+  const records = waitForEvents(context, 1);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].data.eventInfo.invocationSource, 'pretool');
+  assert.equal(
+    records[0].data.eventInfo.appInstanceId,
+    '5d7e71b1-61d6-4a91-9c2e-cba5db983e38',
+  );
+});
+
+test('hook resolves --working-dir from tool input when cwd is outside the project', (t) => {
+  const context = fixture(t);
+  fs.writeFileSync(
+    path.join(context.projectRoot, 'app.json'),
+    JSON.stringify({
+      expo: {
+        extra: {
+          telemetry: {
+            appInstanceId: 'e5b2f43c-fa9f-44a0-b8a7-54e4f956f9db',
+          },
+        },
+      },
+    }),
+  );
+  const unrelated = path.join(context.root, 'outside');
+  fs.mkdirSync(unrelated);
+
+  assert.equal(runHook('pretool', {
+    cwd: unrelated,
+    session_id: 'session-1',
+    tool_input: {
+      skill: 'deploy',
+      arguments: `--working-dir "${context.projectRoot}" --non-interactive`,
+    },
+  }, context).status, 0);
+
+  const records = waitForEvents(context, 1);
+  assert.equal(records.length, 1);
+  assert.equal(
+    records[0].data.eventInfo.appInstanceId,
+    'e5b2f43c-fa9f-44a0-b8a7-54e4f956f9db',
+  );
 });
 
 test('another plugin namespace and embedded command are no-ops', (t) => {
