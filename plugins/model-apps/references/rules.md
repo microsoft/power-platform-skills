@@ -20,7 +20,7 @@ Comprehensive rules for generating generative page code. Read this file during c
 12. **Forbidden Functions**: Don't use `createTheme`, `mergeThemes`, `useTheme` (don't exist in Fluent UI V9)
 13. **Navigation**: Use the `Xrm.Navigation.navigateTo` API for all in-app navigation. Never construct raw URLs or manipulate `window.location` — see **Special Patterns > Generative Page Navigation**.
 14. **Batched async state — no intermediate renders**: React 17 does NOT batch `setState` calls inside async functions. Every separate `setState` triggers its own render. When a component fetches multiple pieces of data (e.g., a record plus related records), use a **single state object** and a **single `setData(...)` call** at the end: `const [{ record, related, loading, error }, setData] = useState({...})`. For multi-entity fetches, use `Promise.all` or `Promise.allSettled` so one `setData` completes the entire load. Never call `setLoading(false)` in a `finally` block when the data setters are in the `try` block — this always produces an intermediate render. **PageInput exception:** initial `useState({ loading: !!recordId, ... })` (PageInput rendering pattern) does NOT violate this rule — that's a synchronous initial value, not a separate `setState` call after fetch. The rule is per-effect: independent effects (e.g., usersettings fetch + record fetch) can each have their own single batched `setData`.
-15. **Data fetching — de-dupe + cache, and NEVER `dataApi` in a dependency array (any Dataverse page that fetches on mount)**: The genpage host (a) hands a **new `dataApi` reference every render** and (b) **double-mounts the page on open** — a cache-bypassing re-mount ~300ms after the first. Both make a naive on-mount fetch run 2+ times → double fetch + spinner re-flash. Fixes: **(1)** Never put `dataApi` in a `useEffect`/`useMemo`/`useCallback` dependency array, and never `useCallback` a fetch function — it re-fires the effect on every render. Depend on a **readiness boolean** (`const dataReady = !!dataApi;`) plus `recordId`/`reloadKey` as needed. **(2)** Wrap the fetch in the **in-flight-promise de-dupe + `window` cache** pattern in `references/data-caching.md` so concurrent mounts share ONE round-trip and later mounts read cache. The in-flight de-dupe — not the dep array — is what defeats the host double-mount (correct deps alone do NOT). Apply to **any page that fetches on mount**, including single-visit overviews/dashboards. **Skip only mock-data pages and forms with no initial fetch.** See the reference for the full pattern.
+15. **Data fetching — de-dupe + cache, and NEVER `dataApi` in a dependency array (any real host read on mount)**: The genpage host (a) hands a **new `dataApi` reference every render** and (b) **double-mounts the page on open** — a cache-bypassing re-mount ~300ms after the first. Both make a naive on-mount fetch run 2+ times → double fetch + spinner re-flash. Fixes: **(1)** Never put `dataApi` in a `useEffect`/`useMemo`/`useCallback` dependency array, and never `useCallback` a fetch function — it re-fires the effect on every render. Depend on a **readiness boolean** (`const dataReady = !!dataApi;`) plus `recordId`/`reloadKey` as needed. **(2)** Wrap the fetch in the **in-flight-promise de-dupe + `window` cache** pattern in `references/data-caching.md` so concurrent mounts share ONE round-trip and later mounts read cache. The in-flight de-dupe — not the dep array — is what defeats the host double-mount (correct deps alone do NOT). Apply to **any page that fetches data on mount through a real host read**, including Dataverse reads, connector reads (`queryConnectorTable` / `executeConnectorOperation`), and single-visit overviews/dashboards. **Skip only pages that render inline mock arrays and forms with no initial fetch.** See the reference for the full pattern.
 16. **Overlays must be confined to the page container (`mountNode`)**: The generated page shares the DOM with the genpage *designer* — the preview is NOT an isolated iframe. Every Fluent surface that renders through a portal (`Dialog` via `DialogSurface`, `Popover`, `Menu`, `Tooltip`, `Combobox`/`Dropdown` listbox, `DatePicker`, `TimePicker`) defaults to portalling to `document.body` of the **designer**, so without a `mountNode` it escapes the preview and can cover the designer chrome — including the coding-agent panel. Establish a single `containerRef`/`mountNode` on the page root and thread it to every overlay. See **Special Patterns > Dialogs and Overlays**.
 17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
 18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
@@ -335,30 +335,45 @@ const isDark =
 const [isDarkMode, setIsDarkMode] = useState(isDark);
 ```
 
-#### Multi-page builds: use `PAGEREF_` placeholders
+#### Multi-page builds: use `PAGEREF_<token>` placeholders
 
 In a multi-page deployment, page GUIDs don't exist until after first upload. Use a
-`PAGEREF_<filename-without-tsx>` placeholder as the `pageId` — the skill replaces
-these with real GUIDs in a second pass after all pages are deployed.
+`PAGEREF_<token>` placeholder as the `pageId`. The build replaces these with real GUIDs in a
+resolved deployment copy after all pages are deployed; your canonical `.tsx` keeps the symbolic
+token (the build never writes a GUID back into it).
+
+**The token depends on the caller — read the plan's `## Environment` `Mode:` line:**
+
+| `Mode:` | Token | Why |
+|---------|-------|-----|
+| `app-builder` | the target page's **`Key`** (the `Key` column in `## Pages`, = App Spec `pages[].key` = `navigatesTo[].targetKey`) | Rename-stable, and a downloaded page's file is a storage path (`pages/<guid>/page.tsx`) whose stem means nothing |
+| absent (standalone `/genpage`) | the target page's **file name without `.tsx`**, exactly as in the `File` column | There is no App Spec, so there are no keys and the plan has no `Key` column; Phase 6.5 builds a filename-stem → page-id map |
 
 ```typescript
-// Navigating to a sibling page — use PAGEREF_ placeholder at build time
+// Navigating to a sibling page — pass any custom id in `data` (never recordId)
 xrm.Navigation.navigateTo({
     pageType: "generative",
-    pageId: "PAGEREF_pet-gallery",    // replaced with real GUID post-deploy
-    entityName: "adopt_pet",
-    recordId: selectedId,
+    pageId: "PAGEREF_pet-gallery",   // app-builder: target's Key. standalone: target's file stem.
+    data: { selectedPetId: selectedId },   // custom ids go in data (read as pageInput?.data?.selectedPetId)
 });
 ```
 
-The placeholder format is `PAGEREF_` followed by the sibling page's filename without
-`.tsx` (e.g., `pet-gallery.tsx` → `PAGEREF_pet-gallery`).
+**Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
+`PAGEREF_<token>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
+`navigateTo` call**. Always emit it exactly there — never single-quoted, back-ticked, concatenated,
+or as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref and any parity
+mismatch). In `app-builder` mode every `PAGEREF_<key>` you emit must have a matching `navigatesTo`
+entry in the page's spec, and every declared `navigatesTo.targetKey` must appear as a real nav
+pageId in the source (the build enforces exact parity, and verification confirms each edge resolves
+to the actual target).
 
-**Must be quoted.** The skill's Phase 6.5 fix-up looks for `"PAGEREF_<name>"` as a
-quoted token to avoid partial-string collisions (e.g., `PAGEREF_pet` inside
-`PAGEREF_pet-gallery`). Always emit the placeholder as a string literal inside
-double quotes — assign it to `pageId` as a string, never construct it via
-concatenation.
+**Every `PAGEREF_` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
+A page referenced by a `PAGEREF_` placeholder must have a matching `page` subarea in the
+app's `appShell`. Navigation-only pages — reachable only via a `PAGEREF_` call but absent from the
+app sitemap — are not supported; validation rejects them. A "detail" page that receives a caller-
+supplied record id or other context is a normal sitemap page; it reads its input via
+`pageInput?.data?.<field>`. See [`app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`
+for the three-authority identity model and the `pages[].pageId` edit-snapshot field.
 
 ### Dark Mode Toggle
 
@@ -427,7 +442,7 @@ Two host behaviors make a naive on-mount fetch run more than once:
 - For detail pages, key both the cache and the in-flight map by `recordId` (`Map<string, ...>` on `window`).
 - On mutation or manual refresh, clear the cache **and** the in-flight promise before refetching.
 
-**When to apply:** any page that fetches Dataverse data on mount (list, detail, and single-visit overviews/dashboards). Skip only mock-data pages and forms with no initial fetch.
+**When to apply:** any page that fetches data on mount through a real host read — Dataverse `dataApi` calls OR connector calls such as `queryConnectorTable` / `executeConnectorOperation` (lists, details, and single-visit overviews/dashboards). Skip only pages that render inline mock arrays and forms with no initial fetch.
 
 See [`references/data-caching.md`](./data-caching.md) for the complete list and detail patterns.
 
@@ -586,6 +601,19 @@ Platform connectors via `queryConnectorTable` (tabular) and
 `executeConnectorOperation` (REST). These are optional runtime methods — always
 presence-check before calling. See [connectors.md](./connectors.md) for the
 required patterns and the binding contract.
+
+### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
+
+When the plan's `## Custom API Bindings` is non-empty, the page may invoke Dataverse
+**Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
+API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
+(read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the
+page's bound operations. These are optional runtime methods — always presence-check before
+calling, guard Actions against double-submit, read results from `res.outputs` (never
+`res.value`), surface only the sanitized `res.error?.message`, and never auto-retry an
+`indeterminate` result. Call only the `name`s in the plan's `## Custom API Bindings`; a name
+not bound to the page fails with `not_bound`. See [custom-api.md](./custom-api.md) for the
+required patterns, the `boundTo` rules, and the full `error.code` contract.
 
 ---
 

@@ -12,51 +12,15 @@ const helpers = require('./validation-helpers');
 const UNIQUE_NAME_RE = /^[A-Za-z0-9_]+$/;
 
 /**
- * Validates and normalizes a Dataverse environment URL before it is passed
- * to anything that interpolates it into a shell command (notably
- * helpers.getAuthToken, which calls `az account get-access-token --resource
- * "${url}"` via execSync). Returns the URL's `origin` only (scheme + host +
- * optional port) so path, query, fragment, and userinfo are all stripped.
- *
- * Throws on:
- *   - non-string / empty input
- *   - input that `new URL()` can't parse
- *   - non-https protocol (Dataverse refuses http and we don't want file: etc.)
- *   - URLs with embedded userinfo (https://user:pass@host) — credentials in
- *     URLs are a smell and can confuse downstream tooling
- *
- * The normalized origin is safe to interpolate into a shell command because
- * URL.origin only contains scheme, host, and port — characters that the
- * URL spec disallows from carrying shell metacharacters.
+ * Compatibility wrapper for existing callers. The shared validation helper
+ * owns the trust policy so token acquisition and authenticated requests use
+ * the same public and sovereign cloud endpoint allowlist.
  *
  * @param {unknown} envUrl
- * @returns {string} sanitized origin, e.g. "https://contoso.crm.dynamics.com"
- * @throws Error with a human-readable message on rejection
+ * @returns {string} validated Dataverse origin
  */
 function sanitizeEnvUrl(envUrl) {
-  if (typeof envUrl !== 'string' || envUrl.trim() === '') {
-    throw new Error('envUrl must be a non-empty string.');
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(envUrl);
-  } catch {
-    throw new Error(`envUrl is not a valid URL: "${envUrl}".`);
-  }
-
-  if (parsed.protocol !== 'https:') {
-    throw new Error(`envUrl must use https (got "${parsed.protocol}").`);
-  }
-
-  if (parsed.username || parsed.password) {
-    throw new Error('envUrl must not contain userinfo (username/password). Authentication uses the Azure CLI token, not credentials in the URL.');
-  }
-
-  // url.origin is the scheme + host + port — no path, no query, no fragment.
-  // For "https://contoso.crm.dynamics.com:443/api/data/v9.2/?x=1#anchor"
-  // it returns "https://contoso.crm.dynamics.com:443".
-  return parsed.origin;
+  return helpers.validateDataverseEnvironmentUrl(envUrl, 'envUrl');
 }
 
 /**

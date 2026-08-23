@@ -35,7 +35,8 @@
 
 'use strict';
 
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+const { validateDataverseEnvironmentUrl } = require('./validation-helpers');
 
 function parseArgs(argv) {
   const args = argv.slice(2);
@@ -61,12 +62,13 @@ function log(msg, quiet) {
 }
 
 function makePacRunner(execImpl) {
-  const exec = execImpl || execSync;
-  return function runPac(cmd) {
+  const exec = execImpl || execFileSync;
+  return function runPac(args) {
     try {
-      const out = exec(`pac ${cmd}`, {
+      const out = exec('pac', args, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
       });
       return { ok: true, stdout: typeof out === 'string' ? out : (out || '') };
     } catch (e) {
@@ -92,11 +94,11 @@ function parseBlockedAttachmentsFromPacOutput(pacOutput) {
 
 async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execImpl } = {}) {
   const runPac = makePacRunner(execImpl);
-  // Build pac command args for env targeting
-  const envArg = envUrl ? `--environment "${envUrl}"` : '';
+  const trustedEnvUrl = envUrl ? validateDataverseEnvironmentUrl(envUrl) : null;
+  const envArgs = trustedEnvUrl ? ['--environment', trustedEnvUrl] : [];
 
-  log(`Reading blockedattachments from ${envUrl || '(current active env)'}`, quiet);
-  const listResult = runPac(`env list-settings ${envArg} --filter blockedattachments`);
+  log(`Reading blockedattachments from ${trustedEnvUrl || '(current active env)'}`, quiet);
+  const listResult = runPac(['env', 'list-settings', ...envArgs, '--filter', 'blockedattachments']);
   if (!listResult.ok) {
     throw new Error(`pac env list-settings failed: ${listResult.stderr || listResult.error}`);
   }
@@ -115,7 +117,7 @@ async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execIm
   if (wasBlocked.length === 0) {
     log(`Extensions [${extensions.join(', ')}] are not blocked — nothing to change`, quiet);
     return {
-      envUrl: envUrl || '(current active env)',
+      envUrl: trustedEnvUrl || '(current active env)',
       wasBlocked: [],
       removed: [],
       unchanged: extensions,
@@ -133,7 +135,15 @@ async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execIm
   log(`Will remove [${wasBlocked.join(', ')}] from blockedattachments`, quiet);
 
   if (!dryRun) {
-    const updateResult = runPac(`env update-settings ${envArg} --name blockedattachments --value "${newValue}"`);
+    const updateResult = runPac([
+      'env',
+      'update-settings',
+      ...envArgs,
+      '--name',
+      'blockedattachments',
+      '--value',
+      newValue,
+    ]);
     if (!updateResult.ok) {
       throw new Error(`pac env update-settings failed: ${updateResult.stderr || updateResult.error}`);
     }
@@ -143,7 +153,7 @@ async function fixBlockedAttachments({ envUrl, extensions, dryRun, quiet, execIm
   }
 
   return {
-    envUrl: envUrl || '(current active env)',
+    envUrl: trustedEnvUrl || '(current active env)',
     wasBlocked,
     removed: dryRun ? [] : wasBlocked,
     unchanged,

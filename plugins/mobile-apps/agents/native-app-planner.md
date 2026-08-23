@@ -25,14 +25,36 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Wizard answers collected by the skill (target users + device, target platforms, aesthetic, features)
 - The working directory where `native-app-plan.md` should be written
 - The plugin root directory (`${PLUGIN_ROOT}`)
+- The foreground-generated normalized Dataverse planning snapshot path, when available
+- The deterministic Dataverse planning evidence appendix path, when available
+- Dataverse planning mode: `required` or `connector-only`
 
 ## Hard Rules
 
 - **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
-- **Single plan document.** Everything goes into `<working_dir>/native-app-plan.md`. No HTML, no separate per-domain files. Mermaid for diagrams.
+- **Single human plan document.** Everything user-reviewed goes into
+  `<working_dir>/native-app-plan.md`. Deterministic execution uses the
+  normalized schema contract plus the gate-owned
+  `<working_dir>/.tmp/mobile-plan-status.json` receipt; neither is a second
+  human plan or a source
+  for free-form Markdown parsing. No HTML or other per-domain plan files.
+  Mermaid for diagrams.
 - **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
+- **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
+  default-mode `data-model-architect` dispatch and revision. In `required`,
+  pass both planning-snapshot/evidence absolute paths unchanged. In `connector-only`,
+  state that both paths are not supplied. Never invent placeholder artifact
+  paths. Do not
+  resolve the environment, verify Dataverse access, run broad discovery, or
+  issue any live Dataverse
+  query in this planner. The foreground orchestrator owns planning-snapshot creation,
+  degradation, and exact-name expansion.
+- **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
+  rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
+  referenced artifact; do not paste candidate rankings, raw columns, or timing
+  tables into `native-app-plan.md`.
 - **MANDATORY progress reporting.** Every step in the workflow has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence between gates looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
@@ -44,7 +66,8 @@ Required tool surface:
 - `EnterPlanMode` / `ExitPlanMode` — run the four approval gates
 - `AskUserQuestion` — industry-confirm and style-picker handoffs
 - `Read` / `Write` — read references, write `native-app-plan.md`
-- `Bash` / `Grep` / `Glob` — discovery (Dataverse probe, working-dir checks)
+- `Bash` / `Grep` / `Glob` — working-dir checks and legacy discovery only;
+  never use them for Dataverse discovery when planning-snapshot/evidence paths are supplied
 
 **Detection:** attempt a no-op call to `Task` (e.g. spawn nothing, just check the tool exists). If the host raises `tool not available`, `unknown tool`, or any equivalent before you can dispatch, you are running in a degraded shell. Same check for `EnterPlanMode` and `AskUserQuestion`.
 
@@ -61,16 +84,17 @@ The orchestrator's Step 3 has a documented inline-gate fallback for exactly this
 Read these references once before doing anything else:
 
 - `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
-- `${PLUGIN_ROOT}/template/package.json` — **the native-capability allowlist**. The set of native modules in this file is fixed by the rewrap pipeline; you may NEVER propose a capability whose module is not present here. See Step 3 for how this list is enforced.
+- `${PLUGIN_ROOT}/template/package.json` — **the native-code allowlist**. The set of modules with native code/config is fixed by the rewrap pipeline; you may NEVER propose a native capability whose module is not present here. Pure-JavaScript app dependencies are planned separately by `screen-planner` under `## Screens` and need not be bundled in this template.
 
 Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
 
 From the planner prompt extract:
 - **Target platforms** — iOS + Android by default. If the user picked just one platform, native modules need `Platform.OS` branching notes in the screen plan.
 - **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
+- **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
 
-Capture these for the native capabilities section in Step 4.
+Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
 
 ## Step 2 — Spawn `data-model-architect` + inline planning in parallel
 
@@ -87,18 +111,38 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 >
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
-> Target environment: read from `power.config.json` if it exists in the working directory, otherwise use the environment URL or ID provided by the orchestrator and resolve it with `scripts/resolve-environment.js`.
+> Target environment: use the foreground-resolved environment URL and tenant.
+> When planning-snapshot/evidence paths are supplied, do not read `power.config.json` or
+> call `scripts/resolve-environment.js`.
 > Working directory: [absolute path]
 > Plugin root: ${PLUGIN_ROOT}
+> Dataverse planning mode: [required | connector-only]
+> Dataverse planning failure reason: none
+> Normalized Dataverse foreground planning snapshot: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Dataverse planning evidence: [absolute path supplied by foreground verbatim, or NOT SUPPLIED]
+> Structured schema contract output: [absolute
+> `<working_dir>/.tmp/dataverse-schema-contract.json` in required mode, or NOT
+> SUPPLIED in connector-only mode]
 >
-> Follow the instructions in your agent file. You are read-only — do NOT create tables. Return a markdown `## Data Model` section ready to embed in native-app-plan.md, including a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
+> Follow the instructions in your agent file. You are read-only — do NOT create tables. In required mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. Include a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
 
 After spawning, proceed immediately to Step 3 without waiting. Then, before writing the plan doc (Step 4), check the architect's result and parse its first line per AGENTS.md rule #10:
 
-- `DONE` → embed section, continue.
-- `DONE_WITH_CONCERNS: <list>` → embed section, propagate concerns.
-- `NEEDS_CONTEXT: <missing>` → re-spawn once with missing context. If second return is also `NEEDS_CONTEXT`, return `BLOCKED`.
+- `DONE` → in `required` mode, verify both `_dm_section.md` and the normalized
+  `.tmp/dataverse-schema-contract.json` exist; then embed the section and
+  continue. A missing sidecar is `BLOCKED`, not a Markdown-parsing fallback.
+- `DONE_WITH_CONCERNS: <list>` → apply the same sidecar check, embed section,
+  and propagate concerns.
+- `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → return that
+  exact first line to the foreground orchestrator. Do not expand the foreground planning snapshot
+  or re-run discovery here.
+- `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>` → return that exact
+  first line to the foreground orchestrator for collision-only expansion. Do
+  not infer absence or rewrite the proposed names here.
+- `NEEDS_CONTEXT: <missing>` → re-spawn once with missing non-Dataverse context,
+  forwarding the same planning-snapshot/evidence paths unchanged. If the second return
+  is also `NEEDS_CONTEXT`, return `BLOCKED`.
 - `BLOCKED: <reason>` → return `BLOCKED: data-model-architect returned BLOCKED: <reason>` to orchestrator.
 
 ## Step 3 — Plan Native Capabilities Inline (Gate 2)
@@ -112,12 +156,12 @@ Build the native capabilities matrix yourself (this is a small enough surface to
 
 ### Step 3.0 — Build the allowlist (MANDATORY, before any cap is proposed)
 
-The set of native modules the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9.
+The set of modules with native code/config that the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a native capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a native module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9. This restriction does not apply to verified pure-JavaScript dependencies; do not infer native code from a package-name prefix.
 
 Read the template's `package.json`:
 
 ```bash
-node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); const deps = Object.keys({...p.dependencies, ...p.devDependencies}); console.log(deps.filter(d => d.startsWith('expo-') || d.startsWith('react-native-') || d.startsWith('@react-native-community/') || d.startsWith('@microsoft/extension-') || d === '@microsoft/power-apps-native-bglocation').join('\n'));"
+node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); console.log(Object.keys({...p.dependencies, ...p.devDependencies}).sort().join('\n'));"
 ```
 
 Map each shipped module to a user-facing capability slug. Use this known mapping table, but still gate every row against the live allowlist output; a listed capability is supported only when its exact package appears in `template/package.json` and is not runtime-banned.
@@ -134,7 +178,6 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `secure-store` | `expo-secure-store` | — |
 | `file-system` | `expo-file-system` | — |
 | `sharing` | `expo-sharing` | — |
-| `calendar-management-view` | `react-native-calendars` | — |
 | `location` | `expo-location` | `/add-native location` |
 | `biometrics` / `local-authentication` | `expo-local-authentication` | `/add-native biometrics` |
 | `clipboard` | `expo-clipboard` | `/add-native clipboard` |
@@ -169,23 +212,11 @@ PDF/pen inference rules:
 - `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
 - The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
 
-**Capabilities not present or runtime-banned** — do not propose: anything whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
+**Capabilities not present or runtime-banned** — do not propose: anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, Bluetooth/NFC/BLE/AR without a shipped package, and `expo-haptics` unless the screen-builder hard rule is explicitly removed.
 
-### Calendar management view capability
+### Pure-JavaScript dependency handoff
 
-If requirements mention calendar management, scheduling, appointment calendars, personal/team/POS calendar views, month/week/day views, agenda, availability, visits, routes by date, or field-service schedules, propose `calendar-management-view` when `react-native-calendars` is present in `${PLUGIN_ROOT}/template/package.json`. This is a UI library capability, not an Expo permission capability: it needs no `/add-native` wrapper, no `app.config.js` permission changes, and no native skill invocation.
-
-The native-capability matrix row MUST use:
-
-| Field | Required value |
-|---|---|
-| Capability | `calendar-management-view` |
-| Module | `react-native-calendars` |
-| Used by screens | every calendar/agenda/schedule screen, such as personal calendar, team calendar, POS calendar, appointment list |
-| Justification | render real mobile calendar/agenda surfaces instead of generic FlatList-only date groupings |
-| Dedicated skill | blank / `None — UI library, screen-builder imports directly` |
-
-If `react-native-calendars` is absent from the template/package allowlist, do NOT silently plan generic calendar widgets. Add a transparency note: `> Excluded — requirements suggested calendar management views, but this template does not ship react-native-calendars. Update the template/package.json or use timeline/list scheduling screens until the template includes it.`
+Do not put JS-only libraries in `## Native Capabilities` and do not route them through `/add-native`. Pass explicit JavaScript package requests and use cases that may benefit from an established library to `screen-planner`, which follows [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md), chooses a compatible JS-only package, and records an exact approved version under `## Screens → ### JavaScript Dependencies`. `/create-mobile-app` installs that table before screen builders run. Package-specific examples belong in the canonical reference; every library uses the same generic selection gate.
 
 If the requirements imply one of these, DROP the capability and add a transparency note to the `## Native Capabilities` section so the user sees what was excluded and why:
 
@@ -340,8 +371,15 @@ Approve? (Reject → revise data model only)
 
 Call `ExitPlanMode` to request approval.
 
-- **Approved:** mark `[x] Data model approved` in the plan doc, continue to Gate 2.
-- **Rejected:** re-spawn `data-model-architect` with the user's feedback, regenerate that section, re-enter plan mode. Loop until approved.
+- **Approved:** mark `[x] Data model approved` in the plan doc and immediately
+  initialize/update `<working_dir>/.tmp/mobile-plan-status.json` with the
+  normalized contract's exact content/hash and a `dataModel` approval record.
+  This receipt is written by this gate-owning planner, never by the Step 8
+  manifest builder. Continue to Gate 2.
+- **Rejected:** re-spawn `data-model-architect` with the user's feedback and
+  the original planning-snapshot/evidence paths verbatim, regenerate that section, and
+  regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
+  until approved; do not run discovery during a revision.
 
 ### Gate 2 — Native Capabilities + Connectors (combined)
 
@@ -454,6 +492,8 @@ Plugin root: ${PLUGIN_ROOT}
 
 Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
 
+Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
+
 Style-picker + preview rules unchanged — honour the same `skip_preview` policy as the legacy single-pass mode (default `skip_preview: true` when `Design vibe opt-in: deferred`).
 
 Return per AGENTS.md rule #10.
@@ -508,13 +548,17 @@ Reject loop = re-spawn `screen-planner` with the user's feedback (layout, screen
 ### Step 5c — Cross-entity Read Audit (Round 2 data-model pass)
 
 **Print before spawning:**
-> "→ Auditing the locked screen plan for cross-entity reads (calc-column candidates from related_entity_fields blocks)…"
+> "→ Auditing the locked screen plan for supported cross-entity read paths…"
 
-**Run condition:** execute this step ONLY after Gate 4b has been approved AND the screen-planner's per-screen specs include at least one `related_entity_fields` block. Skip silently otherwise (no cross-entity reads = no calc-column proposals needed).
+**Run condition:** execute this step ONLY after Gate 4b has been approved AND the screen-planner's per-screen specs include at least one `related_entity_fields` block. Skip silently otherwise.
 
 **Detection (cheap):** before spawning, `Grep` the locked plan for `related_entity_fields:` in `<working_dir>/native-app-plan.md`. Zero matches → skip Step 5c entirely, mark `[x]` and proceed to Step 6. One or more matches → spawn the audit pass below.
 
-This step exists because of the runtime constraint documented at [`shared/references/data-performance.md` § Cross-entity Reads](${PLUGIN_ROOT}/shared/references/data-performance.md#cross-entity-reads) — the SDK has no `$expand`, so cross-entity fields on hot paths (lists, dashboards) MUST be denormalized via calculated columns at the data-model layer. The screen-planner emits `related_entity_fields` per screen; this step turns those into calc-column proposals.
+This step exists because the SDK has no `$expand`. It verifies that every
+cross-entity field uses a formatted lookup or bounded chained fetch, and flags
+hot-path fields that require an externally supplied projection. It never
+synthesizes calculated/formula metadata and must preserve the already approved
+`.tmp/dataverse-schema-contract.json` unchanged.
 
 #### 5c.1 — Spawn `data-model-architect` in `cross-entity-audit` mode
 
@@ -540,22 +584,23 @@ Wait for return; apply the Step 3.0 status switch:
 - `DONE_WITH_CONCERNS: <list>` → embed addendum, propagate concerns into your own final `DONE_WITH_CONCERNS:`.
 - `NEEDS_CONTEXT:` / `BLOCKED:` — propagate up per the standard switch.
 
-#### 5c.2 — Gate 1 addendum (calc-column approval)
+#### 5c.2 — Gate 1 addendum (cross-entity read paths)
 
 If 5c.1 wrote a `### Cross-entity Reads` addendum, present it to the user as a Gate 1 addendum (NOT a fresh Gate 1 — the original schema is already approved and unchanged):
 
 ```
 ## Gate 1 — Addendum: Cross-entity Reads
 
-The screen plan you approved at Gate 4b reads N fields from related entities (gate names on inspections, customer phones on orders, etc.). Because the Power Apps SDK has no $expand, those fields need calculated columns on the parent tables to display efficiently — otherwise list screens would either render "—" or trigger N+1 fetches per row.
+The screen plan reads N fields from related entities. The generated SDK has no
+$expand, so each field must use a formatted lookup, a bounded chained fetch, or
+an external server-owned projection.
 
-Proposed calculated columns (auto-derived from your screen plan, no schema reshape):
+Proposed read paths:
 
 [paste the ### Cross-entity Reads table from _dm_section.md]
 
-[paste the Chained-fetch fields (informational) table if present — these need NO schema change, the screen-builder handles them at scaffold time]
-
-Approve to add these calc columns to the data model? (Reject → revise the audit. Approve → /setup-datamodel will create them in Phase 6.1b.)
+Approve these read paths? Any `external-projection-required` row remains a
+blocker until the user supplies that projection outside this workflow.
 ```
 
 Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with the user's feedback (e.g. "drop cr3e9_tailnumber_calc, the list doesn't actually show it"). Approve = mark `[x]` Gate 1 addendum approved, proceed to Step 6.
@@ -572,6 +617,79 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_
 ```
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
+
+In `required` mode, also validate the schema sidecar structurally one final
+time:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
+  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+```
+
+The gate-owning planner must now finalize the pre-existing
+`<working_dir>/.tmp/mobile-plan-status.json` receipt from the approved
+screen/hook/identity/lookup service requirements. The receipt has this
+deterministic shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "workflow": "create-mobile-app",
+  "approvals": {
+    "dataModel": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp from Gate 1 acceptance>",
+      "approvedContractSha256": "<sha256 of stable normalized contract content>"
+    },
+    "nativeCapabilities": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    },
+    "connectors": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    },
+    "screenPlan": {
+      "status": "approved",
+      "approvedAt": "<ISO timestamp>"
+    }
+  },
+  "approvedPlanSha256": "<sha256 of final native-app-plan.md bytes>",
+  "approvedContractSha256": "<same contract hash as dataModel approval>",
+  "approvedContract": { "<exact normalized contract content>": "..." },
+  "serviceRequiredTables": [
+    {
+      "logicalName": "cr123_inspection",
+      "consumers": ["screen:Inspections", "screen:Inspection detail"]
+    }
+  ],
+  "integritySha256": "<sha256 of stable receipt JSON without this field>"
+}
+```
+
+Every row requires at least one deterministic consumer identifier. Its exact
+logical-name set must equal the non-deferred `serviceRequired` table and M:N
+intersect declarations in the normalized schema contract. If the final screen
+plan introduces a service not present there, revise and re-approve the affected
+earlier section rather than silently changing the contract.
+
+Initialize the receipt when Gate 1 is accepted, then advance its other approval
+records, current plan hash, and final service dependencies only when this same
+planner accepts the corresponding existing gates. Before revising an approved
+section, mark that section and dependent later sections non-approved; refresh
+the receipt only after the existing approval loop accepts the revision.
+Do not call the manifest builder to create or restamp this receipt. The local
+filesystem trust model is non-adversarial: integrity hashes detect accidental
+or out-of-workflow replacement, not a malicious process that can rewrite every
+project artifact. Step 8 only consumes and verifies the completed receipt.
+
+Do not return `DONE` if this fails. Connector-only mode must not create the
+sidecar. Treat every `unverified` contract row as non-executable; only explicit
+`create` or fully specified `adapt` rows may later become metadata operations.
+Adapt rows must carry all adapted logical/schema/intersect names required by
+the data-model-architect contract, rather than leaving names for the execution
+agent to invent.
 
 ## Step 7 — Return Status
 
@@ -596,6 +714,8 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 Plan approved.
 
 Plan document: <absolute path to native-app-plan.md>
+Dataverse schema contract: <absolute path, or "not applicable">
+Mobile plan approval receipt: <absolute path, or "not applicable">
 
 Sections approved:
   ✓ Data model      — <N tables: M reuse, K extend, L create>

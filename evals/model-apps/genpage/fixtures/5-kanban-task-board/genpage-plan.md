@@ -10,7 +10,7 @@ D:/temp/task-board
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com
+- URL: https://contosobapenv0001.crmtest.dynamics.com
 - App: Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc)
 - Languages: English (1033) only
 - Solution: Default
@@ -26,6 +26,10 @@ No entity creation required — all entities already exist.
 
 ## Existing Entities
 task
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Design Preferences
 - Styling: Fluent UI V9 Cards in a 3-column horizontal layout. Priority color-coded badges: green = Low, blue = Normal, orange = High, red = Critical. Clean column headers with icons (ClipboardTaskRegular, PlayRegular, CheckmarkCircleRegular). Neutral background per column with subtle border.

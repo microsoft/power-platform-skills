@@ -22,7 +22,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | Prerequisite | Required for | Install |
 |---|---|---|
 | [Node.js](https://nodejs.org/) (LTS) | All skills | `winget install OpenJS.NodeJS.LTS` |
-| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) >= 2.7.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
+| [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
 
 After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
@@ -70,7 +70,46 @@ capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased
 
 ## Skills
 
-The plugin provides a single skill that covers the full lifecycle of a generative page.
+The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
+`/genpage` builds standalone generative pages for an existing app. **They are independent — you can
+use either on its own, and neither requires the other.**
+
+| Skill | Status | Use it when |
+|---|---|---|
+| [`/app-builder`](#app-builder) | **Preview** | You want a whole app — tables, relationships, forms, views, charts, security roles, app + sitemap |
+| [`/genpage`](#genpage) | Stable | You want one or more generative pages added to an app that already exists |
+
+Already have an app and just want to add a page? Use `/genpage` — you never need to run
+`/app-builder` first. Building from scratch? `/app-builder` authors its own generative pages as part
+of the build, so you don't need to run `/genpage` afterwards.
+
+### `/app-builder`
+
+> **Preview.** This skill is under active development: its App Spec schema and CLI flags may change
+> between releases, and `--changed-only` (partial apply) is Preview within it. Prefer a scratch/dev
+> environment, review the dry-run plan before approving, and use `teardown-model-app.js --apply` to
+> clean up probes. Report issues with `/report-issue`.
+
+Builds and edits a whole model-driven Power App from a natural-language intent, via the headless
+vendored `cds-maker-sdk`. It runs an interactive, multi-turn authoring flow and a narrated build:
+
+1. **Select environment** — resolves the target Dataverse org and confirms auth
+2. **Author the App Spec** (design-only) — tables, columns, relationships, adaptive forms with
+   sub-grids, views, Choice-column charts, dashboards, generative **page intents**, personas, and the
+   app shell + sitemap, with two consent levels and previews you approve before anything is written
+3. **Guardrail lint** — `spec-lint` + `validateAppSpec` gate the spec before any live call
+4. **Plan approval** — a phase-grouped dry-run plan is shown in plan mode for your go-ahead
+5. **Generate pages** — dispatches parallel page-builder workers to write each page's `.tsx`
+6. **Build** — applies the spec idempotently phase by phase, then optionally `--verify` reconciles
+   the deployed app against the spec
+7. **Edit** — downloads a deployed app back into an editable App Spec so you can change and rebuild it
+
+**Usage:** Invoke directly with `/app-builder`, or use any of the keywords below:
+
+- `Build an app for tracking service requests`
+- `Create a model-driven app to manage suppliers and contracts`
+- `Make me an app to manage job candidates and interviews`
+- `Edit my app — add a table for invoices and put it on the nav`
 
 ### `/genpage`
 
@@ -127,16 +166,16 @@ The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatica
 while it's loaded. They are **fail-open**: any internal error exits 0, so a hook can
 never fail or abort a skill run. Because the plugin installs **globally**, the hooks
 are scoped so they don't interfere with unrelated projects: the write-safety guard
-only **flags** (never blocks) and only during an active genpage session, and the icon
-validator only fires on genpage output. At most, the icon validator blocks a single
-tool call (the agent reworks it) — never the whole skill.
+only **flags** (never blocks) and only during an active model-apps authoring session,
+and the icon validator only fires on generated-page output. At most, the icon
+validator blocks a single tool call (the agent reworks it) — never the whole skill.
 
 | Hook | When | What it does |
 |---|---|---|
-| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a genpage session (a `genpage-plan.md` at/under cwd). Never blocks; silent in unrelated projects. |
-| Icon validator | after a genpage `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. |
+| Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd — only during a model-apps authoring session (a `genpage-plan.md`, `app-spec.json`, or `model-app-plan.md` at/under cwd, so it covers both `/genpage` and `/app-builder`). Never blocks; silent in unrelated projects. |
+| Icon validator | after a generated `.tsx` write | Blocks `@fluentui/react-icons` imports that aren't in the verified list. Fires for both skills (gated on the `export default GeneratedComponent` marker, or a sibling `genpage-plan.md` / `model-app-plan.md`). |
 | Skill validator | after a skill runs | Runs the skill's `validate*.js` if it has one. |
-| Telemetry | on skill start / prompt | Emits anonymous `skill_started` (see [Telemetry](#telemetry)). |
+| Telemetry | on skill start / prompt | Emits `skill_started` usage telemetry (see [Telemetry](#telemetry)). |
 
 **Escape hatches** (environment variables — set to `1` or `true`):
 
@@ -157,19 +196,21 @@ export MODEL_APPS_DISABLE_HOOKS=1
 
 ## Telemetry
 
-model-apps ships anonymous, opt-out usage telemetry (1DS). The committed config ships
+model-apps ships opt-out usage telemetry (1DS). The committed config ships
 **disabled** (`disabled: true`) — it emits nothing until go-live, even though it now
 carries the provisioned model-apps key + stream (staged, not yet enabled). `disabled:
 true` is the active guard; the placeholder-key check is only a secondary guard for
 un-provisioned copies. Once enabled it is **on by default** (you opt out).
 
-- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions, and
-  Dataverse org/tenant GUIDs when signed in. **Never** file paths, prompts, tool
-  inputs, entity/table names, URLs, credentials, usernames, hostnames, or any
-  user-level identifier (no Entra object id).
+- **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
+  session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when
+  PAC is signed in. Model Apps excludes the signed-in user's Entra object ID.
+  Events do not include file paths, prompts, tool inputs, entity/table names, URLs,
+  credentials, usernames, or hostnames.
 - **Local diagnostic mirror:** every event is also written to
   `~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl` (even
-  when you've opted out of transmission) — hand over that one file when filing an issue.
+  when you've opted out of transmission) and retains the same event fields.
+  Hand over that one file when filing an issue.
 - **Opt out** per-user with `/model-apps:telemetry off` (re-enable with `on`, check
   with `status`), or for CI/automation set
   `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` (highest precedence).

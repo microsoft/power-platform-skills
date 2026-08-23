@@ -83,6 +83,10 @@ function isConnectorsEnabled(opts) {
   return isEnabled('connectors', opts);
 }
 
+function isCustomApiEnabled(opts) {
+  return isEnabled('custom-api', opts);
+}
+
 // Catalog of every flag the skill knows about, with lifecycle status so makers
 // and devs can see what is experimental / in-progress vs GA. `status` is one of
 // 'experimental' | 'in-progress' | 'ga'. Keep this the single source of truth —
@@ -98,6 +102,19 @@ const FLAGS = {
       'pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX authoring ' +
       'control (power-platform-ux), and the maker/admin ECS setting — all live in PROD.',
     enableEnv: 'GENPAGE_ENABLE_CONNECTORS=1',
+  },
+  'custom-api': {
+    status: 'in-progress',
+    summary:
+      'GenPage Dataverse Custom API (plug-in) invocation — calling a Custom API Action or Function ' +
+      'from a generated page via dataApi.executeAction / executeFunction / listBoundActions, gated by ' +
+      "the page's revision-bound actionBindings manifest.",
+    dependencies:
+      'the AIBuilder CoderAgent action prompt, the shared pai-gen-ux-action-runtime plus the UCI ' +
+      'and Controls host runtimes, a pac CLI `model genpage upload --actions` verb ' +
+      '(PowerPlatform-Scale-AdminTools) to persist actionBindings into config.json, and the ' +
+      'GenUxPluginActionAllowList ECS setting — all live in PROD.',
+    enableEnv: 'GENPAGE_ENABLE_CUSTOM_API=1',
   },
 };
 
@@ -116,6 +133,19 @@ function exitIfConnectorsDisabled(opts = {}) {
   const write = opts.write || ((s) => process.stderr.write(s));
   if (!isConnectorsEnabled(opts)) {
     write(connectorsDisabledMessage() + '\n');
+    return exit(3);
+  }
+  return undefined;
+}
+
+// Fail-closed gate shared by every Custom API (Dataverse Action/Function) script entry
+// point. Mirrors exitIfConnectorsDisabled so both features gate the same way: exit 3 =
+// "feature off" (distinct from 1 = runtime/usage error). `exit`/`write` are injectable for tests.
+function exitIfCustomApiDisabled(opts = {}) {
+  const exit = opts.exit || process.exit;
+  const write = opts.write || ((s) => process.stderr.write(s));
+  if (!isCustomApiEnabled(opts)) {
+    write(customApiDisabledMessage() + '\n');
     return exit(3);
   }
   return undefined;
@@ -167,11 +197,28 @@ function connectorsDisabledMessage() {
   );
 }
 
+// Standard operator-facing message printed when a Custom API entrypoint is invoked while
+// the flag is OFF. Centralized (mirrors connectorsDisabledMessage) so every Custom API
+// script speaks with one voice about why it stopped and how to turn the feature on.
+function customApiDisabledMessage() {
+  return (
+    'Dataverse Custom API support is disabled (feature flag "custom-api" is OFF). ' +
+    'GenPage Custom API invocation requires the AIBuilder action prompt, the shared action ' +
+    'runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` ' +
+    'verb, and the GenUxPluginActionAllowList setting to all be live in PROD. To enable for a ' +
+    'single run set GENPAGE_ENABLE_CUSTOM_API=1, or flip "custom-api" to true in ' +
+    'plugins/model-apps/feature-flags.json once the dependencies are released.'
+  );
+}
+
 module.exports = {
   isEnabled,
   isConnectorsEnabled,
+  isCustomApiEnabled,
   connectorsDisabledMessage,
+  customApiDisabledMessage,
   exitIfConnectorsDisabled,
+  exitIfCustomApiDisabled,
   describe,
   validateFlags,
   envVarName,

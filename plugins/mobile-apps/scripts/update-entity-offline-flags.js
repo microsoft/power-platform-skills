@@ -28,6 +28,7 @@
 //   1 — bad args, auth failure, network failure after retries
 
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const { retryAfterDelayMs } = require('./dataverse-request');
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -195,8 +196,7 @@ async function main() {
     }
 
     if (res.statusCode === 429 && attempt < maxRetries) {
-      const retryAfter = res.headers?.['retry-after'];
-      const delayMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000;
+      const delayMs = retryAfterDelayMs(res.headers?.['retry-after'], 30000);
       process.stderr.write(`429 rate-limited — waiting ${delayMs / 1000}s\n`);
       await new Promise((r) => setTimeout(r, delayMs));
       continue;

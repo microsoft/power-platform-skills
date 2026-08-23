@@ -1,6 +1,6 @@
-# Mobile Apps telemetry is exercised with isolated configs and local mirrors.
-# The job-level opt-out is a backstop against accidental production emission if
-# the plugin is provisioned later and a new test forgets its local test seam.
+# Functional unit tests for the mobile-apps plugin across supported operating
+# systems and Node versions. These scripts spawn Azure CLI shims and manipulate
+# filesystem paths, so cross-platform coverage protects real behavior.
 name: mobile-apps-script-tests
 
 on:
@@ -9,14 +9,12 @@ on:
             - main
         paths:
             - "plugins/mobile-apps/**"
-            - "shared/telemetry/**"
+            - ".github/workflows/mobile-apps-script-tests.yml"
 
 jobs:
     test-mobile-apps-scripts:
-        name: test-mobile-apps-scripts (${{ matrix.os }})
+        name: test-mobile-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
         runs-on: ${{ matrix.os }}
-        env:
-            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:
@@ -24,6 +22,9 @@ jobs:
                     - ubuntu-latest
                     - windows-latest
                     - macos-latest
+                node:
+                    - 20
+                    - 22
         steps:
             - name: checkout
               uses: actions/checkout@v4
@@ -31,9 +32,9 @@ jobs:
             - name: setup-node
               uses: actions/setup-node@v4
               with:
-                  node-version: 22
+                  node-version: ${{ matrix.node }}
 
             - name: run-mobile-apps-script-tests
               shell: bash
-              working-directory: plugins/mobile-apps/scripts/tests
-              run: node --test
+              working-directory: plugins/mobile-apps
+              run: node --test scripts/tests/*.test.js

@@ -7,8 +7,8 @@
  * resulting deps include known-bad packages, private vendor packages are
  * referenced via the npm registry instead of `file:` paths to vendor *.tgz,
  * OR native/runtime packages are added outside the current package baseline's
- * native/runtime allowlist.
- * Generic JS-only dependencies remain allowed.
+ * native/runtime allowlist. A reviewed exact-version exception may admit an
+ * otherwise ambiguous `react-native-*` package that planning verified is JS-only.
  *
  * Allowed icon library: `@expo/vector-icons` only.
  *
@@ -40,14 +40,14 @@ const FORBIDDEN_DEPS = {
 // Names that MUST resolve to a vendor *.tgz file: path.
 const VENDOR_ONLY = [/^expo-msal-intune$/, /^@microsoft\/pa-/];
 
-// Native/runtime packages are fixed by the Expo template baseline. These name
-// patterns intentionally catch Expo modules, React Native packages, config
-// plugins, and native-flavoured UI/runtime packages. Generic JS-only packages
-// like date-fns, zod, uuid, nanoid, or lodash do not match and remain allowed.
+// These patterns identify packages known to require native runtime support. The
+// broad `react-native-*` namespace is handled separately because it also contains
+// pure-JavaScript packages; those stay blocked unless planning passes an exact
+// reviewed name/version exception to explicit validation.
 const NATIVE_PACKAGE_PATTERNS = [
   /^expo($|-)/,
   /^@expo\//,
-  /^react-native($|-)/,
+  /^react-native$/,
   /^@react-native\//,
   /^@react-native-community\//,
   /^@shopify\/react-native-/,
@@ -72,6 +72,8 @@ const NATIVE_PACKAGE_PATTERNS = [
   /^@sentry\/react-native$/,
 ];
 
+const AMBIGUOUS_REACT_NATIVE_PACKAGE_PATTERN = /^react-native-/;
+
 const BUNDLED_TEMPLATE_PACKAGE_PATH = path.resolve(__dirname, '..', 'template', 'package.json');
 
 function packageDeps(pkg) {
@@ -89,6 +91,14 @@ function readPackageDepsFromContent(content) {
   } catch {
     return null;
   }
+}
+
+function readRequiredPackageDeps(packagePath) {
+  const deps = readPackageDepsFromContent(fs.readFileSync(packagePath, 'utf8'));
+  if (!deps) {
+    throw new Error('package manifest is not valid JSON');
+  }
+  return deps;
 }
 
 function readPackageLockDeps(packageJsonPath) {
@@ -135,11 +145,10 @@ function reconstructBeforeContent(toolName, toolInput, afterContent) {
 
 function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPath) {
   if (toolInput.validation_mode === 'explicit-mobile-workflow') {
-    try {
-      return readPackageDepsFromContent(fs.readFileSync(BUNDLED_TEMPLATE_PACKAGE_PATH, 'utf8'));
-    } catch {
-      return null;
-    }
+    // Explicit mobile validation is the final native-runtime gate. If the bundled
+    // template is missing or malformed, allowing the write would silently turn a
+    // verification failure into permission to add arbitrary native dependencies.
+    return readRequiredPackageDeps(BUNDLED_TEMPLATE_PACKAGE_PATH);
   }
 
   const beforeContent = reconstructBeforeContent(toolName, toolInput, afterContent);
@@ -147,8 +156,15 @@ function getNativeAllowlistDeps(toolName, toolInput, afterContent, packageJsonPa
   return beforeDeps || readPackageLockDeps(packageJsonPath);
 }
 
-function isNativeLikePackage(name) {
-  return NATIVE_PACKAGE_PATTERNS.some((rx) => rx.test(name));
+function approvedJsDependencyVersions(toolInput) {
+  const approved = new Map();
+  if (!Array.isArray(toolInput.approved_js_dependencies)) return approved;
+  for (const entry of toolInput.approved_js_dependencies) {
+    if (typeof entry?.name === 'string' && typeof entry?.version === 'string') {
+      approved.set(entry.name, entry.version);
+    }
+  }
+  return approved;
 }
 
 function isPackageJson(filePath) {
@@ -177,7 +193,7 @@ function readResult(toolName, toolInput) {
   return '';
 }
 
-function findViolations(content, filePath, nativeAllowlistDeps) {
+function findViolations(content, filePath, nativeAllowlistDeps, approvedJsDependencies) {
   let pkg;
   try {
     pkg = JSON.parse(content);
@@ -205,12 +221,21 @@ function findViolations(content, filePath, nativeAllowlistDeps) {
         reason: `\`${name}\` is a private vendor package. Reference must be a \`file:./vendor/<name>-<version>.tgz\` path, not \`${version}\`. Will 404 from npm registry.`,
       });
     }
-    if (!editingBundledTemplatePackage && nativeAllowlistDeps && isNativeLikePackage(name)) {
-      if (!nativeAllowlistDeps[name]) {
+    if (!editingBundledTemplatePackage && nativeAllowlistDeps && !nativeAllowlistDeps[name]) {
+      if (NATIVE_PACKAGE_PATTERNS.some((rx) => rx.test(name))) {
         violations.push({
           name,
           version,
-          reason: `Native/runtime dependency \`${name}\` was not present in this app/template package baseline before the edit. Do not add native libraries from an app branch; start from a template/runtime that already ships it. JS-only packages are still allowed.`,
+          reason: `Native/runtime dependency \`${name}\` was not present in this app/template package baseline. Start from a template/runtime that already ships it.`,
+        });
+      } else if (
+        AMBIGUOUS_REACT_NATIVE_PACKAGE_PATTERN.test(name) &&
+        approvedJsDependencies.get(name) !== String(version)
+      ) {
+        violations.push({
+          name,
+          version,
+          reason: `Dependency \`${name}@${version}\` uses the ambiguous \`react-native-*\` namespace and is absent from the app/template baseline. Explicit validation requires the same exact name/version from the user-approved JavaScript Dependencies plan.`,
         });
       }
     }
@@ -236,8 +261,17 @@ process.stdin.on('end', () => {
   const content = readResult(toolName, toolInput);
   if (!content) process.exit(0);
 
-  const nativeAllowlistDeps = getNativeAllowlistDeps(toolName, toolInput, content, fp);
-  const violations = findViolations(content, fp, nativeAllowlistDeps);
+  let nativeAllowlistDeps;
+  try {
+    nativeAllowlistDeps = getNativeAllowlistDeps(toolName, toolInput, content, fp);
+  } catch (error) {
+    process.stderr.write(
+      `BLOCKED: unable to load native dependency allowlist from ${BUNDLED_TEMPLATE_PACKAGE_PATH}: ${error.message}\n`,
+    );
+    process.exit(2);
+  }
+  const approvedJsDependencies = approvedJsDependencyVersions(toolInput);
+  const violations = findViolations(content, fp, nativeAllowlistDeps, approvedJsDependencies);
   if (violations.length === 0) process.exit(0);
 
   const rel = path.relative(process.cwd(), fp) || fp;

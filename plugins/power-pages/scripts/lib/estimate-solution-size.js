@@ -730,9 +730,15 @@ function estimateTotalSize({ classified, tables, schemaAttrCount, webFilesAggreg
  * to the expected site. Safety check for solutions that accidentally contain
  * ppcs from multiple sites.
  */
-async function countSolutionMembership(envUrl, solutionId, token, sitePpcIdSet = null) {
+async function countSolutionMembership(
+  envUrl,
+  solutionId,
+  token,
+  sitePpcIdSet = null,
+  makeRequest = helpers.makeRequest,
+) {
   const url = `${envUrl}/api/data/v9.2/solutioncomponents?$filter=_solutionid_value eq ${solutionId}&$select=objectid,componenttype&$top=5000`;
-  const res = await helpers.makeRequest({
+  const res = await makeRequest({
     url,
     headers: {
       Authorization: `Bearer ${token}`,

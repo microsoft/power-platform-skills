@@ -36,9 +36,19 @@ same relative position so downstream parsers can find them predictably:
 ## Environment
 - URL: [environment URL]
 - App: [app name] ([app-id]) OR "create new: [name]"
+- Mode: app-builder    ← **only** when the plan was projected from an App Spec by
+  `scripts/write-page-plan.js`; omitted for a planner-authored (standalone `/genpage`) plan
 - Languages: [detected languages with LCIDs, or "English (1033) only"]
 - Solution: [solution unique name — ALWAYS present, default fallback is "Default"]
 - Publisher Prefix: [prefix tied to the solution's publisher — ALWAYS present, default fallback is "new"]
+
+`Mode` selects the **page identity rule** the page-builder uses for `PAGEREF_` tokens, so it is
+not cosmetic:
+- `Mode: app-builder` → the token is the page's **`Key`** (see `## Pages` below). A page pulled
+  from a deployed app keeps its real storage path (`pages/<guid>/page.tsx`), so its file stem is
+  meaningless as an identity.
+- `Mode` absent → there are no App Spec keys and no `Key` column, so the token is the target's
+  file name without `.tsx`.
 
 Both `Solution` and `Publisher Prefix` are **mandatory** in every plan. The
 planner picks them by asking the user (when metadata work is needed) or by
@@ -62,7 +72,16 @@ Downstream consumers honour them:
 |------|------|---------|----------|
 | [Name] | [name].tsx | [description] | [entity logical names, comma-separated, OR "mock data"] |
 
+In an `app-builder` plan the table carries an extra **`Key`** column between `Page` and `File`, and
+each Per-Page Specification repeats it as `- **Key:** <key>`:
+
+| Page | Key | File | Purpose | Entities |
+|------|-----|------|---------|----------|
+| [Name] | [stable key] | [file path] | [description] | [entity logical names OR "mock data"] |
+
 ## Entity Creation Required
+The entity-builder provisions this entire section in one pass via `scripts/provision-entities.js` (SDK-backed, idempotent); the section contract (suffix-only names) is unchanged.
+
 [If NO entities need creating, the value is exactly:]
 No entity creation required — all entities already exist.
 
@@ -119,6 +138,21 @@ at runtime.]
 | new_uxtest_sharepoint | /providers/Microsoft.PowerApps/apis/shared_sharepointonline | https://.../sites/foo | 5709dd6f-... | Pet | | PetName (string), OwnerName (string), PetType ({Value:string}), Created (datetime) | | |
 | new_uxtest_msnweather | /providers/Microsoft.PowerApps/apis/shared_msnweather | | | | CurrentWeather | | Location (required), units (optional) | temperature (number), conditions (string), humidity (number) |
 
+## Custom API Bindings
+[If NO Custom APIs are used, the value is exactly:]
+No custom API bindings.
+
+[Else, one row per bound Custom API. `Kind` is Action (may mutate; called with
+executeAction) or Function (read-only; called with executeFunction). `Bound Entity` is the
+table logical name for an entity-bound API, or `(Global)` for an unbound one. `Parameters`
+lists each request parameter as `name: Kind` using the declared Dataverse parameter kind.
+All values are discovered by genpage-customapi-builder via list-custom-apis.js — never
+fabricated. Persisted (via `pac ... upload --actions`) into config.json's `actionBindings`.]
+| Name | Kind | Bound Entity | Display Name | Parameters (name: kind) |
+|------|------|--------------|--------------|-------------------------|
+| new_ApproveOrder | Action | salesorder | Approve Order | Comment: String, Amount: Decimal |
+| new_GetOrderSummary | Function | (Global) | Get Order Summary | OrderId: Guid |
+
 ## Solution Packaging
 [OPTIONAL section — include ONLY when packaging into a solution. Omit it entirely
 to skip packaging; when absent, the orchestrator skips Phase 6.7. This section is
@@ -145,10 +179,11 @@ connector bindings." sentinel).]
 - **Purpose:** [one-line description]
 - **Entities:** [comma-separated logical names OR "mock data"]
 - **Needs caching:** true / false — set true for any page that **fetches data on
-  mount** (list, detail, or single-visit overview/dashboard); all need the
-  in-flight de-dupe that survives the host double-mount. Set false only for
-  forms with no initial fetch and mock-data pages. When true, the page-builder
-  reads `references/data-caching.md`.
+  mount** through a real host read (Dataverse `dataApi` calls or connector calls
+  such as `queryConnectorTable` / `executeConnectorOperation`), regardless of
+  Data mode. Set false only for pages that render inline mock arrays or forms
+  with no initial fetch. When true, the page-builder reads
+  `references/data-caching.md`.
 - **Key Features:** [what this specific page should do]
 - **Components:** [Fluent UI V9 components to use]
 - **Layout:** [responsive design approach]
@@ -174,6 +209,7 @@ connector bindings." sentinel).]
 | `## Entity Creation Required` | Entity-builder | Exact literal "No entity creation required..." when empty, else per-entity subsections |
 | `## Existing Entities` | Orchestrator (for `pac model genpage generate-types --data-sources`) | Comma-separated logical names |
 | `## Connector Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No connector bindings." when empty; logical names must match Dataverse connectionreferences; tabular bindings must include discovered optional `Fields`; REST/action bindings must include discovered `Parameters` and `Response` |
+| `## Custom API Bindings` | Planner, page-builder, orchestrator deploy | Exact literal "No custom API bindings." when empty; names must match existing Dataverse Custom APIs (`customapi.uniquename`); entity-bound rows carry the bound table (else `(Global)`); every row carries its discovered `Parameters` kinds |
 | `## Solution Packaging` | Orchestrator (Phase 6.7) | Opt-in; absent = skip |
 | `## Design Preferences` | Page-builder | Prose, free-form |
 | `## Relevant Samples` | Page-builder (for Read path resolution) | Sample filename must match a file in `${PLUGIN_ROOT}/samples/` |
@@ -189,6 +225,7 @@ Before the orchestrator fans out to builders in Phase 5, it should verify:
 - [ ] Every page in `## Pages` has a matching `### [Page Name]` subsection in `## Per-Page Specifications`
 - [ ] If `## Pages` contains Dataverse entities, `## Existing Entities` is non-empty OR `## Entity Creation Required` is non-empty
 - [ ] Every non-empty `## Connector Bindings` logical name matches an existing `connectionreference` in the selected environment
+- [ ] Every non-empty `## Custom API Bindings` name matches an existing `customapi` (uniquename) in the selected environment; entity-bound rows carry the bound table and every row its parameter kinds
 - [ ] Every tabular connector binding records discovered `Fields`; generated connector row interfaces must mark every field optional
 - [ ] Every REST/action connector binding records discovered `Parameters` and `Response`; generated request/response interfaces must be built from those schemas only
 

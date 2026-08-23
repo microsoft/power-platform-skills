@@ -4,18 +4,19 @@
  * PreToolUse guardrail for Write / Edit / MultiEdit.
  *
  * Path safety — reject writes whose absolute path escapes the current working
- * directory. Stops a runaway sub-agent (e.g. a parallel genpage page-builder)
- * from clobbering ~/.bashrc, /etc/*, sibling repos, etc. genpage always works
- * inside a working directory created under the cwd (SKILL Phase 0), so every
- * legitimate write stays under it.
+ * directory. Stops a runaway sub-agent (e.g. a parallel genpage or app-builder
+ * page-builder) from clobbering ~/.bashrc, /etc/*, sibling repos, etc. Both
+ * authoring skills always work inside a working directory created under the cwd
+ * (genpage SKILL Phase 0 / app-builder SKILL Phase 0), so every legitimate write
+ * stays under it.
  *
  * SCOPING (global-install safety): this plugin's hooks are installed globally, so
  * this guard must NOT constrain writes in unrelated projects. It therefore only
- * enforces during an active genpage session — detected by a `genpage-plan.md` at
- * or one level under the cwd (genpage Phase 0 creates the working dir as a child
- * of cwd and writes the plan into it). With no genpage-plan.md present the hook is
- * a clean no-op (exit 0), so a globally-installed model-apps plugin never blocks
- * ordinary out-of-cwd writes.
+ * enforces during an active model-apps authoring session — detected by a session
+ * marker (`genpage-plan.md`, or app-builder's `app-spec.json` / `model-app-plan.md`)
+ * at or one level under the cwd. With no marker present the hook is a clean no-op
+ * (exit 0), so a globally-installed model-apps plugin never blocks ordinary
+ * out-of-cwd writes.
  *
  * This intentionally does NOT scan content for secrets. Per repo convention,
  * secret handling is done via agent instructions in SKILL.md (no fixed regex can
@@ -89,23 +90,30 @@ function isPathSafe(targetPath, cwd) {
 }
 
 /**
- * True when the cwd looks like an active genpage run: a `genpage-plan.md` sits at
- * the cwd or in one of its immediate child directories. genpage Phase 0 creates
- * the working directory as a direct child of cwd and the planner writes
- * genpage-plan.md into it (skills/genpage/SKILL.md), so the plan is at either
- * `<cwd>/genpage-plan.md` (host started inside the working dir) or
- * `<cwd>/<workdir>/genpage-plan.md` (host started at the project root). Shallow,
- * bounded, and fail-open: any error → false (treat as "not a genpage session" and
- * do NOT warn), because a hook must never interfere with unrelated work.
+ * True when the cwd looks like an active model-apps authoring run: a session marker
+ * file sits at the cwd or in one of its immediate child directories. Both authoring
+ * skills create their working directory as a direct child of cwd and write a marker
+ * into it, so the marker is at either `<cwd>/<marker>` (host started inside the
+ * working dir) or `<cwd>/<workdir>/<marker>` (host started at the project root):
+ *   - genpage      -> genpage-plan.md            (skills/genpage/SKILL.md Phase 0)
+ *   - app-builder  -> app-spec.json / model-app-plan.md (skills/app-builder/SKILL.md
+ *                     Phase 0 — the working dir holds both)
+ * app-builder matters here for the same reason genpage does: its generate-pages phase
+ * dispatches PARALLEL page-builder workers that write page `.tsx` files, which is
+ * exactly the runaway-sub-agent write this guard flags. Shallow, bounded, and
+ * fail-open: any error → false (treat as "not a model-apps session" and do NOT warn),
+ * because a hook must never interfere with unrelated work.
  */
-function isGenpageSession(cwd) {
+const SESSION_MARKERS = ['genpage-plan.md', 'app-spec.json', 'model-app-plan.md'];
+
+function isModelAppsSession(cwd) {
   try {
-    if (fs.existsSync(path.join(cwd, 'genpage-plan.md'))) return true;
+    if (SESSION_MARKERS.some((m) => fs.existsSync(path.join(cwd, m)))) return true;
     let scanned = 0;
     for (const entry of fs.readdirSync(cwd, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name === 'node_modules' || entry.name === '.git') continue;
       if (++scanned > 1000) break; // bound syscalls on very large project roots
-      if (fs.existsSync(path.join(cwd, entry.name, 'genpage-plan.md'))) return true;
+      if (SESSION_MARKERS.some((m) => fs.existsSync(path.join(cwd, entry.name, m)))) return true;
     }
   } catch {
     return false;
@@ -148,17 +156,18 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
-  // Global-install safety: only enforce during an active genpage session, so a
-  // globally-installed model-apps plugin never blocks writes in unrelated projects.
-  if (!isGenpageSession(cwd)) {
-    debug('no genpage-plan.md at/under cwd — not a genpage session, allowing');
+  // Global-install safety: only enforce during an active model-apps authoring session
+  // (genpage or app-builder), so a globally-installed model-apps plugin never blocks
+  // writes in unrelated projects.
+  if (!isModelAppsSession(cwd)) {
+    debug('no genpage-plan.md / app-spec.json / model-app-plan.md at/under cwd — not a model-apps session, allowing');
     process.exit(0);
   }
 
   for (const p of extractWritePaths(toolName, toolInput)) {
     if (!isPathSafe(p, cwd)) {
       warn(
-        `Heads up: a genpage ${toolName} targeted "${p}", which is outside your project folder ` +
+        `Heads up: a model-apps ${toolName} targeted "${p}", which is outside your project folder ` +
         `(${cwd}). Allowing it, but flagging in case a sub-agent went off-track. ` +
         `Silence with MODEL_APPS_SKIP_WRITE_GUARD=1 or MODEL_APPS_DISABLE_HOOKS=1.`
       );

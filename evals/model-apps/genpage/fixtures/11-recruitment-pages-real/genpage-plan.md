@@ -10,7 +10,7 @@ D:/temp/recruitment-app
 D:/Projects/power-platform-skills/plugins/model-apps
 
 ## Environment
-- URL: https://aurorabapenv610b3.crmtest.dynamics.com
+- URL: https://contosobapenv0001.crmtest.dynamics.com
 - App: create new: Recruitment App
 - Languages: English (1033) only
 - Solution: Crdec34
@@ -28,6 +28,10 @@ No entity creation required — all entities already exist.
 
 ## Existing Entities
 contact, appointment
+
+## Connector Bindings
+
+No connector bindings.
 
 ## Design Preferences
 - Styling: Clean, professional recruitment theme using Fluent UI V9 components; neutral palette (white backgrounds, subtle grays, blue accents); card-based layouts where appropriate

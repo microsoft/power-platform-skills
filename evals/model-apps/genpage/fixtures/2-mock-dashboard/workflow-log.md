@@ -8,12 +8,12 @@
 
 ### Prereq checks
 - `node --version` → v20.11.0
-- `pac help` → PAC CLI Version 2.7.3 (>= 2.7.0 verified)
+- `pac help` → PAC CLI Version 2.11.0 (> 2.10.0 verified)
 - (Commands run separately, not chained with &&)
 
 ### Auth check
-- `pac auth list` → active profile `aurora365-user1@auroratstgeo.onmicrosoft.com`
-- Active environment: https://aurorabapenv4ab3f.crm10.dynamics.com/ (reported to user)
+- `pac auth list` → active profile `contoso-user001@contosotest1.onmicrosoft.com`
+- Active environment: https://contosobapenv0002.crm10.dynamics.com/ (reported to user)
 
 ### Discovery questions (AskUserQuestion)
 - Question 1 (new or edit): user answered "Create new page(s)"
