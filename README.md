@@ -49,7 +49,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install mcp-apps@power-platform-skills
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
-    /plugin install power-apps-mobile@power-platform-skills
+    /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
     ```
@@ -90,7 +90,7 @@ Build and deploy Power Apps code apps for mobile with native device capabilities
 
 **Stack**: Expo + React Native + TypeScript, deployed via Power Apps Wrap
 
-### [Power Apps Mobile Controls](plugins/power-apps-mobile/README.md) (`plugins/power-apps-mobile`)
+### [Power Apps Mobile Extension](plugins/power-apps-mobile-extension/README.md) (`plugins/power-apps-mobile-extension`)
 
 Build third-party native controls for wrapped Canvas apps and package them as verified
 `.ppmplugin` bundles with matching dispatcher PCF controls.
@@ -122,7 +122,7 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/mcp-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/code-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
-    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile
+    claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
     ```
@@ -234,7 +234,7 @@ power-platform-skills/
 │   │   ├── skills/
 │   │   ├── shared/           # Shared instructions + references
 │   │   └── template/         # Bundled Expo app template
-│   ├── power-apps-mobile/     # Native controls for wrapped Canvas apps
+│   ├── power-apps-mobile-extension/ # Native controls for wrapped Canvas apps
 │   │   ├── .plugin/
 │   │   │   └── plugin.json
 │   │   ├── .claude-plugin/   # Legacy manifest mirror

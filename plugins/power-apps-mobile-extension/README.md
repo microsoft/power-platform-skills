@@ -1,4 +1,4 @@
-# Power Apps Mobile Plugin
+# Power Apps Mobile Extension Plugin
 
 Claude Code / GitHub Copilot plugin for creating **third-party controls for Power Apps Mobile
 (PAM)**. It helps design, generate, test, package, and publish a native control using public tooling
@@ -22,13 +22,13 @@ Then load the skills using one of the following options.
 ### Option A — local checkout (`--plugin-dir`)
 
 Clone the public repository, then launch your CLI from the control folder and point it at the
-`power-apps-mobile` plugin:
+`power-apps-mobile-extension` plugin:
 
 ```bash
 git clone https://github.com/microsoft/power-platform-skills.git
-copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile
+copilot --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
 # or
-claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile
+claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
 ```
 
 ### Option B — marketplace (no clone needed)
@@ -38,7 +38,7 @@ plugin:
 
 ```text
 /plugin marketplace add microsoft/power-platform-skills
-/plugin install power-apps-mobile@power-platform-skills
+/plugin install power-apps-mobile-extension@power-platform-skills
 ```
 
 Once your CLI is open, run the skills — start with **`/design-native-extension-feature`** (or jump to `/generate-ppmplugin` if you already have a native module).

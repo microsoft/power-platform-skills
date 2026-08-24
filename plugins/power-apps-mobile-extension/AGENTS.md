@@ -2,8 +2,8 @@
 
 ## Scope
 
-This directory is the complete, self-contained `power-apps-mobile` plugin. In the public
-`microsoft/power-platform-skills` repository, copy it to `plugins/power-apps-mobile/`.
+This directory is the complete, self-contained `power-apps-mobile-extension` plugin. In the public
+`microsoft/power-platform-skills` repository, copy it to `plugins/power-apps-mobile-extension/`.
 
 The plugin builds third-party Power Apps Mobile controls into native-only `.ppmplugin` bundles and
 generates the companion dispatcher PCF. It must use only files in the control's working tree and
@@ -35,5 +35,5 @@ summary is necessary, keep it synchronized with the owning reference.
 - Keep skill frontmatter descriptions below the GitHub Copilot 1,024-character limit.
 
 When adding the plugin to the public repository, also register
-`./plugins/power-apps-mobile` in both root marketplace manifests and add it to the root README. Those
+`./plugins/power-apps-mobile-extension` in both root marketplace manifests and add it to the root README. Those
 repository-level registrations intentionally remain outside this self-contained plugin payload.
