@@ -17,6 +17,7 @@ const { validatePlanArtifactBundle } = require('../validate-plan-artifact-bundle
 const { writePlanArtifactBundle } = require('../write-plan-artifact-bundle');
 const { validateExperienceScreenContract } = require('../lib/experience-screen-contract');
 const { sha256 } = require('../lib/mobile-plan-execution-contract');
+const { validatePrototypeDomainModel } = require('../lib/prototype-domain-model');
 const { prepareExecutionPreflight } = require('../prepare-mobile-plan-execution-contract');
 
 const checkpointScript = path.resolve(__dirname, '..', 'plan-checkpoints.js');
@@ -52,6 +53,42 @@ function schema() {
       relationships: [],
       alternateKeys: [],
     }],
+  };
+}
+
+function domainModel() {
+  const fixtures = [
+    ['item-comfort', 'Cabin comfort set'],
+    ['item-organizer', 'Travel organizer'],
+    ['item-hydration', 'Hydration kit'],
+    ['item-watch', 'Classic watch'],
+  ].map(([id, name]) => ({ id, name }));
+  return {
+    schemaVersion: 1,
+    mode: 'prototype-domain',
+    entities: [{
+      key: 'Item', displayName: 'Item', displayPluralName: 'Items', description: 'A product travelers can browse.', primaryNameField: 'name', estimatedPrototypeRows: 4,
+      fields: [
+        { key: 'id', displayName: 'ID', type: 'id', required: true },
+        { key: 'name', displayName: 'Name', type: 'text', required: true },
+      ],
+    }],
+    relationships: [], choices: [],
+    operations: [
+      { key: 'listItems', entity: 'Item', kind: 'list', repository: 'CatalogRepository', method: 'listItems', hook: 'useItems', selectFields: ['id', 'name'], filterFields: [], sortFields: ['name'], pagination: { mode: 'bounded', boundedReason: 'The approved prototype has four items.', maximumExpectedCount: 4 } },
+      { key: 'getItem', entity: 'Item', kind: 'get', repository: 'CatalogRepository', method: 'getItem', hook: 'useItem', selectFields: ['id', 'name'], filterFields: [], sortFields: [], pagination: { mode: 'none' } },
+    ],
+    actors: [{ key: 'Traveler', displayName: 'Traveler' }],
+    uxPermissions: [{ actor: 'Traveler', operation: 'listItems', allowed: true }, { actor: 'Traveler', operation: 'getItem', allowed: true }],
+    offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listItems', 'getItem'] },
+    fixtures: { Item: fixtures },
+    fixtureScenarios: [
+      { key: 'items-populated', state: 'populated', description: 'Four travel products are visible.', entity: 'Item', recordIds: fixtures.map((item) => item.id) },
+      { key: 'items-loading', state: 'loading', description: 'Travel products are loading.' },
+      { key: 'items-empty', state: 'empty', description: 'No travel products are visible.' },
+      { key: 'items-error', state: 'error', description: 'Travel products failed to load.' },
+      { key: 'items-offline', state: 'offline', description: 'Local travel products remain visible.' },
+    ],
   };
 }
 
@@ -143,13 +180,14 @@ function bundle(root) {
   const preflight = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'mobile-plan-execution-preflight.json'), 'utf8'));
   const composition = primaryComposition(experience);
   return {
-    version: 2,
+    version: 3,
     kind: 'mobile-plan-artifact-bundle',
     workflow: 'create-mobile-prototype',
     planningMode: 'prototype',
     artifacts: {
       nativeAppPlanMarkdown: planMarkdown(),
-      dataverseSchemaContract: schema(),
+      prototypeDomainModel: domainModel(),
+      dataverseSchemaContract: null,
       experienceScreenContract: {
         schemaVersion: 3,
         experienceContractSha256: contractHash(experience),
@@ -223,16 +261,16 @@ function plannedScreen({ id, route, file, role, purpose, pattern, action }) {
     testIds: [`screen-${id.toLowerCase()}`],
     dependencies: { foundation: [], fixtures: ['Item'], screens: [] },
     data: {
-      entities: ['cr_item'],
-      fixtureScenarios: ['populated', 'loading', 'empty', 'error', 'offline'],
+      entities: ['Item'],
+      fixtureScenarios: ['items-populated', 'items-loading', 'items-empty', 'items-error', 'items-offline'],
       operations: detail ? [{
-        id: 'get-item', kind: 'get', entity: 'cr_item', service: 'Cr_itemService', serviceMethod: 'getById',
-        select: ['cr_itemid', 'cr_name'], filter: [], sort: [],
-        routeBindings: [{ parameter: 'id', target: 'id', field: 'cr_itemid' }], idField: 'cr_itemid',
+        id: 'get-item', kind: 'get', entity: 'Item', domainOperation: 'getItem', repository: 'CatalogRepository', repositoryMethod: 'getItem', hook: 'useItem',
+        select: ['id', 'name'], filter: [], sort: [],
+        routeBindings: [{ parameter: 'id', target: 'id', field: 'id' }], idField: 'id',
       }] : [{
-        id: 'list-items', kind: 'list', entity: 'cr_item', service: 'Cr_itemService', serviceMethod: 'getAll',
-        select: ['cr_itemid', 'cr_name'], filter: [], sort: [{ field: 'cr_name', direction: 'asc' }],
-        pagination: { mode: 'none', boundedReason: 'The approved prototype fixture has four items.', maximumExpectedCount: 4 },
+        id: 'list-items', kind: 'list', entity: 'Item', domainOperation: 'listItems', repository: 'CatalogRepository', repositoryMethod: 'listItems', hook: 'useItems',
+        select: ['id', 'name'], filter: [], sort: [{ field: 'name', direction: 'asc' }],
+        pagination: { mode: 'bounded', boundedReason: 'The approved prototype fixture has four items.', maximumExpectedCount: 4 },
         routeBindings: [],
       }],
     },
@@ -240,38 +278,38 @@ function plannedScreen({ id, route, file, role, purpose, pattern, action }) {
   };
 }
 
-test('foreground validates and writes exactly the five return-only planning artifacts', (context) => {
+test('foreground validates and writes exactly the five active return-only planning artifacts', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
   assert.deepEqual(validatePlanArtifactBundle(root, value), { valid: true, errors: [] });
   const result = writePlanArtifactBundle(root, value);
   assert.deepEqual(result.written.sort(), [
-    '.tmp/dataverse-schema-contract.json',
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
+    '.tmp/prototype-domain-model.json',
     'native-app-plan.md',
   ]);
   assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), '{"name":"protected","dependencies":{},"devDependencies":{}}\n');
   assert.equal(fs.readFileSync(path.join(root, 'app', 'keep.tsx'), 'utf8'), 'export default null;\n');
   assert.equal(fs.readFileSync(path.join(root, 'src', 'keep.ts'), 'utf8'), 'export {};\n');
   assert.equal(fs.readFileSync(path.join(root, 'memory-bank.md'), 'utf8'), '# Memory\n');
-  const writtenSchema = JSON.parse(fs.readFileSync(
-    path.join(root, '.tmp', 'dataverse-schema-contract.json'),
+  const writtenDomain = JSON.parse(fs.readFileSync(
+    path.join(root, '.tmp', 'prototype-domain-model.json'),
     'utf8',
   ));
-  assert.equal(writtenSchema.planningMode, 'prototype');
-  assert.equal(writtenSchema.executionEligible, false);
+  assert.equal(writtenDomain.mode, 'prototype-domain');
+  assert.equal(fs.existsSync(path.join(root, '.tmp', 'dataverse-schema-contract.json')), false);
 });
 
-test('the schema-authoritative v3 planner fixture is semantically complete without duplicated Markdown examples', (context) => {
+test('the domain-authoritative v3 planner fixture is semantically complete without duplicated Markdown examples', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
   const experience = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-contract.json'), 'utf8'));
   assert.equal(fs.existsSync(path.resolve(__dirname, '..', 'schema-experience-screen-contract.json')), true);
-  assert.deepEqual(validateExperienceScreenContract(value.artifacts.experienceScreenContract, experience), []);
+  assert.deepEqual(validateExperienceScreenContract(value.artifacts.experienceScreenContract, experience, { dataContract: value.artifacts.prototypeDomainModel, executionContract: value.artifacts.executionContract }), []);
   assert.deepEqual(validatePlanArtifactBundle(root, value), { valid: true, errors: [] });
-  assert.deepEqual(validateContract(value.artifacts.dataverseSchemaContract), { valid: true, errors: [] });
+  assert.deepEqual(validatePrototypeDomainModel(value.artifacts.prototypeDomainModel), { valid: true, errors: [] });
 });
 
 test('foreground creates prototype checkpoint state only after writing the validated bundle', (context) => {
@@ -322,6 +360,9 @@ test('remote CDN media policy rejects the bundled-only planner drift seen in a p
 test('remote CDN media fields are complete on every product or media-bearing table', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
+  value.workflow = 'create-mobile-app';
+  value.planningMode = 'required';
+  value.artifacts.dataverseSchemaContract = schema();
   value.artifacts.dataverseSchemaContract.tables = [
     mediaTable('cr_product', 'Product', [
       ['cr_imageurl', 'Image URL'],
@@ -334,18 +375,6 @@ test('remote CDN media fields are complete on every product or media-bearing tab
       ['cr_imageassetkey', 'Image asset key'],
     ]),
   ];
-  for (const screen of value.artifacts.experienceScreenContract.screens) {
-    screen.data.entities = ['cr_product'];
-    screen.data.operations = screen.routeParameters.length ? [{
-      id: `get-product-${screen.id.toLowerCase()}`, kind: 'get', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getById',
-      select: ['cr_name', 'cr_imageurl', 'cr_imagealttext', 'cr_imageassetkey'], filter: [], sort: [],
-      routeBindings: [{ parameter: 'id', target: 'id', field: 'cr_productid' }], idField: 'cr_productid',
-    }] : [{
-      id: `list-products-${screen.id.toLowerCase()}`, kind: 'list', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getAll',
-      select: ['cr_name', 'cr_imageurl', 'cr_imagealttext', 'cr_imageassetkey'], filter: [], sort: [],
-      pagination: { mode: 'none', boundedReason: 'The approved fixture has two products.', maximumExpectedCount: 2 }, routeBindings: [],
-    }];
-  }
   const result = validatePlanArtifactBundle(root, value);
   assert.equal(result.valid, false);
   assert.ok(result.errors.includes('remote-cdn-cached table cr_product is missing media field imageCacheKey'));
@@ -355,6 +384,9 @@ test('remote CDN media fields are complete on every product or media-bearing tab
 test('remote CDN media agreement accepts complete per-table fields plus a bundled fallback', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
+  value.workflow = 'create-mobile-app';
+  value.planningMode = 'required';
+  value.artifacts.dataverseSchemaContract = schema();
   const fields = [
     ['cr_imageurl', 'Image URL'],
     ['cr_imagealttext', 'Image alternative text'],
@@ -365,24 +397,15 @@ test('remote CDN media agreement accepts complete per-table fields plus a bundle
     mediaTable('cr_product', 'Product', fields),
     mediaTable('cr_productmedia', 'Product Media', fields),
   ];
-  for (const screen of value.artifacts.experienceScreenContract.screens) {
-    screen.data.entities = ['cr_product'];
-    screen.data.operations = screen.routeParameters.length ? [{
-      id: `get-product-${screen.id.toLowerCase()}`, kind: 'get', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getById',
-      select: ['cr_name', 'cr_imageurl', 'cr_imagealttext', 'cr_imagecachekey', 'cr_imageassetkey'], filter: [], sort: [],
-      routeBindings: [{ parameter: 'id', target: 'id', field: 'cr_productid' }], idField: 'cr_productid',
-    }] : [{
-      id: `list-products-${screen.id.toLowerCase()}`, kind: 'list', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getAll',
-      select: ['cr_name', 'cr_imageurl', 'cr_imagealttext', 'cr_imagecachekey', 'cr_imageassetkey'], filter: [], sort: [],
-      pagination: { mode: 'none', boundedReason: 'The approved fixture has two products.', maximumExpectedCount: 2 }, routeBindings: [],
-    }];
-  }
   assert.deepEqual(validatePlanArtifactBundle(root, value), { valid: true, errors: [] });
 });
 
 test('remote CDN media agreement requires the source and delivery machine tokens in plan prose', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
+  value.workflow = 'create-mobile-app';
+  value.planningMode = 'required';
+  value.artifacts.dataverseSchemaContract = schema();
   value.artifacts.nativeAppPlanMarkdown = value.artifacts.nativeAppPlanMarkdown
     .replace('approved-cdn', 'licensed image host')
     .replace('device-cached', 'stored for offline use');
@@ -392,49 +415,29 @@ test('remote CDN media agreement requires the source and delivery machine tokens
   assert.ok(result.errors.includes('nativeAppPlanMarkdown must preserve device-cached media delivery'));
 });
 
-test('prototype planning rejects missing, generic, and implausible populated fixture intent', (context) => {
+test('prototype planning rejects missing, generic, and implausible neutral fixtures', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
-  const table = value.artifacts.dataverseSchemaContract.tables[0];
-  delete table.fixtureRowCount;
-  delete table.columns[0].fixtureValues;
+  delete value.artifacts.prototypeDomainModel.fixtures.Item;
   let result = validatePlanArtifactBundle(root, value);
   assert.equal(result.valid, false);
-  assert.ok(result.errors.includes('prototype table cr_item requires fixtureRowCount between 0 and 50'));
+  assert.ok(result.errors.includes('prototypeDomainModel: fixtures is missing entity Item'));
 
-  table.fixtureRowCount = 2;
-  table.columns[0].fixtureValues = ['Item 1', 'Item 2'];
-  table.columns.push({
-    logicalName: 'cr_quantity', schemaName: 'cr_quantity', displayName: 'Quantity', type: 'wholenumber',
-    plannedDecision: 'create', requiredLevel: 'ApplicationRequired', fixtureValues: [0, 48],
-  });
+  value.artifacts.prototypeDomainModel = domainModel();
+  value.artifacts.prototypeDomainModel.fixtures.Item[0].name = 'Item 1';
+  value.artifacts.prototypeDomainModel.entities[0].fields.push({ key: 'quantity', displayName: 'Quantity', type: 'whole-number', required: true, minimum: 1, maximum: 99 });
+  for (const item of value.artifacts.prototypeDomainModel.fixtures.Item) item.quantity = 0;
   result = validatePlanArtifactBundle(root, value);
   assert.equal(result.valid, false);
-  assert.ok(result.errors.includes('prototype table cr_item primary-name fixture values must be unique and domain-readable'));
-  assert.ok(result.errors.includes('prototype quantity column cr_item.cr_quantity requires small positive integer fixtureValues'));
+  assert.ok(result.errors.some((error) => /uses generic numbered copy/.test(error)));
+  assert.ok(result.errors.some((error) => /quantity is below minimum 1/.test(error)));
 });
 
-test('prototype planning accepts explicit prompt-derived row counts and fixture values', (context) => {
+test('prototype planning accepts explicit prompt-derived neutral records and scenarios', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
-  const table = value.artifacts.dataverseSchemaContract.tables[0];
-  table.fixtureRowCount = 2;
-  table.columns[0].fixtureValues = ['Cabin comfort set', 'Hydration face mist'];
-  table.columns.push(
-    {
-      logicalName: 'cr_description', schemaName: 'cr_description', displayName: 'Description', type: 'string',
-      plannedDecision: 'create', requiredLevel: 'ApplicationRequired',
-      fixtureValues: ['Soft travel essentials for a restful flight.', 'A compact mist selected for dry cabin air.'],
-    },
-    {
-      logicalName: 'cr_currencycode', schemaName: 'cr_currencycode', displayName: 'Currency code', type: 'string',
-      plannedDecision: 'create', requiredLevel: 'ApplicationRequired', fixtureValue: 'USD',
-    },
-    {
-      logicalName: 'cr_quantity', schemaName: 'cr_quantity', displayName: 'Quantity', type: 'wholenumber',
-      plannedDecision: 'create', requiredLevel: 'ApplicationRequired', fixtureValues: [1, 2],
-    },
-  );
+  assert.equal(value.artifacts.prototypeDomainModel.fixtures.Item.length, 4);
+  assert.equal(value.artifacts.prototypeDomainModel.fixtureScenarios.some((scenario) => scenario.state === 'offline'), true);
   assert.deepEqual(validatePlanArtifactBundle(root, value), { valid: true, errors: [] });
 });
 
@@ -473,7 +476,7 @@ test('bundle validation rejects approval and checkpoint metadata before persiste
   const root = makeProject(context);
   const value = bundle(root);
   value.warnings.push('approvalId: should be foreground-owned');
-  value.artifacts.dataverseSchemaContract.planPath = 'native-app-plan.md';
+  value.artifacts.prototypeDomainModel.planPath = 'native-app-plan.md';
   value.artifacts.experienceScreenContract.statusPath = '.tmp/mobile-plan-status.json';
   const result = validatePlanArtifactBundle(root, value);
   assert.equal(result.valid, false);
@@ -484,11 +487,12 @@ test('bundle validation rejects approval and checkpoint metadata before persiste
   assert.equal(fs.existsSync(path.join(root, '.tmp', 'mobile-plan-status.json')), false);
 });
 
-test('connector-only bundle still persists the fixed schema artifact as JSON null', (context) => {
+test('connector-only bundle removes stale domain and schema artifacts', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
   value.workflow = 'create-mobile-app';
   value.planningMode = 'connector-only';
+  value.artifacts.prototypeDomainModel = null;
   value.artifacts.dataverseSchemaContract = null;
   const detail = value.artifacts.experienceScreenContract.screens[1];
   detail.route = '/(app)/items/detail';
@@ -500,15 +504,18 @@ test('connector-only bundle still persists the fixed schema artifact as JSON nul
     screen.data.entities = [];
     screen.data.operations = [];
   }
+  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), '{}\n');
+  fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), '{}\n');
   const result = writePlanArtifactBundle(root, value);
   assert.deepEqual(result.written.sort(), [
-    '.tmp/dataverse-schema-contract.json',
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
     'native-app-plan.md',
   ]);
-  assert.equal(fs.readFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), 'utf8'), 'null\n');
+  assert.deepEqual(result.removed.sort(), ['.tmp/dataverse-schema-contract.json', '.tmp/prototype-domain-model.json']);
+  assert.equal(fs.existsSync(path.join(root, '.tmp', 'dataverse-schema-contract.json')), false);
+  assert.equal(fs.existsSync(path.join(root, '.tmp', 'prototype-domain-model.json')), false);
 });
 
 test('writer restores all previous artifact content after a late replacement failure', (context) => {
@@ -516,12 +523,14 @@ test('writer restores all previous artifact content after a late replacement fai
   const value = bundle(root);
   const previous = {
     plan: '# Previous plan\n',
+    domain: '{"previous":true}\n',
     schema: '{"previous":true}\n',
     screen: '{"previous":true}\n',
     foundation: '{"previous":true}\n',
     execution: '{"previous":true}\n',
   };
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), previous.plan);
+  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), previous.domain);
   fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), previous.schema);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), previous.screen);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), previous.foundation);
@@ -541,6 +550,7 @@ test('writer restores all previous artifact content after a late replacement fai
   }
 
   assert.equal(fs.readFileSync(path.join(root, 'native-app-plan.md'), 'utf8'), previous.plan);
+  assert.equal(fs.readFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), 'utf8'), previous.domain);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), 'utf8'), previous.schema);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'), previous.screen);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), 'utf8'), previous.foundation);

@@ -743,6 +743,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
   --project-root "$WORKING_DIR" \
   --file "$WORKING_DIR/native-app-plan.md" \
+  --file "$WORKING_DIR/.tmp/prototype-domain-model.json" \
   --file "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --file "$WORKING_DIR/.tmp/experience-screen-contract.json" \
   --file "$WORKING_DIR/.tmp/experience-foundation-contract.json" \
@@ -774,7 +775,7 @@ Then wait for a normal textual response:
   Only after this command reports `status: approved` may the workflow continue
   to auth, native, connector, or Dataverse mutation steps.
 - Any requested edit - request a revised return-only bundle, stage it at the
-  same foreground path, validate it, persist the five fixed artifacts, rerun
+  same foreground path, validate it, persist the six fixed artifact slots, rerun
   Step 3.9 and plan validators, then run `plan-checkpoints.js --action draft`
   again for a fresh revision.
 - Any other response - restate the available textual choices without mutating
@@ -1895,7 +1896,55 @@ return (
 
 Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
-### Step 10.7 — Snapshot generated services into the plan
+### Step 10.7 — Generate domain adapters and immutable screen tasks
+
+> **AUTHORITATIVE DOMAIN-FIRST OVERRIDE:** Execute this section and then jump
+> directly to Step 11. The older service-snapshot/view-model/skeleton reference
+> text that follows through Step 10.8d is retained temporarily for historical
+> context and MUST NOT be executed. Screens never import generated services.
+
+The planner's `.tmp/prototype-domain-model.json` remains the screen/hook
+contract. Generated Dataverse services are adapter implementation details.
+After `/add-dataverse` has produced `.datamodel-manifest.json` and real service
+files, run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/gen-data-layer.js" \
+  "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/reconcile-domain-dataverse.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../prototype-to-real-app/scripts/gen-dataverse-repositories.js" \
+  "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/configure-prototype-runtime.js" \
+  "$PROJECT_DIR" dataverse
+npm --prefix "$PROJECT_DIR" run type-check
+```
+
+Any reconciliation conflict blocks screen work. Do not patch domain types or
+screens to resemble Dataverse. Only
+`src/data/repositories/dataverseRepositories.ts` may import generated services.
+
+Compile and validate the aggregate pack plus per-screen tasks:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Generate one typed skeleton from each `.tmp/screen-tasks/<screen-id>.json`.
+Skeletons import task-listed hooks and helpers only from `@/data`, plus route,
+shell, and foundation dependencies. They contain literal route/header/operation
+bindings and a `// TODO: screen-builder fills JSX here` marker. Never put a
+fixture import, repository call, generated service, connector call,
+`toExperienceRecord`, or presentation adapter in a skeleton.
+
+Run the type-check gate, then continue at Step 11.
+
+### Legacy Step 10.7-10.8d Reference — Do Not Execute
 
 **Print before starting:**
 > "→ [Step 10.7/13] Probing src/generated/services/ and writing the service registry into native-app-plan.md…"
@@ -2317,24 +2366,25 @@ Each prompt:
   screen_name: <work-order id>
   route: <work-order route>
   target_file: <working_dir>/<work-order file>
-  screen_build_pack_path: <working_dir>/.tmp/screen-build-pack.json
+  screen_task_path: <working_dir>/.tmp/screen-tasks/<screen-id>.json
+  screen_task_revision: <task revision>
   screen_build_pack_revision: <pack revision>
   input_file_sha256: <foreground SHA-256 of target_file immediately before dispatch>
   artifact_protocol: return-only mobile-screen-artifact v1
   skeleton_exists: true
 
-  Follow screen-builder.md. Validate the pack and use only the matching
-  screens[screen_id] work order plus design.recipe. Its presentation,
+  Follow screen-builder.md. Validate and use only the supplied immutable task.
+  Its presentation,
   regions, firstViewport, header, primaryAction, media, states,
   qualityCriteria, testIds, data, dependencies, and forbiddenDefaults are
   binding. Import its required foundation components instead of recreating
   motif UI. A typed skeleton already exists at target_file; use it to compose
   the exact complete replacement TSX in memory and preserve resolved imports.
   Do not write, edit, patch, or redirect output into any workspace file. Do not
-  reread native-app-plan.md, the experience
-  sidecars, brand/design-system.md, or broad plugin references unless the work
-  order explicitly names a targeted guidanceRef. A missing/stale work order is
-  BLOCKED; there is no v2 legacy-plan fallback. Return per AGENTS.md rule #12:
+  read the aggregate build pack, native-app-plan.md, the experience
+  sidecars, brand/design-system.md, or broad plugin references unless the
+  task explicitly names a targeted guidanceRef. A missing/stale task is
+  BLOCKED; there is no legacy-plan fallback. Return per AGENTS.md rule #12:
   on success use literal `DONE` or `DONE_WITH_CONCERNS:`, then one blank line,
   then exactly one fenced `mobile-screen-artifact` JSON object containing the
   exact complete TSX source and no prose. Echo the supplied input hash and the
@@ -2448,12 +2498,16 @@ and `DONE_WITH_CONCERNS` do not open later waves or qualify visual completion.
 Keep the early Metro process running and reuse it at Step 12.
 
 Common wave-gate repair classes to batch instead of fixing line-by-line:
-- Generated service/model names: singular vs plural generated names, stale aliases after Dataverse rename.
-- Service option shapes: `orderBy` must match the generated type, usually `string[]`.
+- Domain adapter mappings: stale entity/field/choice/service mappings belong in
+  reconciliation or `dataverseRepositories.ts`, never screen JSX.
+- Repository option shapes: filters, sort, and cursors must match the approved
+  domain operation.
 - UI prop mismatches: invalid Tamagui shorthand props on components that do not support them.
 - React Native style types: percent widths must use a typed percentage or shared `ProgressBar` helper.
-- Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
-- Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
+- Dataverse create/update payload typing: isolate generated SDK adaptation in
+  the repository adapter; no `as any` belongs in screen JSX.
+- Connector blockers: resolve the adapter boundary; never replace a missing
+  connector with a screen-local generated-service call.
 
 **After all waves return and the last wave gate is clean**, compare a fingerprint
 of TypeScript-relevant files with the last successful wave check. If files
@@ -2469,6 +2523,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"

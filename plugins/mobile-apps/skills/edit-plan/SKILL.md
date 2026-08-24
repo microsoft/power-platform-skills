@@ -13,7 +13,7 @@ model: opus
 Surgically update one approved section of `native-app-plan.md`, re-run that
 section's approval gate, keep its machine-readable planning artifacts
 consistent, and record a durable pending-apply handoff. This skill does not
-change app source, generated services, Dataverse, connectors, native wrappers,
+change app source, domain/repository implementations, Dataverse, connectors, native wrappers,
 brand files, sample data, or lifecycle sync hashes.
 
 Use `/edit-app` instead when the user expects the app to change in the same
@@ -34,9 +34,9 @@ request.
   until conversion completes.
 - Edit exactly one major section per invocation. A cross-section feature
   belongs to `/edit-app`, where all dependencies can be approved together.
-- In prototype mode, Data Model edits must produce a complete normalized schema
-  contract marked `planningMode: "prototype"` and
-  `executionEligible: false`. Never invoke Dataverse.
+- In prototype mode, Data Model edits must produce a complete neutral
+  `.tmp/prototype-domain-model.json`; `.tmp/dataverse-schema-contract.json`
+  remains absent. Never invoke Dataverse or invent target metadata.
 - In Dataverse mode, this workflow may perform read-only discovery but must not
   create an executable operation manifest or write metadata.
 - Leave `lastSyncedPlanHash` and `lastDataverseManifestHash` unchanged. Their
@@ -59,7 +59,7 @@ node -e "const c=require(process.argv[1]); if(c.schemaVersion!==3) process.exit(
   "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 ```
 
-Read the plan, lifecycle state, memory bank, current structured schema contract
+Read the plan, lifecycle state, memory bank, current neutral domain contract
 when present, real Dataverse manifest when present, and
 `.mobile-app/plan-change.json` when present.
 
@@ -105,19 +105,17 @@ full app requirements, relevant screen contracts, and the user's request.
 For `dataMode: prototype`, pass:
 
 ```text
-Dataverse planning mode: prototype
+Planning mode: prototype
 Target environment: NOT SUPPLIED
-Publisher prefix: cr (prototype placeholder only)
-Mode: edit; preserve unaffected table/column identities and stable choice values.
+Mode: edit; preserve unaffected entity/field/choice/operation keys and stable fixture IDs.
 ```
 
 Require one fenced `data-model-draft` JSON response with `dataModelMarkdown`,
-`dataverseSchemaContract`, and warnings. The foreground workflow validates the
-returned contract and writes the approved section/sidecar; the agent never
-writes a project or scratch file. For prototypes, the contract must retain
-`planningMode: "prototype"` and `executionEligible: false`. The agent must not
-reset unchanged option integers, primary keys, logical names, relationships, or
-alternate keys merely because one field changed.
+`prototypeDomainModel`, `dataverseSchemaContract: null`, and warnings. The
+foreground validates and writes the approved section/sidecar; the agent never
+writes a project or scratch file. The agent must not reset unchanged entity,
+field, operation, choice, relationship, fixture, or scenario identities merely
+because one field changed.
 
 For `dataMode: dataverse`, pass the current real manifest and environment facts
 for read-only reconciliation. Draft Reuse/Extend/Create/Adapt/Defer decisions,
@@ -212,7 +210,7 @@ Data Model edit and otherwise preserves the current value when one exists.
 `screenContractSha256` and `executionContractSha256` are always required.
 
 After the updated plan and sidecars validate, remove
-`.tmp/screen-build-pack.json`. The approved pending record preserves the hashes
+`.tmp/screen-build-pack.json` and `.tmp/screen-tasks/`. The approved pending record preserves the hashes
 needed by `/edit-app --apply-plan`; deleting the derived pack prevents preview,
 debug, deploy, or direct sync from treating the previous operations as current.
 `/edit-app --apply-plan` recompiles it after mode-specific specialists finish.

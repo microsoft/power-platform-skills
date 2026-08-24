@@ -1,8 +1,8 @@
 # Product Experience Contract
 
 The Product Experience Contract is the one machine-readable source of truth
-for product decisions that must survive planning, design, screen generation,
-mock data generation, refinement, and visual QA. It is created from a normal
+for product decisions that must survive planning, domain/fixture generation,
+design, screen generation, refinement, and visual QA. It is created from a normal
 one-line or few-line brief; a screenshot, HTML page, or image is optional.
 
 ## Artifacts
@@ -12,7 +12,9 @@ one-line or few-line brief; a screenshot, HTML page, or image is optional.
 | `.tmp/experience-contract.json` | foreground creation workflow | Brief-derived product experience |
 | `.tmp/experience-screen-contract.json` | foreground creation workflow, from the return-only `screen-planner` contract | Canonical primary-screen composition and runtime anchors |
 | `.tmp/experience-foundation-contract.json` | foreground creation workflow, from the return-only `screen-planner` contract | Hash-bound ownership of the 2-5 reusable motif components |
-| `.tmp/screen-build-pack.json` | compiler/orchestrator | Compact revision-bound assembly sheet for builders, mocks, refiner, and validation |
+| `.tmp/prototype-domain-model.json` | foreground creation workflow, from the return-only data architect | Canonical neutral entities, operations, fixtures, and scenarios |
+| `.tmp/screen-build-pack.json` | compiler/orchestrator | Compact revision-bound assembly sheet for orchestration and validation |
+| `.tmp/screen-tasks/<screen-id>.json` | compiler/orchestrator | Immutable one-screen work order supplied to one builder |
 | `native-app-plan.md` → `## Design` | foreground creation workflow, from the return-only `native-app-planner` bundle | Human-reviewable Product Experience Contract mirror |
 | `brand/design-system.md` → `## Product Experience Primitives` | `/design-system` | Token/component translation of motifs and hierarchy |
 | `.tmp/experience-visual-review.json` | native review/refiner | Native evidence for the product experience |
@@ -116,24 +118,26 @@ universal component library.
 
 ## Screen Build Pack
 
-After the experience, screen, foundation, design, and data-intent sources are
+After the experience, screen, foundation, design, and neutral-domain sources are
 available, compile one immutable execution pack:
 
 ```bash
 node scripts/compile-screen-build-pack.js --project-root <project>
 node scripts/validate-screen-build-pack.js --project-root <project>
+node scripts/validate-screen-task-pack.js --project-root <project>
 ```
 
 The pack contains source hashes, a deterministic revision, compact experience
 and design pointers, navigation initial/key-flow routes, fixture adapter and
 entities, per-screen first viewport/action/states/dependencies/test IDs, build
-order, and targeted invalidation dependencies. It is not a second strategy:
+order, domain repository/hooks, and targeted invalidation dependencies. The
+compiler also writes one revision-bound task per screen. It is not a second strategy:
 planners/design systems still make rich decisions; builders consume the pack.
 
-Parallel screen builders, prototype mock generation, the React Native refiner,
-and final validators read the same revision. They never mutate it. A legacy
-fallback is compatibility-only, must be explicitly logged, and must never
-invent dashboard/CRUD behavior when a field is absent. Recompile after a
+Each parallel screen builder reads only its task; the refiner and final
+validators use the parent revision. Screens consume `@/data` hooks and never
+generated services. Legacy generated mocks are compatibility-migration input,
+not a fallback execution source. Recompile after a
 relevant source hash changes; the validator reports only affected screen,
 fixture, and validator targets as stale.
 

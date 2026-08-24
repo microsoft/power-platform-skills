@@ -57,24 +57,26 @@ function screenShellIssues(projectRoot, pack) {
       }
     }
   }
-  if (pack?.fixtures?.viewModel) {
-    const viewModelPath = path.join(projectRoot, normalizeRelativePath(pack.fixtures.viewModel));
-    if (!fs.existsSync(viewModelPath)) {
+  if (pack?.fixtures?.dataModule) {
+    const dataModulePath = path.join(projectRoot, normalizeRelativePath(pack.fixtures.dataModule));
+    if (!fs.existsSync(dataModulePath)) {
       issues.push({
-        rule: 'missing-experience-view-model',
-        file: normalizeRelativePath(pack.fixtures.viewModel),
-        message: 'The build pack requires a materialized stable-ID experience view model before native route validation.',
+        rule: 'missing-domain-data-module',
+        file: normalizeRelativePath(pack.fixtures.dataModule),
+        message: 'The build pack requires the generated neutral domain module before native route validation.',
       });
     } else {
-      const content = fs.readFileSync(viewModelPath, 'utf8');
-      if (!/export function toExperienceRecord\b/.test(content)
-        || !/export function getExperienceAsset\b/.test(content)
-        || !/export function isExperienceRecordActionable\b/.test(content)
-        || !/export function relatedExperienceRecords\b/.test(content)) {
+      const content = fs.readFileSync(dataModulePath, 'utf8');
+      const providerPath = path.join(path.dirname(dataModulePath), 'PrototypeDataProvider.tsx');
+      if (!/export function isDomainRecordActionable\b/.test(content)
+        || !/resolveDomainMedia/.test(content)
+        || !/PrototypeDataProvider/.test(content)
+        || !fs.existsSync(providerPath)
+        || /QueryClientProvider/.test(fs.existsSync(providerPath) ? fs.readFileSync(providerPath, 'utf8') : '')) {
         issues.push({
-          rule: 'invalid-experience-view-model',
-          file: normalizeRelativePath(pack.fixtures.viewModel),
-          message: 'Experience view model must expose canonical record, availability, relationship, and local asset adapters.',
+          rule: 'invalid-domain-data-module',
+          file: normalizeRelativePath(pack.fixtures.dataModule),
+          message: 'Neutral data module must expose domain actionability, media resolution, and a provider that reuses host Query Client ownership.',
         });
       }
     }

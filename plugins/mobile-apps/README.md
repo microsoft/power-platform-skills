@@ -51,7 +51,7 @@ connector wiring.
     /create-mobile-app
     ```
 
-    For a local UX prototype with deterministic mock data and no Power
+    For a local UX prototype with a deterministic neutral domain and no Power
     Platform environment yet, run this instead:
 
     ```text
@@ -264,8 +264,9 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 
 Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
 
-For a mock-backed prototype, `/edit-app` regenerates local schema/services and
-uses `/sync-from-plan`; it never creates real tables or connections. Requests
+For a local prototype, `/edit-app` regenerates neutral models, repositories,
+hooks, fixtures, and affected tasks; it never creates real tables or
+connections. Requests
 such as "make this real", "connect this prototype to Dataverse", or "choose an
 environment" route to `/prototype-to-real-app`.
 
@@ -298,9 +299,9 @@ Example edit flows:
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. |
-| `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, rebases placeholder publisher names, live-reconciles and applies Dataverse, replaces connector stubs, optionally reuses seed scenarios, proves all mocks are gone, restores auth/runtime, and commits Dataverse state after one final sync. |
-| `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from `native-app-plan.md`; refreshes service/field bindings, routes, shared code, affected screens, quality gates, preview, and lifecycle hashes. Conversion uses its target-mode gate to commit `dataverse`. |
+| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs one environment-free review, writes a neutral domain contract, generates deterministic local repositories/TanStack Query hooks/fixtures under `src/data`, builds polished screens from immutable tasks, and starts Metro without Power Platform provisioning. |
+| `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, applies approved Dataverse changes, reconciles the same domain against live metadata, generates repository/connector adapters, optionally seeds approved fixtures, restores auth/runtime, proves screens unchanged, and commits Dataverse state after final validation. |
+| `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from the readable plan plus machine sidecars; refreshes domain/repository mappings, routes, shared code, affected screen tasks, quality gates, preview, and lifecycle hashes. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |

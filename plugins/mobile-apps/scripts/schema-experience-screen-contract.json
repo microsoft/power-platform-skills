@@ -219,13 +219,15 @@
     },
     "operation": {
       "type": "object",
-      "required": ["id", "kind", "entity", "service", "serviceMethod", "routeBindings"],
+      "required": ["id", "kind", "entity", "domainOperation", "repository", "repositoryMethod", "hook", "routeBindings"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
         "kind": { "enum": ["list", "get", "create", "update", "delete", "related-list", "connector"] },
-        "entity": { "type": "string", "minLength": 1 },
-        "service": { "type": "string", "minLength": 1 },
-        "serviceMethod": { "type": "string", "minLength": 1 },
+        "entity": { "type": ["string", "null"] },
+        "domainOperation": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*Repository$" },
+        "repositoryMethod": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "hook": { "type": "string", "pattern": "^use[A-Z][A-Za-z0-9]*$" },
         "select": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "filter": { "type": "array", "items": { "$ref": "#/definitions/filter" } },
         "sort": { "type": "array", "items": { "$ref": "#/definitions/sort" } },
@@ -273,10 +275,9 @@
       "type": "object",
       "required": ["mode"],
       "properties": {
-        "mode": { "enum": ["cursor", "offset", "none"] },
+        "mode": { "enum": ["cursor", "bounded", "none"] },
         "pageSize": { "type": "integer", "minimum": 1, "maximum": 100 },
         "cursorParameter": { "type": "string", "minLength": 1 },
-        "offsetParameter": { "type": "string", "minLength": 1 },
         "boundedReason": { "type": "string", "minLength": 5 },
         "maximumExpectedCount": { "type": "integer", "minimum": 0 }
       },
@@ -294,14 +295,14 @@
     },
     "relationshipBinding": {
       "type": "object",
-      "required": ["sourceEntity", "targetEntity", "schemaName", "sourceField", "targetField", "readStrategy"],
+      "required": ["key", "sourceEntity", "targetEntity", "sourceField", "targetField", "readStrategy"],
       "properties": {
+        "key": { "type": "string", "minLength": 1 },
         "sourceEntity": { "type": "string", "minLength": 1 },
         "targetEntity": { "type": "string", "minLength": 1 },
-        "schemaName": { "type": "string", "minLength": 1 },
         "sourceField": { "type": "string", "minLength": 1 },
         "targetField": { "type": "string", "minLength": 1 },
-        "readStrategy": { "enum": ["formatted-lookup", "chained-fetch", "external-projection-required"] },
+        "readStrategy": { "enum": ["repository", "embedded", "external-projection-required"] },
         "sourceRouteParameter": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false

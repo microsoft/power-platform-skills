@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { contractHash } = require('./experience-patterns');
 const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
+const { validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 
 function readJson(filePath, label) {
   try {
@@ -28,6 +29,7 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
   const experiencePath = path.join(root, '.tmp', 'experience-contract.json');
   const screenPath = path.join(root, '.tmp', 'experience-screen-contract.json');
   const schemaPath = path.join(root, '.tmp', 'dataverse-schema-contract.json');
+  const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
   const packagePath = path.join(root, 'package.json');
   const preflightPath = path.join(root, '.tmp', 'mobile-plan-execution-preflight.json');
   const resolvedContractPath = path.resolve(root, contractPath);
@@ -35,7 +37,6 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
     [resolvedContractPath, 'mobile plan execution contract'],
     [experiencePath, 'Experience Contract'],
     [screenPath, 'Experience Screen Contract'],
-    [schemaPath, 'data contract'],
     [packagePath, 'package.json'],
     [preflightPath, 'mobile plan execution preflight'],
   ]) {
@@ -46,11 +47,22 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
   if (screenContract.schemaVersion !== 3) {
     return { valid: false, errors: ['Experience Screen Contract must use schemaVersion 3; re-plan legacy v1/v2 screens'] };
   }
+  let dataContract = null;
+  // The neutral domain remains the screen/hook contract after graduation. A
+  // Dataverse schema may coexist as the persistence mapping target, but it
+  // must never replace the domain contract used to validate app behavior.
+  if (fs.existsSync(domainPath)) {
+    dataContract = readJson(domainPath, 'Prototype domain model');
+    const domainValidation = validatePrototypeDomainModel(dataContract);
+    if (!domainValidation.valid) return domainValidation;
+  } else if (fs.existsSync(schemaPath)) {
+    dataContract = readJson(schemaPath, 'Data contract');
+  }
   return validateMobilePlanExecutionContract(readJson(resolvedContractPath, 'Mobile plan execution contract'), {
     briefText: fs.readFileSync(briefPath, 'utf8'),
     experienceContractSha256: contractHash(experienceContract),
     screenContract,
-    dataContract: readJson(schemaPath, 'Data contract'),
+    dataContract,
     packageJson: readJson(packagePath, 'package.json'),
     preflight: readJson(preflightPath, 'Mobile plan execution preflight'),
   });

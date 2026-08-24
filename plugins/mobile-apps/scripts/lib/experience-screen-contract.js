@@ -278,18 +278,83 @@ function pathParameters(route) {
 
 function validatePagination(operation, label, errors) {
   const pagination = operation.pagination;
-  if (!pagination || !['cursor', 'offset', 'none'].includes(pagination.mode)) {
+  if (!pagination || !['cursor', 'bounded', 'none'].includes(pagination.mode)) {
     errors.push(`${label}.pagination is required for list operations`);
     return;
   }
-  if (pagination.mode === 'none') {
+  if (['none', 'bounded'].includes(pagination.mode)) {
     if (typeof pagination.boundedReason !== 'string' || pagination.boundedReason.trim().length < 5) errors.push(`${label}.pagination none requires boundedReason`);
     if (!Number.isInteger(pagination.maximumExpectedCount) || pagination.maximumExpectedCount < 0) errors.push(`${label}.pagination none requires maximumExpectedCount`);
   } else {
     if (!Number.isInteger(pagination.pageSize) || pagination.pageSize < 1 || pagination.pageSize > 100) errors.push(`${label}.pagination ${pagination.mode} requires pageSize between 1 and 100`);
-    const parameter = pagination.mode === 'cursor' ? pagination.cursorParameter : pagination.offsetParameter;
+    const parameter = pagination.cursorParameter;
     if (typeof parameter !== 'string' || !parameter.trim()) errors.push(`${label}.pagination ${pagination.mode} requires its continuation parameter`);
   }
+}
+
+function domainEntityByKey(dataContract, key) {
+  return (dataContract?.entities || []).find((entity) => entity.key === key) || null;
+}
+
+function domainOperationByKey(dataContract, key) {
+  return (dataContract?.operations || []).find((operation) => operation.key === key) || null;
+}
+
+function domainRelationshipByKey(dataContract, key) {
+  return (dataContract?.relationships || []).find((relationship) => relationship.key === key) || null;
+}
+
+function validateDomainRelationship(operation, label, dataContract, errors) {
+  const binding = operation.relationship;
+  if (!binding || typeof binding !== 'object') {
+    errors.push(`${label}.relationship is required for related-list operations`);
+    return;
+  }
+  const relationship = domainRelationshipByKey(dataContract, binding.key);
+  if (!relationship) {
+    errors.push(`${label}.relationship ${binding.key || '<missing>'} does not exist in the prototype domain model`);
+    return;
+  }
+  const parent = domainEntityByKey(dataContract, relationship.parent);
+  const parentId = parent?.fields?.find((field) => field.type === 'id')?.key;
+  if (binding.sourceEntity !== relationship.parent || binding.targetEntity !== relationship.child) errors.push(`${label}.relationship source/target do not match ${binding.key}`);
+  if (binding.sourceField !== parentId || binding.targetField !== relationship.childField) errors.push(`${label}.relationship fields do not match ${binding.key}`);
+  if (binding.readStrategy === 'external-projection-required') errors.push(`${label}.relationship requires an unresolved external projection`);
+  if (binding.readStrategy !== 'repository') errors.push(`${label}.related-list must use repository read strategy`);
+  if (binding.sourceRouteParameter) {
+    const expectedValueFrom = `route:${binding.sourceRouteParameter}`;
+    const routeBound = (operation.routeBindings || []).some((item) => item.parameter === binding.sourceRouteParameter && item.target === 'relationship' && item.field === relationship.childField);
+    const filterBound = (operation.filter || []).some((item) => item.field === relationship.childField && item.valueFrom === expectedValueFrom);
+    if (!routeBound || !filterBound) errors.push(`${label}.relationship route parameter ${binding.sourceRouteParameter} must bind and filter ${relationship.childField}`);
+  }
+}
+
+function validateDomainOperation(operation, screen, label, context, errors) {
+  const domainOperation = domainOperationByKey(context.dataContract, operation.domainOperation);
+  if (!domainOperation) {
+    errors.push(`${label}.domainOperation ${operation.domainOperation || '<missing>'} does not exist in the prototype domain model`);
+    return;
+  }
+  const expectedKind = operation.kind === 'related-list' ? 'list' : operation.kind;
+  if (domainOperation.kind !== expectedKind) errors.push(`${label}.kind does not match domain operation ${domainOperation.key}`);
+  if (operation.entity !== domainOperation.entity) errors.push(`${label}.entity does not match domain operation ${domainOperation.key}`);
+  if (operation.repository !== domainOperation.repository || operation.repositoryMethod !== domainOperation.method || operation.hook !== domainOperation.hook) errors.push(`${label} repository or hook identity does not match domain operation ${domainOperation.key}`);
+  if (!(screen.data?.entities || []).includes(domainOperation.entity)) errors.push(`${label}.entity is missing from screen.data.entities`);
+  const entity = domainEntityByKey(context.dataContract, domainOperation.entity);
+  const fields = new Set((entity?.fields || []).map((field) => field.key));
+  for (const field of [...(operation.select || []), ...(operation.filter || []).map((item) => item.field), ...(operation.sort || []).map((item) => item.field), ...(operation.writeFields || []), operation.idField].filter(Boolean)) {
+    if (!fields.has(field)) errors.push(`${label} references unknown domain field ${field}`);
+  }
+  for (const field of operation.select || []) if (!(domainOperation.selectFields || []).includes(field)) errors.push(`${label}.select field ${field} is not approved by ${domainOperation.key}`);
+  for (const filter of operation.filter || []) if (!(domainOperation.filterFields || []).includes(filter.field)) errors.push(`${label}.filter field ${filter.field} is not approved by ${domainOperation.key}`);
+  for (const sort of operation.sort || []) if (!(domainOperation.sortFields || []).includes(sort.field)) errors.push(`${label}.sort field ${sort.field} is not approved by ${domainOperation.key}`);
+  for (const field of operation.writeFields || []) if (!(domainOperation.writeFields || []).includes(field)) errors.push(`${label}.write field ${field} is not approved by ${domainOperation.key}`);
+  if (['list', 'related-list'].includes(operation.kind)) {
+    validatePagination(operation, label, errors);
+    const expectedMode = domainOperation.pagination?.mode;
+    if (operation.pagination?.mode !== expectedMode) errors.push(`${label}.pagination mode does not match domain operation ${domainOperation.key}`);
+  }
+  if (operation.kind === 'related-list' || operation.relationship) validateDomainRelationship(operation, label, context.dataContract, errors);
 }
 
 function validateRelationshipBinding(operation, label, dataContract, errors) {
@@ -369,13 +434,33 @@ function validateOperation(operation, screen, screenIndex, operationIndex, conte
   }
   if (!/^[a-z][a-z0-9-]*$/.test(String(operation.id || ''))) errors.push(`${label}.id is invalid`);
   if (!OPERATION_KINDS.has(operation.kind)) errors.push(`${label}.kind is invalid`);
-  if (typeof operation.service !== 'string' || !operation.service.trim()) errors.push(`${label}.service is required`);
-  if (typeof operation.serviceMethod !== 'string' || !operation.serviceMethod.trim()) errors.push(`${label}.serviceMethod is required`);
+  if (typeof operation.repository !== 'string' || !operation.repository.trim()) errors.push(`${label}.repository is required`);
+  if (typeof operation.repositoryMethod !== 'string' || !operation.repositoryMethod.trim()) errors.push(`${label}.repositoryMethod is required`);
+  if (typeof operation.hook !== 'string' || !operation.hook.trim()) errors.push(`${label}.hook is required`);
   const routeParameters = new Set((screen.routeParameters || []).map((parameter) => parameter.name));
   if (!Array.isArray(operation.routeBindings)) errors.push(`${label}.routeBindings must be an array`);
   for (const [bindingIndex, binding] of (operation.routeBindings || []).entries()) {
     if (!routeParameters.has(binding?.parameter)) errors.push(`${label}.routeBindings references undeclared parameter ${binding?.parameter || '<missing>'}`);
     if (!['id', 'filter', 'relationship', 'input'].includes(binding?.target) || typeof binding?.field !== 'string' || !binding.field.trim()) errors.push(`${label}.routeBindings[${bindingIndex}] is invalid`);
+  }
+  if (READ_KINDS.has(operation.kind) && (!Array.isArray(operation.select) || !operation.select.length)) errors.push(`${label}.select must be non-empty for read operations`);
+  if (['create', 'update'].includes(operation.kind) && (!Array.isArray(operation.writeFields) || !operation.writeFields.length)) errors.push(`${label}.writeFields must be non-empty for ${operation.kind}`);
+  if (['get', 'update', 'delete'].includes(operation.kind)) {
+    if (!operation.idField) errors.push(`${label}.idField is required for ${operation.kind}`);
+    else if (!(operation.routeBindings || []).some((binding) => binding?.target === 'id' && binding.field === operation.idField)) {
+      const parameter = (screen.routeParameters || []).find((candidate) => candidate?.required)?.name || '<required>';
+      errors.push(`${label} path parameter ${parameter} is not bound to screen operation id field ${operation.idField}`);
+    }
+  }
+  for (const [filterIndex, filter] of (operation.filter || []).entries()) {
+    if (!['eq', 'ne', 'contains', 'startswith', 'endswith', 'gt', 'ge', 'lt', 'le', 'in'].includes(filter?.operator)) errors.push(`${label}.filter[${filterIndex}].operator is invalid`);
+    const hasValue = Object.prototype.hasOwnProperty.call(filter || {}, 'value');
+    const hasValueFrom = typeof filter?.valueFrom === 'string' && filter.valueFrom.length > 0;
+    if (hasValue === hasValueFrom) errors.push(`${label}.filter[${filterIndex}] requires exactly one of value or valueFrom`);
+    if (hasValueFrom && filter.valueFrom.startsWith('route:') && !routeParameters.has(filter.valueFrom.slice(6))) errors.push(`${label}.filter[${filterIndex}] references undeclared route parameter ${filter.valueFrom.slice(6)}`);
+  }
+  for (const [sortIndex, sort] of (operation.sort || []).entries()) {
+    if (!sort || typeof sort.field !== 'string' || !['asc', 'desc'].includes(sort.direction)) errors.push(`${label}.sort[${sortIndex}] is invalid`);
   }
 
   if (operation.kind === 'connector') {
@@ -385,20 +470,17 @@ function validateOperation(operation, screen, screenIndex, operationIndex, conte
     }
     const connector = (context.executionContract?.connectorOperations || []).find((item) => item.id === operation.connectorOperationId);
     if (!connector) errors.push(`${label}.connectorOperationId does not resolve in the execution contract`);
-    else {
-      if (operation.service !== connector.service) errors.push(`${label}.service does not match connector service ${connector.service}`);
-      if (operation.serviceMethod !== connector.operation) errors.push(`${label}.serviceMethod does not match connector operation ${connector.operation}`);
-      if (context.serviceSurface) {
-        const serviceMethods = context.serviceSurface[operation.service];
-        if (!serviceMethods) errors.push(`${label}.service ${operation.service} is absent from the generated service surface`);
-        else if (!serviceMethods.includes(operation.serviceMethod)) errors.push(`${label}.serviceMethod ${operation.serviceMethod} is absent from service ${operation.service}`);
-      }
-    }
+    else if (operation.domainOperation !== connector.id) errors.push(`${label}.domainOperation must match connector operation ${connector.id}`);
+    return;
+  }
+
+  if (context.dataContract?.mode === 'prototype-domain') {
+    validateDomainOperation(operation, screen, label, context, errors);
     return;
   }
 
   const allowedMethods = METHOD_BY_KIND[operation.kind];
-  if (allowedMethods && !allowedMethods.has(operation.serviceMethod)) errors.push(`${label}.serviceMethod ${operation.serviceMethod} is invalid for ${operation.kind}`);
+  if (allowedMethods && !allowedMethods.has(operation.repositoryMethod)) errors.push(`${label}.repositoryMethod ${operation.repositoryMethod} is invalid for ${operation.kind}`);
   if (context.serviceSurface) {
     const serviceMethods = context.serviceSurface[operation.service];
     if (!serviceMethods) errors.push(`${label}.service ${operation.service} is absent from the generated service surface`);

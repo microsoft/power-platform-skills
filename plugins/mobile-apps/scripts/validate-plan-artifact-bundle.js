@@ -13,6 +13,7 @@ const {
 const { validateContract } = require('./build-dataverse-operation-manifest');
 const { validateExperienceScreenContract } = require('./lib/experience-screen-contract');
 const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
+const { validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 
 const TOP_LEVEL_KEYS = BUNDLE_SCHEMA.required;
 const ARTIFACT_KEYS = BUNDLE_SCHEMA.properties.artifacts.required;
@@ -212,9 +213,9 @@ function planContradictsRemoteMedia(plan) {
 }
 
 function validateMediaDataAgreement(contract, schema, plan, errors) {
-  if (contract?.assetPolicy?.media !== 'remote-cdn-cached' || !schema || !Array.isArray(schema.tables)) return;
+  if (contract?.assetPolicy?.media !== 'remote-cdn-cached') return;
 
-  for (const table of schema.tables) {
+  for (const table of schema?.tables || []) {
     const presentFields = semanticMediaFields(table);
     if (!mediaEntityTable(table, schema.publisherPrefix, presentFields)) continue;
     for (const [semanticName, displayName] of Object.entries(REMOTE_MEDIA_FIELDS)) {
@@ -346,7 +347,7 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
     return { valid: false, errors: ['bundle must be an object'] };
   }
   exactKeys(bundle, TOP_LEVEL_KEYS, 'bundle', errors);
-  if (bundle.version !== 2) errors.push('bundle version must be 2');
+  if (bundle.version !== 3) errors.push('bundle version must be 3');
   if (bundle.kind !== 'mobile-plan-artifact-bundle') errors.push('bundle kind must be mobile-plan-artifact-bundle');
   if (!['create-mobile-app', 'create-mobile-prototype'].includes(bundle.workflow)) errors.push('bundle workflow is invalid');
   if (!['required', 'prototype', 'connector-only'].includes(bundle.planningMode)) errors.push('bundle planningMode is invalid');
@@ -382,22 +383,30 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
     return { valid: false, errors };
   }
   for (const error of validateExperienceContract(experience)) errors.push(`foreground experience contract: ${error}`);
+  const domainModel = bundle.artifacts?.prototypeDomainModel;
   const schema = bundle.artifacts?.dataverseSchemaContract;
   if (bundle.planningMode === 'connector-only') {
+    if (domainModel !== null) errors.push('connector-only bundle prototypeDomainModel must be null');
+  } else if (!domainModel || typeof domainModel !== 'object' || Array.isArray(domainModel)) {
+    errors.push('prototypeDomainModel must be an object for domain-backed workflows');
+  } else {
+    const validation = validatePrototypeDomainModel(domainModel);
+    if (!validation.valid) errors.push(...validation.errors.map((error) => `prototypeDomainModel: ${error}`));
+  }
+  if (bundle.planningMode === 'connector-only') {
     if (schema !== null) errors.push('connector-only bundle dataverseSchemaContract must be null');
+  } else if (bundle.planningMode === 'prototype') {
+    if (schema !== null) errors.push('prototype bundle dataverseSchemaContract must be null');
   } else {
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
       errors.push('dataverseSchemaContract must be an object');
     } else {
       const schemaValidation = validateContract(schema);
       if (!schemaValidation.valid) errors.push(...schemaValidation.errors.map((error) => `dataverseSchemaContract: ${error}`));
-      if (bundle.planningMode === 'prototype' && (schema.planningMode !== 'prototype' || schema.executionEligible !== false)) {
-        errors.push('prototype bundle schema requires planningMode prototype and executionEligible false');
-      }
       validateMediaDataAgreement(experience, schema, plan, errors);
-      if (bundle.planningMode === 'prototype') validatePrototypeFixtures(schema, errors);
     }
   }
+  if (bundle.planningMode !== 'required') validateMediaDataAgreement(experience, null, plan, errors);
 
   const briefPath = [
     path.join(root, '.tmp', 'experience-brief.md'),
@@ -422,14 +431,14 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
       briefText: fs.readFileSync(briefPath, 'utf8'),
       experienceContractSha256: contractHash(experience),
       screenContract: bundle.artifacts?.experienceScreenContract,
-      dataContract: schema,
+      dataContract: domainModel,
       packageJson: readJson(packagePath),
       preflight: readJson(preflightPath),
     });
     errors.push(...executionValidation.errors);
   }
   validateScreenContract(experience, bundle.artifacts?.experienceScreenContract, {
-    dataContract: schema,
+    dataContract: domainModel,
     executionContract,
   }, errors);
   validateFoundation(experience, bundle.artifacts?.experienceFoundationContract, errors);

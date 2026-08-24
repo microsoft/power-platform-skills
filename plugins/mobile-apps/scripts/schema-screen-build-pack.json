@@ -9,7 +9,7 @@
     "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "sources": {
       "type": "object",
-      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "tokens", "dataIntent", "executionContract"],
+      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "tokens", "domainModel", "executionContract"],
       "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
     },
     "sourcePaths": { "type": "object" },
@@ -38,11 +38,13 @@
     },
     "fixtures": {
       "type": "object",
-      "required": ["adapter", "entities", "assetPolicy", "assetManifest", "viewModel", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
+      "required": ["adapter", "entities", "assetPolicy", "domainModelPath", "dataModule", "mediaAdapter", "assetManifest", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
       "properties": {
         "entities": { "type": "array" },
+        "domainModelPath": { "const": ".tmp/prototype-domain-model.json" },
+        "dataModule": { "const": "src/data/index.ts" },
+        "mediaAdapter": { "const": "src/data/media.ts" },
         "assetManifest": { "const": "assets/experience/manifest.json" },
-        "viewModel": { "const": "src/generated/experience-view-model.ts" },
         "recordIdentity": { "const": "stable-primary-key" },
         "mediaPolicy": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
         "mediaManifest": { "const": "assets/experience/manifest.json" },
@@ -86,11 +88,13 @@
           "forbiddenDefaults": { "type": "array" },
           "data": {
             "type": "object",
-            "required": ["adapter", "entities", "fixtureScenarios", "viewModel", "recordIdentity", "mediaPolicy", "mediaFields", "operations", "runtimeBindings"],
+            "required": ["adapter", "entities", "fixtureScenarios", "sourceModule", "domainModel", "hooks", "recordIdentity", "mediaPolicy", "mediaFields", "operations", "runtimeBindings"],
             "properties": {
               "entities": { "type": "array" },
               "fixtureScenarios": { "type": "array" },
-              "viewModel": { "const": "src/generated/experience-view-model.ts" },
+              "sourceModule": { "const": "@/data" },
+              "domainModel": { "const": ".tmp/prototype-domain-model.json" },
+              "hooks": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
               "recordIdentity": { "const": "stable-primary-key" },
               "mediaFields": { "const": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] },
               "operations": { "type": "array" },
@@ -102,7 +106,7 @@
                     "type": "object",
                     "required": ["mapper", "stableId"],
                     "properties": {
-                      "mapper": { "const": "toExperienceRecord" },
+                      "mapper": { "const": "domain-record" },
                       "stableId": { "const": "id" }
                     },
                     "additionalProperties": false
@@ -114,7 +118,7 @@
                       "required": { "type": "boolean" },
                       "entities": { "type": "array" },
                       "stateProperty": { "const": "availabilityState" },
-                      "predicate": { "const": "isExperienceRecordActionable" },
+                      "predicate": { "const": "isDomainRecordActionable" },
                       "disabledActionId": { "type": ["string", "null"] }
                     },
                     "additionalProperties": false
@@ -124,8 +128,8 @@
                     "required": ["required", "resolver", "join", "relationships"],
                     "properties": {
                       "required": { "type": "boolean" },
-                      "resolver": { "const": "resolveExperienceMedia" },
-                      "join": { "const": "relatedExperienceRecords" },
+                      "resolver": { "const": "resolveDomainMedia" },
+                      "join": { "const": "repository-relationship" },
                       "relationships": { "type": "array" }
                     },
                     "additionalProperties": false

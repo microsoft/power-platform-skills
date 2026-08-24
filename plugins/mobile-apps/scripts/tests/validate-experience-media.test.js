@@ -26,11 +26,11 @@ function pack(policy = 'remote-cdn-cached') {
   return JSON.stringify({
     experience: { contentModel: ['products', 'media'] },
     fixtures: {
-      adapter: 'local',
+      adapter: 'mock-repository',
       mediaPolicy: policy,
       mediaManifest: 'assets/experience/manifest.json',
       assetManifest: 'assets/experience/manifest.json',
-      viewModel: 'src/generated/experience-view-model.ts',
+      mediaAdapter: 'src/data/media.ts',
       mediaFields,
     },
     screens: [
@@ -80,25 +80,24 @@ function manifest(png, policy = 'remote-cdn-cached') {
   });
 }
 
-function viewModel() {
+function mediaAdapter() {
   return [
-    'export type ExperienceRecord = { imageUrl: string | null; imageAltText: string; imageCacheKey: string; imageAssetKey: string; };',
-    'const EXPERIENCE_ASSET_SOURCES: Record<string, unknown> = {};',
-    'function httpsImageSource(imageUrl: string | null) { return imageUrl ? { uri: imageUrl } : null; }',
-    'export function resolveExperienceMedia(record: ExperienceRecord) {',
-    '  const fallbackSource = EXPERIENCE_ASSET_SOURCES[record.imageAssetKey] || null;',
-    '  const remoteSource = httpsImageSource(record.imageUrl);',
-    '  return { ...record, imageSource: remoteSource || fallbackSource, fallbackSource, sourcePriority: remoteSource ? "remote" : "local" };',
+    'export type DomainMedia = { imageUrl?: string; imageAltText: string; imageCacheKey?: string; imageAssetKey: string; };',
+    'const SOURCES: Record<string, unknown> = {};',
+    'export function resolveDomainMedia(media: DomainMedia) {',
+    '  const fallbackSource = SOURCES[media.imageAssetKey] || null;',
+    '  const remoteSource = media.imageUrl ? { uri: media.imageUrl } : null;',
+    '  return { ...media, imageSource: remoteSource || fallbackSource, fallbackSource, sourcePriority: remoteSource ? "remote" : "local" };',
     '}',
   ].join('\n');
 }
 
-function disconnectedViewModel() {
+function disconnectedMediaAdapter() {
   return [
-    'export type ExperienceRecord = { imageUrl: string | null; imageAltText: string; imageCacheKey: string; imageAssetKey: string; };',
-    'const EXPERIENCE_ASSET_SOURCES: Record<string, unknown> = {};',
-    'export function resolveExperienceMedia(record: ExperienceRecord) {',
-    '  return { ...record, imageSource: EXPERIENCE_ASSET_SOURCES[record.imageAssetKey] || null, sourcePriority: "remote" };',
+    'export type DomainMedia = { imageUrl?: string; imageAltText: string; imageCacheKey?: string; imageAssetKey: string; };',
+    'const SOURCES: Record<string, unknown> = {};',
+    'export function resolveDomainMedia(media: DomainMedia) {',
+    '  return { ...media, imageSource: SOURCES[media.imageAssetKey] || null, sourcePriority: "remote" };',
     '}',
   ].join('\n');
 }
@@ -126,7 +125,7 @@ function fallbackBlindEntityImageSource() {
 }
 
 function routeSource() {
-  return "import { EntityImage } from '@/components';\nimport { resolveExperienceMedia } from '@/generated/experience-view-model';\nexport function Screen() { return <EntityImage media={resolveExperienceMedia(item)} />; }\n";
+  return "import { EntityImage } from '@/components';\nimport { resolveDomainMedia } from '@/data';\nexport function Screen() { return <EntityImage media={resolveDomainMedia(item.media)} />; }\n";
 }
 
 test('accepts cached CDN media rendered through the canonical adapter', (context) => {
@@ -135,7 +134,7 @@ test('accepts cached CDN media rendered through the canonical adapter', (context
     '.tmp/screen-build-pack.json': pack(),
     'assets/experience/manifest.json': manifest(png),
     'assets/experience/cr_product-1.png': png,
-    'src/generated/experience-view-model.ts': viewModel(),
+    'src/data/media.ts': mediaAdapter(),
     'src/components/index.tsx': entityImageSource(),
     'app/(app)/home.tsx': routeSource(),
     'app/(app)/products/[id].tsx': routeSource(),
@@ -152,7 +151,7 @@ test('rejects incomplete fixture media and screen-local remote URLs', (context) 
     '.tmp/screen-build-pack.json': pack(),
     'assets/experience/manifest.json': JSON.stringify(invalidManifest),
     'assets/experience/cr_product-1.png': png,
-    'src/generated/experience-view-model.ts': viewModel(),
+    'src/data/media.ts': mediaAdapter(),
     'src/components/index.tsx': entityImageSource(),
     'app/(app)/home.tsx': `${routeSource()}\nconst bad = 'https://example.invalid/image.png';`,
     'app/(app)/products/[id].tsx': routeSource(),
@@ -169,7 +168,7 @@ test('rejects URL metadata disconnected from the rendered source and a fallback-
     '.tmp/screen-build-pack.json': pack(),
     'assets/experience/manifest.json': manifest(png),
     'assets/experience/cr_product-1.png': png,
-    'src/generated/experience-view-model.ts': disconnectedViewModel(),
+    'src/data/media.ts': disconnectedMediaAdapter(),
     'src/components/EntityImage.tsx': fallbackBlindEntityImageSource(),
     'app/(app)/home.tsx': routeSource(),
     'app/(app)/products/[id].tsx': routeSource(),
@@ -194,7 +193,7 @@ test('rejects symbolic local-first identities with no materialized file', (conte
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': pack('local-first'),
     'assets/experience/manifest.json': JSON.stringify(symbolicManifest),
-    'src/generated/experience-view-model.ts': viewModel(),
+    'src/data/media.ts': mediaAdapter(),
     'app/(app)/home.tsx': routeSource(),
     'app/(app)/products/[id].tsx': routeSource(),
   });
@@ -210,7 +209,7 @@ test('rejects corrupt bundled media even when manifest metadata claims coverage'
     '.tmp/screen-build-pack.json': pack('local-first'),
     'assets/experience/manifest.json': manifest(png, 'local-first'),
     'assets/experience/cr_product-1.png': Buffer.from('not-an-image'),
-    'src/generated/experience-view-model.ts': viewModel(),
+    'src/data/media.ts': mediaAdapter(),
     'app/(app)/home.tsx': routeSource(),
     'app/(app)/products/[id].tsx': routeSource(),
   });

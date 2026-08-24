@@ -4,16 +4,17 @@
   "type": "object",
   "required": ["version", "kind", "workflow", "planningMode", "artifacts", "sections", "warnings"],
   "properties": {
-    "version": { "const": 2 },
+    "version": { "const": 3 },
     "kind": { "const": "mobile-plan-artifact-bundle" },
     "workflow": { "enum": ["create-mobile-app", "create-mobile-prototype"] },
     "planningMode": { "enum": ["required", "prototype", "connector-only"] },
     "artifacts": {
       "type": "object",
-      "required": ["nativeAppPlanMarkdown", "dataverseSchemaContract", "experienceScreenContract", "experienceFoundationContract", "executionContract"],
+      "required": ["nativeAppPlanMarkdown", "prototypeDomainModel", "dataverseSchemaContract", "experienceScreenContract", "experienceFoundationContract", "executionContract"],
       "additionalProperties": false,
       "properties": {
         "nativeAppPlanMarkdown": { "type": "string", "minLength": 1 },
+        "prototypeDomainModel": { "type": ["object", "null"] },
         "dataverseSchemaContract": { "type": ["object", "null"] },
         "experienceScreenContract": { "type": "object" },
         "experienceFoundationContract": { "type": "object" },

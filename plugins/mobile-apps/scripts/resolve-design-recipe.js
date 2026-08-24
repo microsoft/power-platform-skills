@@ -36,10 +36,10 @@ function typographyRecipe(visualCharacter) {
   };
 }
 
-function resolveDesignRecipe(contract, screenContract, brandContext = null) {
+function resolveDesignRecipe(contract, screenContract, brandContext = null, context = {}) {
   const contractIssues = validateExperienceContract(contract);
   if (contractIssues.length) throw new Error(`Experience contract is invalid: ${contractIssues.join('; ')}`);
-  const screenIssues = validateExperienceScreenContract(screenContract, contract);
+  const screenIssues = validateExperienceScreenContract(screenContract, contract, context);
   if (screenIssues.length) throw new Error(`Experience screen contract is invalid: ${screenIssues.join('; ')}`);
   const screens = normalizeScreenContract(screenContract, contract);
   const character = contract.visualCharacter;
@@ -111,7 +111,14 @@ function main(argv) {
     const screenContract = readJson(path.join(root, '.tmp', 'experience-screen-contract.json'), 'Experience screen contract');
     const brandPaths = [path.join(root, '.tmp', 'brand-context.json'), path.join(root, 'brand', 'brand-context.json')];
     const brandPath = brandPaths.find((candidate) => fs.existsSync(candidate));
-    const recipe = resolveDesignRecipe(contract, screenContract, brandPath ? readJson(brandPath, 'Brand context') : null);
+    const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
+    const schemaPath = path.join(root, '.tmp', 'dataverse-schema-contract.json');
+    const executionPath = path.join(root, '.tmp', 'mobile-plan-execution-contract.json');
+    const dataContract = fs.existsSync(domainPath)
+      ? readJson(domainPath, 'Prototype domain model')
+      : fs.existsSync(schemaPath) ? readJson(schemaPath, 'Dataverse schema contract') : null;
+    const executionContract = fs.existsSync(executionPath) ? readJson(executionPath, 'Mobile plan execution contract') : null;
+    const recipe = resolveDesignRecipe(contract, screenContract, brandPath ? readJson(brandPath, 'Brand context') : null, { dataContract, executionContract });
     const output = path.resolve(root, args.output || 'brand/design-recipe.json');
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, `${JSON.stringify(recipe, null, 2)}\n`);

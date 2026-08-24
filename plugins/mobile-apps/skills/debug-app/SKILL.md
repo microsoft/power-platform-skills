@@ -153,7 +153,7 @@ Extract three signals from the user's text:
 | Signal | How to derive |
 |---|---|
 | **Affected screen** | Match keywords against route filenames in `app/` (e.g., `"todos"` → `app/(tabs)/todos.tsx`, `app/todos/index.tsx`, `app/(tabs)/index.tsx`). Use `Glob` to enumerate `app/**/*.tsx`; pick the closest substring match. If multiple, ask once. |
-| **Affected entity / service** | Same keyword against `src/generated/services/*Service.ts` and `src/generated/models/*Model.ts` (e.g., `"todos"` → `TodosService`, `Todo` model). Use `Glob`. |
+| **Affected domain operation / hook** | Match against `.tmp/prototype-domain-model.json`, `src/data/hooks/*.ts`, and `src/data/contracts.ts` (e.g., `"todos"` -> `Todo`, `listTodos`, `useTodos`). Use `Glob` only after reading the domain model. |
 | **Symptom class** | Map the text to one of: `empty-list`, `blank-screen`, `wrong-data`, `unresponsive-control`, `stale-data`, `wrong-navigation`, `crash`, `pdf-viewer`, `pdf-report`, `pen-input`, `geolocation`, `dataverse-upload`. Default for "PDF won't open / preview PDF fails": `pdf-viewer`. Default for "report PDF not generated / print report fails": `pdf-report`. Default for "signature / pen / ink fails": `pen-input`. Default for "location not tracking / GPS not updating / background location stopped / breadcrumb gaps / route not consistent": `geolocation`. Default for "signature/report saved but missing", or "location rows not reaching Dataverse": `dataverse-upload`. Default for "not appearing / not showing / nothing here / missing": `empty-list`. Default for "doesn't load / freezes / spinner forever": `blank-screen`. |
 
 Append to `fixes.md`:
@@ -180,7 +180,7 @@ Inject targeted `console.log` statements at the boundaries of the suspected data
 |---|---|
 | `empty-list` | (a) entry point of the data-fetching hook, logging `[TRACE items]` the raw response length; (b) the screen component, logging `[TRACE render]` the `items` array length before the list renders |
 | `blank-screen` | Entry point of the screen component, logging `[TRACE mount]` a timestamp and any auth/data props passed in |
-| `wrong-data` / `stale-data` | The hook that calls the generated service (NOT inside `src/generated/`), logging `[TRACE service-response]` the raw return value |
+| `wrong-data` / `stale-data` | The approved `src/data` query hook and active repository adapter boundary, logging `[TRACE repository-response]` without editing generated SDK files |
 | `unresponsive-control` | The event handler (`onPress`, `onSubmit`, etc.) logging `[TRACE handler-called]` before any async work |
 | `crash` | Skip injection — jump to the monitor loop (Step A), crash stacks appear in the terminal |
 
@@ -193,7 +193,7 @@ console.log('[TRACE <tag>]', <value>); // [INJECTED-TRACE]
 - `<tag>` — short unique label for this site (e.g., `items`, `render`, `service-response`)
 - `// [INJECTED-TRACE]` trailing comment on the SAME LINE — this is the cleanup grep key
 - Log the smallest useful value; use `JSON.stringify(value)` for objects
-- **Never inject inside `src/generated/`** — inject in the hook/screen that calls into it
+- **Never inject inside `src/generated/`** — inject in the domain hook or repository adapter
 
 Record every injection in `.claude/debug-app/injected-logs.md`:
 ```
@@ -210,23 +210,27 @@ Wait for the user to reply, then call `BashOutput($METRO_TERMINAL_ID)` and filte
 Use the `[TRACE` lines to walk the chain:
 
 1. **Screen TSX** (`app/<route>.tsx`)
-   - Find the `useListData(...)` / `use*Data(...)` call.
-   - Check service-call options — a stray `top: 0`, an over-strict `filter`, a `search: query` bound to a never-cleared input, or `orderBy` on a missing column can each silently return zero rows.
+   - Find the task-approved `@/data` hook.
+   - Check route/filter inputs; screens must not call repositories or generated services directly.
    - Check any client-side `.filter(...)` after the data lands.
 
-2. **Data hook** (`src/hooks/useListData.ts` or sibling)
-   - **Critical:** the template hook has TWO mock-fallback paths:
-     - **Error path**: service returns `{ error }` → hook substitutes mock AND may call `setError`. **Silent** if the screen ignores `error`.
-     - **Empty-result path**: service returns `{ data: [] }` (no error) → hook silently substitutes mock. Always invisible without a `[TRACE]` log.
-   - Detect: `Grep` for `MOCK_` imports in the screen file. If present, mock data is wired in.
-   - Confirm `useFocusEffect` is used (not `useEffect`) — `useEffect` won't re-run on back-navigate.
+2. **Domain hook** (`src/data/hooks/<hook>.ts`)
+   - Verify its query key, enabled condition, route/filter input, pagination,
+     mutation invalidation, and repository method match the domain operation.
+   - A screen import of fixtures/repositories/generated services is a contract
+     violation, not a debugging shortcut.
+   - Confirm focus-backed aggregates refetch when returning from mutations.
 
-3. **Generated service** (`src/generated/services/<Name>Service.ts`)
-   - If a TODO stub or file missing → route to `/add-connector` or `/add-dataverse`. Do NOT edit `src/generated/`.
-   - If it exists and the `[TRACE service-response]` log shows an error field → read that error; 401/403 = auth issue; 404 = wrong resource name.
+3. **Active repository adapter** (`src/data/repositories/mockRepositories.ts`
+   or `dataverseRepositories.ts`)
+   - Prototype: validate fixture references and operation filtering.
+   - Dataverse: validate `.tmp/dataverse-repository-mapping.json`, then inspect
+     generated service behavior without editing generated files. 401/403 is
+     auth; 404 or unknown fields is mapping/reconciliation drift.
 
-4. **Generated model** (`src/generated/models/<Name>Model.ts`)
-   - Confirm field names match what the screen references. `item.title` vs `cr3e9_title` produces blank rows.
+4. **Domain model** (`src/data/model.ts` and `.tmp/prototype-domain-model.json`)
+   - Confirm the screen uses neutral field keys. Dataverse logical fields must
+     be translated only in the adapter.
 
 5. **`power.config.json`**
    - Confirm the `datasources` array contains the suspected entity / connector. If absent, `npx power-apps add-data-source` was never run for it.

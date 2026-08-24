@@ -5,39 +5,31 @@ const test = require('node:test');
 const { validateExperienceScreenContract } = require('../lib/experience-screen-contract');
 
 const dataContract = {
-  tables: [
+  schemaVersion: 1,
+  mode: 'prototype-domain',
+  entities: [
     {
-      logicalName: 'cr_product',
-      primaryIdAttribute: 'cr_productid',
-      serviceRequired: true,
-      plannedDecision: 'create',
-      columns: [
-        { logicalName: 'cr_productid', type: 'uniqueidentifier', plannedDecision: 'create' },
-        { logicalName: 'cr_name', type: 'string', plannedDecision: 'create' },
-        { logicalName: 'cr_featured', type: 'boolean', plannedDecision: 'create' },
-        { logicalName: 'cr_priority', type: 'integer', plannedDecision: 'create' },
+      key: 'Product',
+      fields: [
+        { key: 'id', type: 'id' },
+        { key: 'name', type: 'text' },
+        { key: 'featured', type: 'boolean' },
+        { key: 'priority', type: 'whole-number' },
       ],
-      relationships: [],
     },
     {
-      logicalName: 'cr_productmedia',
-      primaryIdAttribute: 'cr_productmediaid',
-      serviceRequired: true,
-      plannedDecision: 'create',
-      columns: [
-        { logicalName: 'cr_productmediaid', type: 'uniqueidentifier', plannedDecision: 'create' },
-        { logicalName: 'cr_productid', type: 'lookup', lookupTarget: 'cr_product', plannedDecision: 'create' },
-        { logicalName: 'cr_imageurl', type: 'string', plannedDecision: 'create' },
+      key: 'ProductMedia',
+      fields: [
+        { key: 'id', type: 'id' },
+        { key: 'productId', type: 'reference', referenceTarget: 'Product' },
+        { key: 'imageUrl', type: 'text' },
       ],
-      relationships: [{
-        kind: 'many-to-one',
-        schemaName: 'cr_Product_ProductMedia',
-        plannedDecision: 'create',
-        parentTable: 'cr_product',
-        childTable: 'cr_productmedia',
-        lookup: { logicalName: 'cr_productid' },
-      }],
     },
+  ],
+  relationships: [{ key: 'ProductMedia', parent: 'Product', child: 'ProductMedia', cardinality: 'one-to-many', childField: 'productId', required: false }],
+  operations: [
+    { key: 'getProduct', entity: 'Product', kind: 'get', repository: 'CatalogRepository', method: 'getProduct', hook: 'useProduct', selectFields: ['id', 'name'], filterFields: [], sortFields: [] },
+    { key: 'listProductMedia', entity: 'ProductMedia', kind: 'list', repository: 'CatalogRepository', method: 'listProductMedia', hook: 'useProductMedia', selectFields: ['id', 'productId', 'imageUrl'], filterFields: ['productId'], sortFields: [], pagination: { mode: 'none', boundedReason: 'At most five images per product.', maximumExpectedCount: 5 } },
   ],
 };
 
@@ -59,22 +51,22 @@ function screen(overrides = {}) {
     states: ['loading', 'empty', 'error', 'offline'],
     qualityCriteria: ['Product remains visible.', 'Action remains reachable.', 'Large text does not clip.'],
     testIds: ['screen-product-detail'],
-    dependencies: { foundation: [], fixtures: ['cr_product'], screens: [] },
+    dependencies: { foundation: [], fixtures: ['Product'], screens: [] },
     data: {
-      entities: ['cr_product', 'cr_productmedia'],
+      entities: ['Product', 'ProductMedia'],
       fixtureScenarios: ['available product', 'sold-out product'],
       operations: [
         {
-          id: 'get-product', kind: 'get', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getById',
-          select: ['cr_productid', 'cr_name'], filter: [], sort: [], routeBindings: [{ parameter: 'productId', target: 'id', field: 'cr_productid' }], idField: 'cr_productid',
+          id: 'get-product', kind: 'get', entity: 'Product', domainOperation: 'getProduct', repository: 'CatalogRepository', repositoryMethod: 'getProduct', hook: 'useProduct',
+          select: ['id', 'name'], filter: [], sort: [], routeBindings: [{ parameter: 'productId', target: 'id', field: 'id' }], idField: 'id',
         },
         {
-          id: 'list-product-media', kind: 'related-list', entity: 'cr_productmedia', service: 'Cr_productmediaService', serviceMethod: 'getAll',
-          select: ['cr_productmediaid', 'cr_productid', 'cr_imageurl'],
-          filter: [{ field: 'cr_productid', operator: 'eq', valueFrom: 'route:productId' }], sort: [],
+          id: 'list-product-media', kind: 'related-list', entity: 'ProductMedia', domainOperation: 'listProductMedia', repository: 'CatalogRepository', repositoryMethod: 'listProductMedia', hook: 'useProductMedia',
+          select: ['id', 'productId', 'imageUrl'],
+          filter: [{ field: 'productId', operator: 'eq', valueFrom: 'route:productId' }], sort: [],
           pagination: { mode: 'none', boundedReason: 'At most five images per product.', maximumExpectedCount: 5 },
-          routeBindings: [{ parameter: 'productId', target: 'relationship', field: 'cr_productid' }],
-          relationship: { sourceEntity: 'cr_product', targetEntity: 'cr_productmedia', schemaName: 'cr_Product_ProductMedia', sourceField: 'cr_productid', targetField: 'cr_productid', readStrategy: 'chained-fetch', sourceRouteParameter: 'productId' },
+          routeBindings: [{ parameter: 'productId', target: 'relationship', field: 'productId' }],
+          relationship: { key: 'ProductMedia', sourceEntity: 'Product', targetEntity: 'ProductMedia', sourceField: 'id', targetField: 'productId', readStrategy: 'repository', sourceRouteParameter: 'productId' },
         },
       ],
     },
@@ -119,18 +111,18 @@ test('rejects a data-bound screen with no executable operations', () => {
 
 test('rejects unknown query fields and nonexistent relationships', () => {
   const value = contract();
-  value.screens[0].data.operations[1].select.push('cr_missing');
-  value.screens[0].data.operations[1].relationship.schemaName = 'cr_Missing';
+  value.screens[0].data.operations[1].select.push('missingField');
+  value.screens[0].data.operations[1].relationship.key = 'MissingRelationship';
   const errors = validate(value).join('\n');
-  assert.match(errors, /unknown field cr_missing/);
-  assert.match(errors, /relationship cr_Missing does not exist/);
+  assert.match(errors, /unknown domain field missingField/);
+  assert.match(errors, /relationship MissingRelationship does not exist/);
 });
 
 test('rejects a detail route whose parameter is dropped from the query bindings', () => {
   const value = contract();
   value.screens[0].data.operations[0].routeBindings = [];
   const errors = validate(value).join('\n');
-  assert.match(errors, /path parameter productId is not bound to a screen operation/);
+  assert.match(errors, /path parameter productId is not bound to screen operation id field id/);
 });
 
 test('allows pagination none only for an explicitly bounded collection', () => {
@@ -142,20 +134,11 @@ test('allows pagination none only for an explicitly bounded collection', () => {
 test('rejects a related list that drops its route-key filter', () => {
   const value = contract();
   value.screens[0].data.operations[1].filter = [];
-  assert.match(validate(value).join('\n'), /relationship route parameter productId must bind and filter cr_productid/);
+  assert.match(validate(value).join('\n'), /relationship route parameter productId must bind and filter productId/);
 });
 
-test('rejects many-to-many reads without an explicit intersect table service contract', () => {
+test('rejects related reads that require an unresolved external projection', () => {
   const value = contract();
-  const data = structuredClone(dataContract);
-  data.tables[1].relationships[0] = {
-    kind: 'many-to-many',
-    schemaName: 'cr_Product_ProductMedia',
-    plannedDecision: 'create',
-    entity1: 'cr_product',
-    entity2: 'cr_productmedia',
-    intersectTable: 'cr_product_productmedia',
-  };
-  const errors = validateExperienceScreenContract(value, null, { dataContract: data }).join('\n');
-  assert.match(errors, /requires an explicit intersect table operation/);
+  value.screens[0].data.operations[1].relationship.readStrategy = 'external-projection-required';
+  assert.match(validate(value).join('\n'), /requires an unresolved external projection/);
 });

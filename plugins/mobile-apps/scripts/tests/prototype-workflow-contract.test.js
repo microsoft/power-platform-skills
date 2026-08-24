@@ -11,307 +11,167 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
-test('prototype entry skills and executable helpers are present', () => {
-  const expected = [
-    'skills/create-mobile-prototype/SKILL.md',
-    'skills/create-mobile-prototype/scripts/gen-mock-services.js',
+test('domain-first workflow artifacts and executable gates are present', () => {
+  for (const relativePath of [
+    'scripts/schema-prototype-domain-model.json',
+    'scripts/lib/prototype-domain-model.js',
+    'scripts/validate-prototype-domain-model.js',
+    'scripts/schema-dataverse-repository-mapping.json',
+    'scripts/reconcile-domain-dataverse.js',
+    'scripts/validate-screen-task-pack.js',
+    'scripts/validate-mobile-app.js',
+    'skills/create-mobile-prototype/scripts/gen-data-layer.js',
+    'skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js',
     'skills/create-mobile-prototype/scripts/configure-prototype-runtime.js',
-    'skills/edit-plan/SKILL.md',
-    'skills/prototype-to-real-app/SKILL.md',
-    'skills/prototype-to-real-app/scripts/rebase-prototype-plan.js',
-    'skills/add-sample-data/scripts/prepare-prototype-seed-migration.js',
-    'skills/sync-from-plan/SKILL.md',
-    'scripts/cleanup-prototype-artifacts.js',
-    'scripts/validate-datamodel-manifest.js',
-    'scripts/validate-screen-contracts.js',
-    'scripts/plan-approval.js',
-    'scripts/plan-checkpoints.js',
-    'scripts/mobile-plan-preflight-catalog.json',
-    'scripts/prepare-mobile-plan-execution-contract.js',
-    'scripts/schema-mobile-plan-execution-contract.json',
-    'scripts/validate-mobile-plan-execution-contract.js',
-    'scripts/schema-screen-artifact.json',
-    'scripts/validate-screen-artifact.js',
-    'scripts/write-screen-artifact.js',
+    'skills/prototype-to-real-app/scripts/gen-dataverse-repositories.js',
     'shared/references/lifecycle-state.md',
-  ];
-  for (const relativePath of expected) {
-    assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, `${relativePath} must exist`);
-  }
+  ]) assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, relativePath);
 });
 
-test('new workflow Markdown keeps fenced blocks balanced', () => {
-  const documents = [
+test('domain-first workflow Markdown keeps fenced blocks balanced', () => {
+  for (const relativePath of [
     'skills/create-mobile-prototype/SKILL.md',
-    'skills/edit-plan/SKILL.md',
     'skills/prototype-to-real-app/SKILL.md',
+    'skills/create-mobile-app/SKILL.md',
+    'skills/edit-app/SKILL.md',
+    'skills/edit-plan/SKILL.md',
     'skills/sync-from-plan/SKILL.md',
+    'agents/native-app-planner.md',
+    'agents/data-model-architect.md',
+    'agents/screen-planner.md',
+    'agents/screen-builder.md',
     'shared/references/lifecycle-state.md',
-  ];
-  for (const relativePath of documents) {
+  ]) {
     const fenceCount = (read(relativePath).match(/^```/gm) || []).length;
     assert.equal(fenceCount % 2, 0, `${relativePath} has unbalanced code fences`);
   }
 });
 
-test('prototype creation uses the current planner and non-executable schema contract', () => {
+test('prototype creation plans a neutral domain and uses one consolidated review', () => {
   const skill = read('skills/create-mobile-prototype/SKILL.md');
-  assert.match(skill, /^name: create-mobile-prototype$/m);
-  assert.match(skill, /mobile-app:native-app-planner/);
-  assert.match(skill, /Dataverse planning mode: prototype/);
-  assert.match(skill, /planningMode.*prototype/);
-  assert.match(skill, /executionEligible.*false/);
-  assert.match(skill, /gen-mock-services\.js/);
-  assert.match(skill, /configure-prototype-runtime\.js[\s\S]*prototype/);
-  assert.match(skill, /\.mobile-app\/state\.json/);
-  assert.doesNotMatch(skill, /code-apps-native:/);
-  assert.doesNotMatch(skill, /pac code|create-code-app-native/);
+  assert.match(skill, /prototype-domain-model\.json/);
+  assert.match(skill, /prototypeDomainModel/);
+  assert.match(skill, /dataverseSchemaContract: null/);
+  assert.match(skill, /--section prototype-review/);
+  assert.match(skill, /mayAuthorizeExternalMutations: false/);
+  assert.match(skill, /gen-data-layer\.js/);
+  assert.match(skill, /PrototypeDataProvider/);
+  assert.match(skill, /validate-screen-task-pack\.js/);
+  assert.match(skill, /screen_task_path/);
+  assert.match(skill, /validate-mobile-app\.js[\s\S]*--scope all --record/);
+  assert.doesNotMatch(skill, /gen-mock-services\.js/);
+  assert.doesNotMatch(skill, /placeholder `cr_|publisher prefix: cr/i);
+  assert.doesNotMatch(skill, /four textual|data-model\|native-capabilities\|connectors\|screen-plan/i);
 });
 
-test('prototype creation is host-neutral and does not require nested approval tools', () => {
-  const skill = read('skills/create-mobile-prototype/SKILL.md');
-  assert.match(skill, /return one complete[\s\S]*mobile-plan-artifact-bundle/i);
-  assert.match(skill, /Do not probe named host tools/i);
-  assert.match(skill, /Four textual prototype checkpoints/);
-  assert.match(skill, /data-model\|native-capabilities\|connectors\|screen-plan/);
-  assert.match(skill, /plan-checkpoints\.js/);
-  assert.match(skill, /local mock[\s\S]*generation/i);
-  assert.match(skill, /planningMode: "prototype"/);
-  assert.doesNotMatch(skill, /Nested planner tool-surface fallback/);
-  assert.match(skill, /outer workflow records four ordinary\s+textual local checkpoints/i);
-  assert.match(skill, /test -f "\$PROJECT_DIR\/\.tmp\/mobile-plan-status\.json"/);
-  assert.match(skill, /validate-plan-artifact-bundle\.js/);
-  assert.match(skill, /write-plan-artifact-bundle\.js/);
-  assert.match(skill, /prepare-mobile-plan-execution-contract\.js/);
-  assert.match(skill, /mobile-plan-execution-contract\.json/);
-  assert.match(skill, /schemaVersion!==3/);
-  assert.match(skill, /validate-mobile-files\.js[\s\S]*experience-foundation-contract\.json/);
+test('planning agents keep Dataverse separate from canonical domain operations', () => {
+  const nativePlanner = read('agents/native-app-planner.md');
+  const dataArchitect = read('agents/data-model-architect.md');
+  const screenPlanner = read('agents/screen-planner.md');
+  for (const content of [nativePlanner, dataArchitect]) {
+    assert.match(content, /prototypeDomainModel/);
+    assert.match(content, /dataverseSchemaContract: null/);
+    assert.match(content, /no environment/i);
+  }
+  assert.match(nativePlanner, /bundle schema version 3/);
+  assert.match(nativePlanner, /domain operation\/repository\/method\/hook/);
+  assert.match(dataArchitect, /stable opaque IDs/);
+  assert.match(dataArchitect, /fixtures/);
+  assert.match(screenPlanner, /domainOperation/);
+  assert.match(screenPlanner, /repository interface, repository method, and exported hook/);
+  assert.doesNotMatch(screenPlanner, /serviceMethod/);
 });
 
-test('real app planning uses a textual revision-bound approval before external mutation', () => {
-  const planner = read('agents/native-app-planner.md');
-  const skill = read('skills/create-mobile-app/SKILL.md');
-  const protocol = read('scripts/plan-checkpoints.js');
-  assert.match(planner, /NEEDS_USER_APPROVAL/);
-  assert.doesNotMatch(planner, /BLOCKED: tool surface missing/);
-  assert.match(skill, /Textual plan approval protocol/);
-  assert.match(skill, /--action approve/);
-  assert.match(skill, /External mutation authorization/);
-  assert.match(protocol, /plan-revision-changed/);
-  assert.match(protocol, /textual-approve-required/);
+test('screen builders receive one immutable task and cannot cross the domain boundary', () => {
+  const builder = read('agents/screen-builder.md');
+  assert.match(builder, /screen_task_path/);
+  assert.match(builder, /mobile-screen-task/);
+  assert.match(builder, /read only the supplied task/i);
+  assert.match(builder, /Import app data only from `@\/data`/);
+  assert.match(builder, /Never import `@\/data\/fixtures`, `@\/data\/repositories`, or `@\/generated`/);
+  assert.match(builder, /isDomainRecordActionable/);
+  assert.match(builder, /resolveDomainMedia/);
+  assert.match(builder, /mobile-screen-artifact/);
+  assert.doesNotMatch(builder.match(/^---\n([\s\S]*?)\n---/)[1], /^\s+-\s+(?:Write|Edit)\s*$/m);
 });
 
-test('conversion rejects prototype approvals and commits through one target-mode sync', () => {
+test('graduation reconciles and swaps adapters without rewriting screens', () => {
   const skill = read('skills/prototype-to-real-app/SKILL.md');
-  assert.match(skill, /^name: prototype-to-real-app$/m);
-  assert.match(skill, /transitioning/);
-  assert.match(skill, /npx power-apps init -t MobileApp/);
-  assert.match(skill, /rebase-prototype-plan\.js/);
-  assert.match(skill, /add-dataverse --skip-planning/);
-  assert.match(skill, /cleanup-prototype-artifacts\.js/);
-  assert.match(skill, /live-name-map\.json/);
-  assert.match(skill, /dataverseManifestSha256/);
-  assert.match(skill, /prepare-prototype-seed-migration\.js/);
-  assert.match(skill, /Never replace failed prototype mappings with generic rows/);
+  assert.match(skill, /prototype-domain-model\.json.*remains canonical/s);
+  assert.match(skill, /reconcile-domain-dataverse\.js/);
+  assert.match(skill, /dataverse-repository-mapping\.json/);
+  assert.match(skill, /gen-dataverse-repositories\.js/);
+  assert.match(skill, /dataverseRepositories\.ts/);
+  assert.match(skill, /proves? screens unchanged|unchanged-screen/i);
   assert.match(skill, /configure-prototype-runtime\.js[\s\S]*dataverse/);
-  assert.match(skill, /sync-from-plan --working-dir <PROJECT_DIR> --target-data-mode dataverse/);
-  assert.match(skill, /Do not pass the prototype schema contract/);
-  assert.match(skill, /Remove `\.tmp\/screen-build-pack\.json` immediately after archiving/);
-  assert.match(skill, /regenerate schema-v3 screen operations/);
-  assert.doesNotMatch(skill, /pac code|code-apps-native:/);
+  assert.match(skill, /validate-mobile-app\.js[\s\S]*--scope all --record/);
+  assert.doesNotMatch(skill, /rebase-prototype-plan|cleanup-prototype-artifacts|replace services/i);
 });
 
-test('sync owns the transition commit and blocks Dataverse mode with mock artifacts', () => {
-  const skill = read('skills/sync-from-plan/SKILL.md');
-  assert.match(skill, /^name: sync-from-plan$/m);
-  assert.match(skill, /--target-data-mode dataverse/);
-  assert.match(skill, /dataMode === "transitioning"/);
-  assert.match(skill, /cleanup-prototype-artifacts\.js/);
-  assert.match(skill, /set `dataMode: "dataverse"`/);
-  assert.match(skill, /transition: null/);
-  assert.match(skill, /lastSyncedScreenContractHash/);
-  assert.match(skill, /lastSyncedExecutionContractHash/);
+test('direct real creation uses the same domain adapter and task architecture', () => {
+  const skill = read('skills/create-mobile-app/SKILL.md');
+  assert.match(skill, /AUTHORITATIVE DOMAIN-FIRST OVERRIDE/);
+  assert.match(skill, /gen-data-layer\.js/);
+  assert.match(skill, /reconcile-domain-dataverse\.js/);
+  assert.match(skill, /gen-dataverse-repositories\.js/);
+  assert.match(skill, /validate-screen-task-pack\.js/);
+  assert.match(skill, /screen_task_path/);
+  assert.match(skill, /Only[\s\S]*dataverseRepositories\.ts[\s\S]*generated services/i);
 });
 
-test('planning agents explicitly support environment-free prototype mode', () => {
-  const architect = read('agents/data-model-architect.md');
-  const planner = read('agents/native-app-planner.md');
-  for (const content of [architect, planner]) {
-    assert.match(content, /`prototype`/);
-    assert.match(content, /planningMode.*prototype/);
-    assert.match(content, /executionEligible.*false/);
+test('edit and sync workflows regenerate repositories rather than screen services', () => {
+  const edit = read('skills/edit-app/SKILL.md');
+  const editPlan = read('skills/edit-plan/SKILL.md');
+  const sync = read('skills/sync-from-plan/SKILL.md');
+  for (const content of [edit, sync]) {
+    assert.match(content, /gen-data-layer\.js/);
+    assert.match(content, /reconcile-domain-dataverse\.js/);
+    assert.match(content, /gen-dataverse-repositories\.js/);
+    assert.match(content, /validate-mobile-app\.js/);
+    assert.doesNotMatch(content, /gen-mock-services\.js/);
   }
-  assert.match(architect, /no environment/);
-  assert.match(planner, /Prototype plans are not execution\s+approvals/);
+  assert.match(editPlan, /prototype-domain-model\.json/);
+  assert.match(editPlan, /dataverseSchemaContract: null/);
+  assert.match(editPlan, /screen-tasks/);
 });
 
-test('edit-app routes graduation intent before ordinary edits', () => {
-  const skill = read('skills/edit-app/SKILL.md');
-  assert.match(skill, /Convert, graduate, or make a prototype real/);
-  assert.match(skill, /Invoke `\/prototype-to-real-app/);
-  assert.match(skill, /Dataverse planning mode: prototype/);
-  assert.match(skill, /gen-mock-services\.js/);
-  assert.match(skill, /--apply-plan/);
-  assert.match(skill, /approvedPlanSha256/);
+test('runtime and lifecycle preserve host query ownership and revision identity', () => {
+  const runtime = read('skills/create-mobile-prototype/scripts/configure-prototype-runtime.js');
+  const generator = read('skills/create-mobile-prototype/scripts/gen-data-layer.js');
+  const lifecycle = read('shared/references/lifecycle-state.md');
+  assert.match(runtime, /<PrototypeDataProvider>\{children\}<\/PrototypeDataProvider>/);
+  assert.match(runtime, /<PowerAppsProvider/);
+  assert.doesNotMatch(runtime, /QueryClientProvider/);
+  assert.doesNotMatch(generator, /QueryClientProvider/);
+  assert.match(lifecycle, /"schemaVersion": 2/);
+  assert.match(lifecycle, /lastDomainModelHash/);
+  assert.match(lifecycle, /lastRepositoryMappingHash/);
+  assert.match(lifecycle, /lastFixtureRevision/);
+  assert.match(lifecycle, /lastValidation/);
 });
 
-test('edit-plan records a hash-bound plan-only handoff without changing sync state', () => {
-  const skill = read('skills/edit-plan/SKILL.md');
-  assert.match(skill, /^name: edit-plan$/m);
-  assert.match(skill, /approved-pending-apply/);
-  assert.match(skill, /structuredContractSha256/);
-  assert.match(skill, /screenContractSha256/);
-  assert.match(skill, /executionContractSha256/);
-  assert.match(skill, /remove\s+`\.tmp\/screen-build-pack\.json`/i);
-  assert.match(skill, /lastSyncedPlanHash.*unchanged/);
-  assert.match(skill, /\/edit-app --apply-plan/);
-  assert.doesNotMatch(skill, /code-apps-native:/);
-});
-
-test('prototype regeneration and real seed migration preserve data fail-closed', () => {
-  const generator = read('skills/create-mobile-prototype/scripts/gen-mock-services.js');
-  const sampleSkill = read('skills/add-sample-data/SKILL.md');
-  const migration = read('skills/add-sample-data/scripts/prepare-prototype-seed-migration.js');
-  assert.match(generator, /mergeExistingSeeds/);
-  assert.match(generator, /prototype-seed-regeneration\.json/);
-  assert.match(generator, /prototype-seed-archive/);
-  assert.match(sampleSkill, /Do not fall back to generic rows/);
-  assert.match(sampleSkill, /deterministic primary IDs/);
-  assert.match(migration, /approvedPlanSha256/);
-  assert.match(migration, /prototypeContractSha256/);
-  assert.match(migration, /dataverseManifestSha256/);
-  assert.match(migration, /mapChoiceValue/);
-});
-
-test('Dataverse manifest and record executor protect downstream data integrity', () => {
-  const dataverseSkill = read('skills/add-dataverse/SKILL.md');
-  const sampleSkill = read('skills/add-sample-data/SKILL.md');
-  const requestScript = read('scripts/dataverse-request.js');
-  assert.match(dataverseSkill, /validate-datamodel-manifest\.js/);
-  assert.match(dataverseSkill, /every[\s\S]*non-deferred service-required table/);
-  assert.match(sampleSkill, /Never derive it by appending `s`/);
-  assert.match(requestScript, /uncertain: true/);
-  assert.match(requestScript, /Replaying can duplicate generic sample data/);
-});
-
-test('reference-led prototypes bind screenshot intake through planning, polish, and native evidence', () => {
+test('legacy compatibility is explicit, transactional, and not the normal path', () => {
   const prototype = read('skills/create-mobile-prototype/SKILL.md');
-  const realApp = read('skills/create-mobile-app/SKILL.md');
-  const planner = read('agents/native-app-planner.md');
-  const designSystem = read('skills/design-system/SKILL.md');
-  const designRefiner = read('skills/design-react-native-app/SKILL.md');
-  const referenceContract = 'shared/references/reference-fidelity.md';
-  const intakeContract = 'skills/design-system/references/reference-intake.md';
-  const evidenceValidator = 'scripts/validate-visual-qa-evidence.js';
+  const migrator = read('skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js');
+  assert.match(prototype, /one-time transactional[\s\S]{0,20}migrator/);
+  assert.match(migrator, /legacy-prototype-archive/);
+  assert.match(migrator, /preservedFixtures/);
+  assert.match(migrator, /restoreArchive/);
+  assert.match(migrator, /prototype-domain-migration\.json/);
+});
 
-  for (const relativePath of [referenceContract, intakeContract, evidenceValidator]) {
-    assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, relativePath + ' must exist');
-  }
+test('reference-led and brief-only experience inputs remain supported', () => {
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+  const nativePlanner = read('agents/native-app-planner.md');
+  const screenPlanner = read('agents/screen-planner.md');
   assert.match(prototype, /--from-screenshot/);
   assert.match(prototype, /--design-intake/);
-  assert.match(prototype, /design-intake.md/);
-  assert.match(prototype, /Visual reference:/);
-  assert.match(prototype, /Reference intent:/);
-  assert.match(prototype, /Native Reference Evidence/);
-  assert.match(prototype, /validate-visual-qa-evidence.js/);
-  assert.match(prototype, /DONE_WITH_CONCERNS/);
-  assert.match(realApp, /Visual reference input/);
-  assert.match(realApp, /Screenshot\/reference capture/);
-  assert.match(realApp, /Visual reference:/);
-  assert.match(realApp, /Native reference evidence/);
-  assert.match(planner, /Reference fidelity fails closed/);
-  assert.match(planner, /Reference Contract/);
-  assert.match(designSystem, /Reference-contract mode/);
-  assert.match(designRefiner, /Reference-contract mode/);
-});
-
-test('brief-derived experience contract drives planning without a reference input', () => {
-  const expected = [
-    'scripts/schema-experience-contract.json',
-    'scripts/experience-patterns.js',
-    'scripts/plan-experience-foundation.js',
-    'scripts/compile-screen-build-pack.js',
-    'scripts/validate-screen-build-pack.js',
-    'scripts/schema-screen-build-pack.json',
-    'scripts/schema-screen-artifact.json',
-    'scripts/validate-screen-artifact.js',
-    'scripts/write-screen-artifact.js',
-    'scripts/validate-experience-contract.js',
-    'scripts/validate-experience-visual-evidence.js',
-    'shared/references/experience-contract-guide.md',
-    'scripts/tests/experience-contract.test.js',
-  ];
-  for (const relativePath of expected) {
-    assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, `${relativePath} must exist`);
-  }
-
-  const planner = read('agents/native-app-planner.md');
-  const screenPlanner = read('agents/screen-planner.md');
-  const screenBuilder = read('agents/screen-builder.md');
-  const prototype = read('skills/create-mobile-prototype/SKILL.md');
-  const realApp = read('skills/create-mobile-app/SKILL.md');
-  const designSystem = read('skills/design-system/SKILL.md');
-  const stylePicker = read('skills/design-system/references/vibe/style-picker.md');
-  const refiner = read('skills/design-react-native-app/SKILL.md');
-  const seeds = read('skills/create-mobile-prototype/scripts/gen-mock-services.js');
-  const experienceViewModel = read('scripts/lib/experience-view-model.js');
-
-  assert.match(planner, /foreground Experience Contract/);
-  assert.match(planner, /\.tmp\/experience-contract\.json/);
-  assert.match(planner, /motifs/);
-  assert.doesNotMatch(planner, /INDUSTRY_CONFIRM_REQUESTED:/);
-  const patterns = read('scripts/experience-patterns.js');
-  assert.match(patterns, /SEMANTIC_SIGNALS/);
-  assert.match(patterns, /promptEvidence/);
-  assert.match(patterns, /product-led-discovery/);
-  assert.match(patterns, /local-first/);
-  assert.match(screenPlanner, /primary screen composition contract/i);
+  assert.match(prototype, /reference fidelity/i);
+  assert.match(prototype, /one-line mobile app brief/);
+  assert.match(nativePlanner, /Product Experience\s+Contract/);
+  assert.match(nativePlanner, /contractHash\(\)/);
+  assert.match(screenPlanner, /first-viewport focal point/);
   assert.match(screenPlanner, /experienceFoundationContract/);
-  assert.match(screenPlanner, /keyFlow/);
-  assert.match(screenPlanner, /product-led discovery/);
-  assert.doesNotMatch(screenPlanner, /Home is a dashboard by default/);
-  assert.match(screenBuilder, /Primary-screen runtime anchors are mandatory/);
-  assert.match(screenBuilder, /Foundation primitives are mandatory/);
-  assert.match(screenBuilder, /Screen build pack is the execution source/);
-  assert.match(screenBuilder, /validate-screen-build-pack\.js/);
-  assert.match(screenBuilder, /Local-first media is mandatory/);
-  assert.match(screenBuilder, /experience-primary-action/);
-  assert.match(screenBuilder, /return-only agent/);
-  assert.match(screenBuilder, /mobile-screen-artifact/);
-  assert.doesNotMatch(screenBuilder.match(/^---\n([\s\S]*?)\n---/)[1], /^\s+-\s+(?:Write|Edit)\s*$/m);
-  assert.match(prototype, /does not require a screenshot, HTML page, or design intake/);
-  assert.match(prototype, /validate-experience-contract\.js/);
-  assert.match(prototype, /experience-foundation-contract\.json/);
-  assert.match(prototype, /compile-screen-build-pack\.js/);
-  assert.match(prototype, /screen_build_pack_path/);
-  assert.match(prototype, /validate-screen-artifact\.js/);
-  assert.match(prototype, /write-screen-artifact\.js/);
-  assert.match(prototype, /sidecar-declared `keyFlow`/);
-  assert.match(realApp, /Experience direction: contract-first/);
-  assert.match(realApp, /Materialize experience foundation primitives/);
-  assert.match(realApp, /Compile the screen build pack/);
-  assert.match(realApp, /screen_build_pack_path/);
-  assert.match(realApp, /validate-screen-artifact\.js/);
-  assert.match(realApp, /write-screen-artifact\.js/);
-  assert.match(realApp, /sidecar-declared `keyFlow`/);
-  assert.doesNotMatch(realApp, /INDUSTRY_CONFIRM_REQUESTED:/);
-  assert.match(designSystem, /Experience-contract mode/);
-  assert.doesNotMatch(designSystem, /polished-inspection/);
-  assert.match(designSystem, /DESIGN_EXPRESSION_RESULT/);
-  assert.match(stylePicker, /DESIGN_EXPRESSION_RESULT/);
-  assert.match(stylePicker, /never write a plan block/);
-  assert.doesNotMatch(stylePicker, /direction-polished-inspection/);
-  assert.match(refiner, /Experience-contract mode/);
-  assert.match(refiner, /experience-foundation-contract\.json/);
-  assert.match(refiner, /screen-build-pack\.json/);
-  assert.match(refiner, /validate-screen-build-pack\.js/);
-  assert.match(refiner, /keyFlowRoute/);
-  assert.match(refiner, /DONE_WITH_CONCERNS: native experience visual capture unavailable/);
-  assert.match(seeds, /experienceContract \? experiencePack/);
-  assert.match(seeds, /scripts\/lib\/experience-view-model/);
-  assert.match(experienceViewModel, /asset:\/\/experience/);
-  assert.match(experienceViewModel, /stable record ID mapping/);
-  assert.match(seeds, /loadScreenBuildPack/);
 });
 
 test('Open and legacy plugin metadata remain exact mirrors', () => {

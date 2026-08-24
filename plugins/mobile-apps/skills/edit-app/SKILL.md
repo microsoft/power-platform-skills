@@ -153,8 +153,13 @@ Read if present:
 - `.tmp/mobile-plan-execution-contract.json` — requirement, native,
   dependency, and connector execution authority
 - `.tmp/experience-screen-contract.json` — schema-v3 per-screen operations
+- `.tmp/prototype-domain-model.json` — canonical entities, fields, choices,
+  operations, fixtures, and scenarios
+- `.tmp/dataverse-repository-mapping.json` — real persistence mapping when in
+  Dataverse mode
 - `brand/design-system.md` and `brand/tokens.ts` — design constraints and token availability
-- `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
+- `src/data/contracts.ts`, `src/data/hooks/*.ts`, and the active repository
+  adapter — stable app data surface
 
 Run these existing-app health checks before any mutation:
 
@@ -164,7 +169,7 @@ Run these existing-app health checks before any mutation:
 | `power.config.json`, `.resolved-environment.json`, and memory bank env agree | For data-source/schema edits, STOP until the user confirms the intended environment |
 | `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, `src/tokens/index.ts` exist | Restore missing shared scaffold from `shared/samples/src/` before screen-builder work; do not overwrite existing files |
 | `app/_layout.tsx` still wraps providers and SafeAreaProvider correctly | Patch conservatively before screen work; route/safe-area validators depend on this |
-| `src/generated/` compiles when the edit depends on generated services | Regenerate schemas/services first, or block before screen work |
+| neutral domain, hooks, and active repository adapter validate | Regenerate/reconcile the owning domain or adapter first; never patch a screen around it |
 | execution contract and schema-v3 screen operations validate | Re-plan the affected requirement/data/screen section; never infer missing operations from source |
 | `node_modules` and package scripts needed for verification exist | If missing, ask user to run install; do not pretend verification passed |
 
@@ -180,12 +185,12 @@ First inspect the app so questions can use real options instead of abstractions:
 
 ```bash
 find app -name '*.tsx' -not -name '_layout.tsx' -not -name '+not-found.tsx' | sort
-ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
-ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\.ts$||'
+ls -1 src/data/hooks/*.ts 2>/dev/null | sed 's|src/data/hooks/||;s|\.ts$||'
+ls -1 src/data/repositories/*.ts 2>/dev/null | sed 's|src/data/repositories/||;s|\.ts$||'
 find src/native -maxdepth 1 -type f -name '*.ts*' 2>/dev/null | sort
 ```
 
-Also read the relevant `native-app-plan.md` sections (`## Data Model`, `## Native Capabilities`, `## Design`, `## Screens`, and `## Generated Services` if present) plus the existing TSX for any candidate screen. If `brand/design-system.md` exists, read it before asking design/screen questions so the edit preserves product grammar, density, component rules, and negatives.
+Also read the relevant `native-app-plan.md` sections (`## Data Model`, `## Native Capabilities`, `## Design`, and `## Screens`) plus the existing TSX for any candidate screen. Treat machine sidecars, not a generated-service snapshot, as execution authority. If `brand/design-system.md` exists, read it before asking design/screen questions so the edit preserves product grammar, density, component rules, and negatives.
 
 Ask only for information that cannot be inferred from the app. If there is exactly one plausible screen/table/service, state the inferred choice in the mutation preview instead of asking. If there are multiple plausible choices, ask a small multiple-choice question with those real names.
 
@@ -453,17 +458,18 @@ Apply sections in dependency order so screens always build against the current d
 below with local contract regeneration:
 
 1. Data Model changes normally run `mobile-app:data-model-architect` with
-  `Dataverse planning mode: prototype`, update and re-approve both
-  `## Data Model` and `.tmp/dataverse-schema-contract.json`, and preserve
-  `planningMode: "prototype"` / `executionEligible: false`. Under
+  `planning mode: prototype`, update and re-approve both
+  `## Data Model` and `.tmp/prototype-domain-model.json`, and require
+  `.tmp/dataverse-schema-contract.json` to remain absent. Under
   `--apply-plan`, reuse the already approved/hash-verified contract and do not
-  spawn or gate the architect again. Then run
-  `skills/create-mobile-prototype/scripts/gen-mock-services.js`; its
-  regeneration contract must preserve compatible existing seed rows and emit
-  a report for added/removed/type-changed fields.
+  spawn or gate the architect again. Then run `validate-prototype-domain-model.js`
+  and `skills/create-mobile-prototype/scripts/gen-data-layer.js`. Preserve
+  compatible user-edited fixtures through the domain contract or the legacy
+  migration artifact; never infer Dataverse names.
 2. Connector changes update/re-approve `## Connectors`, then rerun the same
-  generator to add or remove explicit throw-stubs. Do not create a Power
-  Platform connection in prototype mode.
+  execution/domain repository intent. Keep its adapter fail-closed. Do not
+  create a Power Platform connection or expose connector calls to screens in
+  prototype mode.
 3. Native and design changes use the normal allowlist/design paths.
 4. Continue to Step 6, which invokes `/sync-from-plan` exactly once so route,
   screen, quality, preview, and lifecycle hashes are updated by their owning
@@ -481,23 +487,28 @@ mode.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
-After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
+After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the domain/repository/dependency/native-wrapper gates before screen work. Screen tasks must reflect validated contracts on disk, not an earlier plan.
 
-#### Step 5.5 — Refresh generated service snapshot
+#### Step 5.5 — Refresh repository adapters
 
-Run this after any data-source/schema/connector mutation and before any screen-builder prompt:
+In prototype mode, regenerate and validate the local adapter:
 
 ```bash
-cd <working_dir>
-for svc in src/generated/services/*.ts; do
-  [ -e "$svc" ] || continue
-  name=$(basename "$svc" .ts)
-  methods=$(grep -oE 'static async [a-zA-Z_]+' "$svc" | sed 's/static async //' | tr '\n' ',' | sed 's/,$//')
-  echo "| \`$name\` | \`src/generated/services/$name.ts\` | $methods |"
-done
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/gen-data-layer.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" --project-root "$PROJECT_DIR" --scope domain
 ```
 
-Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
+In Dataverse mode, refresh live reconciliation and regenerate only the adapter:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/gen-data-layer.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/reconcile-domain-dataverse.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../prototype-to-real-app/scripts/gen-dataverse-repositories.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" --project-root "$PROJECT_DIR" --scope domain
+```
+
+Do not write generated-service snapshots into the readable plan. Screens and
+builders consume immutable domain task packs, never SDK service files.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 

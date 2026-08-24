@@ -110,6 +110,12 @@ function executionTargets(contract, screenContract, dataContract) {
   for (const table of dataContract?.tables || []) {
     if (table?.logicalName) targets.add(`data:${table.logicalName}`);
   }
+  for (const entity of dataContract?.entities || []) {
+    if (entity?.key) targets.add(`data:${entity.key}`);
+  }
+  for (const operation of dataContract?.operations || []) {
+    if (operation?.key) targets.add(`operation:${operation.key}`);
+  }
   for (const item of contract?.nativeCapabilities || []) {
     if (item?.id) {
       targets.add(item.id);

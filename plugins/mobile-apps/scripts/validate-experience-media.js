@@ -106,21 +106,21 @@ function entityImageDefinitions(projectRoot) {
 }
 
 function validateRemoteAdapter(source, requireBundledFallback, issues) {
-  const connectsUrlToPrimary = /httpsImageSource\s*\(\s*record\.imageUrl\s*\)/.test(source)
+  const connectsUrlToPrimary = /remoteSource\s*=\s*media\.imageUrl\s*\?\s*\{\s*uri:\s*media\.imageUrl\s*\}/.test(source)
     && /imageSource\s*:\s*remoteSource\s*\|\|\s*fallbackSource/.test(source);
   if (!connectsUrlToPrimary) {
     issues.push({
       rule: 'remote-media-source-disconnected',
-      message: 'Canonical media resolver must derive its rendered primary imageSource from record.imageUrl for remote media policies.',
+      message: 'Domain media resolver must derive its rendered primary imageSource from media.imageUrl for remote media policies.',
     });
   }
   if (requireBundledFallback && (
-    !/fallbackSource\s*=\s*EXPERIENCE_ASSET_SOURCES/.test(source)
+    !/fallbackSource\s*=\s*SOURCES/.test(source)
     || !/fallbackSource\s*,/.test(source)
   )) {
     issues.push({
       rule: 'remote-media-fallback-disconnected',
-      message: 'Canonical media resolver must expose the Metro-bundled asset as fallbackSource.',
+      message: 'Domain media resolver must expose the Metro-bundled asset as fallbackSource.',
     });
   }
 }
@@ -195,14 +195,14 @@ function validateExperienceMedia(projectRoot, packPath = '.tmp/screen-build-pack
     }
   }
 
-  const viewModelRelativePath = pack.fixtures?.viewModel;
-  const viewModelPath = path.join(root, normalizePath(viewModelRelativePath));
-  if (!viewModelRelativePath || !fs.existsSync(viewModelPath)) {
-    issues.push({ rule: 'missing-experience-media-adapter', message: 'Screen build pack declares media but the canonical view model is missing.' });
+  const mediaAdapterRelativePath = pack.fixtures?.mediaAdapter;
+  const mediaAdapterPath = path.join(root, normalizePath(mediaAdapterRelativePath));
+  if (!mediaAdapterRelativePath || !fs.existsSync(mediaAdapterPath)) {
+    issues.push({ rule: 'missing-domain-media-adapter', message: 'Screen build pack declares media but src/data/media.ts is missing.' });
   } else {
-    const source = fs.readFileSync(viewModelPath, 'utf8');
-    for (const required of ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey', 'imageSource', 'fallbackSource', 'resolveExperienceMedia']) {
-      if (!source.includes(required)) issues.push({ rule: 'incomplete-experience-media-adapter', message: `Canonical view model is missing ${required}.` });
+    const source = fs.readFileSync(mediaAdapterPath, 'utf8');
+    for (const required of ['imageUrl', 'imageAssetKey', 'imageSource', 'fallbackSource', 'resolveDomainMedia']) {
+      if (!source.includes(required)) issues.push({ rule: 'incomplete-domain-media-adapter', message: `Domain media adapter is missing ${required}.` });
     }
     if (['remote-cdn-cached', 'remote-allowed'].includes(policy)) {
       validateRemoteAdapter(source, policy === 'remote-cdn-cached', issues);
@@ -218,9 +218,9 @@ function validateExperienceMedia(projectRoot, packPath = '.tmp/screen-build-pack
     const recordEntries = Object.entries(records);
     const approvedHosts = Array.isArray(manifest.media?.approvedHosts) ? manifest.media.approvedHosts : [];
     const requiresRemote = ['remote-cdn-cached', 'remote-allowed'].includes(policy);
-    const requiresBundled = pack.fixtures?.adapter === 'local' || ['local-first', 'remote-cdn-cached'].includes(policy);
-    if (pack.fixtures?.adapter === 'local' && recordEntries.length === 0) {
-      issues.push({ rule: 'missing-fixture-media', message: 'A media-critical local prototype needs at least one resolved media record.' });
+    const requiresBundled = pack.fixtures?.adapter === 'mock-repository' || ['local-first', 'remote-cdn-cached'].includes(policy);
+    if (pack.fixtures?.adapter === 'mock-repository' && recordEntries.length === 0) {
+      issues.push({ rule: 'missing-fixture-media', message: 'A media-critical domain prototype needs at least one resolved media record.' });
     }
     if (requiresRemote && !approvedHosts.length) {
       issues.push({ rule: 'missing-approved-cdn-hosts', message: 'Remote fixture media requires approved hosts in the media manifest.' });
@@ -264,8 +264,8 @@ function validateExperienceMedia(projectRoot, packPath = '.tmp/screen-build-pack
   const sources = mediaRouteSources(root, pack);
   if (sources.length) {
     const aggregate = sources.map((source) => source.content).join('\n');
-    if (!aggregate.includes('EntityImage') || !aggregate.includes('resolveExperienceMedia')) {
-      issues.push({ rule: 'media-resolver-unused', message: 'Built media routes/foundations must render EntityImage from resolveExperienceMedia.' });
+    if (!aggregate.includes('EntityImage') || !aggregate.includes('resolveDomainMedia')) {
+      issues.push({ rule: 'media-resolver-unused', message: 'Built media routes/foundations must render EntityImage from resolveDomainMedia.' });
     }
     for (const source of sources) {
       if (/https?:\/\//i.test(source.content)) {

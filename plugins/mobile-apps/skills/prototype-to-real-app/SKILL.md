@@ -1,6 +1,6 @@
 ---
 name: prototype-to-real-app
-description: Use when the user wants to convert or graduate an existing mock-data Power Apps mobile prototype into a real app backed by a selected Power Platform environment, Dataverse, and real connector services without scaffolding a new project.
+description: Use when the user wants to graduate an existing neutral-domain Power Apps mobile prototype to a selected environment, Dataverse, auth, and real connectors without rewriting screens or feature hooks.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Skill
 model: opus
@@ -10,276 +10,122 @@ model: opus
 
 # Prototype To Real App
 
-Convert an existing `/create-mobile-prototype` project in place. Preserve its
-approved product design, navigation, screens, and user-authored code while
-replacing mock data/auth integration with a selected Power Platform
-environment, live Dataverse schema, generated services, and real connectors.
+Convert a `/create-mobile-prototype` project in place. The neutral domain model,
+repository interfaces, TanStack Query hooks, navigation, screens, and design
+remain canonical. Graduation binds a real environment, reconciles Dataverse
+metadata, and replaces only repository/connector adapters.
 
 ## Inputs
 
-- `--working-dir <path>` - default current directory.
-- `--environment <environment-id>` - optional. Ask when absent.
-- `--no-sample-data` - do not copy prototype scenarios into Dataverse.
-- `--skip-auth-registration` - leave the client ID blank and report a final
-  concern. Tenant/environment wiring is still required.
-- `--force` - allow state reconstruction only when strong prototype markers
-  exist and the user explicitly confirms.
+- `--working-dir <path>`: defaults to current directory.
+- `--environment <environment-id>`: optional; ask when absent.
+- `--no-sample-data`: do not seed approved fixture records.
+- `--skip-auth-registration`: leave client ID unresolved and report a blocker.
+- `--force`: reconstruct missing state only after explicit confirmation and
+  strong neutral-prototype evidence.
 
-## Non-Negotiables
+## Invariants
 
-- Do not invoke `/create-mobile-app`, scaffold a new app, or copy a template.
-- Do not pass the prototype schema contract or approval receipt to the real
-  operation-manifest fast path. They were approved without target metadata and
-  are intentionally non-executable.
-- Do not perform metadata writes until the selected environment, tenant,
-  publisher prefix, solution, and a fresh live reconciliation are confirmed.
-- Do not mark state `dataverse` before real services replace every mock and
-  `/sync-from-plan --target-data-mode dataverse` passes.
-- Do not delete a marker-bearing mock service merely to satisfy cleanup. First
-  prove a real generated replacement exists and no app code imports the mock.
-- Do not allow child data/native/connector skills to rebuild screens. This
-  orchestrator invokes `/sync-from-plan` exactly once at the end.
-- Preserve a resume checkpoint in `.mobile-app/state.json` before the first
-  irreversible operation. Conversion is resumable, not rollback-based.
+- Never scaffold/copy a new app or invoke `/create-mobile-app` as a creation
+  workflow.
+- `.tmp/prototype-domain-model.json` remains canonical before and after
+  graduation. Do not replace domain keys/types with Dataverse logical names.
+- Screens and feature hooks remain unchanged and may import only `@/data`.
+  Generated service imports are allowed only in
+  `src/data/repositories/dataverseRepositories.ts` or an approved connector
+  adapter boundary.
+- Prototype review/approval cannot authorize real mutation. Obtain normal
+  explicit confirmation immediately before binding/provisioning.
+- Do not mutate until environment, tenant, solution, publisher, schema
+  decisions, operation impact, and fresh reconciliation are visible.
+- Do not set `dataMode: dataverse` until generated services, repository
+  adapters, connector adapters, auth, and final validation all pass.
+- Conversion is resumable through `.mobile-app/state.json`; never hide partial
+  completion by weakening validation or deleting prototype evidence.
 
-## Progress Contract
+## Progress
 
 ```text
--> [real 1/10] Checking prototype state and quality baseline...
--> [real 2/10] Confirming the Power Platform environment...
--> [real 3/10] Binding the existing project to that environment...
--> [real 4/10] Reconciling the prototype model against live Dataverse...
--> [real 5/10] Applying tables and real generated services...
--> [real 6/10] Replacing connector stubs and verifying native wrappers...
--> [real 7/10] Seeding Dataverse from prototype scenarios...
--> [real 8/10] Removing prototype runtime artifacts and restoring auth...
--> [real 9/10] Reconciling optional offline scope...
--> [real 10/10] Rebinding screens and running final gates...
+-> [real 1/9] Verifying the neutral prototype baseline...
+-> [real 2/9] Selecting and resolving the target environment...
+-> [real 3/9] Planning and approving real persistence changes...
+-> [real 4/9] Binding the existing app and applying Dataverse changes...
+-> [real 5/9] Reconciling domain semantics with live metadata...
+-> [real 6/9] Generating Dataverse and connector repository adapters...
+-> [real 7/9] Seeding approved fixtures and restoring auth...
+-> [real 8/9] Running unchanged-screen and runtime validation...
+-> [real 9/9] Committing lifecycle state and reporting readiness...
 ```
 
 ## Resume Model
 
-Read `.mobile-app/state.json` before doing anything:
+Read `.mobile-app/state.json` first:
 
 | State | Action |
 |---|---|
 | `prototype` | Start at Step 1. |
-| `transitioning` to `dataverse` | Verify the previous phase's postconditions, then resume from `transition.phase`. Never blindly skip a phase. |
-| `dataverse` and cleanup check passes | Return `DONE`: already converted. Offer ordinary `/sync-from-plan` only when the plan changed. |
-| Missing state with strong prototype markers | With `--force`, show the inferred facts and require confirmation before reconstructing state. Otherwise stop. |
-| Conflicting markers | Stop and report them; do not guess. |
+| `transitioning` to `dataverse` | Recheck the previous phase, then resume exactly at `transition.phase`. |
+| `dataverse` with passing dispatcher result | Return `DONE`; use ordinary sync only for later plan changes. |
+| Missing state with strong domain manifest/model/provider markers | With `--force`, show inferred facts and ask before reconstructing schema v2 state. |
+| Conflicting markers | Stop and report them; never guess. |
 
-Update `transition.updatedAt` and `transition.phase` only after a phase's
-postconditions pass. On failure, leave the current phase in state and report
-the exact resume command.
+Update phase only after its postconditions pass. On failure, leave the current
+phase and print the exact resume invocation.
 
 ## Workflow
 
-### Step 1 - Verify Prototype And Quality Baseline
+### 1. Verify The Neutral Prototype
 
 Require:
 
 ```bash
-test -f "$PROJECT_DIR/package.json"
-test -f "$PROJECT_DIR/app.config.js"
 test -f "$PROJECT_DIR/native-app-plan.md"
-test -f "$PROJECT_DIR/src/generated/.prototype-manifest.json"
+test -f "$PROJECT_DIR/.tmp/prototype-domain-model.json"
+test -f "$PROJECT_DIR/.mobile-app/prototype-domain-manifest.json"
 test -f "$PROJECT_DIR/.mobile-app/state.json"
-test -f "$PROJECT_DIR/.tmp/mobile-plan-execution-contract.json"
-node -e "const c=require(process.argv[1]); if(c.schemaVersion!==3) process.exit(1)" \
-  "$PROJECT_DIR/.tmp/experience-screen-contract.json"
+test -f "$PROJECT_DIR/src/data/contracts.ts"
+test -f "$PROJECT_DIR/src/data/repositories/mockRepositories.ts"
+test -f "$PROJECT_DIR/src/data/repositories/dataverseRepositories.ts"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all
 ```
 
-For a fresh conversion, also require the non-executable planner artifacts:
+Require lifecycle schema version 2 and `dataMode: prototype`. Reject a legacy
+`src/generated/.prototype-manifest.json`; run the compatibility migrator from
+`/create-mobile-prototype` first.
 
-```bash
-node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false) process.exit(1)" \
-  "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
-```
+Record hashes of `app/`, `src/components/`, non-generated `src/hooks/`, and the
+screen contract. These are the unchanged-screen baseline. Archive the local
+prototype approval as historical context; never pass it to Dataverse mutation.
 
-Read `.tmp/final-validation.md`. It must be current for the plan hash and record
-passing results for:
+### 2. Resolve Environment And Planning Facts
 
-- `check-routes.js`
-- `validate-screen-contracts.js`
-- `validate-screen-quality.js --report`
-- `validate-color-contrast.js --report`
-- `npm run type-check`
+Resolve/list the user-selected environment through the existing environment
+skill. Verify environment ID, URL, tenant, and display name agree. Ask for one
+environment choice when absent.
 
-If the file is absent, stale, or incomplete, invoke:
+Use the neutral domain as planning input to the data-model architect. Inspect
+live metadata and choose reuse/extend/create per entity and field. Resolve the
+real publisher prefix, solution, ownership, alternate keys, choice values,
+relationships, and generated service requirements. Keep domain keys in one
+column and real Dataverse names in a separate mapping column.
 
-```text
-/sync-from-plan --working-dir <PROJECT_DIR>
-```
+Write a real `.tmp/dataverse-schema-contract.json`; do not edit the domain
+model to make it look like Dataverse. Update plan review sections and execution
+contracts, then validate them.
 
-in prototype mode, then restart conversion. Do not discover weak screens only
-after attaching a real backend.
+### 3. Explicit Real-Mutation Approval
 
-Check that app code does not import `*.seed.json` directly. Record the current
-plan hash, prototype manifest, connector stubs, and generated service names for
-the later replacement audit.
+Present one final mutation summary immediately before the first external write:
 
-### Step 2 - Resolve And Confirm Environment
+- environment, tenant, solution, and publisher;
+- tables reused/extended/created;
+- columns, relationships, choices, keys, and ownership;
+- generated data sources and connector bindings;
+- sample-data and offline intent;
+- unresolved conflicts or destructive changes.
 
-Use current CLI auth handling from shared instructions:
-
-```bash
-npx power-apps auth-status --json
-```
-
-If the requested account is cached but inactive, use `auth-switch`; if absent,
-use `login`. Do not use `az account set` to switch the standalone Power Apps
-CLI.
-
-Resolve the supplied/selected environment ID:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" \
-  "<environment-id>" > "$PROJECT_DIR/.resolved-environment.json"
-```
-
-Capture environment ID, URL, display name, tenant ID, and region. Verify Azure
-CLI can acquire a token for that tenant because Dataverse helper scripts use
-`az` independently from `npx power-apps`.
-
-Show an explicit mutation gate:
-
-```text
-Environment: <display name>
-ID: <environment ID>
-URL: <Dataverse URL>
-Tenant: <tenant ID>
-
-This conversion can create or extend Dataverse tables, add data sources and
-connections, insert sample rows, and optionally create an offline profile.
-Proceed / Choose another environment / Cancel
-```
-
-After approval, write lifecycle state:
-
-```json
-{
-  "dataMode": "transitioning",
-  "environment": {
-    "id": "<id>",
-    "url": "<url>",
-    "displayName": "<name>"
-  },
-  "transition": {
-    "from": "prototype",
-    "to": "dataverse",
-    "phase": "binding",
-    "startedAt": "<ISO>",
-    "updatedAt": "<ISO>"
-  }
-}
-```
-
-Preserve the schema version and existing hashes.
-
-### Step 3 - Archive Prototype Approvals And Bind Project
-
-Prototype approvals are useful historical intent but unsafe execution input.
-Before binding, create `.tmp/prototype-plan-artifacts/` and move these files
-there on the first run:
-
-- `.tmp/dataverse-schema-contract.json`
-- `.tmp/mobile-plan-execution-contract.json` as
-  `mobile-plan-execution-contract.prototype.json`
-- `.tmp/mobile-plan-execution-preflight.json` as
-  `mobile-plan-execution-preflight.prototype.json`
-- `.tmp/experience-screen-contract.json` as
-  `experience-screen-contract.prototype.json`
-- prototype `power.config.json` as `power.config.prototype.json`
-
-Do not overwrite an existing archive on resume. Verify the archived contract
-still has `planningMode: prototype` and `executionEligible: false`. Do not pass
-any archived path as `--schema-contract`, `--approval-receipt`,
-`--operation-manifest`, or related fast-path arguments.
-
-Remove `.tmp/screen-build-pack.json` immediately after archiving these
-prototype identities. It is derived from the archived operations and must not
-survive into Dataverse reconciliation. Recompile only after the real screen and
-execution contracts validate.
-
-If a legacy `.tmp/mobile-plan-status.json` exists, archive it as optional
-historical context only. It is not a real-app authorization and must not be
-passed to a mutation command.
-
-Remove only the zero-environment prototype `power.config.json`, then bind the
-existing project:
-
-```bash
-cd "$PROJECT_DIR"
-npx power-apps init -t MobileApp \
-  --display-name '<existing display name>' \
-  --environment-id '<environment ID>' \
-  --non-interactive
-```
-
-If `init` proposes to replace source, app, package, or plan files, stop and
-surface the diff. Successful binding must change configuration only, not
-scaffold another app.
-
-Verify the new `power.config.json.environmentId` exactly matches the approved
-environment and rerun `resolve-environment.js` from that ID. The resolved URL
-and tenant must match Step 2.
-
-Unless `--skip-auth-registration`, execute
-`/set-app-registration-native` from the project root. The user may create the
-Wrap registration and paste its client ID or explicitly skip. Always write the
-resolved tenant/environment cache to `auth.config.json`; never invent a client
-ID.
-
-Advance transition phase to `dataverse`.
-
-### Step 4 - Rebase Prefix And Perform Live Reconciliation
-
-Detect the selected solution's real publisher prefix:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" \
-  "<environment-url>" \
-  --tenant-id '<tenant-id>'
-```
-
-Then rebase only identifiers proven by the archived prototype contract:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/rebase-prototype-plan.js" \
-  "$PROJECT_DIR" "<publisher-prefix>"
-```
-
-This writes an audit mapping and a still-non-executable rebased contract under
-`.tmp/prototype-plan-artifacts/`; it does not recreate a real approval receipt.
-
-Now read and execute `/add-dataverse` Step 4 as a **read-only preflight** from
-the project root. Use its exact live batching, derived lookup/choice/Boolean
-metadata checks, customization capability checks, and no-dead-end taxonomy.
-Stop before Step 5 writes anything. Write the resulting matrix to
-`.tmp/prototype-plan-artifacts/live-reconciliation.md`.
-
-Present the live matrix as a concise textual draft summary. Highlight every
-change from prototype assumptions:
-
-- Reuse or Extend instead of Create;
-- publisher/name aliases;
-- adapted columns or tables;
-- deferred fields/dependencies;
-- standard-table mappings;
-- any user-visible field or relationship impact.
-
-Ask for a normal textual response: `approve`, requested data-intent edits, or
-cancel. On `approve`, replace the Data Model section's prototype assumption
-matrix with the live decisions while preserving its business schema and archived
-history. Before persisting a fresh real-app receipt, write a current real
-`.tmp/dataverse-schema-contract.json`, regenerate schema-v3 screen operations
-with every prototype entity/field/relationship mapped to the approved live
-identity, regenerate `.tmp/mobile-plan-execution-contract.json` from the
-archived requirement IDs plus current template/connector facts, and run both
-plan-bundle and execution-contract validators. No prototype operation identity
-may remain unless the live map explicitly preserves it. Then persist the
-receipt:
+Draft and record the normal real-app receipt:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
@@ -294,274 +140,131 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
   --response approve
 ```
 
-The resulting status must be `approved` with
-`mayAuthorizeExternalMutations: true`. The archived prototype checkpoint is
-always local-only and cannot satisfy this requirement. Any reconciliation,
-plan, schema, Experience Contract, screen contract, or foundation contract
-drift after this point invalidates the receipt and requires a fresh textual
-approval before `/add-dataverse` below.
+No approval, no mutation. After approval, atomically set lifecycle state to
+`dataMode: transitioning`, preserve all hashes, record the environment, and set
+phase `binding`.
 
-Also write
-`.tmp/prototype-plan-artifacts/live-name-map.json`, bound to the approved plan
-hash, archived prototype-contract hash, environment ID/URL, and publisher
-prefix. It must include every prototype table and field, including explicit
-`defer` decisions:
+### 4. Bind And Apply Dataverse
 
-```json
-{
-  "schemaVersion": 1,
-  "approvedPlanSha256": "<hash>",
-  "prototypeContractSha256": "<hash>",
-  "environment": { "id": "<id>", "url": "<url>" },
-  "publisherPrefix": "<prefix>",
-  "tables": {
-    "cr_inspection": {
-      "logicalName": "cr123_inspection",
-      "decision": "create",
-      "columns": {
-        "cr_name": { "logicalName": "cr123_name", "decision": "create" },
-        "cr_siteid": { "logicalName": "cr123_siteid", "decision": "create" }
-      }
-    }
-  }
-}
-```
+Archive prototype-only `power.config.json` and review receipts without
+overwriting earlier archives. Bind the existing directory with `power-apps
+init`; if it proposes source, screen, package, or plan replacement, stop.
 
-Do not infer this map later from suffixes or generated filenames. It is the
-identity bridge used by sample-data migration and field-binding repair.
+Verify bound environment facts exactly, configure app registration unless
+skipped, then apply the approved schema through `/add-dataverse`. Use fresh live
+reconciliation and mutation receipts; never pass the prototype receipt.
 
-### Step 5 - Apply Dataverse And Assert Postconditions
+Require `.datamodel-manifest.json` plus a generated service for every mapped
+entity. Advance phase to `reconciliation` only after metadata and generated
+services validate.
 
-From the project root, execute `/add-dataverse --skip-planning`. This is the
-standalone fallback path by design: pass no archived prototype contract,
-receipt, reconciliation, operation manifest, or publish checkpoint.
+### 5. Reconcile Domain To Dataverse
 
-First verify the current real plan is still approved:
+Run the conservative reconciler:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
-  --project-root "$PROJECT_DIR" \
-  --action status \
-  --workflow create-mobile-app
+node "${CLAUDE_SKILL_DIR}/../../scripts/reconcile-domain-dataverse.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
-Do not invoke `/add-dataverse` when this check is pending, stale, or does not
-report `mayAuthorizeExternalMutations: true`.
+It writes:
 
-`--skip-planning` suppresses duplicate sample-data/offline prompts. The child
-must still perform its own fresh live reconciliation, execute metadata changes
-sequentially, publish, add each required table through
-`npx power-apps add-data-source`, write the real manifest, and type-check.
+- `.tmp/dataverse-reconciliation-report.json` with exact entity/field/choice/
+  operation matches, warnings, and conflicts;
+- `.tmp/dataverse-repository-mapping.json` only when no blocker remains.
 
-Resolve `MANIFEST_PATH` from `.datamodel-manifest.json`, then
-`docs/plan-artifacts/.datamodel-manifest.json`. Assert:
+Review every ambiguous entity/field, unsupported image/file transform, choice
+label/value mismatch, money currency ambiguity, missing service, and missing
+operation. Resolve conflicts in approved planning/mapping inputs and rerun.
+Never make a best-effort adapter from a blocked report.
 
-- every non-deferred required table has a manifest entry and generated
-  service;
-- each table has exact logical name and entity set name when required by
-  generated writes/seeding;
-- lookups include schema name and target metadata;
-- choice/Boolean columns include stable integer/label options;
-- file/image columns and aliases match the approved live matrix;
-- no old placeholder table name remains in current screen/data contracts.
+### 6. Generate Repository And Connector Adapters
 
-Run the structural handoff validator:
+Generate the Dataverse implementation behind existing interfaces:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-datamodel-manifest.js" \
-  "$MANIFEST_PATH"
+node "${CLAUDE_SKILL_DIR}/scripts/gen-dataverse-repositories.js" "$PROJECT_DIR"
+npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
 ```
 
-Reconcile `live-name-map.json` against the actual manifest and any final
-Adapt/collision aliases chosen by `/add-dataverse`. If a final name differs
-from the approved Step 4 matrix, return to the Step 4 gate. Otherwise enrich
-the map with the final manifest facts and set:
+This may overwrite only
+`src/data/repositories/dataverseRepositories.ts`. It maps real rows, choices,
+money, IDs, filters, sort, cursors, and writes into canonical domain records.
+Do not modify screen files, domain model/types, contracts, or hooks.
 
-- `approvedPlanSha256` from the final approved `native-app-plan.md` bytes;
-- `prototypeContractSha256` from the immutable archived prototype contract;
-- `dataverseManifestSha256` from the validated real manifest;
-- the exact selected environment ID/URL.
+For every planned non-Dataverse connector, run the owning connector skill and
+place its calls behind the approved repository/adapter boundary. Raw connector
+calls in screens are blockers. Verify native wrappers but do not rebuild them.
 
-Every non-deferred mapped table/column must resolve exactly once. The seed
-migration planner rejects any stale hash or environment mismatch.
+Advance phase to `seeding` only when every required adapter is real and all
+connector throw-stubs are gone.
 
-Run `npm run generate-schemas` and `npm run type-check`. Any missing manifest
-fact or compile error blocks conversion.
+### 7. Optional Sample Data And Auth
 
-Advance transition phase to `connectors`.
+Unless `--no-sample-data`, transform approved neutral fixtures through the
+reviewed repository mapping and seed via `/add-sample-data` in dependency order.
+Preserve stable IDs when supported; remap references through the insertion
+result. Never seed generic rows or exceed approved inventory/relationship
+constraints.
 
-### Step 6 - Replace Connector Stubs And Verify Native Wrappers
-
-Read the regenerated real
-`.tmp/mobile-plan-execution-contract.json → connectorOperations[]`, group rows
-by exact API/service pairing, and sequentially execute `/add-connector
-<api-name>` from the project root. Follow its connection, dataset/table, and
-schema-generation prompts. Do not infer a connector or method from archived
-prototype Markdown.
-
-After each connector, verify a real generated service replaced or superseded
-the corresponding throw-stub. A planned connector that cannot be provisioned
-is blocking because leaving its stub would create a partly mocked real app.
-
-Read `## Native Capabilities`. Existing prototype wrappers should already be
-valid. Invoke `/add-native <capability>` only when a wrapper is missing or the
-current allowlist contract requires repair. Do not duplicate wrappers or edit
-native package/config boundaries.
-
-Advance transition phase through `native` to `seeding`.
-
-### Step 7 - Seed Dataverse From Prototype Scenarios
-
-Keep seed JSON until this step completes. Unless `--no-sample-data`, ask once:
-
-```text
-Seed the real Dataverse tables from the prototype scenarios? Yes (default) / No
-```
-
-On yes, execute `/add-sample-data --from-seed` from the project root. It must
-first validate the real manifest and run:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../add-sample-data/scripts/prepare-prototype-seed-migration.js" \
-  "$PROJECT_DIR"
-```
-
-Require zero mapping blockers before any insert. The child then preserves
-prototype GUIDs as real IDs, remaps choices by label, proves lookup parents in
-the current environment, inserts by dependency tier, and journals live results.
-
-Missing table/column/choice/lookup mappings or required-row failures are
-conversion blockers. Approved deferred fields and unavailable media bytes may
-return `DONE_WITH_CONCERNS`, because the row data remains valid and the exact
-loss is reported. Never replace failed prototype mappings with generic rows.
-
-Record inserted/existing/skipped counts and the migration-plan hash per table.
-
-Advance transition phase to `cleanup`.
-
-### Step 8 - Rebind Service Imports And Remove Prototype Runtime
-
-First run real schema generation and inspect the current generated service
-surface. Compare it with `src/generated/.prototype-manifest.json` and the real
-Dataverse manifest.
-
-When real filenames/methods differ from the prototype contract, create a
-non-generated compatibility layer under `src/services/` or update app imports
-mechanically. Compatibility code may import only real generated services and
-models. It must not import prototype schemas, seed JSON, or mock registries.
-Add a focused `@/services` alias when needed.
-
-For every marker-bearing service/barrel left in the prototype manifest:
-
-1. Prove the corresponding real generated table/connector service exists.
-2. Prove app and non-generated source no longer import the mock file/export.
-3. Only then delete that exact orphan listed by the prototype manifest.
-
-Do not delete an un-replaced connector stub or table mock. It indicates an
-incomplete provisioning phase.
-
-Run the shared cleanup transaction:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/cleanup-prototype-artifacts.js" \
-  "$PROJECT_DIR"
-```
-
-It removes seed files and generator-owned schemas, blocks on remaining mock
-markers, and removes `.prototype-manifest.json` only after a clean pass.
-
-Switch the reversible runtime shell:
+Switch runtime configuration only after adapters pass:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/configure-prototype-runtime.js" \
   "$PROJECT_DIR" dataverse
-npm --prefix "$PROJECT_DIR" run generate-schemas
-npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-Verify:
+This restores the real predev/schema generation command and auth guards. The
+same `PrototypeDataProvider` remains mounted under `PowerAppsProvider`; its
+repository factory now selects Dataverse adapters from `dataMode`.
 
-- `app/_layout.tsx` still mounts `PowerAppsProvider` with auth, power config,
-  schema map, Tamagui config, and the established provider order;
-- `app/index.tsx` now follows real `useAuth()` state because runtime data mode
-  is Dataverse;
-- `app/(app)/_layout.tsx` guards unauthenticated routes;
-- `power.config.json` contains real database/connection references;
-- no source references a prototype seed/schema/mock marker.
+If offline behavior is required, run `/setup-offline-profile` only now, preview
+its scope, and assign it after explicit approval. Advance phase to `validation`.
 
-Advance transition phase to `sync`.
+### 8. Prove Screens Did Not Change
 
-### Step 9 - Reconcile Optional Offline Scope
+Recompute the baseline hashes. Any change under screen/navigation/shared UX
+files must be explained by an independently approved non-data fix; adapter
+generation itself must produce no screen diff.
 
-If the approved plan requests offline behavior or an offline profile already
-exists, run the canonical local delta check from
-`offline-profile-reconciliation.md`.
-
-- No profile and no approved offline requirement: continue silently.
-- Approved offline requirement with no profile: offer
-  `/setup-offline-profile` now that real tables exist.
-- Existing profile with delta: reconcile tables/columns through the documented
-  specialist skills and recheck to `in-sync`.
-
-Offline profile failure blocks deployment but need not undo completed online
-conversion. Record it as a concern unless offline operation is a core approved
-requirement, in which case stop before final success.
-
-### Step 10 - Sync Once And Commit Dataverse State
-
-Invoke exactly once:
-
-```text
-/sync-from-plan --working-dir <PROJECT_DIR> --target-data-mode dataverse
-```
-
-This treats the transition as a mandatory Dataverse field-binding rebind even
-when the screen list is unchanged. It refreshes the generated-service snapshot,
-updates exact lookup/choice/file bindings, rebuilds affected data screens,
-runs route/contract/quality/contrast/TypeScript gates, renders preview, and
-only then commits:
-
-- `dataMode: "dataverse"`
-- `transition: null`
-- selected environment facts
-- current plan and real manifest hashes
-- final sync timestamp
-
-After return, independently assert state is Dataverse, cleanup check passes in
-`--check` mode, manifest hash is present, and `npm run type-check` succeeds.
-Then rerun the full non-generated source gate so an unchanged prototype-era
-shared hook cannot survive conversion:
+Run:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
-  --project-root "$PROJECT_DIR" --all-source
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all --record
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
-Run the changed-file dispatcher against every orchestrator-owned file as the
-separate ownership/provenance gate.
+Exercise the critical flow against real data, including one list/get, one
+mutation when approved, choice formatting, money, relationships, offline/error
+states, auth redirect, and media fallback. Never replace a failing real adapter
+with mock data to pass validation.
 
-If final sync fails, leave state `transitioning` at phase `sync`. Do not restore
-prototype mode: real metadata/services may already be live and mock artifacts
-have been removed. Repair and rerun this skill to resume safely.
+### 9. Commit Lifecycle State
 
-## Summary Output
+Only after all gates pass, atomically set:
 
-```text
-DONE
+- `dataMode: dataverse`;
+- the verified environment facts;
+- `transition: null`;
+- current plan/screen/execution/Dataverse manifest hashes;
+- current `lastDomainModelHash`, `lastRepositoryMappingHash`, and
+  `lastFixtureRevision`;
+- passing `lastValidation` metadata and `lastSyncAt`.
 
-Prototype converted to a real Power Apps mobile app.
-Environment: <display name / ID>
-Data mode: dataverse
-Dataverse: <reuse / extend / create / adapt / defer summary>
-Connectors: <real services added or none>
-Native capabilities: <verified / repaired>
-Sample data: <seeded / skipped / concerns>
-Offline profile: <not requested / created / reconciled / concern>
-Sync and validation: PASS
-Preview: <path>
-Next: /deploy
-```
-
-Use `DONE_WITH_CONCERNS` for skipped app registration, non-critical sample-data
-failures, or non-core offline concerns. Never report success while lifecycle
-state is `transitioning`, a mock marker remains, or a hard sync gate failed.
+Completion output must report environment/solution, reconciled mappings,
+created/extended/reused tables, generated repository/connector adapters,
+sample-data result, auth/offline status, unchanged-screen proof, and validation
+results. Report `--skip-auth-registration` as a blocker, not a successful fully
+wrapped app.

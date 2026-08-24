@@ -22,6 +22,7 @@ const {
   validateContract,
 } = require('./build-dataverse-operation-manifest');
 const { validateProjectExecutionContract } = require('./validate-mobile-plan-execution-contract');
+const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 
 const APPROVAL_KEYS = ['dataModel', 'nativeCapabilities', 'connectors', 'screenPlan'];
 
@@ -43,6 +44,7 @@ function resolvePaths(projectRoot, options = {}) {
   return {
     root,
     planPath: path.resolve(root, options.plan || 'native-app-plan.md'),
+    domainModelPath: options.domainModel ? path.resolve(root, options.domainModel) : path.join(root, '.tmp', 'prototype-domain-model.json'),
     contractPath: options.contract ? path.resolve(root, options.contract) : path.join(root, '.tmp', 'dataverse-schema-contract.json'),
     experienceContractPath: path.resolve(root, options.experienceContract || '.tmp/experience-contract.json'),
     experienceScreenContractPath: path.resolve(root, options.experienceScreenContract || '.tmp/experience-screen-contract.json'),
@@ -64,6 +66,7 @@ function optionalFileSha256(filePath) {
 function artifactHashes(paths, planBytes) {
   return {
     nativeAppPlanSha256: sha256(planBytes),
+    prototypeDomainModelSha256: optionalFileSha256(paths.domainModelPath),
     dataverseSchemaContractSha256: optionalFileSha256(paths.contractPath),
     experienceContractSha256: optionalFileSha256(paths.experienceContractPath),
     experienceScreenContractSha256: optionalFileSha256(paths.experienceScreenContractPath),
@@ -85,6 +88,8 @@ function currentRevision(projectRoot, options = {}) {
     planSha256: sha256(planBytes),
     contractSha256: null,
     contract: null,
+    domainModelSha256: null,
+    domainModel: null,
     planBytes,
     paths,
   };
@@ -97,6 +102,13 @@ function currentRevision(projectRoot, options = {}) {
       revision.contract = contract;
       revision.contractSha256 = sha256(stableJson(approvedContract));
     }
+  }
+  if (fs.existsSync(paths.domainModelPath)) {
+    const domainModel = readJson(paths.domainModelPath);
+    const validation = validatePrototypeDomainModel(domainModel);
+    if (!validation.valid) throw new Error(`Prototype domain model is invalid: ${validation.errors.join('; ')}`);
+    revision.domainModel = domainModel;
+    revision.domainModelSha256 = domainModelRevision(domainModel);
   }
   revision.artifactHashes = artifactHashes(paths, planBytes);
   revision.artifactRevisionSha256 = sha256(stableJson(revision.artifactHashes));
@@ -112,6 +124,7 @@ function pendingApprovalState(revision, workflow, reason = 'plan-draft') {
     reason,
     planRevisionSha256: revision.planSha256,
     contractRevisionSha256: revision.contractSha256,
+    domainModelRevisionSha256: revision.domainModelSha256,
     artifactRevisionSha256: revision.artifactRevisionSha256,
     artifactHashes: revision.artifactHashes,
     approvals: Object.fromEntries(APPROVAL_KEYS.map((key) => [key, { status: 'pending' }])),
@@ -209,6 +222,7 @@ function parseArgs(argv) {
     else if (argv[index] === '--workflow') args.workflow = argv[++index];
     else if (argv[index] === '--plan') args.plan = argv[++index];
     else if (argv[index] === '--contract') args.contract = argv[++index];
+    else if (argv[index] === '--domain-model') args.domainModel = argv[++index];
     else if (argv[index] === '--execution-contract') args.executionContract = argv[++index];
     else if (argv[index] === '--execution-preflight') args.executionPreflight = argv[++index];
     else if (argv[index] === '--receipt') args.receipt = argv[++index];
@@ -225,6 +239,7 @@ function publicResult(result) {
     reason: result.reason,
     planRevisionSha256: result.revision?.planSha256 || null,
     contractRevisionSha256: result.revision?.contractSha256 || null,
+    domainModelRevisionSha256: result.revision?.domainModelSha256 || null,
     artifactRevisionSha256: result.revision?.artifactRevisionSha256 || null,
   };
 }

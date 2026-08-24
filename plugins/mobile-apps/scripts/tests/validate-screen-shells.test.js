@@ -22,7 +22,7 @@ function buildPack() {
   return JSON.stringify({
     fixtures: {
       assetManifest: 'assets/experience/manifest.json',
-      viewModel: 'src/generated/experience-view-model.ts',
+      dataModule: 'src/data/index.ts',
     },
     screens: [
       { route: '/(app)/home', file: 'app/(app)/home.tsx', headerMode: 'root' },
@@ -31,11 +31,10 @@ function buildPack() {
   });
 }
 
-const viewModelSource = [
-  'export function toExperienceRecord() {}',
-  'export function getExperienceAsset() {}',
-  'export function isExperienceRecordActionable() {}',
-  'export function relatedExperienceRecords() {}',
+const dataModuleSource = [
+  "export { resolveDomainMedia } from './media';",
+  "export { PrototypeDataProvider } from './PrototypeDataProvider';",
+  'export function isDomainRecordActionable() { return true; }',
   '',
 ].join('\n');
 
@@ -43,7 +42,8 @@ test('accepts provider-only root layout and pack-matched route shells', (context
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': buildPack(),
     'assets/experience/manifest.json': JSON.stringify({ assets: {}, fallbacks: {} }),
-    'src/generated/experience-view-model.ts': viewModelSource,
+    'src/data/index.ts': dataModuleSource,
+    'src/data/PrototypeDataProvider.tsx': 'export function PrototypeDataProvider({ children }) { return children; }\n',
     'app/_layout.tsx': "export default function Root() { return <SafeAreaProvider><Slot /></SafeAreaProvider>; }\n",
     'app/(app)/home.tsx': "import { ScreenShell } from '@/components'; export default function Home() { return <ScreenShell headerMode=\"root\" title=\"Home\" />; }\n",
     'app/(app)/products/[id].tsx': "import { ScreenShell } from '@/components'; export default function Detail() { return <ScreenShell headerMode=\"back\" title=\"Detail\" />; }\n",
@@ -56,7 +56,8 @@ test('reports root and route safe-area ownership plus header-mode drift', (conte
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': buildPack(),
     'assets/experience/manifest.json': JSON.stringify({ assets: {}, fallbacks: {} }),
-    'src/generated/experience-view-model.ts': viewModelSource,
+    'src/data/index.ts': dataModuleSource,
+    'src/data/PrototypeDataProvider.tsx': 'export function PrototypeDataProvider({ children }) { return children; }\n',
     'app/_layout.tsx': "export default function Root() { return <SafeAreaView><Slot /></SafeAreaView>; }\n",
     'app/(app)/home.tsx': "import { SafeAreaView } from 'react-native-safe-area-context'; export default function Home() { return <SafeAreaView />; }\n",
     'app/(app)/products/[id].tsx': "import { ScreenShell } from '@/components'; export default function Detail() { return <ScreenShell headerMode=\"root\" title=\"Detail\" />; }\n",
@@ -69,7 +70,7 @@ test('reports root and route safe-area ownership plus header-mode drift', (conte
   assert.ok(rules.includes('header-mode-implementation-drift'));
 });
 
-test('fails closed when pack-declared media or view-model artifacts are absent', (context) => {
+test('fails closed when pack-declared media or domain data artifacts are absent', (context) => {
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': buildPack(),
     'app/_layout.tsx': "export default function Root() { return <SafeAreaProvider><Slot /></SafeAreaProvider>; }\n",
@@ -79,5 +80,5 @@ test('fails closed when pack-declared media or view-model artifacts are absent',
 
   const rules = validateScreenShells(root).map((issue) => issue.rule);
   assert.ok(rules.includes('missing-local-asset-manifest'));
-  assert.ok(rules.includes('missing-experience-view-model'));
+  assert.ok(rules.includes('missing-domain-data-module'));
 });

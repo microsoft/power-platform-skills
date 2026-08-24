@@ -188,12 +188,24 @@ helpers are first-class rebind targets: repair them before screen builders run,
 and include every consuming screen in the target set when the helper's behavior
 changes.
 
-### Step 3 - Reconcile Services And Navigation
+### Step 3 - Reconcile Repositories And Navigation
 
-Refresh the `## Generated Services (snapshot at <ISO timestamp>)` section using
-the exact service files and exported methods on disk. In Dataverse mode this
-snapshot must contain no mock marker; in prototype mode it must agree with
-`src/generated/.prototype-manifest.json`.
+In prototype mode, validate the neutral domain and regenerate `src/data` from
+it. In Dataverse mode, reconcile the domain against the current manifest and
+regenerate only `dataverseRepositories.ts`. Do not write service snapshots into
+the readable plan and do not expose generated services to screens.
+
+```bash
+# prototype
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/gen-data-layer.js" "$PROJECT_DIR"
+
+# dataverse
+node "${CLAUDE_SKILL_DIR}/../create-mobile-prototype/scripts/gen-data-layer.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/reconcile-domain-dataverse.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../prototype-to-real-app/scripts/gen-dataverse-repositories.js" "$PROJECT_DIR"
+```
+
+Run only the branch matching lifecycle `dataMode`, then validate domain scope.
 
 Read the approved Screen Map and run `/create-mobile-app` Step 10b's current
 navigation algorithm:
@@ -215,7 +227,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/materialize-experience-view-model.js" \
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
   --project-root "$PROJECT_DIR"
 npm --prefix "$PROJECT_DIR" run type-check
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
@@ -232,13 +244,12 @@ Reuse `/create-mobile-app` Step 10.8:
   share a row, status map, cursor/list hook, save helper, or formatter;
 - write typed skeletons only for new/missing screens;
 - patch imports/hooks surgically for existing screens;
-- preserve route params and generated service contracts.
-- preserve the pack-selected `ScreenShell` header mode and the generated
-  `toExperienceRecord` / `getExperienceAsset` boundary; do not restore direct
+- preserve route params and domain operation/hook contracts.
+- preserve the pack-selected `ScreenShell` header mode and the canonical
+  `@/data` boundary; do not restore direct
   `SafeAreaView` wrappers or per-screen presentation arrays.
-- rebind every shared data helper identified in Step 2 using exact manifest and
-  generated-model names; lookup reads use `_<lookup>_value`, never the lookup
-  navigation property in `select`;
+- rebind every shared data helper through neutral repository contracts;
+  Dataverse lookup/logical-name adaptation belongs only in the adapter;
 - preserve optional/null semantics and workflow helpers shared by multiple
   screens rather than reintroducing per-screen predicates.
 
@@ -267,14 +278,13 @@ Select targets in this order:
 | `--changed-screens` | Named screens plus required navigation parents |
 | Missing route file | Missing screen |
 | Screen spec hash changed | Changed screen |
-| Prototype to Dataverse transition or manifest hash changed | Every data-bound screen or shared data helper whose imports/field bindings changed, plus screens consuming changed helpers |
+| Prototype to Dataverse transition or manifest hash changed with stable domain/screen contracts | Repository adapter only; do not rebuild screens |
 | Only lifecycle hashes are missing | Run gates first; rebuild only failures |
 
-Spawn `mobile-app:screen-builder` in waves of at most five. Prompts include the
-existing file, approved per-screen spec, current generated-service snapshot,
-data mode, exact target path, matching build-pack entry, literal header mode,
-and stable-ID view model. In Dataverse mode include the manifest facts for that
-screen.
+Spawn `mobile-app:screen-builder` in waves of at most five. Each prompt includes
+only the existing file, exact target/input hash, one immutable
+`.tmp/screen-tasks/<screen-id>.json`, its task revision, and the parent pack
+revision. Builders never receive generated-service or Dataverse manifest facts.
 
 Parse each first-line status using the plugin protocol. On
 `NEEDS_USER_APPROVAL`, pause the sync and use the outer textual checkpoint
@@ -294,6 +304,10 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
   "$PROJECT_DIR/native-app-plan.md"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
   --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \

@@ -16,6 +16,7 @@ const { screenInputFingerprint, validateScreenArtifact } = require('../validate-
 const { validateScreenSourceContract } = require('../lib/screen-source-contract');
 const { writeScreenArtifact } = require('../write-screen-artifact');
 const { prepareExecutionPreflight } = require('../prepare-mobile-plan-execution-contract');
+const { generateDataLayer } = require('../../skills/create-mobile-prototype/scripts/gen-data-layer');
 
 const passengerBrief = [
   'Create a mobile app for showcasing inventory items to flight passengers.',
@@ -26,6 +27,62 @@ const passengerBrief = [
 
 function hash(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function passengerDomainModel() {
+  return {
+    schemaVersion: 1, mode: 'prototype-domain',
+    entities: [
+      { key: 'Category', displayName: 'Category', displayPluralName: 'Categories', description: 'A collection in the onboard shop.', primaryNameField: 'name', estimatedPrototypeRows: 2, fields: [
+        { key: 'id', displayName: 'ID', type: 'id', required: true },
+        { key: 'name', displayName: 'Name', type: 'text', required: true },
+      ] },
+      { key: 'Product', displayName: 'Product', displayPluralName: 'Products', description: 'A product offered to flight passengers.', primaryNameField: 'name', estimatedPrototypeRows: 2, fields: [
+        { key: 'id', displayName: 'ID', type: 'id', required: true },
+        { key: 'categoryId', displayName: 'Category', type: 'reference', required: true, referenceTarget: 'Category' },
+        { key: 'name', displayName: 'Name', type: 'text', required: true },
+        { key: 'price', displayName: 'Price', type: 'money', required: true },
+        { key: 'availability', displayName: 'Availability', type: 'choice', required: true, choiceKey: 'ProductAvailability' },
+        { key: 'inventoryQuantity', displayName: 'Inventory quantity', type: 'whole-number', required: true, minimum: 0 },
+        { key: 'media', displayName: 'Product image', type: 'image', required: true, mediaIntent: 'featured' },
+      ] },
+      { key: 'CartItem', displayName: 'Cart item', displayPluralName: 'Cart items', description: 'A product selected for the passenger bag.', primaryNameField: 'label', estimatedPrototypeRows: 1, fields: [
+        { key: 'id', displayName: 'ID', type: 'id', required: true },
+        { key: 'productId', displayName: 'Product', type: 'reference', required: true, referenceTarget: 'Product' },
+        { key: 'label', displayName: 'Label', type: 'text', required: true },
+        { key: 'quantity', displayName: 'Quantity', type: 'whole-number', required: true, minimum: 1, maximum: 25 },
+      ] },
+    ],
+    relationships: [
+      { key: 'CategoryProducts', parent: 'Category', child: 'Product', cardinality: 'one-to-many', childField: 'categoryId', required: true },
+      { key: 'ProductCartItems', parent: 'Product', child: 'CartItem', cardinality: 'one-to-many', childField: 'productId', required: true },
+    ],
+    choices: [{ key: 'ProductAvailability', options: [{ key: 'available', label: 'Available' }, { key: 'sold-out', label: 'Sold out' }] }],
+    operations: [
+      { key: 'listProducts', entity: 'Product', kind: 'list', repository: 'CatalogRepository', method: 'listProducts', hook: 'useProducts', selectFields: ['id', 'categoryId', 'name', 'price', 'availability', 'inventoryQuantity', 'media'], filterFields: ['categoryId', 'availability'], sortFields: ['name'], pagination: { mode: 'cursor', pageSize: 20 } },
+      { key: 'getProduct', entity: 'Product', kind: 'get', repository: 'CatalogRepository', method: 'getProduct', hook: 'useProduct', selectFields: ['id', 'categoryId', 'name', 'price', 'availability', 'inventoryQuantity', 'media'], filterFields: [], sortFields: [], pagination: { mode: 'none' } },
+      { key: 'createCartItem', entity: 'CartItem', kind: 'create', repository: 'CartRepository', method: 'createCartItem', hook: 'useCreateCartItem', selectFields: [], filterFields: [], sortFields: [], writeFields: ['productId', 'label', 'quantity'], pagination: { mode: 'none' } },
+      { key: 'listCartItems', entity: 'CartItem', kind: 'list', repository: 'CartRepository', method: 'listCartItems', hook: 'useCartItems', selectFields: ['id', 'productId', 'label', 'quantity'], filterFields: [], sortFields: ['label'], pagination: { mode: 'bounded', boundedReason: 'The local bag is capped at twenty-five lines.', maximumExpectedCount: 25 } },
+    ],
+    actors: [{ key: 'Passenger', displayName: 'Passenger' }],
+    uxPermissions: ['listProducts', 'getProduct', 'createCartItem', 'listCartItems'].map((operation) => ({ actor: 'Passenger', operation, allowed: true })),
+    offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listProducts', 'getProduct', 'createCartItem', 'listCartItems'] },
+    fixtures: {
+      Category: [{ id: 'category-travel', name: 'Travel essentials' }, { id: 'category-wellness', name: 'Cabin wellness' }],
+      Product: [
+        { id: 'product-organizer', categoryId: 'category-travel', name: 'Travel organizer', price: { amount: 42.5, currencyCode: 'USD' }, availability: 'available', inventoryQuantity: 8, media: { imageUrl: 'https://images.unsplash.com/photo-1523779917675-b6ed3a42a561', imageAltText: 'Compact travel organizer', imageAssetKey: 'asset://experience/product-organizer.png' } },
+        { id: 'product-mist', categoryId: 'category-wellness', name: 'Hydration face mist', price: { amount: 18, currencyCode: 'USD' }, availability: 'sold-out', inventoryQuantity: 0, media: { imageUrl: 'https://images.unsplash.com/photo-1556228578-8c89e6adf883', imageAltText: 'Hydration face mist', imageAssetKey: 'asset://experience/product-mist.png' } },
+      ],
+      CartItem: [{ id: 'cart-organizer', productId: 'product-organizer', label: 'Travel organizer', quantity: 1 }],
+    },
+    fixtureScenarios: [
+      { key: 'shop-populated', state: 'populated', description: 'Available and sold-out products are visible.', entity: 'Product', recordIds: ['product-organizer', 'product-mist'] },
+      { key: 'shop-loading', state: 'loading', description: 'The onboard shop is loading.' },
+      { key: 'shop-empty', state: 'empty', description: 'No products match the current category.' },
+      { key: 'shop-error', state: 'error', description: 'The onboard catalog failed to load.' },
+      { key: 'shop-offline', state: 'offline', description: 'Cached onboard products remain available.' },
+    ],
+  };
 }
 
 function screenSpec({ id, route, file, role, purpose, pattern, action, mediaRequired, foundation, entities, routeParameters = [], navigation, headerMode, operations = [] }) {
@@ -54,25 +111,23 @@ function createProject(context) {
   const composition = primaryComposition(contract);
   const foundation = foundationContract(contract);
   const foundationIds = foundation.primitives.map((primitive) => primitive.component);
-  const productSelect = ['cr_productid', 'cr_name', 'cr_price', 'cr_currencycode', 'cr_categoryid', 'cr_availability', 'cr_imageurl'];
+  const productSelect = ['id', 'categoryId', 'name', 'price', 'availability', 'inventoryQuantity', 'media'];
   const listProducts = (id) => ({
-    id, kind: 'list', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getAll',
-    select: productSelect, filter: [], sort: [{ field: 'cr_name', direction: 'asc' }],
+    id, kind: 'list', entity: 'Product', domainOperation: 'listProducts', repository: 'CatalogRepository', repositoryMethod: 'listProducts', hook: 'useProducts',
+    select: productSelect, filter: [], sort: [{ field: 'name', direction: 'asc' }],
     pagination: { mode: 'cursor', pageSize: 20, cursorParameter: 'skipToken' }, routeBindings: [],
   });
   const screens = [
-    screenSpec({ id: 'Home', route: contract.primaryScreen.route, file: contract.primaryScreen.file, role: 'primary', purpose: contract.primaryJob, pattern: 'editorial-hero', action: { id: 'browse-products', label: contract.firstViewport.primaryAction, placement: 'inline', destination: '/(app)/catalog' }, mediaRequired: true, foundation: foundationIds, entities: ['cr_product', 'cr_productmedia', 'cr_category', 'cr_cartitem'], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Shop' }, operations: [listProducts('list-featured-products')] }),
-    screenSpec({ id: 'ProductDetail', route: '/(app)/products/[id]', file: 'app/(app)/products/[id].tsx', role: 'key-flow', purpose: 'Inspect a product before adding it to cart.', pattern: 'detail', action: { id: 'add-to-cart', label: 'Add to bag', placement: 'sticky-bottom', destination: '/(app)/cart' }, mediaRequired: true, foundation: foundationIds, entities: ['cr_product', 'cr_productmedia', 'cr_cartitem'], routeParameters: [{ name: 'id', source: 'path', required: true }], navigation: { kind: 'pushed', intent: 'push', parentRoute: contract.primaryScreen.route }, operations: [
-      { id: 'get-product', kind: 'get', entity: 'cr_product', service: 'Cr_productService', serviceMethod: 'getById', select: productSelect, filter: [], sort: [], routeBindings: [{ parameter: 'id', target: 'id', field: 'cr_productid' }], idField: 'cr_productid' },
-      { id: 'list-product-media', kind: 'related-list', entity: 'cr_productmedia', service: 'Cr_productmediaService', serviceMethod: 'getAll', select: ['cr_productmediaid', 'cr_productid', 'cr_imageurl'], filter: [{ field: 'cr_productid', operator: 'eq', valueFrom: 'route:id' }], sort: [], pagination: { mode: 'none', boundedReason: 'At most five images per product.', maximumExpectedCount: 5 }, routeBindings: [{ parameter: 'id', target: 'relationship', field: 'cr_productid' }], relationship: { sourceEntity: 'cr_product', targetEntity: 'cr_productmedia', schemaName: 'cr_Product_ProductMedia', sourceField: 'cr_productid', targetField: 'cr_productid', readStrategy: 'chained-fetch', sourceRouteParameter: 'id' } },
-      { id: 'create-cart-item', kind: 'create', entity: 'cr_cartitem', service: 'Cr_cartitemService', serviceMethod: 'create', writeFields: ['cr_productid', 'cr_quantity'], routeBindings: [{ parameter: 'id', target: 'input', field: 'cr_productid' }] },
+    screenSpec({ id: 'Home', route: contract.primaryScreen.route, file: contract.primaryScreen.file, role: 'primary', purpose: contract.primaryJob, pattern: 'editorial-hero', action: { id: 'browse-products', label: contract.firstViewport.primaryAction, placement: 'inline', destination: '/(app)/catalog' }, mediaRequired: true, foundation: foundationIds, entities: ['Product', 'Category', 'CartItem'], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Shop' }, operations: [listProducts('list-featured-products')] }),
+    screenSpec({ id: 'ProductDetail', route: '/(app)/products/[id]', file: 'app/(app)/products/[id].tsx', role: 'key-flow', purpose: 'Inspect a product before adding it to cart.', pattern: 'detail', action: { id: 'add-to-cart', label: 'Add to bag', placement: 'sticky-bottom', destination: '/(app)/cart' }, mediaRequired: true, foundation: foundationIds, entities: ['Product', 'CartItem'], routeParameters: [{ name: 'id', source: 'path', required: true }], navigation: { kind: 'pushed', intent: 'push', parentRoute: contract.primaryScreen.route }, operations: [
+      { id: 'get-product', kind: 'get', entity: 'Product', domainOperation: 'getProduct', repository: 'CatalogRepository', repositoryMethod: 'getProduct', hook: 'useProduct', select: productSelect, filter: [], sort: [], routeBindings: [{ parameter: 'id', target: 'id', field: 'id' }], idField: 'id' },
+      { id: 'create-cart-item', kind: 'create', entity: 'CartItem', domainOperation: 'createCartItem', repository: 'CartRepository', repositoryMethod: 'createCartItem', hook: 'useCreateCartItem', writeFields: ['productId', 'label', 'quantity'], routeBindings: [{ parameter: 'id', target: 'input', field: 'productId' }] },
     ] }),
-    screenSpec({ id: 'Catalog', route: '/(app)/catalog', file: 'app/(app)/catalog.tsx', role: 'supporting', purpose: 'Browse products by image-led category collections.', pattern: 'image-card-grid', action: null, mediaRequired: true, foundation: foundationIds, entities: ['cr_product', 'cr_category'], routeParameters: [{ name: 'categoryId', source: 'query', required: false }], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Categories' }, headerMode: 'root', operations: [{ ...listProducts('list-catalog-products'), filter: [{ field: 'cr_categoryid', operator: 'eq', valueFrom: 'route:categoryId' }], routeBindings: [{ parameter: 'categoryId', target: 'filter', field: 'cr_categoryid' }] }] }),
-    screenSpec({ id: 'Cart', route: '/(app)/cart', file: 'app/(app)/cart.tsx', role: 'supporting', purpose: 'Review selected products and quantities.', pattern: 'summary', action: { id: 'checkout', label: 'Review order', placement: 'sticky-bottom' }, mediaRequired: false, foundation: foundationIds, entities: ['cr_cartitem', 'cr_product'], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Bag' }, headerMode: 'root', operations: [{ id: 'list-cart-items', kind: 'list', entity: 'cr_cartitem', service: 'Cr_cartitemService', serviceMethod: 'getAll', select: ['cr_cartitemid', 'cr_productid', 'cr_quantity'], filter: [], sort: [], pagination: { mode: 'none', boundedReason: 'The local cart is capped at twenty-five lines.', maximumExpectedCount: 25 }, routeBindings: [] }] }),
+    screenSpec({ id: 'Catalog', route: '/(app)/catalog', file: 'app/(app)/catalog.tsx', role: 'supporting', purpose: 'Browse products by image-led category collections.', pattern: 'image-card-grid', action: null, mediaRequired: true, foundation: foundationIds, entities: ['Product', 'Category'], routeParameters: [{ name: 'categoryId', source: 'query', required: false }], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Categories' }, headerMode: 'root', operations: [{ ...listProducts('list-catalog-products'), filter: [{ field: 'categoryId', operator: 'eq', valueFrom: 'route:categoryId' }], routeBindings: [{ parameter: 'categoryId', target: 'filter', field: 'categoryId' }] }] }),
+    screenSpec({ id: 'Cart', route: '/(app)/cart', file: 'app/(app)/cart.tsx', role: 'supporting', purpose: 'Review selected products and quantities.', pattern: 'summary', action: { id: 'checkout', label: 'Review order', placement: 'sticky-bottom' }, mediaRequired: false, foundation: foundationIds, entities: ['CartItem', 'Product'], navigation: { kind: 'tab-root', intent: 'navigate', tabLabel: 'Bag' }, headerMode: 'root', operations: [{ id: 'list-cart-items', kind: 'list', entity: 'CartItem', domainOperation: 'listCartItems', repository: 'CartRepository', repositoryMethod: 'listCartItems', hook: 'useCartItems', select: ['id', 'productId', 'label', 'quantity'], filter: [], sort: [{ field: 'label', direction: 'asc' }], pagination: { mode: 'bounded', boundedReason: 'The local cart is capped at twenty-five lines.', maximumExpectedCount: 25 }, routeBindings: [] }] }),
   ];
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'src', 'generated', 'services'), { recursive: true });
   fs.writeFileSync(path.join(root, 'brief.md'), passengerBrief);
   const packageJson = { name: 'flight-shop', dependencies: {}, devDependencies: {} };
   fs.writeFileSync(path.join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
@@ -86,23 +141,9 @@ function createProject(context) {
     criticalFlow: { screenIds: ['Home', 'ProductDetail'], outcome: 'Discover a product and decide whether to add it to the bag.' },
     screens,
   }, null, 2)}\n`);
-  fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), `${JSON.stringify({
-    planningMode: 'prototype',
-    tables: [
-      { logicalName: 'cr_product', displayName: 'Product', primaryIdAttribute: 'cr_productid', serviceRequired: true, columns: [
-        { logicalName: 'cr_productid', type: 'uniqueidentifier' }, { logicalName: 'cr_name', type: 'string', primaryName: true },
-        { logicalName: 'cr_price', type: 'money' }, { logicalName: 'cr_currencycode', type: 'string' },
-        { logicalName: 'cr_categoryid', type: 'lookup', lookupTarget: 'cr_category' }, { logicalName: 'cr_availability', type: 'string' },
-        { logicalName: 'cr_imageurl', type: 'string' },
-      ], relationships: [] },
-      { logicalName: 'cr_productmedia', displayName: 'Product Media', primaryIdAttribute: 'cr_productmediaid', serviceRequired: true, columns: [
-        { logicalName: 'cr_productmediaid', type: 'uniqueidentifier' }, { logicalName: 'cr_productid', type: 'lookup', lookupTarget: 'cr_product' },
-        { logicalName: 'cr_imageurl', type: 'string' },
-      ], relationships: [{ kind: 'many-to-one', schemaName: 'cr_Product_ProductMedia', plannedDecision: 'create', parentTable: 'cr_product', childTable: 'cr_productmedia', lookup: { logicalName: 'cr_productid' } }] },
-      { logicalName: 'cr_category', displayName: 'Category', primaryIdAttribute: 'cr_categoryid', serviceRequired: true, columns: [{ logicalName: 'cr_categoryid', type: 'uniqueidentifier' }, { logicalName: 'cr_name', type: 'string', primaryName: true }], relationships: [] },
-      { logicalName: 'cr_cartitem', displayName: 'Cart item', primaryIdAttribute: 'cr_cartitemid', serviceRequired: true, columns: [{ logicalName: 'cr_cartitemid', type: 'uniqueidentifier' }, { logicalName: 'cr_productid', type: 'lookup', lookupTarget: 'cr_product' }, { logicalName: 'cr_quantity', type: 'integer' }], relationships: [] },
-    ],
-  }, null, 2)}\n`);
+  const domain = passengerDomainModel();
+  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(domain, null, 2)}\n`);
+  generateDataLayer(root, domain, contract);
   const preflight = prepareExecutionPreflight(passengerBrief, contract, packageJson);
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-preflight.json'), `${JSON.stringify(preflight, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), `${JSON.stringify({
@@ -121,9 +162,6 @@ function createProject(context) {
     javascriptDependencies: [],
     connectorOperations: [],
   }, null, 2)}\n`);
-  for (const service of ['Cr_productService', 'Cr_productmediaService', 'Cr_cartitemService']) {
-    fs.writeFileSync(path.join(root, 'src', 'generated', 'services', `${service}.ts`), `export const ${service} = { async getAll() {}, async getById() {}, async create() {} };\n`);
-  }
   fs.writeFileSync(path.join(root, 'brand', 'design-system.md'), '# Design\n\n## Product Experience Primitives\n');
   fs.writeFileSync(path.join(root, 'brand', 'tokens.ts'), 'export const tokens = {} as const;\n');
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), [
@@ -152,12 +190,13 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
   assert.equal(pack.experience.entryMode, 'discovery');
   assert.equal(pack.experience.primarySurface, 'product-led-discovery');
   assert.deepEqual(pack.fixtures, {
-    adapter: 'local',
-    entities: ['Product', 'Product Media', 'Category', 'Cart item'],
+    adapter: 'mock-repository',
+    entities: ['Category', 'Product', 'CartItem'],
     assetPolicy: 'remote-cdn-cached',
-    dataIntentPath: '.tmp/dataverse-schema-contract.json',
+    domainModelPath: '.tmp/prototype-domain-model.json',
     assetManifest: 'assets/experience/manifest.json',
-    viewModel: 'src/generated/experience-view-model.ts',
+    dataModule: 'src/data/index.ts',
+    mediaAdapter: 'src/data/media.ts',
     recordIdentity: 'stable-primary-key',
     mediaPolicy: 'remote-cdn-cached',
     mediaManifest: 'assets/experience/manifest.json',
@@ -188,20 +227,24 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
     adapter: home.data.adapter,
     entities: home.data.entities,
     fixtureScenarios: home.data.fixtureScenarios,
-    viewModel: home.data.viewModel,
+    sourceModule: home.data.sourceModule,
+    domainModel: home.data.domainModel,
+    hooks: home.data.hooks,
     recordIdentity: home.data.recordIdentity,
     mediaPolicy: home.data.mediaPolicy,
     mediaFields: home.data.mediaFields,
   }, {
-    adapter: 'local',
-    entities: ['cr_product', 'cr_productmedia', 'cr_category', 'cr_cartitem'],
+    adapter: 'mock-repository',
+    entities: ['Product', 'Category', 'CartItem'],
     fixtureScenarios: ['populated', 'loading', 'empty', 'error', 'offline'],
-    viewModel: 'src/generated/experience-view-model.ts',
+    sourceModule: '@/data',
+    domainModel: '.tmp/prototype-domain-model.json',
+    hooks: ['useProducts'],
     recordIdentity: 'stable-primary-key',
     mediaPolicy: 'remote-cdn-cached',
     mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
   });
-  assert.ok(home.dependencies.artifacts.includes('fixture:cr_product'));
+  assert.ok(home.dependencies.artifacts.includes('fixture:Product'));
   assert.deepEqual(pack.builderWaves.map((wave) => [wave.id, wave.targets]), [
     ['foundations', ['ExperienceFeaturedProductMedia', 'ExperienceCategoryBrowse', 'ExperienceCartAction']],
     ['vertical-slice', ['Home', 'ProductDetail']],
@@ -236,12 +279,12 @@ test('source drift changes revision and invalidates only dependent targets', (co
   assert.deepEqual(validateScreenBuildPack(root, second), { issues: [], staleTargets: [] });
 });
 
-test('pack compilation blocks an operation whose generated service is missing', (context) => {
+test('pack compilation blocks an operation whose approved domain hook is missing', (context) => {
   const { root } = createProject(context);
-  fs.rmSync(path.join(root, 'src', 'generated', 'services', 'Cr_productService.ts'));
+  fs.rmSync(path.join(root, 'src', 'data', 'hooks', 'useProducts.ts'));
   assert.throws(
     () => compileScreenBuildPack(root),
-    /service Cr_productService is absent from the generated service surface/,
+    /Domain hook useProducts is missing from src\/data\/hooks/,
   );
 });
 
@@ -303,33 +346,28 @@ test('build pack derives executable availability, related-media, and aggregate f
   const detail = pack.screens.find((screen) => screen.id === 'ProductDetail');
   assert.deepEqual(detail.data.runtimeBindings.availability, {
     required: true,
-    entities: [{ entity: 'cr_product', field: 'cr_availability' }],
+    entities: [{ entity: 'Product', field: 'availability' }],
     stateProperty: 'availabilityState',
-    predicate: 'isExperienceRecordActionable',
+    predicate: 'isDomainRecordActionable',
     disabledActionId: 'add-to-cart',
   });
-  assert.deepEqual(detail.data.runtimeBindings.relatedMedia.relationships, [{
-    sourceEntity: 'cr_productmedia',
-    sourceField: 'cr_productid',
-    targetEntity: 'cr_product',
-  }]);
-  assert.equal(detail.data.runtimeBindings.relatedMedia.required, true);
+  assert.deepEqual(detail.data.runtimeBindings.relatedMedia.relationships, []);
+  assert.equal(detail.data.runtimeBindings.relatedMedia.required, false);
   assert.equal(detail.data.runtimeBindings.aggregateFreshness.requiredWhenRendered, true);
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
 });
 
-test('prototype mock generation records the consumed pack revision', (context) => {
+test('compiler CLI emits immutable per-screen tasks bound to the pack revision', (context) => {
   const { root } = createProject(context);
-  const pack = compileScreenBuildPack(root);
-  fs.writeFileSync(path.join(root, '.tmp', 'screen-build-pack.json'), `${JSON.stringify(pack, null, 2)}\n`);
   const result = spawnSync(process.execPath, [
-    path.join(__dirname, '..', '..', 'skills', 'create-mobile-prototype', 'scripts', 'gen-mock-services.js'),
-    root,
+    path.join(__dirname, '..', 'compile-screen-build-pack.js'), '--project-root', root,
   ], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'src', 'generated', '.prototype-manifest.json'), 'utf8'));
-  assert.equal(manifest.screenBuildPackRevision, pack.revision);
-  assert.equal(manifest.experienceContractSource, '.tmp/screen-build-pack.json#experience');
+  const pack = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'screen-build-pack.json'), 'utf8'));
+  const task = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'screen-tasks', 'Home.json'), 'utf8'));
+  assert.equal(task.packRevision, pack.revision);
+  assert.equal(task.target.file, 'app/(app)/home.tsx');
+  assert.deepEqual(task.data.hooks, ['useProducts']);
 });
 
 function screenArtifactFixture(root, pack) {
@@ -357,14 +395,15 @@ function screenArtifactFixture(root, pack) {
       inputFileSha256: hash(fs.readFileSync(target)),
       source: [
         "import { EntityImage, ScreenShell } from '@/components';",
-        "import { isExperienceRecordActionable, resolveExperienceMedia, toExperienceRecord } from '@/generated/experience-view-model';",
+        "import { isDomainRecordActionable, resolveDomainMedia, useProducts } from '@/data';",
         "import { Button, YStack } from 'tamagui';",
         '',
         'export default function HomeScreen() {',
-        "  const item = toExperienceRecord('cr_product', { cr_productid: 'product-1', cr_name: 'Travel organizer', cr_availability: 'Available' });",
-        "  const mediaRecords = [toExperienceRecord('cr_productmedia', { cr_productmediaid: 'media-1', cr_productid: 'product-1', cr_imageurl: 'asset://experience/product-1.png' })];",
-        '  const canBrowse = isExperienceRecordActionable(item);',
-        `  return <ScreenShell headerMode="${screen.headerMode}" title=""><YStack testID="experience-region-home-content"><EntityImage media={resolveExperienceMedia(item, mediaRecords)} aspectRatio={16 / 9} maxHeight={320} /><Button testID="experience-primary-action" disabled={!canBrowse}>${screen.primaryAction.label}</Button></YStack></ScreenShell>;`,
+        '  // operation:list-featured-products',
+        '  const products = useProducts();',
+        '  const item = products.data?.[0];',
+        '  const canBrowse = isDomainRecordActionable(item || {});',
+        `  return <ScreenShell headerMode="${screen.headerMode}" title=""><YStack testID="experience-region-home-content">{item ? <EntityImage media={resolveDomainMedia(item.media)} aspectRatio={16 / 9} maxHeight={320} /> : null}<Button testID="experience-primary-action" disabled={!canBrowse}>${screen.primaryAction.label}</Button></YStack></ScreenShell>;`,
         '}',
       ].join('\n'),
       warnings: [],
@@ -455,7 +494,7 @@ test('screen artifact rejects unplanned service calls and unapproved package imp
 
   const errors = validateScreenArtifact(root, pack, artifact, 'Home').errors.join('\n');
   assert.match(errors, /imports unapproved package left-pad/);
-  assert.match(errors, /calls Cr_productService.delete without an approved screen operation/);
+  assert.match(errors, /calls generated service Cr_productService.delete; screens must use approved @\/data hooks/);
 });
 
 test('screen artifact writer rejects a symlinked pack target', (context) => {
@@ -619,11 +658,12 @@ test('source contract rejects enabled unavailable actions, dead media joins, and
     primaryAction: { id: 'choose-item', label: 'Choose item', placement: 'inline' },
     testIds: ['detail-content', 'experience-primary-action'],
     data: { runtimeBindings: {
-      availability: { required: true, predicate: 'isExperienceRecordActionable', disabledActionId: 'choose-item' },
+      availability: { required: true, predicate: 'isDomainRecordActionable', disabledActionId: 'choose-item' },
       relatedMedia: {
         required: true,
-        join: 'relatedExperienceRecords',
-        relationships: [{ sourceEntity: 'cr_itemmedia', sourceField: 'cr_itemid', targetEntity: 'cr_item' }],
+        resolver: 'resolveDomainMedia',
+        join: 'repository-relationship',
+        relationships: [{ sourceEntity: 'ItemMedia', sourceField: 'itemId', targetEntity: 'Item' }],
       },
       aggregateFreshness: { requiredWhenRendered: true },
     } },
@@ -640,19 +680,18 @@ test('source contract rejects enabled unavailable actions, dead media joins, and
   ].join('\n');
   const rules = new Set(validateScreenSourceContract(invalid, screen).map((issue) => issue.rule));
   assert.ok(rules.has('availability-predicate-missing'));
-  assert.ok(rules.has('dead-related-media-entity'));
+  assert.ok(rules.has('legacy-presentation-adapter'));
   assert.ok(rules.has('dead-related-media-relationship'));
   assert.ok(rules.has('aggregate-badge-stale-after-mutation'));
 
   const valid = [
-    "const item = toExperienceRecord('cr_item', row);",
-    "const mediaRecords = mediaRows.map((media) => toExperienceRecord('cr_itemmedia', media));",
-    'const canChoose = isExperienceRecordActionable(item);',
+    'const item = row;',
+    'const canChoose = isDomainRecordActionable(item);',
     'const cartCount = rows.length;',
     'useFocusEffect(useCallback(() => { loadCartItems(); }, [loadCartItems]));',
     '<ScreenShell headerMode="back">',
     '  <YStack testID="detail-content">',
-    '    <EntityImage media={resolveExperienceMedia(item, mediaRecords)} />',
+    '    <EntityImage media={resolveDomainMedia(item.media)} />',
     '    <Button testID="experience-primary-action" disabled={!canChoose}>Choose item</Button>',
     '  </YStack>',
     '</ScreenShell>',

@@ -7,6 +7,7 @@ const { validatePlanArtifactBundle } = require('./validate-plan-artifact-bundle'
 
 const TARGETS = {
   nativeAppPlanMarkdown: 'native-app-plan.md',
+  prototypeDomainModel: '.tmp/prototype-domain-model.json',
   dataverseSchemaContract: '.tmp/dataverse-schema-contract.json',
   experienceScreenContract: '.tmp/experience-screen-contract.json',
   experienceFoundationContract: '.tmp/experience-foundation-contract.json',
@@ -62,6 +63,16 @@ function contentFor(bundle, key) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+function activeTargets(bundle) {
+  return Object.entries(TARGETS).filter(([key]) => bundle.artifacts[key] !== null);
+}
+
+function inactiveDataTargets(bundle) {
+  return ['prototypeDomainModel', 'dataverseSchemaContract']
+    .filter((key) => bundle.artifacts[key] === null)
+    .map((key) => TARGETS[key]);
+}
+
 function backupPath(target) {
   return path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.backup`);
 }
@@ -86,9 +97,18 @@ function writePlanArtifactBundle(projectRoot, bundle) {
   if (!validation.valid) throw new Error(`invalid plan artifact bundle: ${validation.errors.join('; ')}`);
 
   const stages = [];
+  const removals = [];
   try {
-    for (const [key, relativePath] of Object.entries(TARGETS)) {
+    for (const [key, relativePath] of activeTargets(bundle)) {
       stages.push(stageAtomic(safeTarget(root, relativePath), contentFor(bundle, key)));
+    }
+    for (const relativePath of inactiveDataTargets(bundle)) {
+      const target = path.resolve(root, relativePath);
+      if (!fs.existsSync(target)) continue;
+      assertNoSymlink(root, target);
+      const backup = backupPath(target);
+      fs.renameSync(target, backup);
+      removals.push({ target, backup });
     }
     for (const stage of stages) {
       if (!fs.existsSync(stage.target)) continue;
@@ -100,13 +120,18 @@ function writePlanArtifactBundle(projectRoot, bundle) {
       stage.written = true;
     }
     cleanupStages(stages);
+    for (const removal of removals) fs.rmSync(removal.backup, { force: true });
   } catch (error) {
     restoreStages(stages);
+    for (const removal of [...removals].reverse()) {
+      if (fs.existsSync(removal.backup)) fs.renameSync(removal.backup, removal.target);
+    }
     cleanupStages(stages);
     throw error;
   }
   return {
     written: stages.map((stage) => path.relative(root, stage.target).replace(/\\/g, '/')),
+    removed: removals.map((removal) => path.relative(root, removal.target).replace(/\\/g, '/')),
   };
 }
 

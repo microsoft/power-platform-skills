@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   compactExecutionContract,
-  generatedServiceSurface,
+  domainDataSurface,
   revisionForPack,
   sha256,
   stableStringify,
@@ -23,7 +23,14 @@ function currentSourceHash(projectRoot, relativePath, source) {
     try {
       const contract = JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp', 'experience-contract.json'), 'utf8'));
       const screens = JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), 'utf8'));
-      return sha256(stableStringify(resolveDesignRecipe(contract, screens)));
+      const domainPath = path.join(projectRoot, '.tmp', 'prototype-domain-model.json');
+      const schemaPath = path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json');
+      const executionPath = path.join(projectRoot, '.tmp', 'mobile-plan-execution-contract.json');
+      const dataContract = fs.existsSync(domainPath)
+        ? JSON.parse(fs.readFileSync(domainPath, 'utf8'))
+        : fs.existsSync(schemaPath) ? JSON.parse(fs.readFileSync(schemaPath, 'utf8')) : null;
+      const executionContract = fs.existsSync(executionPath) ? JSON.parse(fs.readFileSync(executionPath, 'utf8')) : null;
+      return sha256(stableStringify(resolveDesignRecipe(contract, screens, null, { dataContract, executionContract })));
     } catch { return null; }
   }
   const filePath = path.join(projectRoot, relativePath);
@@ -42,7 +49,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (pack.screenContractVersion !== 3) {
     issues.push({ rule: 'legacy-screen-contract', message: 'Screen build pack requires a schema-version-3 Experience Screen Contract. Re-plan before building.' });
   }
-  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'dataIntent', 'executionContract'];
+  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'domainModel', 'executionContract'];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -75,8 +82,8 @@ function validateScreenBuildPack(projectRoot, pack) {
     if (!['root', 'back', 'close', 'none'].includes(screen.headerMode) || pack.shell?.headerModes?.[screen.route] !== screen.headerMode) {
       issues.push({ rule: 'header-mode-drift', message: `Screen build pack header mode drift for ${screen.route || screen.id}.` });
     }
-    if (screen.data?.recordIdentity !== 'stable-primary-key' || screen.data?.viewModel !== 'src/generated/experience-view-model.ts' || !Array.isArray(screen.data?.entities)) {
-      issues.push({ rule: 'screen-data-identity-missing', message: `Screen build pack requires stable-ID view-model data for ${screen.route || screen.id}.` });
+    if (screen.data?.recordIdentity !== 'stable-primary-key' || screen.data?.sourceModule !== '@/data' || screen.data?.domainModel !== '.tmp/prototype-domain-model.json' || !Array.isArray(screen.data?.entities) || !Array.isArray(screen.data?.hooks)) {
+      issues.push({ rule: 'screen-data-identity-missing', message: `Screen build pack requires stable neutral-domain data for ${screen.route || screen.id}.` });
     }
     if (!Array.isArray(screen.data?.operations)) {
       issues.push({ rule: 'missing-screen-operations', message: `Screen build pack lacks executable operations for ${screen.route || screen.id}.` });
@@ -85,13 +92,13 @@ function validateScreenBuildPack(projectRoot, pack) {
       issues.push({ rule: 'screen-media-intent-drift', message: `Screen build pack media intent drift for ${screen.route || screen.id}.` });
     }
     const bindings = screen.data?.runtimeBindings;
-    if (bindings?.canonicalRecord?.mapper !== 'toExperienceRecord'
+    if (bindings?.canonicalRecord?.mapper !== 'domain-record'
       || bindings?.canonicalRecord?.stableId !== 'id'
       || bindings?.availability?.stateProperty !== 'availabilityState'
-      || bindings?.availability?.predicate !== 'isExperienceRecordActionable'
+      || bindings?.availability?.predicate !== 'isDomainRecordActionable'
       || !Array.isArray(bindings?.availability?.entities)
-      || bindings?.relatedMedia?.resolver !== 'resolveExperienceMedia'
-      || bindings?.relatedMedia?.join !== 'relatedExperienceRecords'
+      || bindings?.relatedMedia?.resolver !== 'resolveDomainMedia'
+      || bindings?.relatedMedia?.join !== 'repository-relationship'
       || !Array.isArray(bindings?.relatedMedia?.relationships)
       || bindings?.aggregateFreshness?.policy !== 'focus-revalidate-after-mutation'
       || bindings?.aggregateFreshness?.hook !== 'useFocusEffect'
@@ -142,13 +149,11 @@ function validateScreenBuildPack(projectRoot, pack) {
       issues.push({ rule: 'invalid-screen-contract', message: `Cannot read the approved screen contract: ${error.message}` });
     }
   }
-  const serviceSurface = generatedServiceSurface(projectRoot);
+  const dataSurface = domainDataSurface(projectRoot);
   for (const screen of pack.screens || []) {
     for (const operation of screen.data?.operations || []) {
-      const methods = serviceSurface[operation.service];
-      if (!methods || !methods.includes(operation.serviceMethod)) {
-        issues.push({ rule: 'unavailable-service-method', message: `Operation ${operation.id} requires missing ${operation.service}.${operation.serviceMethod}.` });
-      }
+      if (!dataSurface.hooks.has(operation.hook)) issues.push({ rule: 'unavailable-domain-hook', message: `Operation ${operation.id} requires missing domain hook ${operation.hook}.` });
+      if (!dataSurface.repositories.has(operation.repository)) issues.push({ rule: 'unavailable-repository', message: `Operation ${operation.id} requires missing repository ${operation.repository}.` });
     }
   }
   const packagePath = path.join(projectRoot, 'package.json');
@@ -168,7 +173,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (!pack.design?.tokensPath || !pack.design?.recipe || !Array.isArray(pack.design?.primitives) || !pack.design.primitives.length) {
     issues.push({ rule: 'missing-design-primitives', message: 'Screen build pack requires design tokens and foundation primitives.' });
   }
-  if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.viewModel !== 'src/generated/experience-view-model.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
+  if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.domainModelPath !== '.tmp/prototype-domain-model.json' || pack.fixtures?.dataModule !== 'src/data/index.ts' || pack.fixtures?.mediaAdapter !== 'src/data/media.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
     issues.push({ rule: 'missing-fixture-intent', message: 'Screen build pack requires fixture adapter, entities, and asset policy.' });
   }
   issues.push(...validateScreenComposition(pack));

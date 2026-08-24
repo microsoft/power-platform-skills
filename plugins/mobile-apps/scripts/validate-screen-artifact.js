@@ -129,12 +129,22 @@ function validateImports(source, pack, projectRoot, errors) {
 }
 
 function validateServiceCalls(source, screen, errors) {
-  const allowed = new Set((screen.data?.operations || []).map((operation) => `${operation.service}.${operation.serviceMethod}`));
   const pattern = /\b([A-Za-z_$][\w$]*Service)\.([A-Za-z_$][\w$]*)\s*\(/g;
   let match;
   while ((match = pattern.exec(source)) !== null) {
     const call = `${match[1]}.${match[2]}`;
-    if (!allowed.has(call)) errors.push(`artifact source calls ${call} without an approved screen operation`);
+    errors.push(`artifact source calls generated service ${call}; screens must use approved @/data hooks`);
+  }
+}
+
+function validateDomainHooks(source, screen, errors) {
+  if (/from\s+['"]@\/data\/fixtures['"]|from\s+['"]@\/data\/repositories\//.test(source)) {
+    errors.push('artifact source imports domain fixtures or repositories directly; screens must use @/data hooks');
+  }
+  if (/from\s+['"]@\/generated\//.test(source)) errors.push('artifact source imports generated Power Apps files; screens must use @/data hooks');
+  for (const operation of screen.data?.operations || []) {
+    if (!source.includes(operation.id)) errors.push(`artifact source is missing operation ID anchor ${operation.id}`);
+    if (!new RegExp(`\\b${operation.hook}\\s*\\(`).test(source)) errors.push(`artifact source does not call approved domain hook ${operation.hook} for operation ${operation.id}`);
   }
 }
 
@@ -160,6 +170,7 @@ function validateSource(source, screen, pack, projectRoot, errors) {
   }
   validateImports(source, pack, projectRoot, errors);
   validateServiceCalls(source, screen, errors);
+  validateDomainHooks(source, screen, errors);
 }
 
 function validateScreenArtifact(projectRoot, pack, artifact, expectedScreenId = null) {

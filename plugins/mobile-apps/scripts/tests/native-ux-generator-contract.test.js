@@ -14,15 +14,15 @@ function read(relativePath) {
 test('screen builder inherits the configured model and requires route shell plus canonical data', () => {
   const builder = read('agents/screen-builder.md');
   assert.doesNotMatch(builder, /^model:/m);
-  assert.match(builder, /Route shell and header contract are mandatory/);
+  assert.match(builder, /Route and composition/);
   assert.match(builder, /<ScreenShell headerMode=/);
-  assert.match(builder, /toExperienceRecord/);
-  assert.match(builder, /getExperienceAsset/);
-  assert.match(builder, /resolveExperienceMedia/);
-  assert.match(builder, /Category-to-catalog context is mandatory/);
+  assert.match(builder, /Hook results are canonical domain records/);
+  assert.match(builder, /isDomainRecordActionable/);
+  assert.match(builder, /resolveDomainMedia/);
+  assert.match(builder, /Pass canonical IDs\/slugs/);
   assert.match(builder, /remote-cdn-cached/);
-  assert.match(builder, /media=\{resolveExperienceMedia\(record\)\}/);
-  assert.match(builder, /Do not define, wrap, shadow/);
+  assert.match(builder, /resolveDomainMedia\(record\.media\)/);
+  assert.match(builder, /never embed URLs or create another image\nwrapper/);
   assert.match(builder, /canonical experience data assets are missing/);
   assert.match(builder, /return-only agent/);
   assert.match(builder, /mobile-screen-artifact/);
@@ -36,11 +36,11 @@ test('explicit CDN media and category context remain policy-driven planning inpu
   const dataModel = read('agents/data-model-architect.md');
   assert.match(patterns, /remote-cdn-cached/);
   assert.match(patterns, /cachedCdn/);
-  assert.match(planner, /categoryId.*categorySlug/);
-  assert.match(planner, /initializes its visible filter/);
-  assert.match(dataModel, /imageUrl/);
-  assert.match(dataModel, /imageCacheKey/);
-  assert.match(dataModel, /imageAssetKey/);
+  assert.match(planner, /Category\/query context/);
+  assert.match(planner, /unfiltered fallback/);
+  assert.match(dataModel, /media intent/);
+  assert.match(dataModel, /ISO currency codes/);
+  assert.match(dataModel, /accessible image alt text/);
 });
 
 test('design-system records brand role and source without recoloring product brands', () => {

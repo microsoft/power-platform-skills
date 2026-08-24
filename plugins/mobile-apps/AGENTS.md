@@ -41,13 +41,13 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 | Delete `power.config.json` | `npx power-apps init` regenerates for the user's environment |
 | Reset `src/generated/` + `src/hooks/` | Remove any example stubs — `npx power-apps add-data-source` repopulates |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` props | Screens render under brand tokens, not upstream defaults |
-| `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
+| `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/data`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 
 ## Guiding Principles
 
-1. **Connector-first for data** — All Power Platform data access goes through connectors and generated services in `src/generated/`. No direct Graph / Azure REST calls.
+1. **Domain-first for app data** — Screens and feature hooks depend only on neutral contracts under `src/data/`. Prototype repositories use fixtures; Dataverse/connector adapters may call generated services. No screen imports generated services, fixtures, repositories, or direct Graph/Azure/Dataverse HTTP.
 2. **Native code is allowlist-bounded; pure JavaScript is app-scoped.** Expo modules and packages that ship native source, a podspec, codegen configuration, an Expo module/config plugin, or platform projects must already exist in `template/package.json`. The rewrap binary is built from a pre-built base, so adding those packages to an app cannot add their native code. Do not classify a package from its name alone: a `react-native-*` package can still be pure JavaScript. For an explicit library request or an approved use case that benefits from an established library, the planner may select a compatible pure-JavaScript package, pin it in the app's `package.json`, and install it before builders use it; no Android/iOS rebuild is required. Do not bundle optional libraries such as `react-native-calendars` in the base template. Follow [`shared/references/javascript-dependency-planning.md`](shared/references/javascript-dependency-planning.md). `expo-haptics` remains runtime-banned even if it appears in a future template (see [`agents/screen-builder.md`](agents/screen-builder.md) HARD RULE). The native boundary and reconciliation rule are in [`skills/add-native/SKILL.md`](skills/add-native/SKILL.md).
 3. **Fresh-template mode** — `/create-mobile-app` and `/create-mobile-prototype` validate and prepare an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
@@ -57,12 +57,13 @@ specialist draft objects without requiring a host-specific approval UI or a
 writable workspace. The foreground workflow alone validates and persists
 `native-app-plan.md`, the schema contract, screen contract, and foundation
 contract, then owns textual checkpoints and approval state. Local prototypes
-require four textual checkpoints but never authorize external mutation; real
+require one consolidated review that never authorizes external mutation; real
 external mutations require a current matching textual receipt. Screen builders
 follow the same host-neutral boundary: they return one schema-bound, complete
 TSX artifact while the foreground validates and atomically persists only the
-target authorized by `.tmp/screen-build-pack.json`.
-7. **Persisted plan + execution contracts** — Write `native-app-plan.md` as the human-reviewable source of truth. Before planning, the foreground persists `.tmp/experience-contract.json` and `.tmp/mobile-plan-execution-preflight.json` from the confirmed brief and selected template; approval hashes bind both. The planner returns bundle version 2 with five fixed output artifacts: the plan, data contract, schema-v3 screen contract, foundation contract, and `.tmp/mobile-plan-execution-contract.json`. The execution contract preserves every preflight requirement ID and trusted native/dependency/connector fact. `compile-screen-build-pack.js` writes a revision-bound compact execution sheet containing exact per-screen operations; downstream consumers read it and never mutate it. A screenshot/HTML input is optional; industry terms may refine vocabulary or compliance needs but never select Home composition or a visual preset. Local-first media contracts reject remote placeholders.
+target authorized by `.tmp/screen-build-pack.json`; each builder receives only
+its immutable `.tmp/screen-tasks/<screen-id>.json` work order.
+7. **Persisted plan + execution contracts** — Write `native-app-plan.md` as the human-reviewable source of truth. Before planning, the foreground persists `.tmp/experience-contract.json` and `.tmp/mobile-plan-execution-preflight.json` from the confirmed brief and selected template; approval hashes bind both. The planner returns bundle version 3 with six fixed artifact slots: plan, neutral domain, optional Dataverse target, schema-v3 screen contract, foundation contract, and execution contract. Prototype mode requires the domain and a null Dataverse artifact. The execution contract preserves every preflight requirement ID and trusted native/dependency/connector fact. `compile-screen-build-pack.js` writes a revision-bound aggregate plus immutable per-screen tasks containing exact domain operations; downstream consumers never mutate them. A screenshot/HTML input is optional; industry terms may refine vocabulary or compliance needs but never select Home composition or a visual preset. Local-first media contracts reject remote placeholders.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — Do not add `hooks/hooks.json`: Claude loads plugin hooks during unrelated workflows, so a mobile write hook can block Canvas Apps tool calls. Mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
@@ -73,14 +74,14 @@ target authorized by `.tmp/screen-build-pack.json`.
     |---|---|---|
     | `DONE` | Completed cleanly | Log and continue |
     | `DONE_WITH_CONCERNS: <list>` | Worked but flagged doubts | Surface to user before next step; record in `memory-bank.md` |
-    | `NEEDS_USER_APPROVAL: <json>` | A return-only plan bundle is ready for portable textual checkpoints | Stage the returned bundle in the foreground, validate it, persist only the five fixed planning artifacts, then present the named draft section and wait for a textual `approve` or edits. `mayAuthorizeExternalMutations` is true only for a current approved real-app receipt. |
+    | `NEEDS_USER_APPROVAL: <json>` | A return-only plan bundle is ready for portable textual checkpoints | Stage the returned bundle in the foreground, validate it, persist only its six fixed artifact slots (removing null data targets), then present the named draft section and wait for a textual `approve` or edits. `mayAuthorizeExternalMutations` is true only for a current approved real-app receipt. |
     | `NEEDS_CONTEXT: <missing>` | Cannot proceed without more info | Re-dispatch with the info filled in (cap 2 retries) |
     | `BLOCKED: <reason>` | Hit a hard wall | STOP, escalate to user, never silently retry |
 
     Hard rules:
     - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary. `native-app-planner` follows `NEEDS_USER_APPROVAL: <json>` with exactly one fenced `mobile-plan-artifact-bundle`; it does not return paths, approval IDs, or write instructions.
     - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
-    - Nested planners, data-model architects, and screen planners never write planning artifacts, scratch sections, previews, or checkpoint state. The foreground writes only the five fixed planning targets through `scripts/write-plan-artifact-bundle.js` after `scripts/validate-plan-artifact-bundle.js` succeeds.
+    - Nested planners, data-model architects, and screen planners never write planning artifacts, scratch sections, previews, or checkpoint state. The foreground writes only the six fixed planning targets through `scripts/write-plan-artifact-bundle.js` after `scripts/validate-plan-artifact-bundle.js` succeeds; null domain/schema targets are removed rather than persisted as executable-looking files.
     - Screen builders are also return-only. A successful builder returns exactly
       one fenced `mobile-screen-artifact` JSON object after its status line.
       The foreground stages it at a numeric path, validates the whole wave with
@@ -94,7 +95,7 @@ target authorized by `.tmp/screen-build-pack.json`.
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - A low-confidence Product Experience Contract permits one focused clarification about the first user outcome before normal planning resumes. Do not use industry or generic style-picker early-return signals.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-13. **Lifecycle state** — Mock/real mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Conversion uses `prototype → transitioning → dataverse`; only `/sync-from-plan --target-data-mode dataverse` commits the final mode after cleanup and validation. The legacy `.code-apps-native/state.json` path is migration input only.
+13. **Lifecycle state** — Repository mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Schema version 2 records domain, repository mapping, fixture, and validation revisions. Conversion uses `prototype → transitioning → dataverse`; only passing reconciliation, adapter generation, unchanged-screen proof, and `validate-mobile-app.js --scope all --record` commit the final mode. The legacy `.code-apps-native/state.json` path is migration input only.
 
 ## Decisions made
 
@@ -108,9 +109,9 @@ target authorized by `.tmp/screen-build-pack.json`.
     foreground validates each against the immutable build pack and atomically
     persists only its fixed screen target.
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
-- ✅ `/create-mobile-prototype` produces the same approved plan/design/screen quality as real creation, but uses deterministic in-memory CRUD services and connector throw-stubs with no environment, Dataverse, or app-registration call.
-- ✅ `/prototype-to-real-app` converts in place through a resumable lifecycle transaction: archive non-executable prototype approvals, bind environment, live-reconcile schema, replace services/connectors, consume seeds, fail-closed cleanup, restore auth/runtime, then one `/sync-from-plan`.
-- ✅ Prototype schema contracts use placeholder `cr_` names and are marked `planningMode: "prototype"`, `executionEligible: false`. Graduation rebases only contract-proven identifiers to the selected publisher prefix and never feeds prototype approval artifacts into the real operation-manifest fast path.
+- ✅ `/create-mobile-prototype` produces the same plan/design/screen quality as real creation, but generates neutral models, repository interfaces, TanStack Query hooks, realistic fixtures, and a local adapter under `src/data/` with no environment, Dataverse, or app-registration call.
+- ✅ `/prototype-to-real-app` converts in place through a resumable lifecycle transaction: archive non-executable prototype approval, bind environment, live-reconcile the same domain, generate Dataverse/connector repository adapters, optionally seed approved fixtures, restore auth/runtime, and prove screens unchanged.
+- ✅ Prototype planning never invents Dataverse names or target decisions. `.tmp/prototype-domain-model.json` remains canonical after graduation; `.tmp/dataverse-repository-mapping.json` binds it to live metadata, and only adapter files import generated services.
 - ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.

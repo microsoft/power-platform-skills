@@ -207,9 +207,9 @@ function validateAvailabilityBinding(source, screen, elements, issues) {
   const binding = screen.data?.runtimeBindings?.availability;
   if (binding?.required !== true) return;
   const label = screen.route || screen.id || '<unknown>';
-  const predicate = binding.predicate || 'isExperienceRecordActionable';
+  const predicate = binding.predicate || 'isDomainRecordActionable';
   if (!new RegExp(`\\b${escapeRegExp(predicate)}\\s*\\(`).test(source)) {
-    issues.push({ rule: 'availability-predicate-missing', message: `Screen ${label} must derive its primary-action availability from ${predicate} and the canonical view model.` });
+    issues.push({ rule: 'availability-predicate-missing', message: `Screen ${label} must derive its primary-action availability from ${predicate} and the canonical domain record.` });
     return;
   }
   const variables = derivedPredicateVariables(source, predicate);
@@ -233,16 +233,10 @@ function validateRelatedMediaBinding(source, screen, issues) {
   const binding = screen.data?.runtimeBindings?.relatedMedia;
   if (binding?.required !== true) return;
   const label = screen.route || screen.id || '<unknown>';
-  const missingEntities = [...new Set((binding.relationships || []).map((relationship) => relationship.sourceEntity))]
-    .filter((entity) => !new RegExp(`\\btoExperienceRecord\\s*\\(\\s*['\"]${escapeRegExp(entity)}['\"]`).test(source));
-  if (missingEntities.length) {
-    issues.push({ rule: 'dead-related-media-entity', message: `Screen ${label} declares related media but never maps ${missingEntities.join(', ')} through toExperienceRecord.` });
-  }
-  const relationUsed = /\brelatedExperienceRecords\s*\(/.test(source)
-    || /\bresolveExperienceMedia\s*\([^,\n]+,\s*[^)\n]+\)/.test(source)
+  const relationUsed = /\bresolveDomainMedia\s*\(/.test(source)
     || /<[A-Z][A-Za-z0-9]*\b[^>]*\b(?:media|image)Records\s*=/.test(source);
   if (!relationUsed) {
-    issues.push({ rule: 'dead-related-media-relationship', message: `Screen ${label} must join its declared media relationship through ${binding.join || 'relatedExperienceRecords'} or pass canonical mediaRecords to its foundation primitive.` });
+    issues.push({ rule: 'dead-related-media-relationship', message: `Screen ${label} must render canonical domain media through ${binding.resolver || 'resolveDomainMedia'} or pass repository media records to its foundation primitive.` });
   }
 }
 
@@ -363,6 +357,7 @@ function validateScreenSourceContract(source, screen) {
   const issues = [];
   if (typeof source !== 'string' || !screen) return issues;
   const elements = jsxElements(source);
+  if (/\btoExperienceRecord\s*\(/.test(source)) issues.push({ rule: 'legacy-presentation-adapter', message: `Screen ${screen.route || screen.id || '<unknown>'} must use canonical domain records directly.` });
   validateStickyAction(source, screen, elements, issues);
   validateVisiblePrimaryAction(source, screen, elements, issues);
   validateFirstViewportSource(source, screen, elements, issues);

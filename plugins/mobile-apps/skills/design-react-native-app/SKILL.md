@@ -44,7 +44,7 @@ Before changing a planned mobile app, read `native-app-plan.md`,
 `brand/design-system.md` when they exist. Validate the pack first with
 `validate-screen-build-pack.js`; use its revision, primary/key-flow entries,
 states, dependencies, primitives, `shell`, `headerMode`, canonical stable-ID
-view model, local asset manifest, and forbidden defaults as the compact
+domain records/hooks, local asset manifest, and forbidden defaults as the compact
 execution source. The experience contract is required
 for generated create/prototype projects even when there is no screenshot or
 design intake.
@@ -68,14 +68,14 @@ Route shell and data integrity remain binding during refinement:
 - Keep the root layout as `SafeAreaProvider` context only. Each packed route
    uses exactly one `ScreenShell` with its literal packed `headerMode`; do not
    add a nested `SafeAreaView` or automatic scroll-content insets.
-- Preserve `toExperienceRecord` as the presentation boundary. Lists, details,
-   saves, and carts use its stable `id`, never index-based copy or a title as an
-   identifier.
+- Preserve `@/data` hooks as the presentation boundary. Lists, details, saves,
+  and carts use canonical domain `id`, never index-based copy or a title as an
+  identifier. Do not import fixtures, repositories, or generated services.
 - When `assetPolicy.media` is `local-first`, preserve the generated local
-   illustration recipe via `getExperienceAsset` and `EntityImage`. Do not add a
+   illustration recipe via `resolveDomainMedia` and `EntityImage`. Do not add a
    remote URL, Unsplash source, or generic icon-only media replacement.
 - When `assetPolicy.media` is `remote-cdn-cached`, preserve
-  `resolveExperienceMedia(record)` → `EntityImage` with its cache key and local
+   `resolveDomainMedia(record.media)` -> `EntityImage` with its cache key and local
   fallback identity. Do not replace it with a screen-local URL, a generic icon
   block, or a strong accent-color media rectangle.
 - Treat `primaryAction.placement` as runtime structure. For `sticky-bottom`,
@@ -105,6 +105,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
    --project-root "<working_dir>" \
    --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+   --project-root "<working_dir>" \
+   --scope screens
 ```
 
 ### Native visual-review receipt

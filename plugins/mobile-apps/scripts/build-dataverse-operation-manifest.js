@@ -29,6 +29,7 @@ const PHASE_ORDER = [
 ];
 const APPROVAL_ARTIFACT_HASH_KEYS = [
   'nativeAppPlanSha256',
+  'prototypeDomainModelSha256',
   'dataverseSchemaContractSha256',
   'experienceContractSha256',
   'experienceScreenContractSha256',
@@ -36,6 +37,10 @@ const APPROVAL_ARTIFACT_HASH_KEYS = [
   'mobilePlanExecutionContractSha256',
   'mobilePlanExecutionPreflightSha256',
 ];
+const OPTIONAL_APPROVAL_ARTIFACT_HASH_KEYS = new Set([
+  'prototypeDomainModelSha256',
+  'dataverseSchemaContractSha256',
+]);
 const DECISIONS = new Set([
   'reuse',
   'extend',
@@ -860,7 +865,7 @@ function validateApprovalReceipt(approvalReceipt, {
       (key) => !APPROVAL_ARTIFACT_HASH_KEYS.includes(key),
     );
     const missingArtifactKeys = APPROVAL_ARTIFACT_HASH_KEYS.filter(
-      (key) => !artifactHashKeys.includes(key),
+      (key) => !artifactHashKeys.includes(key) && !OPTIONAL_APPROVAL_ARTIFACT_HASH_KEYS.has(key),
     );
     if (unknownArtifactKeys.length) {
       errors.push(`mobile plan approval receipt artifact hashes have unknown keys: ${unknownArtifactKeys.join(', ')}`);
@@ -869,6 +874,7 @@ function validateApprovalReceipt(approvalReceipt, {
       errors.push(`mobile plan approval receipt artifact hashes are missing: ${missingArtifactKeys.join(', ')}`);
     }
     for (const key of APPROVAL_ARTIFACT_HASH_KEYS) {
+      if (OPTIONAL_APPROVAL_ARTIFACT_HASH_KEYS.has(key) && artifactHashes[key] == null) continue;
       if (!/^[a-f0-9]{64}$/i.test(String(artifactHashes[key] || ''))) {
         errors.push(`mobile plan approval receipt artifact hash ${key} must be a SHA-256 hex value`);
       }

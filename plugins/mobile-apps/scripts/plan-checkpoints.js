@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Portable four-section textual plan review protocol. It works without a
+ * Portable textual plan review protocol. It works without a
  * host-specific question or plan-mode UI: the outer workflow presents each
  * checkpoint in ordinary chat text, then records `approve` against this local
  * status artifact. Real app approval becomes the receipt consumed by Dataverse
@@ -23,12 +23,19 @@ const {
   validateApprovalReceipt,
 } = require('./build-dataverse-operation-manifest');
 
-const CHECKPOINTS = [
+const REAL_CHECKPOINTS = [
   { key: 'dataModel', label: 'data-model' },
   { key: 'nativeCapabilities', label: 'native-capabilities' },
   { key: 'connectors', label: 'connectors' },
   { key: 'screenPlan', label: 'screen-plan' },
 ];
+const PROTOTYPE_CHECKPOINTS = [
+  { key: 'prototypeReview', label: 'prototype-review' },
+];
+
+function checkpoints(workflow) {
+  return workflow === 'create-mobile-prototype' ? PROTOTYPE_CHECKPOINTS : REAL_CHECKPOINTS;
+}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -46,32 +53,40 @@ function approvalId(revision, workflow) {
   }));
 }
 
-function requireCompletePlanningArtifacts(revision) {
-  const missing = Object.entries(revision.artifactHashes)
-    .filter(([, hash]) => !hash)
-    .map(([key]) => key);
+function requireCompletePlanningArtifacts(revision, workflow) {
+  const required = [
+    'nativeAppPlanSha256',
+    'experienceContractSha256',
+    'experienceScreenContractSha256',
+    'experienceFoundationContractSha256',
+    'mobilePlanExecutionContractSha256',
+    'mobilePlanExecutionPreflightSha256',
+  ];
+  if (workflow === 'create-mobile-prototype' || revision.contract) required.push('prototypeDomainModelSha256');
+  if (workflow !== 'create-mobile-prototype' && revision.contract) required.push('dataverseSchemaContractSha256');
+  const missing = required.filter((key) => !revision.artifactHashes[key]);
   if (missing.length) {
     throw new Error(`Planning artifacts are missing: ${missing.join(', ')}`);
   }
 }
 
-function checkpointKey(value, { allowAll = false } = {}) {
+function checkpointKey(value, workflow, { allowAll = false } = {}) {
   if (!value) return null;
   const normalized = String(value).trim().toLowerCase().replace(/[-_\s]+/g, '');
   if (normalized === 'all') return allowAll ? 'all' : null;
-  const match = CHECKPOINTS.find((checkpoint) => checkpoint.key.toLowerCase() === normalized);
+  const match = checkpoints(workflow).find((checkpoint) => checkpoint.key.toLowerCase() === normalized);
   return match ? match.key : null;
 }
 
-function approvedSections(approvals) {
-  return CHECKPOINTS
+function approvedSections(approvals, workflow) {
+  return checkpoints(workflow)
     .filter((checkpoint) => approvals?.[checkpoint.key]?.status === 'approved')
     .map((checkpoint) => checkpoint.label);
 }
 
 function summary(workflow) {
   return workflow === 'create-mobile-prototype'
-    ? 'Local prototype draft is ready for four textual plan checkpoints.'
+    ? 'Local prototype draft is ready for one consolidated domain, native, connector, and screen review.'
     : 'Real app draft is ready for textual approval before external mutation.';
 }
 
@@ -85,13 +100,14 @@ function pendingState(revision, workflow, reason = 'plan-draft') {
     planPath: revision.paths.planPath,
     planRevisionSha256: revision.planSha256,
     contractRevisionSha256: revision.contractSha256,
+    domainModelRevisionSha256: revision.domainModelSha256,
     artifactRevisionSha256: revision.artifactRevisionSha256,
     artifactHashes: revision.artifactHashes,
-    sections: CHECKPOINTS.map((checkpoint) => checkpoint.label),
+    sections: checkpoints(workflow).map((checkpoint) => checkpoint.label),
     mayAuthorizeExternalMutations: false,
     summary: summary(workflow),
     reason,
-    approvals: Object.fromEntries(CHECKPOINTS.map((checkpoint) => [checkpoint.key, { status: 'pending' }])),
+    approvals: Object.fromEntries(checkpoints(workflow).map((checkpoint) => [checkpoint.key, { status: 'pending' }])),
   };
 }
 
@@ -117,12 +133,13 @@ function enrichRealReceipt(revision, workflow, approvedAt) {
   receipt.planPath = revision.paths.planPath;
   receipt.planRevisionSha256 = revision.planSha256;
   receipt.contractRevisionSha256 = revision.contractSha256;
+  receipt.domainModelRevisionSha256 = revision.domainModelSha256;
   receipt.artifactRevisionSha256 = revision.artifactRevisionSha256;
   receipt.artifactHashes = revision.artifactHashes;
-  receipt.sections = CHECKPOINTS.map((checkpoint) => checkpoint.label);
+  receipt.sections = REAL_CHECKPOINTS.map((checkpoint) => checkpoint.label);
   receipt.mayAuthorizeExternalMutations = true;
   receipt.summary = summary(workflow);
-  receipt.approvedSections = CHECKPOINTS.map((checkpoint) => checkpoint.label);
+  receipt.approvedSections = REAL_CHECKPOINTS.map((checkpoint) => checkpoint.label);
   receipt.integritySha256 = receiptIntegrity(receipt);
   return receipt;
 }
@@ -132,7 +149,7 @@ function stateForStatus(revision, workflow, receipt) {
     return { status: 'needs-user-approval', reason: 'plan-revision-changed' };
   }
   if (workflow === 'create-mobile-prototype') {
-    const complete = CHECKPOINTS.every((checkpoint) => receipt.approvals?.[checkpoint.key]?.status === 'approved');
+    const complete = PROTOTYPE_CHECKPOINTS.every((checkpoint) => receipt.approvals?.[checkpoint.key]?.status === 'approved');
     return complete && receipt.mayAuthorizeExternalMutations === false
       ? { status: 'approved', reason: null }
       : { status: 'needs-user-approval', reason: 'prototype-checkpoints-pending' };
@@ -155,7 +172,7 @@ function stateForStatus(revision, workflow, receipt) {
 
 function checkpointStatus(projectRoot, options = {}) {
   const revision = currentRevision(projectRoot, options);
-  requireCompletePlanningArtifacts(revision);
+  requireCompletePlanningArtifacts(revision, options.workflow);
   const receiptPath = revision.paths.receiptPath;
   if (!fs.existsSync(receiptPath)) {
     return { ...pendingState(revision, options.workflow), status: 'needs-user-approval', reason: 'approval-receipt-missing', revision };
@@ -180,12 +197,13 @@ function publicResult(state) {
     reason: state.reason || null,
     planPath: state.planPath || state.revision?.paths?.planPath || null,
     approvalId: state.approvalId || approvalId(state.revision, state.workflow),
-    sections: state.sections || CHECKPOINTS.map((checkpoint) => checkpoint.label),
-    approvedSections: approvedSections(state.approvals),
+    sections: state.sections || checkpoints(state.workflow).map((checkpoint) => checkpoint.label),
+    approvedSections: approvedSections(state.approvals, state.workflow),
     mayAuthorizeExternalMutations,
     summary: state.summary || summary(state.workflow),
     planRevisionSha256: state.planRevisionSha256 || state.revision?.planSha256 || null,
     contractRevisionSha256: state.contractRevisionSha256 || state.revision?.contractSha256 || null,
+    domainModelRevisionSha256: state.domainModelRevisionSha256 || state.revision?.domainModelSha256 || null,
     artifactRevisionSha256: state.artifactRevisionSha256 || state.revision?.artifactRevisionSha256 || null,
   };
 }
@@ -197,26 +215,23 @@ function writePending(revision, workflow, reason) {
 }
 
 function approveCheckpoint(revision, workflow, existing, section, approvedAt) {
-  if (workflow === 'create-mobile-prototype' && section === 'all') {
-    throw new Error('Prototype checkpoint approval requires exactly one named section.');
-  }
-  if (section !== 'all' && !CHECKPOINTS.some((checkpoint) => checkpoint.key === section)) {
+  if (section !== 'all' && !checkpoints(workflow).some((checkpoint) => checkpoint.key === section)) {
     throw new Error('Checkpoint approval requires a valid named section.');
   }
   const state = matchingRevision(existing, revision, workflow)
     ? { ...existing, approvals: structuredClone(existing.approvals || {}) }
     : pendingState(revision, workflow);
-  const targets = section === 'all' ? CHECKPOINTS.map((checkpoint) => checkpoint.key) : [section];
+  const targets = section === 'all' ? checkpoints(workflow).map((checkpoint) => checkpoint.key) : [section];
   for (const key of targets) {
     state.approvals[key] = { status: 'approved', approvedAt, method: 'textual' };
   }
-  const complete = CHECKPOINTS.every((checkpoint) => state.approvals[checkpoint.key]?.status === 'approved');
+  const complete = checkpoints(workflow).every((checkpoint) => state.approvals[checkpoint.key]?.status === 'approved');
   if (!complete) {
     state.status = 'needs-user-approval';
     state.reason = workflow === 'create-mobile-prototype'
       ? 'prototype-checkpoints-pending'
       : 'textual-checkpoints-pending';
-    state.approvedSections = approvedSections(state.approvals);
+    state.approvedSections = approvedSections(state.approvals, workflow);
     return state;
   }
   if (workflow === 'create-mobile-prototype') {
@@ -224,7 +239,7 @@ function approveCheckpoint(revision, workflow, existing, section, approvedAt) {
     state.reason = null;
     state.approvedAt = approvedAt;
     state.approvedPlanSha256 = revision.planSha256;
-    state.approvedSections = approvedSections(state.approvals);
+    state.approvedSections = approvedSections(state.approvals, workflow);
     state.mayAuthorizeExternalMutations = false;
     return state;
   }
@@ -258,7 +273,7 @@ function main(argv) {
   }
   try {
     const revision = currentRevision(args.projectRoot, args);
-    requireCompletePlanningArtifacts(revision);
+    requireCompletePlanningArtifacts(revision, args.workflow);
     if (args.action === 'draft') {
       const current = checkpointStatus(args.projectRoot, args);
       if (current.status === 'approved') {
@@ -277,12 +292,13 @@ function main(argv) {
       }
       const section = checkpointKey(
         args.section || (args.workflow === 'create-mobile-app' ? 'all' : null),
+        args.workflow,
         { allowAll: args.workflow === 'create-mobile-app' },
       );
       if (!section) {
         throw new Error(args.workflow === 'create-mobile-prototype'
-          ? 'Prototype checkpoint approval requires exactly one named --section.'
-          : 'A valid --section is required for real app checkpoint approval.');
+          ? 'Prototype approval requires --section prototype-review.'
+          : 'A valid --section is required for plan approval.');
       }
       const existing = fs.existsSync(revision.paths.receiptPath) ? readJson(revision.paths.receiptPath) : null;
       const state = approveCheckpoint(revision, args.workflow, existing, section, args.now || new Date().toISOString());
@@ -307,7 +323,8 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
-  APPROVAL_KEYS: CHECKPOINTS.map((checkpoint) => checkpoint.key),
+  APPROVAL_KEYS: REAL_CHECKPOINTS.map((checkpoint) => checkpoint.key),
+  PROTOTYPE_APPROVAL_KEYS: PROTOTYPE_CHECKPOINTS.map((checkpoint) => checkpoint.key),
   approvalId,
   approveCheckpoint,
   checkpointStatus,
