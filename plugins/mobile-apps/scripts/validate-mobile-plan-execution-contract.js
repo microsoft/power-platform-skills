@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { contractHash } = require('./experience-patterns');
 const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
-const { validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
+const { validateContextEnrichment } = require('./validate-context-enrichment');
 
 function readJson(filePath, label) {
   try {
@@ -30,6 +32,7 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
   const screenPath = path.join(root, '.tmp', 'experience-screen-contract.json');
   const schemaPath = path.join(root, '.tmp', 'dataverse-schema-contract.json');
   const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
+  const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
   const packagePath = path.join(root, 'package.json');
   const preflightPath = path.join(root, '.tmp', 'mobile-plan-execution-preflight.json');
   const resolvedContractPath = path.resolve(root, contractPath);
@@ -48,12 +51,25 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
     return { valid: false, errors: ['Experience Screen Contract must use schemaVersion 3; re-plan legacy v1/v2 screens'] };
   }
   let dataContract = null;
+  let contextContract = null;
+  if (fs.existsSync(domainPath) && !fs.existsSync(contextPath)) return { valid: false, errors: ['Context Enrichment Contract is missing'] };
+  if (fs.existsSync(contextPath)) {
+    contextContract = readJson(contextPath, 'Context Enrichment Contract');
+    const contextValidation = validateContextEnrichment(contextContract, {
+      experienceContract,
+      briefText: fs.readFileSync(briefPath, 'utf8'),
+    });
+    if (!contextValidation.valid) return contextValidation;
+  }
   // The neutral domain remains the screen/hook contract after graduation. A
   // Dataverse schema may coexist as the persistence mapping target, but it
   // must never replace the domain contract used to validate app behavior.
   if (fs.existsSync(domainPath)) {
     dataContract = readJson(domainPath, 'Prototype domain model');
-    const domainValidation = validatePrototypeDomainModel(dataContract);
+    const domainValidation = validatePrototypeDomainModel(dataContract, {
+      experienceContractSha256: contractHash(experienceContract),
+      contextEnrichmentSha256: contextContract ? contextEnrichmentRevision(contextContract) : null,
+    });
     if (!domainValidation.valid) return domainValidation;
   } else if (fs.existsSync(schemaPath)) {
     dataContract = readJson(schemaPath, 'Data contract');
@@ -61,6 +77,8 @@ function validateProjectExecutionContract(projectRoot, contractPath = '.tmp/mobi
   return validateMobilePlanExecutionContract(readJson(resolvedContractPath, 'Mobile plan execution contract'), {
     briefText: fs.readFileSync(briefPath, 'utf8'),
     experienceContractSha256: contractHash(experienceContract),
+    contextEnrichmentSha256: contextContract ? contextEnrichmentRevision(contextContract) : null,
+    domainModelSha256: dataContract?.mode === 'prototype-domain' ? domainModelRevision(dataContract) : null,
     screenContract,
     dataContract,
     packageJson: readJson(packagePath, 'package.json'),

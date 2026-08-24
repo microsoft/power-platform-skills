@@ -8,9 +8,27 @@ const path = require('node:path');
 const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 const { screenInputFingerprint, validateScreenArtifact } = require('./validate-screen-artifact');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
-const { validateScreenTaskDirectory } = require('./validate-screen-task-pack');
 
 const SCOPES = new Set(['domain', 'tasks', 'screen', 'screens', 'typecheck', 'all']);
+const FINGERPRINT_DIRECTORIES = ['app', 'assets', 'components', 'src'];
+const FINGERPRINT_ARTIFACTS = [
+  '.mobile-app/prototype-domain-manifest.json',
+  '.tmp/context-enrichment-contract.json',
+  '.tmp/design-recipe.json',
+  '.tmp/experience-contract.json',
+  '.tmp/experience-foundation-contract.json',
+  '.tmp/experience-screen-contract.json',
+  '.tmp/mobile-plan-execution-contract.json',
+  '.tmp/prototype-domain-model.json',
+  '.tmp/screen-build-pack.json',
+  'app.config.js',
+  'babel.config.js',
+  'metro.config.js',
+  'package-lock.json',
+  'package.json',
+  'tamagui.config.ts',
+  'tsconfig.json',
+];
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -41,6 +59,43 @@ function safeProjectFile(projectRoot, relativePath) {
     if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) return null;
   }
   return target;
+}
+
+function collectFingerprintFiles(projectRoot) {
+  const root = path.resolve(projectRoot);
+  const files = new Set();
+  function visit(relativePath) {
+    const target = path.resolve(root, relativePath);
+    if (!target.startsWith(`${root}${path.sep}`) || !fs.existsSync(target)) return;
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink()) throw new Error(`validation fingerprint rejects symlink ${relativePath}`);
+    if (stat.isDirectory()) {
+      for (const name of fs.readdirSync(target).sort()) visit(path.join(relativePath, name));
+    } else if (stat.isFile()) files.add(relativePath.split(path.sep).join('/'));
+  }
+  for (const relativePath of [...FINGERPRINT_DIRECTORIES, ...FINGERPRINT_ARTIFACTS]) visit(relativePath);
+  return [...files].sort();
+}
+
+function validationFingerprint(projectRoot, scope = 'all', screenId = null) {
+  const hash = crypto.createHash('sha256');
+  hash.update(stableStringify({ scope, screenId: screenId || null }));
+  for (const relativePath of collectFingerprintFiles(projectRoot)) {
+    const bytes = fs.readFileSync(path.join(projectRoot, relativePath));
+    hash.update(`\0${relativePath}\0${bytes.length}\0`);
+    hash.update(bytes);
+  }
+  return hash.digest('hex');
+}
+
+function reusableValidation(projectRoot, scope, screenId, fingerprint) {
+  const statePath = path.join(projectRoot, '.mobile-app', 'state.json');
+  if (!fs.existsSync(statePath)) return false;
+  const previous = readJson(statePath, 'Lifecycle state').lastValidation;
+  return previous?.status === 'passed'
+    && previous.scope === scope
+    && (previous.screenId || null) === (screenId || null)
+    && previous.contentFingerprint === fingerprint;
 }
 
 function check(id, errors, details = {}) {
@@ -96,6 +151,10 @@ function validateDomainScope(projectRoot) {
   }
   const providerPath = path.join(projectRoot, 'src', 'data', 'PrototypeDataProvider.tsx');
   if (fs.existsSync(providerPath) && /QueryClientProvider/.test(fs.readFileSync(providerPath, 'utf8'))) errors.push('PrototypeDataProvider must use the Query Client owned by PowerAppsProvider');
+  for (const relativePath of collectFingerprintFiles(projectRoot).filter((item) => /^(?:app|components|src)\/.*\.[jt]sx?$/.test(item))) {
+    const source = fs.readFileSync(path.join(projectRoot, relativePath), 'utf8');
+    if (/\b(?:QueryClientProvider|new\s+QueryClient\s*\()/.test(source)) errors.push(`${relativePath} creates a second Query Client; PowerAppsProvider owns the only client`);
+  }
   if (fs.existsSync(path.join(projectRoot, 'src', 'generated', '.prototype-manifest.json'))) errors.push('legacy generated prototype manifest remains; run migrate-legacy-prototype.js');
   const dataMode = lifecycleContext(projectRoot).dataMode;
   if (['transitioning', 'dataverse'].includes(dataMode)) {
@@ -131,7 +190,6 @@ function validateTasksScope(projectRoot) {
   const pack = loadPack(projectRoot);
   const packValidation = validateScreenBuildPack(projectRoot, pack);
   const errors = packValidation.issues.map((issue) => `[${issue.rule}] ${issue.message}`);
-  if (!errors.length) errors.push(...validateScreenTaskDirectory(projectRoot, pack).map((issue) => `[${issue.rule}] ${issue.message}`));
   return check('tasks', errors, { revision: pack.revision });
 }
 
@@ -199,6 +257,10 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
   if (!fs.existsSync(domainPath)) throw new Error('cannot record lifecycle validation without .tmp/prototype-domain-model.json');
   const domainBytes = fs.readFileSync(domainPath);
   const model = JSON.parse(domainBytes.toString('utf8'));
+  const contextPath = path.join(projectRoot, '.tmp', 'context-enrichment-contract.json');
+  const experiencePath = path.join(projectRoot, '.tmp', 'experience-contract.json');
+  if (!fs.existsSync(contextPath) || !fs.existsSync(experiencePath)) throw new Error('cannot record lifecycle validation without Context and Experience contracts');
+  const experience = readJson(experiencePath, 'Experience contract');
   const mappingPath = path.join(projectRoot, '.tmp', 'dataverse-repository-mapping.json');
   const prototypeMapping = (model.operations || []).map((operation) => ({
     operation: operation.key,
@@ -209,9 +271,12 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
   }));
   const packPath = path.join(projectRoot, '.tmp', 'screen-build-pack.json');
   const packRevision = fs.existsSync(packPath) ? readJson(packPath, 'Screen build pack').revision || null : null;
+  const previousNativeVisualEvidence = state.lastValidation?.nativeVisualEvidence || null;
   Object.assign(state, {
     schemaVersion: 2,
     lastDomainModelHash: sha256(domainBytes),
+    lastContextEnrichmentHash: sha256(fs.readFileSync(contextPath)),
+    lastVisualCompositionHash: sha256(stableStringify(experience.visualCompositionIntent)),
     lastRepositoryMappingHash: fs.existsSync(mappingPath) ? sha256(fs.readFileSync(mappingPath)) : sha256(stableStringify(prototypeMapping)),
     lastFixtureRevision: sha256(stableStringify({ fixtures: model.fixtures || {}, fixtureScenarios: model.fixtureScenarios || [] })),
     lastValidation: {
@@ -220,6 +285,9 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
       status: 'passed',
       checkedAt: new Date().toISOString(),
       buildPackRevision: packRevision,
+      qualityStatus: state.dataMode === 'prototype' ? 'statically-validated' : 'runtime-validated',
+      nativeVisualEvidence: state.dataMode === 'prototype' ? null : previousNativeVisualEvidence,
+      contentFingerprint: validationFingerprint(projectRoot, scope, screenId),
     },
   });
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -240,6 +308,7 @@ function parseArgs(argv) {
     else if (argv[index] === '--scope') args.scope = argv[++index];
     else if (argv[index] === '--screen') args.screenId = argv[++index];
     else if (argv[index] === '--record') args.record = true;
+    else if (argv[index] === '--reuse-if-unchanged') args.reuseIfUnchanged = true;
   }
   return args;
 }
@@ -247,13 +316,19 @@ function parseArgs(argv) {
 function main(argv) {
   const args = parseArgs(argv);
   if (!args.projectRoot) {
-    process.stderr.write('Usage: node validate-mobile-app.js --project-root <dir> [--scope domain|tasks|screen|screens|typecheck|all] [--screen <id>] [--record]\n');
+    process.stderr.write('Usage: node validate-mobile-app.js --project-root <dir> [--scope domain|tasks|screen|screens|typecheck|all] [--screen <id>] [--record] [--reuse-if-unchanged]\n');
     return 2;
   }
   try {
-    const checks = validateByScope(path.resolve(args.projectRoot), args.scope, args.screenId);
+    const projectRoot = path.resolve(args.projectRoot);
+    const fingerprint = validationFingerprint(projectRoot, args.scope, args.screenId);
+    if (args.reuseIfUnchanged && reusableValidation(projectRoot, args.scope, args.screenId, fingerprint)) {
+      process.stdout.write(`${JSON.stringify({ validator: 'validate-mobile-app', scope: args.scope, screenId: args.screenId || null, valid: true, skipped: true, reason: 'unchanged-since-recorded-pass', contentFingerprint: fingerprint, checks: [] }, null, 2)}\n`);
+      return 0;
+    }
+    const checks = validateByScope(projectRoot, args.scope, args.screenId);
     const result = { validator: 'validate-mobile-app', scope: args.scope, screenId: args.screenId || null, valid: checks.every((item) => item.valid), checks };
-    if (result.valid && args.record) recordLifecycleValidation(path.resolve(args.projectRoot), args.scope, args.screenId, checks);
+    if (result.valid && args.record) recordLifecycleValidation(projectRoot, args.scope, args.screenId, checks);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.valid ? 0 : 2;
   } catch (error) {
@@ -264,4 +339,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { recordLifecycleValidation, validateByScope, validateDomainScope, validateOneScreen, validateTasksScope };
+module.exports = { collectFingerprintFiles, recordLifecycleValidation, reusableValidation, validateByScope, validateDomainScope, validateOneScreen, validateTasksScope, validationFingerprint };

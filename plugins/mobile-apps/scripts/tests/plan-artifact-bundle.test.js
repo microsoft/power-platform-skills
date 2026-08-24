@@ -17,8 +17,9 @@ const { validatePlanArtifactBundle } = require('../validate-plan-artifact-bundle
 const { writePlanArtifactBundle } = require('../write-plan-artifact-bundle');
 const { validateExperienceScreenContract } = require('../lib/experience-screen-contract');
 const { sha256 } = require('../lib/mobile-plan-execution-contract');
-const { validatePrototypeDomainModel } = require('../lib/prototype-domain-model');
+const { domainModelRevision, validatePrototypeDomainModel } = require('../lib/prototype-domain-model');
 const { prepareExecutionPreflight } = require('../prepare-mobile-plan-execution-contract');
+const { contextEnrichmentRevision, resolveContextEnrichment } = require('../resolve-context-enrichment');
 
 const checkpointScript = path.resolve(__dirname, '..', 'plan-checkpoints.js');
 const confirmedBrief = 'Help travelers browse products and add them to a cart.';
@@ -56,31 +57,51 @@ function schema() {
   };
 }
 
-function domainModel() {
+function domainModel(experience, context) {
   const fixtures = [
     ['item-comfort', 'Cabin comfort set'],
     ['item-organizer', 'Travel organizer'],
     ['item-hydration', 'Hydration kit'],
     ['item-watch', 'Classic watch'],
-  ].map(([id, name]) => ({ id, name }));
+  ].map(([id, name], index) => ({
+    id,
+    name,
+    media: {
+      imageUrl: `https://images.unsplash.com/photo-${1520000000000 + index}`,
+      imageAltText: `${name} product image`,
+      imageCacheKey: `${id}-v1`,
+      imageAssetKey: `asset://experience/${id}.png`,
+    },
+  }));
   return {
     schemaVersion: 1,
     mode: 'prototype-domain',
+    experienceContractSha256: contractHash(experience),
+    contextEnrichmentSha256: contextEnrichmentRevision(context),
     entities: [{
       key: 'Item', displayName: 'Item', displayPluralName: 'Items', description: 'A product travelers can browse.', primaryNameField: 'name', estimatedPrototypeRows: 4,
       fields: [
         { key: 'id', displayName: 'ID', type: 'id', required: true },
         { key: 'name', displayName: 'Name', type: 'text', required: true },
+        { key: 'media', displayName: 'Media', type: 'image', required: true, mediaIntent: 'featured' },
       ],
     }],
     relationships: [], choices: [],
     operations: [
-      { key: 'listItems', entity: 'Item', kind: 'list', repository: 'CatalogRepository', method: 'listItems', hook: 'useItems', selectFields: ['id', 'name'], filterFields: [], sortFields: ['name'], pagination: { mode: 'bounded', boundedReason: 'The approved prototype has four items.', maximumExpectedCount: 4 } },
-      { key: 'getItem', entity: 'Item', kind: 'get', repository: 'CatalogRepository', method: 'getItem', hook: 'useItem', selectFields: ['id', 'name'], filterFields: [], sortFields: [], pagination: { mode: 'none' } },
+      { key: 'listItems', entity: 'Item', kind: 'list', repository: 'CatalogRepository', method: 'listItems', hook: 'useItems', selectFields: ['id', 'name', 'media'], filterFields: [], sortFields: ['name'], pagination: { mode: 'bounded', boundedReason: 'The approved prototype has four items.', maximumExpectedCount: 4 } },
+      { key: 'getItem', entity: 'Item', kind: 'get', repository: 'CatalogRepository', method: 'getItem', hook: 'useItem', selectFields: ['id', 'name', 'media'], filterFields: [], sortFields: [], pagination: { mode: 'none' } },
     ],
     actors: [{ key: 'Traveler', displayName: 'Traveler' }],
     uxPermissions: [{ actor: 'Traveler', operation: 'listItems', allowed: true }, { actor: 'Traveler', operation: 'getItem', allowed: true }],
     offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listItems', 'getItem'] },
+    fixtureRequirements: [
+      { key: 'items-populated', state: 'populated', description: 'Four travel products are visible.', entity: 'Item', minimumRecords: 4 },
+      { key: 'items-loading', state: 'loading', description: 'Travel products are loading.' },
+      { key: 'items-empty', state: 'empty', description: 'No travel products are visible.' },
+      { key: 'items-error', state: 'error', description: 'Travel products failed to load.' },
+      { key: 'items-offline', state: 'offline', description: 'Local travel products remain visible.' },
+    ],
+    mediaPolicy: { mode: experience.assetPolicy.media, requiredFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'], requiresFallback: true },
     fixtures: { Item: fixtures },
     fixtureScenarios: [
       { key: 'items-populated', state: 'populated', description: 'Four travel products are visible.', entity: 'Item', recordIds: fixtures.map((item) => item.id) },
@@ -153,6 +174,7 @@ function makeProject(context) {
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   const experience = deriveExperienceFromBrief(confirmedBrief);
   experience.navigationModel = 'stack';
+  experience.visualCompositionIntent.navigationSilhouette = 'stack';
   experience.navigationIntent = {
     model: 'stack',
     initialRoute: experience.primaryScreen.route,
@@ -177,6 +199,8 @@ function makeProject(context) {
 
 function bundle(root) {
   const experience = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-contract.json'), 'utf8'));
+  const context = resolveContextEnrichment(confirmedBrief, experience);
+  const domain = domainModel(experience, context);
   const preflight = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'mobile-plan-execution-preflight.json'), 'utf8'));
   const composition = primaryComposition(experience);
   return {
@@ -186,7 +210,8 @@ function bundle(root) {
     planningMode: 'prototype',
     artifacts: {
       nativeAppPlanMarkdown: planMarkdown(),
-      prototypeDomainModel: domainModel(),
+      contextEnrichmentContract: context,
+      prototypeDomainModel: domain,
       dataverseSchemaContract: null,
       experienceScreenContract: {
         schemaVersion: 3,
@@ -206,6 +231,7 @@ function bundle(root) {
           plannedScreen({
             id: 'Home', route: experience.primaryScreen.route, file: experience.primaryScreen.file, role: 'primary',
             purpose: experience.primaryJob, pattern: 'editorial-hero', action: { id: 'browse', label: experience.firstViewport.primaryAction, placement: 'inline' },
+            visualComposition: experience.visualCompositionIntent, contextEntries: context.displayContext,
           }),
           plannedScreen({
             id: 'ItemDetail', route: '/(app)/items/[id]', file: 'app/(app)/items/[id].tsx', role: 'key-flow',
@@ -217,6 +243,8 @@ function bundle(root) {
       executionContract: {
         schemaVersion: 1,
         experienceContractSha256: contractHash(experience),
+        contextEnrichmentSha256: contextEnrichmentRevision(context),
+        domainModelSha256: domainModelRevision(domain),
         briefSha256: sha256(confirmedBrief),
         requirements: preflight.requirements.map((requirement) => ({
           id: requirement.id,
@@ -241,7 +269,7 @@ function bundle(root) {
   };
 }
 
-function plannedScreen({ id, route, file, role, purpose, pattern, action }) {
+function plannedScreen({ id, route, file, role, purpose, pattern, action, visualComposition = null, contextEntries = [] }) {
   const regionId = `${id.toLowerCase()}-content`;
   const detail = route.includes('[id]');
   return {
@@ -252,13 +280,17 @@ function plannedScreen({ id, route, file, role, purpose, pattern, action }) {
       : { kind: 'stack-root', intent: 'replace' },
     presentation: { pattern, density: 'balanced', hierarchy: [purpose, action.label] },
     regions: [{ id: regionId, kind: 'content', priority: 1, viewport: 'first', mediaRequired: true }],
-    firstViewport: { regionIds: [regionId], focalPoint: purpose, maxRegions: 4 },
+    firstViewport: { regionIds: [regionId], focalPoint: purpose, maxRegions: 4, nextContentVisible: visualComposition?.nextContentVisible ?? true, maxFeatureViewportShare: visualComposition?.maxFeatureViewportShare ?? 0.38 },
+    context: { entryIds: contextEntries.map((entry) => entry.id), placementIntent: contextEntries.length ? 'primary-screen-context-rail' : 'none', assumptions: [...new Set(contextEntries.map((entry) => entry.assumption))] },
+    signatureComponent: visualComposition ? { ...visualComposition.signatureComponent } : { kind: 'supporting-screen', required: false, testId: null },
     header: { mode: role === 'primary' ? 'root' : 'back', title: role === 'primary' ? '' : id },
-    primaryAction: action,
-    media: { required: true, role: 'content', aspectRatio: role === 'primary' ? '16:9' : '1:1', minCoverage: 0.9, fallback: 'code-native-illustration' },
+    primaryAction: action?.placement === 'sticky-bottom'
+      ? { ...action, clearance: { safeArea: true, tabBar: 'not-applicable' } }
+      : action,
+    media: { required: true, role: 'content', aspectRatio: role === 'primary' ? '16:9' : '1:1', minCoverage: 0.9, fallback: 'code-native-illustration', prominence: visualComposition?.mediaProminence || 'medium' },
     states: ['loading', 'empty', 'error', 'offline'],
     qualityCriteria: ['One focal point is visible.', 'The primary action remains visible.', 'Large text does not clip.'],
-    testIds: [`screen-${id.toLowerCase()}`],
+    testIds: [`screen-${id.toLowerCase()}`, ...(visualComposition ? [visualComposition.signatureComponent.testId] : [])],
     dependencies: { foundation: [], fixtures: ['Item'], screens: [] },
     data: {
       entities: ['Item'],
@@ -278,12 +310,13 @@ function plannedScreen({ id, route, file, role, purpose, pattern, action }) {
   };
 }
 
-test('foreground validates and writes exactly the five active return-only planning artifacts', (context) => {
+test('foreground validates and writes every active return-only planning artifact', (context) => {
   const root = makeProject(context);
   const value = bundle(root);
   assert.deepEqual(validatePlanArtifactBundle(root, value), { valid: true, errors: [] });
   const result = writePlanArtifactBundle(root, value);
   assert.deepEqual(result.written.sort(), [
+    '.tmp/context-enrichment-contract.json',
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
@@ -423,7 +456,7 @@ test('prototype planning rejects missing, generic, and implausible neutral fixtu
   assert.equal(result.valid, false);
   assert.ok(result.errors.includes('prototypeDomainModel: fixtures is missing entity Item'));
 
-  value.artifacts.prototypeDomainModel = domainModel();
+  value.artifacts.prototypeDomainModel = structuredClone(bundle(root).artifacts.prototypeDomainModel);
   value.artifacts.prototypeDomainModel.fixtures.Item[0].name = 'Item 1';
   value.artifacts.prototypeDomainModel.entities[0].fields.push({ key: 'quantity', displayName: 'Quantity', type: 'whole-number', required: true, minimum: 1, maximum: 99 });
   for (const item of value.artifacts.prototypeDomainModel.fixtures.Item) item.quantity = 0;
@@ -494,6 +527,7 @@ test('connector-only bundle removes stale domain and schema artifacts', (context
   value.planningMode = 'connector-only';
   value.artifacts.prototypeDomainModel = null;
   value.artifacts.dataverseSchemaContract = null;
+  delete value.artifacts.executionContract.domainModelSha256;
   const detail = value.artifacts.experienceScreenContract.screens[1];
   detail.route = '/(app)/items/detail';
   detail.file = 'app/(app)/items/detail.tsx';
@@ -508,6 +542,7 @@ test('connector-only bundle removes stale domain and schema artifacts', (context
   fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), '{}\n');
   const result = writePlanArtifactBundle(root, value);
   assert.deepEqual(result.written.sort(), [
+    '.tmp/context-enrichment-contract.json',
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
@@ -523,6 +558,7 @@ test('writer restores all previous artifact content after a late replacement fai
   const value = bundle(root);
   const previous = {
     plan: '# Previous plan\n',
+    context: '{"previous":true}\n',
     domain: '{"previous":true}\n',
     schema: '{"previous":true}\n',
     screen: '{"previous":true}\n',
@@ -530,6 +566,7 @@ test('writer restores all previous artifact content after a late replacement fai
     execution: '{"previous":true}\n',
   };
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), previous.plan);
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), previous.context);
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), previous.domain);
   fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), previous.schema);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), previous.screen);
@@ -550,6 +587,7 @@ test('writer restores all previous artifact content after a late replacement fai
   }
 
   assert.equal(fs.readFileSync(path.join(root, 'native-app-plan.md'), 'utf8'), previous.plan);
+  assert.equal(fs.readFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), 'utf8'), previous.context);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), 'utf8'), previous.domain);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), 'utf8'), previous.schema);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'), previous.screen);

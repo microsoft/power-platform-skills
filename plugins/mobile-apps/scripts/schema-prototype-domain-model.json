@@ -5,6 +5,8 @@
   "required": [
     "schemaVersion",
     "mode",
+    "experienceContractSha256",
+    "contextEnrichmentSha256",
     "entities",
     "relationships",
     "choices",
@@ -12,12 +14,16 @@
     "actors",
     "uxPermissions",
     "offlineUxIntent",
+    "fixtureRequirements",
+    "mediaPolicy",
     "fixtures",
     "fixtureScenarios"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "mode": { "const": "prototype-domain" },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contextEnrichmentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "entities": {
       "type": "array",
       "minItems": 1,
@@ -51,6 +57,21 @@
         "connectivity": { "enum": ["offline-required", "offline-preferred", "network-optional"] },
         "requiredOperations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "fixtureRequirements": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "$ref": "#/definitions/fixtureRequirement" }
+    },
+    "mediaPolicy": {
+      "type": "object",
+      "required": ["mode", "requiredFields", "requiresFallback"],
+      "properties": {
+        "mode": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
+        "requiredFields": { "type": "array", "items": { "enum": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }, "uniqueItems": true },
+        "requiresFallback": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -193,6 +214,18 @@
         "description": { "type": "string", "minLength": 5 },
         "entity": { "type": "string" },
         "recordIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "fixtureRequirement": {
+      "type": "object",
+      "required": ["key", "state", "description"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "state": { "enum": ["populated", "loading", "empty", "error", "offline", "edge"] },
+        "description": { "type": "string", "minLength": 5 },
+        "entity": { "type": "string" },
+        "minimumRecords": { "type": "integer", "minimum": 0, "maximum": 50 }
       },
       "additionalProperties": false
     }

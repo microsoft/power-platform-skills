@@ -165,7 +165,9 @@ function validateSource(source, screen, pack, projectRoot, errors) {
   if (escapedMode && !new RegExp(`headerMode\\s*=\\s*["']${escapedMode}["']`).test(source)) {
     errors.push(`artifact source must use literal ScreenShell headerMode ${screen.headerMode}`);
   }
-  for (const issue of validateScreenSourceContract(source, screen)) {
+  for (const issue of validateScreenSourceContract(source, screen, {
+    minimumControlSize: pack.design?.recipe?.spacing?.minimumControlSize || 44,
+  })) {
     errors.push(`artifact source ${issue.rule}: ${issue.message}`);
   }
   validateImports(source, pack, projectRoot, errors);

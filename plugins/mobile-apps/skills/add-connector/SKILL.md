@@ -60,10 +60,13 @@ Common connector API names:
 - `sql`, `commondataservice`
 
 When `.tmp/mobile-plan-execution-contract.json` exists, run
-`validate-mobile-plan-execution-contract.js`, then resolve the selected API name
-to one or more `connectorOperations[]` rows. Require every row to name the same
-exact API/service pairing and retain its operation, input, output, failure, and
-`requiredBy` contract. If no row exists, stop with
+`validate-mobile-plan-execution-contract.js`, then resolve each requested
+operation to exactly one `connectorOperations[]` row by its stable row ID plus
+exact API, service, and operation. A batch is allowed only when every row ID is
+explicitly supplied by the approved execution flow. Retain each row's input,
+output, failure, repository/hook ownership, and `requiredBy` contract. An API
+name alone is not permission to bind every generated method. If no exact row
+exists, or multiple rows remain ambiguous, stop with
 `BLOCKED: connector is not in the approved execution contract` and route to
 `/edit-app`. Do not infer a method from the connector display label or generated
 file after approval. Unmanaged projects without a generated plan retain the

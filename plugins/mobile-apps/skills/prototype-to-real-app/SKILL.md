@@ -234,8 +234,6 @@ Run:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
-  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \

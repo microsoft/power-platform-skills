@@ -46,6 +46,12 @@ function validateTypographyRecipe(typography) {
   if (typography.supportsDynamicType !== true) {
     issues.push({ rule: 'dynamic-type-disabled', message: 'Design recipe must preserve native Dynamic Type/font scaling.' });
   }
+  for (const role of ['display', 'heading', 'title', 'body', 'label', 'caption']) {
+    if (typeof typography.roles?.[role] !== 'string' || !typography.roles[role].startsWith('$')) issues.push({ rule: 'typography-role-unresolved', message: `Design recipe typography.roles.${role} must resolve to a semantic token.` });
+  }
+  if (typography.dynamicType?.enabled !== true || typography.dynamicType?.preserveLayout !== true || typeof typography.dynamicType?.maximumScale !== 'number' || typography.dynamicType.maximumScale < 1.5) {
+    issues.push({ rule: 'dynamic-type-contract-incomplete', message: 'Design recipe must declare enabled Dynamic Type, layout preservation, and a usable maximum scale.' });
+  }
   if (typography.runtimeStrategy === 'platform-safe-editorial') {
     if (typography.displayRole !== 'editorial-display' || typography.headingFamily !== 'platform-serif' || typography.bodyFamily !== 'system-sans') {
       issues.push({ rule: 'editorial-family-drift', message: 'Platform-safe editorial typography requires an editorial display role, platform-serif headings, and system-sans body copy.' });

@@ -10,10 +10,11 @@
     "planningMode": { "enum": ["required", "prototype", "connector-only"] },
     "artifacts": {
       "type": "object",
-      "required": ["nativeAppPlanMarkdown", "prototypeDomainModel", "dataverseSchemaContract", "experienceScreenContract", "experienceFoundationContract", "executionContract"],
+      "required": ["nativeAppPlanMarkdown", "contextEnrichmentContract", "prototypeDomainModel", "dataverseSchemaContract", "experienceScreenContract", "experienceFoundationContract", "executionContract"],
       "additionalProperties": false,
       "properties": {
         "nativeAppPlanMarkdown": { "type": "string", "minLength": 1 },
+        "contextEnrichmentContract": { "type": "object" },
         "prototypeDomainModel": { "type": ["object", "null"] },
         "dataverseSchemaContract": { "type": ["object", "null"] },
         "experienceScreenContract": { "type": "object" },

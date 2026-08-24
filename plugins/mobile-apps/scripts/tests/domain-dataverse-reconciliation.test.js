@@ -10,7 +10,7 @@ const { generateDataverseRepositories } = require('../../skills/prototype-to-rea
 
 function domainModel() {
   return {
-    schemaVersion: 1, mode: 'prototype-domain',
+    schemaVersion: 1, mode: 'prototype-domain', experienceContractSha256: 'a'.repeat(64), contextEnrichmentSha256: 'b'.repeat(64),
     entities: [
       { key: 'Category', displayName: 'Category', displayPluralName: 'Categories', description: 'A product browsing category.', primaryNameField: 'name', estimatedPrototypeRows: 1, fields: [
         { key: 'id', displayName: 'ID', type: 'id', required: true },
@@ -40,6 +40,14 @@ function domainModel() {
       { actor: 'Shopper', operation: 'createProduct', allowed: true },
     ],
     offlineUxIntent: { connectivity: 'network-optional', requiredOperations: ['listProducts'] },
+    fixtureRequirements: [
+      { key: 'catalog-populated', state: 'populated', description: 'One product is visible.', entity: 'Product', minimumRecords: 1 },
+      { key: 'catalog-loading', state: 'loading', description: 'Products are loading.' },
+      { key: 'catalog-empty', state: 'empty', description: 'No products are visible.' },
+      { key: 'catalog-error', state: 'error', description: 'Products failed to load.' },
+      { key: 'catalog-offline', state: 'offline', description: 'Cached products remain visible.' },
+    ],
+    mediaPolicy: { mode: 'not-applicable', requiredFields: [], requiresFallback: false },
     fixtures: {
       Category: [{ id: 'category-travel', name: 'Travel essentials' }],
       Product: [{ id: 'product-organizer', categoryId: 'category-travel', name: 'Travel organizer', status: 'available', price: { amount: 42.5, currencyCode: 'USD' } }],

@@ -253,6 +253,82 @@ function validateAggregateFreshness(source, screen, issues) {
   }
 }
 
+function validateStaticEngineeringRules(source, screen, elements, issues, options = {}) {
+  const label = screen.route || screen.id || '<unknown>';
+  const minimumControlSize = Number.isFinite(options.minimumControlSize) ? options.minimumControlSize : 44;
+  if (/\b(?:QueryClientProvider|new\s+QueryClient\s*\()/.test(source)) {
+    issues.push({ rule: 'duplicate-query-client', message: `Screen ${label} must use the Query Client owned by PowerAppsProvider.` });
+  }
+  if (/\bcr[a-z0-9]*_[a-z][a-z0-9_]*\b/i.test(source)) {
+    issues.push({ rule: 'provisional-dataverse-identifier', message: `Screen ${label} contains a provisional Dataverse publisher-prefixed identifier.` });
+  }
+  for (const entity of screen.data?.entities || []) {
+    const variable = `${String(entity).replace(/[^A-Za-z0-9_$]/g, '')}s?`;
+    if (new RegExp(`\\b(?:const|let)\\s+(?:mock|sample|local|fallback)?${variable}\\s*=\\s*\\[\\s*\\{`, 'i').test(source)) {
+      issues.push({ rule: 'screen-local-record-array', message: `Screen ${label} declares replacement ${entity} records instead of using its approved @/data hook.` });
+    }
+  }
+  if (/\b(?:const|let)\s+(?:isAvailable|available|inStock|inventoryQuantity|stockCount)\s*=\s*(?:true|false|\d+|['"][^'"]+['"])/i.test(source)) {
+    issues.push({ rule: 'hard-coded-availability', message: `Screen ${label} hard-codes availability instead of deriving it from the canonical domain record.` });
+  }
+  if (/\b(?:const|let)\s+(?:cart|bag|basket|saved|selection|favorite|notification|message|item)[A-Za-z0-9_$]*(?:Count|Total)\s*=\s*\d+(?:\.\d+)?\b/i.test(source)) {
+    issues.push({ rule: 'hard-coded-aggregate', message: `Screen ${label} hard-codes a mutation-backed aggregate.` });
+  }
+  if (/(?:\:\s*any\b|\bas\s+(?:any\b|unknown\s+as\b)|<any>)/.test(source)) {
+    issues.push({ rule: 'unsafe-type-escape', message: `Screen ${label} uses any or a broad unsafe cast.` });
+  }
+  if (/(?:#[0-9a-f]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(|\$(?:blue|gray|grey|slate|purple|green|red|orange)\d*\b)/i.test(source)) {
+    issues.push({ rule: 'raw-starter-color', message: `Screen ${label} uses a raw/starter color instead of an approved semantic token.` });
+  }
+  if (/\bfontSize\s*(?:=|:)\s*(?:\{\s*)?\d+(?:\.\d+)?/.test(source)) {
+    issues.push({ rule: 'arbitrary-typography', message: `Screen ${label} uses an arbitrary font size outside the design recipe's semantic roles.` });
+  }
+  if (/<(?:Input|TextInput)\b/.test(source) && !/(?:KeyboardAvoidingView|KeyboardAware|useKeyboard|keyboardShouldPersistTaps)/.test(source)) {
+    issues.push({ rule: 'keyboard-avoidance-missing', message: `Screen ${label} renders input without an explicit keyboard-avoidance strategy.` });
+  }
+  for (const element of elements.filter((candidate) => /^(?:Pressable|Touchable)/.test(candidate.name))) {
+    if (!/\baccessibilityRole\s*=/.test(element.openTag)) issues.push({ rule: 'custom-control-role-missing', message: `Screen ${label} has a custom touch control without accessibilityRole.` });
+    const body = source.slice(element.openEnd, element.closeStart);
+    if (!/\baccessibilityLabel\s*=/.test(element.openTag) && !/>\s*[^<{\s][^<{]*</.test(`>${body}<`)) issues.push({ rule: 'custom-control-label-missing', message: `Screen ${label} has an icon-only custom touch control without accessibilityLabel.` });
+    if (/\b(?:disabled|selected)\s*=/.test(element.openTag) && !/\baccessibilityState\s*=/.test(element.openTag)) issues.push({ rule: 'custom-control-state-missing', message: `Screen ${label} must expose selected/disabled custom-control state through accessibilityState.` });
+  }
+  for (const element of elements.filter((candidate) => /(?:Button|Pressable|Touchable)$/.test(candidate.name))) {
+    const explicitSizes = [...element.openTag.matchAll(/\b(?:width|height|minWidth|minHeight|minW|minH|w|h)\s*=\s*(?:["']\s*(\d+(?:\.\d+)?)\s*["']|\{\s*(\d+(?:\.\d+)?)\s*\})/g)]
+      .map((match) => Number(match[1] || match[2]));
+    if (explicitSizes.some((size) => size < minimumControlSize)) issues.push({ rule: 'undersized-touch-target', message: `Screen ${label} contains a control smaller than the ${minimumControlSize}-point design-recipe minimum.` });
+  }
+}
+
+function validateContextRendering(source, screen, elements, issues) {
+  const entries = screen.context?.entries || [];
+  if (!entries.length) return;
+  const label = screen.route || screen.id || '<unknown>';
+  const firstIds = new Set(screen.firstViewport?.regionIds || []);
+  const firstRegionElements = (screen.regions || [])
+    .filter((region) => firstIds.has(region.id))
+    .flatMap((region) => {
+      const candidates = regionMarkerCandidates(screen, region);
+      return elements.filter((element) => candidates.includes(literalTestId(element.openTag)));
+    });
+  for (const entry of entries) {
+    const marker = entry.testId || `experience-context-${entry.id}`;
+    const markerElement = elements.find((element) => literalTestId(element.openTag) === marker);
+    if (!markerElement) {
+      issues.push({ rule: 'context-entry-not-rendered', message: `Screen ${label} does not render literal marker ${marker}.` });
+      continue;
+    }
+    if (entry.placementIntent === 'primary-screen-context-rail'
+      && (!firstRegionElements.length || !firstRegionElements.some((region) => elementContains(region, markerElement)))) {
+      issues.push({ rule: 'context-rail-outside-first-viewport', message: `Screen ${label} must render ${marker} inside a marked first-viewport region.` });
+    }
+    const escapedId = escapeRegExp(entry.id);
+    const canonicalBinding = new RegExp(`PROTOTYPE_CONTEXT\\.entries\\s*\\[\\s*['"]${escapedId}['"]\\s*\\]`).test(source);
+    if (!canonicalBinding && !source.includes(entry.sampleValue)) {
+      issues.push({ rule: 'context-value-not-bound', message: `Screen ${label} must bind ${marker} to PROTOTYPE_CONTEXT or its exact approved sample value.` });
+    }
+  }
+}
+
 function validateStickyAction(source, screen, elements, issues) {
   if (screen.primaryAction?.placement !== 'sticky-bottom') return;
   const label = screen.route || screen.id || '<unknown>';
@@ -268,6 +344,19 @@ function validateStickyAction(source, screen, elements, issues) {
     issues.push({
       rule: 'sticky-action-scroll-owner',
       message: `Screen ${label} must use ScreenShell scroll={false} so BottomActionBar is not placed inside the shell's scroll content.`,
+    });
+  }
+  const clearance = screen.primaryAction.clearance;
+  if (clearance?.safeArea !== true || bars.every((bar) => !/\bsafeArea(?:\s*=\s*\{\s*true\s*\})?\b/.test(bar.openTag))) {
+    issues.push({
+      rule: 'sticky-action-safe-area-clearance',
+      message: `Screen ${label} must preserve safe-area clearance on BottomActionBar.`,
+    });
+  }
+  if (clearance?.tabBar === 'above' && bars.every((bar) => !/\btabBarClearance\s*=\s*["']above["']/.test(bar.openTag))) {
+    issues.push({
+      rule: 'sticky-action-tab-bar-clearance',
+      message: `Screen ${label} must keep BottomActionBar above the owning tab bar.`,
     });
   }
   const scrollViews = elements.filter((element) => element.name === 'ScrollView');
@@ -353,11 +442,13 @@ function validateFirstViewportSource(source, screen, elements, issues) {
   }
 }
 
-function validateScreenSourceContract(source, screen) {
+function validateScreenSourceContract(source, screen, options = {}) {
   const issues = [];
   if (typeof source !== 'string' || !screen) return issues;
   const elements = jsxElements(source);
   if (/\btoExperienceRecord\s*\(/.test(source)) issues.push({ rule: 'legacy-presentation-adapter', message: `Screen ${screen.route || screen.id || '<unknown>'} must use canonical domain records directly.` });
+  validateStaticEngineeringRules(source, screen, elements, issues, options);
+  validateContextRendering(source, screen, elements, issues);
   validateStickyAction(source, screen, elements, issues);
   validateVisiblePrimaryAction(source, screen, elements, issues);
   validateFirstViewportSource(source, screen, elements, issues);
@@ -377,5 +468,6 @@ module.exports = {
   actionMarkerCandidates,
   jsxElements,
   regionMarkerCandidates,
+  validateStaticEngineeringRules,
   validateScreenSourceContract,
 };

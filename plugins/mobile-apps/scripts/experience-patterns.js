@@ -391,6 +391,78 @@ function chooseRule(brief) {
   return matches[0] || null;
 }
 
+function visualCompositionIntent(semantic) {
+  const bySurface = {
+    'product-led-discovery': {
+      compositionFamily: 'product-led-discovery', density: 'balanced-rich',
+      regionOrder: ['brand-context', 'value-promise', 'discovery-control', 'signature-feature', 'supporting-preview', 'navigation'],
+      signatureComponent: { kind: 'editorial-promotion', purpose: 'Make the curated offer memorable and actionable' },
+      mediaProminence: 'high', maxFeatureViewportShare: 0.38,
+    },
+    'learning-journey': {
+      compositionFamily: 'progress-journey', density: 'balanced-rich',
+      regionOrder: ['learning-context', 'progress', 'next-step', 'supporting-preview', 'navigation'],
+      signatureComponent: { kind: 'progress-journey', purpose: 'Make progress and the next lesson immediately understandable' },
+      mediaProminence: 'medium', maxFeatureViewportShare: 0.34,
+    },
+    'availability-led-discovery': {
+      compositionFamily: 'availability-led-choice', density: 'balanced-rich',
+      regionOrder: ['selection-context', 'availability-control', 'signature-choice', 'supporting-preview'],
+      signatureComponent: { kind: 'availability-choice', purpose: 'Make the best available option easy to compare and select' },
+      mediaProminence: 'medium', maxFeatureViewportShare: 0.32,
+    },
+    'task-led-workflow': {
+      compositionFamily: 'next-action-workflow', density: 'dense-operational',
+      regionOrder: ['assignment-context', 'next-action', 'work-state', 'supporting-preview'],
+      signatureComponent: { kind: 'next-action-module', purpose: 'Keep the next required action and work state dominant' },
+      mediaProminence: 'low', maxFeatureViewportShare: 0.28,
+    },
+    'capture-led-utility': {
+      compositionFamily: 'capture-led-utility', density: 'sparse-focused',
+      regionOrder: ['capture-context', 'capture-action', 'capture-state', 'supporting-preview'],
+      signatureComponent: { kind: 'capture-frame', purpose: 'Keep capture mechanics and completion feedback unambiguous' },
+      mediaProminence: 'high', maxFeatureViewportShare: 0.42,
+    },
+    'conversation-led-inbox': {
+      compositionFamily: 'conversation-led-inbox', density: 'dense-operational',
+      regionOrder: ['workspace-context', 'attention-state', 'conversation-list', 'navigation'],
+      signatureComponent: { kind: 'attention-inbox', purpose: 'Prioritize the conversation that requires attention' },
+      mediaProminence: 'low', maxFeatureViewportShare: 0.2,
+    },
+    'decision-led-overview': {
+      compositionFamily: 'decision-led-overview', density: 'balanced-rich',
+      regionOrder: ['decision-context', 'priority-signal', 'supporting-evidence', 'next-action', 'navigation'],
+      signatureComponent: { kind: 'priority-signal', purpose: 'Connect the strongest current signal to a clear decision' },
+      mediaProminence: 'low', maxFeatureViewportShare: 0.26,
+    },
+    'content-led-feed': {
+      compositionFamily: 'content-led-feed', density: 'balanced-rich',
+      regionOrder: ['creator-context', 'signature-story', 'content-feed', 'primary-action', 'navigation'],
+      signatureComponent: { kind: 'signature-story', purpose: 'Make the leading story and creator action distinctive' },
+      mediaProminence: 'high', maxFeatureViewportShare: 0.4,
+    },
+    'guided-onboarding': {
+      compositionFamily: 'guided-onboarding', density: 'sparse-focused',
+      regionOrder: ['value-promise', 'guided-start', 'supporting-preview'],
+      signatureComponent: { kind: 'guided-start', purpose: 'Explain the first useful action without premature complexity' },
+      mediaProminence: 'medium', maxFeatureViewportShare: 0.34,
+    },
+  };
+  const resolved = bySurface[semantic.primarySurface] || bySurface['guided-onboarding'];
+  return {
+    ...resolved,
+    visualCharacter: semantic.visualCharacter,
+    focalPoint: semantic.focalPoint,
+    signatureComponent: {
+      ...resolved.signatureComponent,
+      required: true,
+      testId: `experience-signature-${slug(resolved.signatureComponent.kind)}`,
+    },
+    nextContentVisible: true,
+    navigationSilhouette: semantic.navigationModel,
+  };
+}
+
 function deriveExperienceFromBrief(brief, options = {}) {
   const text = String(brief || '').trim();
   if (!text) throw new Error('brief must be a non-empty string');
@@ -426,6 +498,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
     assetPolicy: semantic.assetPolicy,
     mediaIntent: semantic.mediaIntent,
     presentationIntent: semantic.presentationIntent,
+    visualCompositionIntent: visualCompositionIntent(semantic),
     promptEvidence: {
       audience: audienceEvidence,
       primaryJob: primaryEvidence,
@@ -512,6 +585,19 @@ function validateExperienceContract(contract) {
       || !['inline', 'sticky-bottom', 'header', 'floating'].includes(presentation?.primaryActionPlacement)
       || !Number.isInteger(presentation?.maxFirstViewportRegions) || presentation.maxFirstViewportRegions < 1 || presentation.maxFirstViewportRegions > 5) issues.push('presentationIntent is invalid');
   }
+  const composition = contract?.visualCompositionIntent;
+  const compositionFamilies = ['product-led-discovery', 'progress-journey', 'availability-led-choice', 'next-action-workflow', 'capture-led-utility', 'conversation-led-inbox', 'decision-led-overview', 'content-led-feed', 'guided-onboarding'];
+  if (!compositionFamilies.includes(composition?.compositionFamily)
+    || !['sparse-focused', 'balanced-rich', 'dense-operational'].includes(composition?.density)
+    || typeof composition?.focalPoint !== 'string' || composition.focalPoint.length < 5
+    || !Array.isArray(composition?.regionOrder) || composition.regionOrder.length < 3 || new Set(composition.regionOrder).size !== composition.regionOrder.length
+    || !composition?.signatureComponent?.required || !/^experience-signature-[a-z0-9-]+$/.test(String(composition?.signatureComponent?.testId || ''))
+    || !['none', 'low', 'medium', 'high'].includes(composition?.mediaProminence)
+    || composition?.nextContentVisible !== true
+    || composition?.navigationSilhouette !== contract?.navigationModel
+    || typeof composition?.maxFeatureViewportShare !== 'number' || composition.maxFeatureViewportShare <= 0 || composition.maxFeatureViewportShare > 0.6) {
+    issues.push('visualCompositionIntent is invalid');
+  }
   if (contract?.navigationIntent !== undefined && (contract.navigationIntent?.model !== contract.navigationModel
     || contract.navigationIntent?.initialRoute !== contract.primaryScreen?.route
     || typeof contract.navigationIntent?.rationale !== 'string' || contract.navigationIntent.rationale.trim().length < 10)) issues.push('navigationIntent is invalid');
@@ -553,11 +639,13 @@ function primaryComposition(contract) {
     regionOrder: contract.firstViewport.regionOrder,
     primaryAction: contract.firstViewport.primaryAction,
     contentDensity: contract.firstViewport.contentDensity,
+    visualCompositionIntent: contract.visualCompositionIntent,
     signatureMotifs: contract.signatureMotifs.length ? contract.signatureMotifs : pattern.motifs,
     forbiddenDefaults: unique([...pattern.forbidden, ...contract.forbiddenDefaults]),
     runtimeMarkers: [
       ...contract.firstViewport.regionOrder.map((region) => `experience-region-${slug(region)}`),
       'experience-primary-action',
+      ...(contract.visualCompositionIntent?.signatureComponent?.testId ? [contract.visualCompositionIntent.signatureComponent.testId] : []),
       ...contract.signatureMotifs.map((motif) => `experience-motif-${slug(motif)}`),
     ],
   };
@@ -639,5 +727,6 @@ module.exports = {
   normalizeMediaPolicy,
   primaryComposition,
   slug,
+  visualCompositionIntent,
   validateExperienceContract,
 };

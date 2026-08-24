@@ -54,11 +54,12 @@ test('Copilot CLI-like draft agent surface can plan without plan-mode or questio
     }
   });
 
-test('prototype workflow uses one consolidated review without nested gate UI', () => {
+test('prototype workflow defaults to consolidated review and supports explicit full local review', () => {
   const prototype = read('skills/create-mobile-prototype/SKILL.md');
   assert.match(prototype, /version-3 `mobile-plan-artifact-bundle`/i);
   assert.match(prototype, /neutral data layer/i);
-  assert.match(prototype, /One Consolidated Review/);
+  assert.match(prototype, /By default set `REVIEW_MODE=consolidated`/);
+  assert.match(prototype, /--review=consolidated\|full/);
   assert.match(prototype, /--section prototype-review/);
   assert.match(prototype, /plan-checkpoints\.js/);
   assert.doesNotMatch(prototype, /If a nested leaf cannot persist/);
@@ -79,7 +80,7 @@ test('screen builders return artifacts without requiring a writable agent worksp
   assert.match(builder, /mobile-screen-artifact/);
   assert.match(builder, /input_file_sha256/);
   assert.match(builder, /foreground workflow validates and persists/);
-  assert.match(builder, /screen_task_path/);
+  assert.match(builder, /screen_work_order/);
 
   for (const relativePath of [
     'scripts/schema-screen-artifact.json',
@@ -95,7 +96,7 @@ test('real workflow uses textual approval and validates it before external mutat
   const planner = read('agents/native-app-planner.md');
   assert.match(planner, /NEEDS_USER_APPROVAL/);
   assert.match(planner, /mobile-plan-artifact-bundle/);
-  assert.match(planner, /six fixed artifact slots/);
+  assert.match(planner, /seven fixed artifact slots/);
   assert.match(planner, /bundle schema version 3/);
   assert.match(planner, /executionContract/);
   assert.match(real, /Textual plan approval protocol/);

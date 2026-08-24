@@ -21,6 +21,7 @@ writing, review, and execution.
 
 - confirmed brief and assumptions;
 - Product Experience Contract;
+- validated Context Enrichment Contract with exact revision;
 - execution preflight with stable requirement IDs;
 - planning mode: `prototype`, `required`, or `connector-only`;
 - for `required`, foreground-supplied live metadata, environment facts,
@@ -45,6 +46,7 @@ Return:
 
 - a validator-complete `prototypeDomainModel` with
   `mode: prototype-domain`;
+- exact `experienceContractSha256` and `contextEnrichmentSha256` bindings;
 - `dataverseSchemaContract: null`;
 - human-readable `dataModelMarkdown` describing product semantics, not target
   storage.
@@ -111,6 +113,18 @@ Fixtures are part of the contract:
 - populated, loading, empty, error, and offline scenarios, plus edge states
   relevant to the brief.
 
+Apply supplied context only as evidence-bound prototype fixture values. Preserve
+its source, assumption, placement, and forbidden inferences. Do not turn
+journey, seat, availability, assignment, period, workspace, or capture-session
+context into a permanent entity, relationship, integration, permission, native
+capability, connector, or operation unless the brief independently requires it.
+If context is absent or ambiguous, keep `contextMode: none`; do not improvise.
+
+Declare machine-readable fixture requirements before fixture records. Include
+relationship-complete populated data plus loading, empty, error, and offline
+states. Declare media policy and require URL, cache key, and fallback identity
+for cache-backed media.
+
 Record offline UX intent as product behavior. Do not create an offline profile
 or claim server sync.
 
@@ -120,6 +134,8 @@ Before returning, cross-check:
 
 - entity/field/choice/relationship/operation uniqueness and references;
 - every required fixture field and relationship target;
+- every fixture requirement has sufficient scenario/record coverage and media
+  satisfies the declared policy;
 - operation fields against entity fields;
 - list pagination safety;
 - screen-required operations and realistic scenarios;

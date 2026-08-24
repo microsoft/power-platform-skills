@@ -63,7 +63,7 @@ function findReservedMetadata(value, path = 'domainModel', findings = []) {
   return findings;
 }
 
-function validateFieldValue(field, value, choices, entities, label, errors) {
+function validateFieldValue(field, value, choices, entities, mediaPolicy, label, errors) {
   if (value === null || value === undefined) {
     if (field.required) errors.push(`${label} is required`);
     return;
@@ -92,6 +92,9 @@ function validateFieldValue(field, value, choices, entities, label, errors) {
   if (field.type === 'image') {
     if (!value || typeof value !== 'object' || typeof value.imageAltText !== 'string' || !value.imageAltText.trim() || typeof value.imageAssetKey !== 'string' || !value.imageAssetKey.trim()) errors.push(`${label} must contain imageAltText and imageAssetKey`);
     if (value?.imageUrl !== undefined && (typeof value.imageUrl !== 'string' || !/^https:\/\//i.test(value.imageUrl))) errors.push(`${label}.imageUrl must be HTTPS when supplied`);
+    if (['remote-cdn-cached', 'remote-allowed'].includes(mediaPolicy?.mode) && !/^https:\/\//i.test(String(value?.imageUrl || ''))) errors.push(`${label}.imageUrl is required by ${mediaPolicy.mode}`);
+    if (mediaPolicy?.mode === 'remote-cdn-cached' && (typeof value?.imageCacheKey !== 'string' || !value.imageCacheKey.trim())) errors.push(`${label}.imageCacheKey is required by remote-cdn-cached`);
+    if (mediaPolicy?.mode === 'local-first' && value?.imageUrl) errors.push(`${label}.imageUrl is forbidden by local-first`);
   }
   if (field.type === 'file') {
     if (!value || typeof value !== 'object' || typeof value.fileName !== 'string' || !value.fileName.trim() || typeof value.mimeType !== 'string' || !value.mimeType.trim()) errors.push(`${label} must contain fileName and mimeType`);
@@ -100,12 +103,16 @@ function validateFieldValue(field, value, choices, entities, label, errors) {
   if (field.type === 'reference' && !entities.has(field.referenceTarget)) errors.push(`${label} references unknown target ${field.referenceTarget}`);
 }
 
-function validatePrototypeDomainModel(model) {
+function validatePrototypeDomainModel(model, context = {}) {
   const errors = [];
-  const rootKeys = ['schemaVersion', 'mode', 'entities', 'relationships', 'choices', 'operations', 'actors', 'uxPermissions', 'offlineUxIntent', 'fixtures', 'fixtureScenarios'];
+  const rootKeys = ['schemaVersion', 'mode', 'experienceContractSha256', 'contextEnrichmentSha256', 'entities', 'relationships', 'choices', 'operations', 'actors', 'uxPermissions', 'offlineUxIntent', 'fixtureRequirements', 'mediaPolicy', 'fixtures', 'fixtureScenarios'];
   exactKeys(model, rootKeys, rootKeys, 'domainModel', errors);
   if (model?.schemaVersion !== 1) errors.push('domainModel.schemaVersion must be 1');
   if (model?.mode !== 'prototype-domain') errors.push('domainModel.mode must be prototype-domain');
+  if (!/^[a-f0-9]{64}$/.test(String(model?.experienceContractSha256 || ''))) errors.push('domainModel.experienceContractSha256 is invalid');
+  if (!/^[a-f0-9]{64}$/.test(String(model?.contextEnrichmentSha256 || ''))) errors.push('domainModel.contextEnrichmentSha256 is invalid');
+  if (context.experienceContractSha256 && model?.experienceContractSha256 !== context.experienceContractSha256) errors.push('domainModel does not match the Experience Contract');
+  if (context.contextEnrichmentSha256 && model?.contextEnrichmentSha256 !== context.contextEnrichmentSha256) errors.push('domainModel does not match the Context Enrichment Contract');
   for (const finding of findReservedMetadata(model)) errors.push(`${finding} is Dataverse-specific and forbidden in prototype-domain mode`);
 
   const entities = Array.isArray(model?.entities) ? model.entities : [];
@@ -113,6 +120,8 @@ function validatePrototypeDomainModel(model) {
   const choices = Array.isArray(model?.choices) ? model.choices : [];
   const operations = Array.isArray(model?.operations) ? model.operations : [];
   const actors = Array.isArray(model?.actors) ? model.actors : [];
+  const fixtureRequirements = Array.isArray(model?.fixtureRequirements) ? model.fixtureRequirements : [];
+  const mediaPolicy = model?.mediaPolicy;
   if (!entities.length) errors.push('domainModel.entities must be non-empty');
   if (!operations.length) errors.push('domainModel.operations must be non-empty');
   unique(entities, 'key', 'domainModel.entities', errors);
@@ -121,6 +130,15 @@ function validatePrototypeDomainModel(model) {
   unique(operations, 'key', 'domainModel.operations', errors);
   unique(operations, 'hook', 'domainModel.operations hooks', errors);
   unique(actors, 'key', 'domainModel.actors', errors);
+  unique(fixtureRequirements, 'key', 'domainModel.fixtureRequirements', errors);
+  exactKeys(mediaPolicy, ['mode', 'requiredFields', 'requiresFallback'], ['mode', 'requiredFields', 'requiresFallback'], 'domainModel.mediaPolicy', errors);
+  if (!['local-first', 'remote-cdn-cached', 'remote-allowed', 'not-applicable'].includes(mediaPolicy?.mode)) errors.push('domainModel.mediaPolicy.mode is invalid');
+  const expectedMediaFields = mediaPolicy?.mode === 'remote-cdn-cached'
+    ? ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey']
+    : mediaPolicy?.mode === 'remote-allowed' ? ['imageUrl', 'imageAltText']
+      : mediaPolicy?.mode === 'local-first' ? ['imageAltText', 'imageAssetKey'] : [];
+  if (!Array.isArray(mediaPolicy?.requiredFields) || expectedMediaFields.some((field) => !mediaPolicy.requiredFields.includes(field))) errors.push('domainModel.mediaPolicy.requiredFields is incomplete');
+  if (mediaPolicy?.requiresFallback !== ['local-first', 'remote-cdn-cached'].includes(mediaPolicy?.mode)) errors.push('domainModel.mediaPolicy.requiresFallback does not match mode');
   const repositoryMethods = new Set();
   for (const operation of operations) {
     const identity = `${operation.repository}.${operation.method}`;
@@ -237,7 +255,7 @@ function validatePrototypeDomainModel(model) {
       if (typeof id !== 'string' || !id.trim()) errors.push(`${rowLabel}.${idField} must be a stable opaque ID`);
       else if (allIds.has(id)) errors.push(`${rowLabel} duplicates ID ${id} from ${allIds.get(id)}`);
       else allIds.set(id, rowLabel);
-      for (const field of entityFields) validateFieldValue(field, row?.[field.key], choiceMap, entityMap, `${rowLabel}.${field.key}`, errors);
+      for (const field of entityFields) validateFieldValue(field, row?.[field.key], choiceMap, entityMap, mediaPolicy, `${rowLabel}.${field.key}`, errors);
       const name = row?.[entity.primaryNameField];
       if (typeof name === 'string' && GENERIC_NAME.test(name.trim())) errors.push(`${rowLabel}.${entity.primaryNameField} uses generic numbered copy`);
       for (const key of Object.keys(row || {})) {
@@ -267,6 +285,15 @@ function validatePrototypeDomainModel(model) {
   }
 
   const scenarios = Array.isArray(model?.fixtureScenarios) ? model.fixtureScenarios : [];
+  if (!fixtureRequirements.length) errors.push('domainModel.fixtureRequirements must be non-empty');
+  for (const [requirementIndex, requirement] of fixtureRequirements.entries()) {
+    exactKeys(requirement, ['key', 'state', 'description', 'entity', 'minimumRecords'], ['key', 'state', 'description'], `domainModel.fixtureRequirements[${requirementIndex}]`, errors);
+    if (requirement.entity && !entityMap.has(requirement.entity)) errors.push(`fixture requirement ${requirement.key} references unknown entity ${requirement.entity}`);
+    if (requirement.minimumRecords !== undefined && (!Number.isInteger(requirement.minimumRecords) || requirement.minimumRecords < 0 || requirement.minimumRecords > 50)) errors.push(`fixture requirement ${requirement.key} has invalid minimumRecords`);
+    const matchingScenario = scenarios.some((scenario) => scenario.key === requirement.key && scenario.state === requirement.state && (!requirement.entity || scenario.entity === requirement.entity));
+    if (!matchingScenario) errors.push(`fixture requirement ${requirement.key} has no matching fixture scenario`);
+    if (requirement.entity && Number.isInteger(requirement.minimumRecords) && (fixtures[requirement.entity] || []).length < requirement.minimumRecords) errors.push(`fixture requirement ${requirement.key} requires at least ${requirement.minimumRecords} ${requirement.entity} records`);
+  }
   unique(scenarios, 'key', 'domainModel.fixtureScenarios', errors);
   for (const requiredState of ['loading', 'empty', 'error', 'offline']) {
     if (!scenarios.some((scenario) => scenario.state === requiredState)) errors.push(`fixtureScenarios requires ${requiredState} state`);

@@ -10,12 +10,14 @@ const { contractHash } = require('../experience-patterns');
 const { sha256: executionSha256 } = require('../lib/mobile-plan-execution-contract');
 const { validateApprovalReceipt } = require('../build-dataverse-operation-manifest');
 const { currentRevision } = require('../plan-approval');
+const { contextEnrichmentRevision } = require('../resolve-context-enrichment');
+const { domainModelRevision } = require('../lib/prototype-domain-model');
 
 const script = path.resolve(__dirname, '..', 'plan-checkpoints.js');
 
-function domainModel() {
+function domainModel(experience, contextContract) {
   return {
-    schemaVersion: 1, mode: 'prototype-domain',
+    schemaVersion: 1, mode: 'prototype-domain', experienceContractSha256: contractHash(experience), contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
     entities: [{ key: 'Item', displayName: 'Item', displayPluralName: 'Items', description: 'An item in the planned app.', primaryNameField: 'name', estimatedPrototypeRows: 1, fields: [
       { key: 'id', displayName: 'ID', type: 'id', required: true },
       { key: 'name', displayName: 'Name', type: 'text', required: true },
@@ -25,6 +27,14 @@ function domainModel() {
     actors: [{ key: 'User', displayName: 'User' }],
     uxPermissions: [{ actor: 'User', operation: 'listItems', allowed: true }],
     offlineUxIntent: { connectivity: 'network-optional', requiredOperations: ['listItems'] },
+    fixtureRequirements: [
+      { key: 'items-populated', state: 'populated', description: 'One item is visible.', entity: 'Item', minimumRecords: 1 },
+      { key: 'items-loading', state: 'loading', description: 'Items are loading.' },
+      { key: 'items-empty', state: 'empty', description: 'No items are visible.' },
+      { key: 'items-error', state: 'error', description: 'Items failed to load.' },
+      { key: 'items-offline', state: 'offline', description: 'Local items remain visible.' },
+    ],
+    mediaPolicy: { mode: 'not-applicable', requiredFields: [], requiresFallback: false },
     fixtures: { Item: [{ id: 'item-cabin-kit', name: 'Cabin comfort kit' }] },
     fixtureScenarios: [
       { key: 'items-populated', state: 'populated', description: 'One item is visible.', entity: 'Item', recordIds: ['item-cabin-kit'] },
@@ -68,14 +78,24 @@ function makeProject(context) {
       alternateKeys: [],
     }],
   }, null, 2));
-  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(domainModel(), null, 2)}\n`);
   const experience = { schemaVersion: 1 };
+  const contextContract = {
+    schemaVersion: 1,
+    experienceContractSha256: contractHash(experience),
+    contextMode: 'none', displayContext: [], ephemeralModel: null, assumptions: [],
+    forbiddenInferences: ['Do not invent functionality, integrations, permissions, or persistent entities from illustrative context.'],
+  };
+  const domain = domainModel(experience, contextContract);
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(domain, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify(experience)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), '{"schemaVersion":3,"screens":[]}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), '{"schemaVersion":1}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), `${JSON.stringify({
     schemaVersion: 1,
     experienceContractSha256: contractHash(experience),
+    contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
+    domainModelSha256: domainModelRevision(domain),
     briefSha256: executionSha256('Approve this app plan.'),
     requirements: [{ id: 'req-approve-plan', source: 'Approve this app plan.', priority: 'required', kind: 'job', satisfiedBy: ['screen-plan'], status: 'planned' }],
     nativeCapabilities: [], javascriptDependencies: [], connectorOperations: [],
@@ -124,6 +144,29 @@ test('prototype uses one consolidated review without external mutation authoriza
   assert.deepEqual(refreshed.approvedSections, []);
 });
 
+test('prototype full review requires four local sections and never authorizes mutation', (context) => {
+  const root = makeProject(context);
+  const mode = ['--workflow', 'create-mobile-prototype', '--review-mode', 'full'];
+  const draft = run(root, '--action', 'draft', ...mode);
+  assert.equal(draft.status, 0, draft.stderr);
+  assert.deepEqual(output(draft).sections, ['domain-context', 'native-capabilities', 'connectors', 'screen-composition']);
+
+  for (const section of ['domain-context', 'native-capabilities', 'connectors']) {
+    const partial = run(root, '--action', 'approve', ...mode, '--section', section, '--response', 'approve');
+    assert.equal(partial.status, 0, partial.stderr);
+    assert.equal(output(partial).status, 'needs-user-approval');
+    assert.equal(output(partial).mayAuthorizeExternalMutations, false);
+  }
+  const complete = run(root, '--action', 'approve', ...mode, '--section', 'screen-composition', '--response', 'approve');
+  assert.equal(complete.status, 0, complete.stderr);
+  assert.equal(output(complete).status, 'approved');
+  assert.equal(output(complete).mayAuthorizeExternalMutations, false);
+
+  const consolidated = run(root, '--action', 'status', '--workflow', 'create-mobile-prototype');
+  assert.equal(consolidated.status, 2);
+  assert.equal(output(consolidated).reason, 'plan-revision-changed');
+});
+
 test('prototype approval requires the explicitly named consolidated review', (context) => {
   const root = makeProject(context);
   assert.equal(run(root, '--action', 'draft', '--workflow', 'create-mobile-prototype').status, 0);
@@ -164,6 +207,10 @@ test('connector-only real plans can complete textual approval without a Datavers
   const root = makeProject(context);
   fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), 'null\n');
   fs.rmSync(path.join(root, '.tmp', 'prototype-domain-model.json'));
+  const executionPath = path.join(root, '.tmp', 'mobile-plan-execution-contract.json');
+  const execution = JSON.parse(fs.readFileSync(executionPath, 'utf8'));
+  delete execution.domainModelSha256;
+  fs.writeFileSync(executionPath, `${JSON.stringify(execution)}\n`);
   assert.equal(run(root, '--action', 'draft', '--workflow', 'create-mobile-app').status, 0);
   const approve = run(root, '--action', 'approve', '--workflow', 'create-mobile-app', '--section', 'all', '--response', 'approve', '--now', '2026-08-24T00:00:00.000Z');
   assert.equal(approve.status, 0, approve.stderr);

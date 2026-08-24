@@ -8,6 +8,8 @@ function model() {
   return {
     schemaVersion: 1,
     mode: 'prototype-domain',
+    experienceContractSha256: 'a'.repeat(64),
+    contextEnrichmentSha256: 'b'.repeat(64),
     entities: [
       { key: 'Category', displayName: 'Category', displayPluralName: 'Categories', description: 'A product browsing category.', primaryNameField: 'name', estimatedPrototypeRows: 2, fields: [
         { key: 'id', displayName: 'ID', type: 'id', required: true },
@@ -29,6 +31,14 @@ function model() {
     actors: [{ key: 'Shopper', displayName: 'Shopper' }],
     uxPermissions: [{ actor: 'Shopper', operation: 'listProducts', allowed: true }],
     offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listProducts'] },
+    fixtureRequirements: [
+      { key: 'catalog-populated', state: 'populated', description: 'Catalog with available and sold-out products.', entity: 'Product', minimumRecords: 2 },
+      { key: 'catalog-loading', state: 'loading', description: 'Catalog query is loading.' },
+      { key: 'catalog-empty', state: 'empty', description: 'No products match the category.' },
+      { key: 'catalog-error', state: 'error', description: 'Catalog repository reports an error.' },
+      { key: 'catalog-offline', state: 'offline', description: 'Catalog uses local fixture data offline.' },
+    ],
+    mediaPolicy: { mode: 'local-first', requiredFields: ['imageAltText', 'imageAssetKey'], requiresFallback: true },
     fixtures: {
       Category: [{ id: 'category-travel', name: 'Travel essentials' }, { id: 'category-wellness', name: 'Wellness' }],
       Product: [

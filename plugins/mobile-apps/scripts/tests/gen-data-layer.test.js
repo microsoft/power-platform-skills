@@ -11,6 +11,7 @@ const { recordLifecycleValidation, validateDomainScope } = require('../validate-
 function domainModel() {
   return {
     schemaVersion: 1, mode: 'prototype-domain',
+    experienceContractSha256: 'a'.repeat(64), contextEnrichmentSha256: 'b'.repeat(64),
     entities: [
       { key: 'Product', displayName: 'Product', displayPluralName: 'Products', description: 'A product available to browse.', primaryNameField: 'name', estimatedPrototypeRows: 2, fields: [
         { key: 'id', displayName: 'ID', type: 'id', required: true },
@@ -30,6 +31,14 @@ function domainModel() {
     actors: [{ key: 'Shopper', displayName: 'Shopper' }],
     uxPermissions: [{ actor: 'Shopper', operation: 'listProducts', allowed: true }, { actor: 'Shopper', operation: 'getProduct', allowed: true }, { actor: 'Shopper', operation: 'createProduct', allowed: true }],
     offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listProducts', 'getProduct'] },
+    fixtureRequirements: [
+      { key: 'products-populated', state: 'populated', description: 'Two products are visible.', entity: 'Product', minimumRecords: 2 },
+      { key: 'products-loading', state: 'loading', description: 'Products are loading.' },
+      { key: 'products-empty', state: 'empty', description: 'No products are available.' },
+      { key: 'products-error', state: 'error', description: 'Products failed to load.' },
+      { key: 'products-offline', state: 'offline', description: 'Local products remain available.' },
+    ],
+    mediaPolicy: { mode: 'local-first', requiredFields: ['imageAltText', 'imageAssetKey'], requiresFallback: true },
     fixtures: { Product: [
       { id: 'product-one', name: 'Travel organizer', status: 'available', price: { amount: 42.5, currencyCode: 'USD' }, media: { imageAltText: 'Travel organizer', imageAssetKey: 'asset://experience/product-one.png', family: 'travel' } },
       { id: 'product-two', name: 'Classic watch', status: 'sold-out', price: { amount: 129, currencyCode: 'USD' }, media: { imageAltText: 'Classic travel watch', imageAssetKey: 'asset://experience/product-two.png', family: 'watch' } },
@@ -51,6 +60,8 @@ test('generates neutral models, repositories, hooks, provider, fixtures, and loc
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   const model = domainModel();
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(model, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify({ visualCompositionIntent: { compositionFamily: 'product-led-discovery', signatureComponent: { testId: 'signature-product-rail' } } })}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify({ schemaVersion: 1, contextMode: 'none', displayContext: [] })}\n`);
   const manifest = generateDataLayer(root, model, { assetPolicy: { media: 'local-first' } });
   for (const relativePath of [
     'src/data/model.ts', 'src/data/contracts.ts', 'src/data/fixtures.ts',
@@ -89,7 +100,7 @@ test('fails closed when local-first fixtures include remote media', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-data-layer-remote-'));
   const value = domainModel();
   value.fixtures.Product[0].media.imageUrl = 'https://images.unsplash.com/photo-test';
-  assert.throws(() => generateDataLayer(root, value, { assetPolicy: { media: 'local-first' } }), /uses imageUrl under local-first policy/);
+  assert.throws(() => generateDataLayer(root, value, { assetPolicy: { media: 'local-first' } }), /imageUrl is forbidden by local-first/);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

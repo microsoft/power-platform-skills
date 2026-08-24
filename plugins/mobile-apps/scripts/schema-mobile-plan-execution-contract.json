@@ -14,6 +14,8 @@
   "properties": {
     "schemaVersion": { "const": 1 },
     "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contextEnrichmentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "domainModelSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "briefSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "requirements": {
       "type": "array",

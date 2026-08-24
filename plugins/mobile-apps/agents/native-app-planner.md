@@ -21,20 +21,24 @@ external mutation. Never write project files or call Power Platform services.
 ## Inputs and schemas
 
 The caller supplies the confirmed brief, planning mode, Product Experience
-Contract, execution preflight, template facts, and optional reference/live
-metadata evidence.
+Contract with `visualCompositionIntent`, validated Context Enrichment Contract,
+execution preflight, template facts, and optional reference/live metadata
+evidence.
 
 Read:
 
 - `${PLUGIN_ROOT}/scripts/schema-plan-artifact-bundle.json`;
+- `${PLUGIN_ROOT}/scripts/schema-context-enrichment-contract.json`;
 - `${PLUGIN_ROOT}/scripts/schema-prototype-domain-model.json`;
 - `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
 - `${PLUGIN_ROOT}/scripts/schema-mobile-plan-execution-contract.json`;
 - the Dataverse schema contract only in `required` real mode.
 
-Use `contractHash()`, `foundationContract()`, and `primaryComposition()` on the
-parsed experience object and forward their exact results. Do not substitute a
-file-byte hash or abbreviated prose.
+Use `contractHash()`, `contextEnrichmentRevision()`, `domainModelRevision()`,
+`foundationContract()`, and `primaryComposition()` on the parsed objects and
+forward their exact results. Do not substitute a file-byte hash or abbreviated
+prose. The supplied Context Enrichment Contract is foreground authority: copy
+it exactly and never silently add or remove context.
 
 ## Planning modes
 
@@ -44,6 +48,9 @@ file-byte hash or abbreviated prose.
   Dataverse naming.
 - Return a complete neutral `prototypeDomainModel` and
   `dataverseSchemaContract: null`.
+- Bind the domain to exact Experience and Context revisions. Context may enrich
+  fixtures and primary-screen hierarchy only within its evidence, assumptions,
+  placement intent, prototype-session persistence, and forbidden inferences.
 - External connectors are non-executable intentions behind repository hooks.
 - The returned plan is local review material and cannot authorize mutation.
 
@@ -94,6 +101,7 @@ versions are blockers, not warnings.
 Dependencies name exact package/version and reason. Connector operations name
 exact API/operation IDs, inputs, outputs, failure states, and repository-hook
 ownership. Prototype connector operations remain fail-closed.
+The execution contract binds Experience, Context, and Domain revisions.
 
 ## Human plan
 
@@ -125,6 +133,7 @@ Return one object valid against bundle schema version 3:
   "planningMode": "prototype",
   "artifacts": {
     "nativeAppPlanMarkdown": "# ...",
+    "contextEnrichmentContract": {},
     "prototypeDomainModel": {},
     "dataverseSchemaContract": null,
     "experienceScreenContract": {},
@@ -143,8 +152,9 @@ Return one object valid against bundle schema version 3:
 
 The four section Markdown values appear verbatim in the native plan. The
 screen contract uses only domain operation/repository/method/hook identities,
-stable IDs, bounded/cursor reads, exact route bindings, and realistic fixture
-scenarios.
+stable IDs, bounded/cursor reads, exact route bindings, realistic fixture
+scenarios, bounded context entries, and the exact visual signature/viewport
+budget selected by `visualCompositionIntent`.
 
 ## Final checks
 
@@ -152,7 +162,8 @@ Before returning, verify:
 
 - bundle/schema version and exact keys;
 - domain semantics, fixtures, references, choices, and operations;
-- screen graph, operations, foundation, and experience hash bindings;
+- context evidence/assumptions/forbidden inferences and revision binding;
+- screen graph, operations, foundation, visual composition, and experience hash bindings;
 - execution coverage for every required preflight item;
 - planning-mode rules for domain/Dataverse nullability;
 - no commands, paths, writes, approval state, environment mutation, generated
@@ -168,7 +179,7 @@ NEEDS_USER_APPROVAL: {"workflow":"<workflow>","planningMode":"<mode>","mayAuthor
 ```
 ````
 
-The foreground validates and persists the six fixed artifact slots. If an
+The foreground validates and persists the seven fixed artifact slots. If an
 essential fact is missing, return one `NEEDS_CONTEXT: <reason>` line and no
 partial bundle. Use `BLOCKED: <reason>` only for a hard contradiction that
 cannot be resolved by supplying context.

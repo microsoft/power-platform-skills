@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Design Recipe",
   "type": "object",
-  "required": ["schemaVersion", "experienceContractSha256", "paletteStrategy", "visualCharacter", "typography", "shape", "mediaTreatment", "hierarchy", "tokenReferences", "signatureComponents", "screens", "qualityCriteria", "forbiddenDefaults"],
+  "required": ["schemaVersion", "experienceContractSha256", "paletteStrategy", "visualCharacter", "typography", "shape", "colorHierarchy", "spacing", "mediaTreatment", "hierarchy", "actions", "navigation", "icons", "signatureComponent", "contextTreatment", "responsive", "tokenReferences", "signatureComponents", "screens", "qualityCriteria", "forbiddenDefaults"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
@@ -10,7 +10,7 @@
     "visualCharacter": { "type": "string", "minLength": 1 },
     "typography": {
       "type": "object",
-      "required": ["displayRole", "bodyRole", "runtimeStrategy", "headingFamily", "bodyFamily", "monoFamily", "rationale", "supportsDynamicType"],
+      "required": ["displayRole", "bodyRole", "runtimeStrategy", "headingFamily", "bodyFamily", "monoFamily", "rationale", "supportsDynamicType", "roles", "dynamicType"],
       "properties": {
         "displayRole": { "enum": ["editorial-display", "clear-emphasis"] },
         "bodyRole": { "const": "accessible-system-body" },
@@ -19,13 +19,23 @@
         "bodyFamily": { "type": "string", "minLength": 1 },
         "monoFamily": { "type": "string", "minLength": 1 },
         "rationale": { "type": "string", "minLength": 20 },
-        "supportsDynamicType": { "const": true }
+        "supportsDynamicType": { "const": true },
+        "roles": { "type": "object", "required": ["display", "heading", "title", "body", "label", "caption"], "properties": { "display": { "type": "string" }, "heading": { "type": "string" }, "title": { "type": "string" }, "body": { "type": "string" }, "label": { "type": "string" }, "caption": { "type": "string" } }, "additionalProperties": false },
+        "dynamicType": { "type": "object", "required": ["enabled", "maximumScale", "preserveLayout"], "properties": { "enabled": { "const": true }, "maximumScale": { "type": "number", "minimum": 1.5 }, "preserveLayout": { "const": true } }, "additionalProperties": false }
       },
       "additionalProperties": false
     },
-    "shape": { "type": "object", "required": ["cornerCharacter", "elevationCharacter"] },
-    "mediaTreatment": { "type": "object", "required": ["source", "delivery", "fallback", "avoidIconOnlyCriticalSurfaces"] },
-    "hierarchy": { "type": "object", "required": ["focalPoint", "primaryActionPlacement", "maxFirstViewportRegions"] },
+    "shape": { "type": "object", "required": ["cornerCharacter", "elevationCharacter", "borderCharacter", "depthTreatment"] },
+    "colorHierarchy": { "type": "object", "required": ["canvas", "surface", "elevatedSurface", "accent", "critical", "contrastPairs"] },
+    "spacing": { "type": "object", "required": ["rhythm", "density", "minimumControlSize"], "properties": { "minimumControlSize": { "type": "integer", "minimum": 44 } } },
+    "mediaTreatment": { "type": "object", "required": ["source", "delivery", "fallback", "avoidIconOnlyCriticalSurfaces", "aspectRatios", "responsiveClamp"] },
+    "hierarchy": { "type": "object", "required": ["focalPoint", "primaryActionPlacement", "maxFirstViewportRegions", "regionOrder", "nextContentVisible", "maxFeatureViewportShare"] },
+    "actions": { "type": "object", "required": ["primary", "secondary", "destructive"] },
+    "navigation": { "type": "object", "required": ["silhouette", "tabTreatment"] },
+    "icons": { "type": "object", "required": ["family", "strokeTreatment", "criticalActionsRequireLabels"] },
+    "signatureComponent": { "type": "object", "required": ["kind", "purpose", "required", "testId", "construction"] },
+    "contextTreatment": { "type": "object", "required": ["mode", "placement", "mustRemainSupporting"] },
+    "responsive": { "type": "object", "required": ["longCopy", "rtl", "keyboard", "reducedMotion"] },
     "tokenReferences": { "type": "object", "required": ["colors", "typography", "spacing", "radii"] },
     "signatureComponents": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
     "screens": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "pattern", "density", "mediaRequired", "actionPlacement"] } },

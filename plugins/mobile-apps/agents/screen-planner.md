@@ -22,11 +22,13 @@ files, build previews, own approvals, or mutate external systems.
 Read:
 
 1. the Product Experience Contract;
-2. the data architect's neutral domain model and operations;
-3. execution preflight/contract facts;
-4. reference/design intake when supplied;
-5. `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
-6. the supplied `contractHash()`, `foundationContract()`, and
+2. the validated Context Enrichment Contract;
+3. the data architect's neutral domain model and operations;
+4. execution preflight/contract facts;
+5. reference/design intake when supplied;
+6. `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
+7. the supplied `contractHash()`, `contextEnrichmentRevision()`,
+  `foundationContract()`, and
    `primaryComposition()` results.
 
 Copy binding hashes/composition verbatim. Do not use a file-byte hash or invent
@@ -46,6 +48,12 @@ a second contract shape.
 - Specify regions, hierarchy, media coverage/aspect/fallback, loading/empty/
   error/offline states, quality criteria, test IDs, foundation dependencies,
   fixture scenarios, and screen dependencies.
+- Copy the selected composition family, signature component/test ID,
+  next-content requirement, media prominence, navigation silhouette, and
+  maximum feature-viewport share. The primary screen must preserve each value.
+- Copy only screen-relevant context entry IDs, assumptions, and placement. A
+  primary context rail remains subordinate to the product outcome and cannot
+  create a route, operation, integration, or permanent model requirement.
 
 ## Domain operations
 
@@ -79,7 +87,12 @@ service directly. In prototype mode their adapter remains fail-closed.
 - Required media is substantive and accessible. Remote policy uses canonical
   domain media with a bundled fallback; URLs never live in screen specs.
 - Route shells own safe areas and root/back/close behavior. Sticky actions are
-  outside scrolling content.
+  outside scrolling content and declare `clearance.safeArea: true`. Under
+  `tabs-stack`, they also declare `clearance.tabBar: above`; stack-only flows
+  use `not-applicable`.
+- Use `tabs-stack` for 3-5 durable destinations and stack-only navigation for a
+  linear flow. Nested detail routes stay in their owning tab stack, with sticky
+  actions clear of tab and safe-area space.
 - Include long copy, Dynamic Type, keyboard, focus, contrast, and minimum touch
   target criteria.
 - Fixture scenarios are observable render requirements, not prose examples.
@@ -91,6 +104,8 @@ Before returning, verify:
 - one primary and at least one key-flow screen;
 - unique IDs/routes/files and a connected navigation graph;
 - all required route parameters bound to operations;
+- primary signature, next-content, feature-share, context-placement, and
+  navigation-silhouette contracts preserved exactly;
 - every operation resolves to one domain operation and exact repository/hook;
 - all fields/relationships/pagination are valid;
 - the critical flow includes the primary and a meaningful outcome;

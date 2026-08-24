@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   compactExecutionContract,
+  aggregateProjectFilesHash,
+  domainLayerHash,
   domainDataSurface,
   revisionForPack,
   sha256,
@@ -15,6 +17,12 @@ const { validateScreenComposition } = require('./validate-screen-composition');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
 
 function currentSourceHash(projectRoot, relativePath, source) {
+  if (source === 'domainLayer') {
+    try { return domainLayerHash(projectRoot, relativePath); } catch { return null; }
+  }
+  if (source === 'foundationRuntime') {
+    try { return aggregateProjectFilesHash(projectRoot, relativePath, 'Experience foundation runtime'); } catch { return null; }
+  }
   if (source === 'designRecipe') {
     if (relativePath) {
       const recipePath = path.join(projectRoot, relativePath);
@@ -26,11 +34,13 @@ function currentSourceHash(projectRoot, relativePath, source) {
       const domainPath = path.join(projectRoot, '.tmp', 'prototype-domain-model.json');
       const schemaPath = path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json');
       const executionPath = path.join(projectRoot, '.tmp', 'mobile-plan-execution-contract.json');
+      const contextPath = path.join(projectRoot, '.tmp', 'context-enrichment-contract.json');
       const dataContract = fs.existsSync(domainPath)
         ? JSON.parse(fs.readFileSync(domainPath, 'utf8'))
         : fs.existsSync(schemaPath) ? JSON.parse(fs.readFileSync(schemaPath, 'utf8')) : null;
       const executionContract = fs.existsSync(executionPath) ? JSON.parse(fs.readFileSync(executionPath, 'utf8')) : null;
-      return sha256(stableStringify(resolveDesignRecipe(contract, screens, null, { dataContract, executionContract })));
+      const contextContract = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
+      return sha256(stableStringify(resolveDesignRecipe(contract, screens, null, { dataContract, executionContract, contextContract })));
     } catch { return null; }
   }
   const filePath = path.join(projectRoot, relativePath);
@@ -49,7 +59,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (pack.screenContractVersion !== 3) {
     issues.push({ rule: 'legacy-screen-contract', message: 'Screen build pack requires a schema-version-3 Experience Screen Contract. Re-plan before building.' });
   }
-  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'domainModel', 'executionContract'];
+  const sourceNames = ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract'];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -78,6 +88,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (pack.shell?.safeAreaOwner !== 'screen' || pack.shell?.rootSafeAreaProviderOnly !== true || !pack.shell?.headerModes || primary?.headerMode !== 'root' || keyFlow?.headerMode !== 'back') {
     issues.push({ rule: 'invalid-shell-contract', message: 'Screen build pack requires route-owned safe areas plus root/back header modes.' });
   }
+  if (!pack.context || !Array.isArray(pack.context.forbiddenInferences)) issues.push({ rule: 'missing-context-contract', message: 'Screen build pack requires context mode and forbidden inferences.' });
   for (const screen of pack.screens || []) {
     if (!['root', 'back', 'close', 'none'].includes(screen.headerMode) || pack.shell?.headerModes?.[screen.route] !== screen.headerMode) {
       issues.push({ rule: 'header-mode-drift', message: `Screen build pack header mode drift for ${screen.route || screen.id}.` });
@@ -88,6 +99,15 @@ function validateScreenBuildPack(projectRoot, pack) {
     if (!Array.isArray(screen.data?.operations)) {
       issues.push({ rule: 'missing-screen-operations', message: `Screen build pack lacks executable operations for ${screen.route || screen.id}.` });
     }
+    if (!screen.context || !Array.isArray(screen.context.entries) || !Array.isArray(screen.context.assumptions) || !Array.isArray(screen.context.forbiddenInferences)) {
+      issues.push({ rule: 'missing-screen-context', message: `Screen build pack lacks resolved context for ${screen.route || screen.id}.` });
+    }
+    for (const entry of screen.context?.entries || []) {
+      if (entry.testId !== `experience-context-${entry.id}` || !screen.testIds?.includes(entry.testId)) {
+        issues.push({ rule: 'missing-context-runtime-marker', message: `Screen ${screen.route || screen.id} lacks the literal runtime marker for context entry ${entry.id}.` });
+      }
+    }
+    if (!screen.signatureComponent || typeof screen.signatureComponent.required !== 'boolean') issues.push({ rule: 'missing-signature-component', message: `Screen build pack lacks signature-component intent for ${screen.route || screen.id}.` });
     if (screen.data?.mediaPolicy !== pack.fixtures?.mediaPolicy || !Array.isArray(screen.data?.mediaFields) || screen.data.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
       issues.push({ rule: 'screen-media-intent-drift', message: `Screen build pack media intent drift for ${screen.route || screen.id}.` });
     }

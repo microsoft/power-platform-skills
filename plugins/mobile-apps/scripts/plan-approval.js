@@ -44,6 +44,7 @@ function resolvePaths(projectRoot, options = {}) {
   return {
     root,
     planPath: path.resolve(root, options.plan || 'native-app-plan.md'),
+    contextEnrichmentPath: path.resolve(root, options.contextEnrichment || '.tmp/context-enrichment-contract.json'),
     domainModelPath: options.domainModel ? path.resolve(root, options.domainModel) : path.join(root, '.tmp', 'prototype-domain-model.json'),
     contractPath: options.contract ? path.resolve(root, options.contract) : path.join(root, '.tmp', 'dataverse-schema-contract.json'),
     experienceContractPath: path.resolve(root, options.experienceContract || '.tmp/experience-contract.json'),
@@ -66,6 +67,7 @@ function optionalFileSha256(filePath) {
 function artifactHashes(paths, planBytes) {
   return {
     nativeAppPlanSha256: sha256(planBytes),
+    contextEnrichmentContractSha256: optionalFileSha256(paths.contextEnrichmentPath),
     prototypeDomainModelSha256: optionalFileSha256(paths.domainModelPath),
     dataverseSchemaContractSha256: optionalFileSha256(paths.contractPath),
     experienceContractSha256: optionalFileSha256(paths.experienceContractPath),
@@ -223,6 +225,7 @@ function parseArgs(argv) {
     else if (argv[index] === '--plan') args.plan = argv[++index];
     else if (argv[index] === '--contract') args.contract = argv[++index];
     else if (argv[index] === '--domain-model') args.domainModel = argv[++index];
+    else if (argv[index] === '--context-enrichment') args.contextEnrichment = argv[++index];
     else if (argv[index] === '--execution-contract') args.executionContract = argv[++index];
     else if (argv[index] === '--execution-preflight') args.executionPreflight = argv[++index];
     else if (argv[index] === '--receipt') args.receipt = argv[++index];

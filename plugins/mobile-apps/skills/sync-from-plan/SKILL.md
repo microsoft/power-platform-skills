@@ -112,10 +112,13 @@ conversion conditions hold: `dataMode === "transitioning"`,
 Then set it to `dataverse`. Any other transitioning invocation is blocked and
 must return to `/prototype-to-real-app`.
 
-Capture current SHA-256 hashes for the plan, schema-v3 screen contract,
-execution contract, and real manifest. Compare them with
+Capture current SHA-256 hashes for the plan, Context Enrichment Contract,
+neutral Domain Model, canonical Experience `visualCompositionIntent`,
+schema-v3 screen contract, execution contract, and real manifest. Compare them with
 `lastSyncedPlanHash`, `lastSyncedScreenContractHash`,
-`lastSyncedExecutionContractHash`, and `lastDataverseManifestHash` to determine
+`lastSyncedExecutionContractHash`, `lastContextEnrichmentHash`,
+`lastDomainModelHash`, `lastVisualCompositionHash`, and
+`lastDataverseManifestHash` to determine
 whether the sync is structural, operation/data-binding-only, or already current.
 
 ### Step 2 - Validate Mode-Specific Data Contract
@@ -137,14 +140,15 @@ legacy plans, not build inputs; require an explicit re-plan.
 
 #### Prototype Mode (`EFFECTIVE_DATA_MODE=prototype`)
 
-Require `src/generated/.prototype-manifest.json`, at least one generated table
-service when the Data Model is non-empty, and no `.datamodel-manifest.json`.
-Allow mock field names and connector throw-stubs, but not direct seed imports
-from app code:
+Require `.tmp/prototype-domain-model.json`,
+`.mobile-app/prototype-domain-manifest.json`, the owned `src/data/` tree, and
+no `.datamodel-manifest.json`. Reject legacy generated-service prototypes and
+direct fixture/repository/generated-service imports from app code. Validate
+through the neutral domain gate:
 
 ```bash
-grep -R "\.seed\.json" "$PROJECT_DIR/app" "$PROJECT_DIR/src" \
-  --include='*.ts' --include='*.tsx' && exit 1 || true
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
 ```
 
 #### Dataverse Mode (`EFFECTIVE_DATA_MODE=dataverse`)
@@ -227,8 +231,6 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
-  --project-root "$PROJECT_DIR"
 npm --prefix "$PROJECT_DIR" run type-check
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 ```
@@ -278,13 +280,14 @@ Select targets in this order:
 | `--changed-screens` | Named screens plus required navigation parents |
 | Missing route file | Missing screen |
 | Screen spec hash changed | Changed screen |
+| Context, Domain, or Visual Composition hash changed | Recompile the pack and rebuild only dependent screens/foundations |
 | Prototype to Dataverse transition or manifest hash changed with stable domain/screen contracts | Repository adapter only; do not rebuild screens |
 | Only lifecycle hashes are missing | Run gates first; rebuild only failures |
 
 Spawn `mobile-app:screen-builder` in waves of at most five. Each prompt includes
-only the existing file, exact target/input hash, one immutable
-`.tmp/screen-tasks/<screen-id>.json`, its task revision, and the parent pack
-revision. Builders never receive generated-service or Dataverse manifest facts.
+only the existing file, exact target/input hash, one compact in-memory work
+order extracted from `.tmp/screen-build-pack.json`, and the pack revision.
+Builders never receive generated-service or Dataverse manifest facts.
 
 Parse each first-line status using the plugin protocol. On
 `NEEDS_USER_APPROVAL`, pause the sync and use the outer textual checkpoint
@@ -304,8 +307,6 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
   "$PROJECT_DIR/native-app-plan.md"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
-  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
@@ -383,6 +384,9 @@ Only after all hard gates pass, update `.mobile-app/state.json`:
 - `lastSyncedPlanHash`: current plan SHA-256;
 - `lastSyncedScreenContractHash`: current screen contract SHA-256;
 - `lastSyncedExecutionContractHash`: current execution contract SHA-256;
+- `lastContextEnrichmentHash`: current Context Enrichment Contract SHA-256;
+- `lastDomainModelHash`: current neutral Domain Model SHA-256;
+- `lastVisualCompositionHash`: canonical Experience `visualCompositionIntent` SHA-256;
 - `lastDataverseManifestHash`: current manifest SHA-256 in Dataverse mode,
   otherwise `null`;
 - `lastSyncAt`: current ISO timestamp.

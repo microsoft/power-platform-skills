@@ -72,6 +72,15 @@ function validateScreenComposition(pack, options = {}) {
       || screen.firstViewport?.primaryActionPlacement !== (screen.primaryAction?.placement || 'none')) {
       issues.push({ rule: 'first-viewport-action-drift', message: `Screen ${label} first viewport must preserve whether and where its primary action is visible.` });
     }
+    if (screen.signatureComponent?.required === true && (!screen.signatureComponent.testId || !screen.testIds.includes(screen.signatureComponent.testId))) {
+      issues.push({ rule: 'missing-signature-component-contract', message: `Screen ${label} requires a literal signature-component test ID.` });
+    }
+    if (screen.role === 'primary' && screen.firstViewport?.nextContentVisible !== true) issues.push({ rule: 'next-content-preview-missing', message: `Primary screen ${label} must keep a preview of the next content visible.` });
+    if (screen.role === 'primary' && screen.firstViewport?.maxFeatureViewportShare > pack.design?.recipe?.hierarchy?.maxFeatureViewportShare) issues.push({ rule: 'feature-viewport-budget-drift', message: `Primary screen ${label} exceeds the visual composition feature viewport budget.` });
+    if (screen.context?.entries?.length && screen.context.placementIntent === 'primary-screen-context-rail') {
+      if (screen.context.entries.some((entry) => entry.source !== 'inferred-prototype-fixture' || !entry.assumption)) issues.push({ rule: 'invalid-enriched-context', message: `Screen ${label} contains context without source and assumption.` });
+      if (screen.firstViewport?.focalPoint === screen.context.entries[0]?.sampleValue) issues.push({ rule: 'context-became-focal-point', message: `Screen ${label} lets inferred context replace the primary outcome.` });
+    }
     if (!screen.media || typeof screen.media.required !== 'boolean' || typeof screen.media.aspectRatio !== 'string' || typeof screen.media.minCoverage !== 'number') {
       issues.push({ rule: 'missing-media-contract', message: `Screen ${label} lacks a media contract.` });
     } else if (screen.media.required && (screen.media.minCoverage < 0.8 || ['text-only', 'none'].includes(screen.media.fallback))) {
@@ -107,7 +116,12 @@ function validateScreenComposition(pack, options = {}) {
       } else {
         const source = fs.readFileSync(filePath, 'utf8');
         if (!/TODO:\s*screen-builder fills JSX here/i.test(source)) {
-          issues.push(...validateScreenSourceContract(source, screen));
+          issues.push(...validateScreenSourceContract(source, screen, {
+            minimumControlSize: pack.design?.recipe?.spacing?.minimumControlSize || 44,
+          }));
+          if (screen.signatureComponent?.required && !source.includes(screen.signatureComponent.testId)) issues.push({ rule: 'signature-component-not-rendered', message: `Screen ${label} does not render ${screen.signatureComponent.testId}.` });
+          if (/allowFontScaling\s*=\s*\{\s*false\s*\}/.test(source)) issues.push({ rule: 'dynamic-type-disabled', message: `Screen ${label} disables font scaling.` });
+          if (screen.firstViewport?.nextContentVisible && !/(?:below-fold|supporting|preview|next-content)/i.test(source)) issues.push({ rule: 'next-content-source-marker-missing', message: `Screen ${label} must mark/render the contracted next-content preview.` });
         }
       }
     }
@@ -130,7 +144,7 @@ function validateScreenComposition(pack, options = {}) {
   else {
     const criticalIds = pack.navigation?.criticalFlow?.screenIds || [];
     if (!criticalIds.every((id) => verticalSlice.targets.includes(id))) issues.push({ rule: 'incomplete-vertical-slice', message: 'Vertical-slice wave must contain every critical-flow screen.' });
-    if (!verticalSlice.gates?.includes('typecheck') || !verticalSlice.gates?.includes('native-visual-review')) issues.push({ rule: 'missing-vertical-slice-gates', message: 'Vertical-slice wave requires typecheck and native-visual-review gates.' });
+    if (!verticalSlice.gates?.includes('typecheck') || !verticalSlice.gates?.includes('static-quality-review')) issues.push({ rule: 'missing-vertical-slice-gates', message: 'Vertical-slice wave requires typecheck and static-quality-review gates.' });
     if (!verticalSlice.dependsOn?.includes('foundations')) issues.push({ rule: 'vertical-slice-order', message: 'Vertical-slice wave must depend on foundations.' });
   }
   return issues;

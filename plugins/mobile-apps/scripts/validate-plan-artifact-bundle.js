@@ -13,7 +13,9 @@ const {
 const { validateContract } = require('./build-dataverse-operation-manifest');
 const { validateExperienceScreenContract } = require('./lib/experience-screen-contract');
 const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
-const { validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
+const { validateContextEnrichment } = require('./validate-context-enrichment');
 
 const TOP_LEVEL_KEYS = BUNDLE_SCHEMA.required;
 const ARTIFACT_KEYS = BUNDLE_SCHEMA.properties.artifacts.required;
@@ -125,6 +127,8 @@ function validateScreenContract(contract, screenContract, context, errors) {
       if (!Array.isArray(actual) || actual.length !== expected.length || expected.some((value, index) => actual[index] !== value)) {
         errors.push(`experienceScreenContract primaryScreen.${field} does not match primaryComposition()`);
       }
+    } else if (expected && typeof expected === 'object') {
+      if (JSON.stringify(actual) !== JSON.stringify(expected)) errors.push(`experienceScreenContract primaryScreen.${field} does not match primaryComposition()`);
     } else if (actual !== expected) {
       errors.push(`experienceScreenContract primaryScreen.${field} does not match primaryComposition()`);
     }
@@ -383,6 +387,20 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
     return { valid: false, errors };
   }
   for (const error of validateExperienceContract(experience)) errors.push(`foreground experience contract: ${error}`);
+  const briefPath = [
+    path.join(root, '.tmp', 'experience-brief.md'),
+    path.join(root, 'brief.md'),
+  ].find((candidate) => fs.existsSync(candidate));
+  const contextContract = bundle.artifacts?.contextEnrichmentContract;
+  if (!contextContract || typeof contextContract !== 'object' || Array.isArray(contextContract)) {
+    errors.push('contextEnrichmentContract must be an object');
+  } else {
+    const contextValidation = validateContextEnrichment(contextContract, {
+      experienceContract: experience,
+      briefText: briefPath ? fs.readFileSync(briefPath, 'utf8') : null,
+    });
+    if (!contextValidation.valid) errors.push(...contextValidation.errors.map((error) => `contextEnrichmentContract: ${error}`));
+  }
   const domainModel = bundle.artifacts?.prototypeDomainModel;
   const schema = bundle.artifacts?.dataverseSchemaContract;
   if (bundle.planningMode === 'connector-only') {
@@ -390,8 +408,12 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
   } else if (!domainModel || typeof domainModel !== 'object' || Array.isArray(domainModel)) {
     errors.push('prototypeDomainModel must be an object for domain-backed workflows');
   } else {
-    const validation = validatePrototypeDomainModel(domainModel);
+    const validation = validatePrototypeDomainModel(domainModel, {
+      experienceContractSha256: contractHash(experience),
+      contextEnrichmentSha256: contextContract && typeof contextContract === 'object' ? contextEnrichmentRevision(contextContract) : null,
+    });
     if (!validation.valid) errors.push(...validation.errors.map((error) => `prototypeDomainModel: ${error}`));
+    if (domainModel.mediaPolicy?.mode !== experience.assetPolicy?.media) errors.push('prototypeDomainModel mediaPolicy does not match the Experience Contract');
   }
   if (bundle.planningMode === 'connector-only') {
     if (schema !== null) errors.push('connector-only bundle dataverseSchemaContract must be null');
@@ -408,10 +430,6 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
   }
   if (bundle.planningMode !== 'required') validateMediaDataAgreement(experience, null, plan, errors);
 
-  const briefPath = [
-    path.join(root, '.tmp', 'experience-brief.md'),
-    path.join(root, 'brief.md'),
-  ].find((candidate) => fs.existsSync(candidate));
   const packagePath = path.join(root, 'package.json');
   const preflightPath = path.join(root, '.tmp', 'mobile-plan-execution-preflight.json');
   const executionContract = bundle.artifacts?.executionContract;
@@ -430,6 +448,8 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
     const executionValidation = validateMobilePlanExecutionContract(executionContract, {
       briefText: fs.readFileSync(briefPath, 'utf8'),
       experienceContractSha256: contractHash(experience),
+      contextEnrichmentSha256: contextContract && typeof contextContract === 'object' ? contextEnrichmentRevision(contextContract) : null,
+      domainModelSha256: domainModel && typeof domainModel === 'object' ? domainModelRevision(domainModel) : null,
       screenContract: bundle.artifacts?.experienceScreenContract,
       dataContract: domainModel,
       packageJson: readJson(packagePath),
@@ -440,6 +460,7 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
   validateScreenContract(experience, bundle.artifacts?.experienceScreenContract, {
     dataContract: domainModel,
     executionContract,
+    contextContract,
   }, errors);
   validateFoundation(experience, bundle.artifacts?.experienceFoundationContract, errors);
   return { valid: errors.length === 0, errors };

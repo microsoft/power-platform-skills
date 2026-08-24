@@ -49,6 +49,9 @@ solution, ownership, reuse-vs-create, connector binding, or auth questions.
 - `--from-design-intake <path>`: compatibility alias.
 - `--from-screenshot <path[,path...]>`: optional local references.
 - `--reference-fidelity <directional|high|strict-structural>`.
+- `--review=consolidated|full`: defaults to one consolidated local review;
+  `full` uses four local domain/context, native, connector, and
+  screen/composition reviews.
 - `--no-design`: skip interactive design choices, not app-specific tokens.
 
 If no brief was supplied, return:
@@ -76,7 +79,7 @@ NEEDS_CONTEXT: provide a one-line mobile app brief
 - Planned external connectors remain explicit intentions. Their UI may render,
   but runtime access is blocked until graduation supplies a repository adapter.
 - Prototype means local data, not placeholder quality. Apply the same design,
-  navigation, state, accessibility, and native review bar as a real app.
+  navigation, state, accessibility, and static quality bar as a real app.
 
 ## Progress
 
@@ -84,14 +87,14 @@ Print one line before each long phase:
 
 ```text
 -> [prototype 1/9] Checking the installed mobile template...
--> [prototype 2/9] Capturing product and experience intent...
+-> [prototype 2/9] Capturing product, experience, and reversible context...
 -> [prototype 3/9] Planning the neutral domain and screen operations...
 -> [prototype 4/9] Reviewing the complete prototype plan...
 -> [prototype 5/9] Generating the domain data layer and runtime shell...
 -> [prototype 6/9] Applying design, navigation, and shared foundations...
--> [prototype 7/9] Compiling immutable screen tasks and skeletons...
+-> [prototype 7/9] Compiling one immutable screen pack and skeletons...
 -> [prototype 8/9] Building and validating screens in bounded waves...
--> [prototype 9/9] Recording lifecycle state and starting Metro...
+-> [prototype 9/9] Recording statically validated lifecycle state...
 ```
 
 ## Workflow
@@ -128,6 +131,21 @@ and entry modes, first viewport, motifs, asset policy, forbidden defaults, and
 confidence. For low confidence, ask one question about the first user outcome,
 revise the brief, and regenerate. Otherwise record assumptions and continue.
 
+Resolve and validate reversible prototype context before planning:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Context entries must retain brief evidence, source
+`inferred-prototype-fixture`, assumptions, prototype-session persistence, and
+forbidden inferences. They may enrich fixtures/hierarchy but never create a
+workflow, integration, permission, connector, native capability, or permanent
+entity.
+
 Prepare the execution preflight before planning:
 
 ```bash
@@ -142,7 +160,7 @@ Invoke `mobile-app:native-app-planner` once in return-only mode with:
 
 - `workflow: create-mobile-prototype`;
 - `planningMode: prototype`;
-- the confirmed brief and experience contract;
+- the confirmed brief, experience contract, and validated Context Enrichment Contract;
 - template capability/preflight facts;
 - any approved plan/design/reference inputs;
 - explicit prohibition on environment discovery and mutation.
@@ -151,12 +169,16 @@ The planner returns one version-3 `mobile-plan-artifact-bundle`. Its artifacts
 must contain:
 
 - `nativeAppPlanMarkdown`;
+- `contextEnrichmentContract` copied from the validated foreground contract;
 - `prototypeDomainModel` with `mode: prototype-domain`;
 - `dataverseSchemaContract: null`;
 - schema-v3 `experienceScreenContract` whose operations name
   `domainOperation`, repository, method, and hook;
 - `experienceFoundationContract`;
 - `executionContract`.
+
+The Domain and Execution contracts must bind the canonical Experience and
+Context revisions. The Execution Contract also binds the Domain revision.
 
 The domain model must include stable opaque IDs, real field types, explicit
 relationships, choice keys/labels, operation contracts, actors/UX permissions,
@@ -180,7 +202,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
 Do not parse `native-app-plan.md` to recover machine facts. The Markdown is the
 human review surface; sidecars are execution authority.
 
-### 4. One Consolidated Review
+### 4. Local Prototype Review
 
 Draft one local review checkpoint:
 
@@ -188,34 +210,44 @@ Draft one local review checkpoint:
 node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
   --project-root "$PROJECT_DIR" \
   --action draft \
-  --workflow create-mobile-prototype
+  --workflow create-mobile-prototype \
+  --review-mode "$REVIEW_MODE"
 ```
 
 Present one concise review containing:
 
 - entities, relationships, choices, operations, actors, UX permissions, and
   offline behavior;
+- inferred prototype context, its evidence/assumptions, and forbidden
+  inferences;
 - fixture/scenario summary;
 - native capabilities and connector intentions;
 - screen map, navigation, design direction, critical flow, and assumptions;
 - explicit statement that no environment or external mutation is authorized.
 
-Ask for `approve`, revisions, or cancellation. Record approval only with:
+By default set `REVIEW_MODE=consolidated`, ask once for `approve`, revisions,
+or cancellation, and record approval only with:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
   --project-root "$PROJECT_DIR" \
   --action approve \
   --workflow create-mobile-prototype \
+  --review-mode consolidated \
   --section prototype-review \
   --response approve
 ```
 
+For `--review=full`, set `REVIEW_MODE=full` and present/record four local
+sections in order: `domain-context`, `native-capabilities`, `connectors`, and
+`screen-composition`. Pass `--review-mode full` and the matching `--section`
+to each approval command. All four must pass for local approval.
+
 Any plan/sidecar change invalidates the review. Regenerate the affected bundle,
-validate/write it, and repeat this single review. An approved prototype receipt
+validate/write it, and repeat the selected review mode. An approved prototype receipt
 must keep `mayAuthorizeExternalMutations: false`.
 
-### 5. Generate Domain Data And Configure Runtime
+### 5. Prepare Runtime And Parallel Domain/Design Generation
 
 Apply `/create-mobile-app` template-preparation rules without binding an
 environment: update identity, remove stale examples, preserve aliases and root
@@ -231,14 +263,18 @@ the old app on failure, and removes the archive only after success:
 node "${CLAUDE_SKILL_DIR}/scripts/migrate-legacy-prototype.js" "$PROJECT_DIR"
 ```
 
-For a fresh app, generate the neutral data layer:
+After template preparation, start neutral data layer generation and
+`/design-system` in
+parallel because both consume only approved immutable contracts and own
+disjoint files. Native/package/connector/layout/lifecycle mutations remain
+sequential. For a fresh app, the domain branch runs:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/gen-data-layer.js" "$PROJECT_DIR"
 ```
 
 This writes models, repository interfaces, mock repositories, TanStack Query
-hooks, fixtures/scenarios, media resolution, and
+hooks, validated ephemeral context, fixtures/scenarios, media resolution, and
 `PrototypeDataProvider` under `src/data/`. The generated Dataverse adapter is a
 fail-closed placeholder; graduation replaces only that file.
 
@@ -257,12 +293,12 @@ Write `.mobile-app/state.json` using lifecycle schema version 2 with
 domain/repository/fixture revisions. Never store secrets or local absolute
 paths.
 
-### 6. Design, Navigation, And Shared Foundations
+### 6. Join Parallel Work, Then Apply Sequential Mutations
 
 Apply every approved template-supported native capability sequentially through
 `/add-native`; never install unsupported native code or fake wrappers.
 
-Run `/design-system` unless `--no-design`. Even with `--no-design`, create
+Join the design-system branch here. Run `/design-system` unless `--no-design`. Even with `--no-design`, create
 app-specific semantic tokens and integrate them through the existing
 `PowerAppsProvider`; never add outer Tamagui or Query Client providers. Honor
 reference fidelity and materialize required media.
@@ -275,9 +311,16 @@ bypass in `app/(app)/_layout.tsx`; do not change data-provider ownership.
 Create only the 2-5 foundation primitives named by the foundation contract and
 export them from `@/components`.
 
-### 7. Compile Tasks And Typed Skeletons
+After navigation/foundation writes, pass every changed file to
+`validate-mobile-files.js --file <path>` and run type-check before pack
+compilation. Do the same after writing typed skeletons. A changed-file or
+TypeScript failure blocks builder dispatch.
 
-Compile and validate the aggregate pack plus one immutable task per screen:
+### 7. Compile The Single Pack And Typed Skeletons
+
+Compile the single pack only after Context, Domain, Execution, Screen v3,
+Foundation, generated domain layer/fixture manifest, design recipe, and tokens
+all exist and validate:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
@@ -285,13 +328,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --output ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
-  --project-root "$PROJECT_DIR"
 ```
 
-The compiler writes `.tmp/screen-tasks/<screen-id>.json`. Generate one typed
-skeleton per task. Each skeleton imports only `ScreenShell`, approved
-foundation components, route APIs, and task-listed hooks/helpers from
+The compiler writes only `.tmp/screen-build-pack.json`. For each screen,
+extract its matching compact work order in memory from that pack. Generate one typed
+skeleton per work order. Each skeleton imports only `ScreenShell`, approved
+foundation components, route APIs, and work-order-listed hooks/helpers from
 `@/data`. It must contain the literal header mode, route bindings, operation-ID
 anchors, and `// TODO: screen-builder fills JSX here`.
 
@@ -301,10 +343,9 @@ Never put fixture arrays, repository calls, generated service imports,
 ### 8. Build In Bounded Waves
 
 Use the pack's `builderWaves`. Run at most five screen builders concurrently.
-Give each builder exactly one task path, task revision, parent pack revision,
-target, and input-file hash. Do not give it the aggregate pack or plan.
-Use the explicit invocation fields `screen_task_path`, `screen_task_revision`,
-and `screen_build_pack_revision`.
+Give each builder exactly one compact `screen_work_order`, the immutable
+`screen_build_pack_revision`, target, and input-file hash. Do not persist
+per-screen JSON/Markdown or give it the aggregate pack or plan.
 
 Each builder is return-only. The foreground parses its single
 `mobile-screen-artifact`, then validates and writes only the authorized target:
@@ -315,26 +356,67 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/write-screen-artifact.js" \
   --pack ".tmp/screen-build-pack.json" \
   --artifact "$ARTIFACT_PATH" \
   --screen-id "$SCREEN_ID"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
+  --project-root "$PROJECT_DIR" \
+  --file "$TARGET_FILE"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" \
   --scope screen \
   --screen "$SCREEN_ID"
 ```
 
-After each wave, run type-check. Repair only the owning screen or shared
-foundation. Maximum three repair cycles per failing scope; then stop with the
-exact blocker rather than weakening a contract.
+After each wave, run the changed-file dispatcher with every file written in
+that wave, then type-check. Repair only the owning screen or shared foundation.
+Maximum three repair cycles per failing scope; then stop with the exact blocker
+rather than weakening a contract.
 
-For the primary and key-flow screens, run native visual review at phone and
-large-text widths. Check first viewport, loading/empty/error/offline states,
-keyboard/touch behavior, media fallback, and route flow. Save evidence under
-`.tmp/visual-evidence/`.
+For the primary and key-flow screens, run the static composition, route,
+domain, shell, media, accessibility, contrast, and TypeScript gates. Native
+screenshot capture and native visual approval are deliberately out of scope.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope tasks
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope screen --screen "$PRIMARY_SCREEN_ID"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope screen --screen "$KEY_FLOW_SCREEN_ID"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-runtime.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
+node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
+npm --prefix "$PROJECT_DIR" run type-check
+```
+
+Any failure blocks early Metro. Repair only the owning layer and rerun the same
+gate before continuing.
+
+After that vertical slice passes, start Metro early on an explicit available
+port without an interactive prompt:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
+  --project-root "$PROJECT_DIR" \
+  --preferred-port 8081
+```
+
+Report the selected port and exact command as an interactive handoff, not as
+evidence of visual completion. Then continue bounded supporting-screen waves.
 
 Run final gates through the dispatcher and specialized visual validators:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
-  --project-root "$PROJECT_DIR" --scope all --record
+  --project-root "$PROJECT_DIR" --scope all --record --reuse-if-unchanged
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
   --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
@@ -345,12 +427,18 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-runtime.js" \
   --project-root "$PROJECT_DIR"
 ```
 
-### 9. Finish And Start Metro
+The dispatcher reports `unchanged-since-recorded-pass` only when the same
+successful scope and relevant content fingerprint were recorded previously.
+Report that skip. Any relevant source, asset, config, contract, fixture, or
+pack change forces validation.
+
+### 9. Finish Static Validation
 
 Confirm lifecycle state contains current `lastDomainModelHash`,
+`lastContextEnrichmentHash`, `lastVisualCompositionHash`,
 `lastRepositoryMappingHash`, `lastFixtureRevision`, and passing
-`lastValidation`. Start the development server with the template's `npm run
-dev` command and report its URL/QR target.
+`lastValidation` with `qualityStatus: statically-validated` and
+`nativeVisualEvidence: null`. Report the earlier Metro command/port.
 
 Completion output must include:
 
@@ -358,7 +446,10 @@ Completion output must include:
 - domain entities/operations and fixture/scenario counts;
 - screens and critical flow;
 - native capabilities and blocked connector intentions;
-- validation/type-check/native-review results;
+- static validation and type-check results;
+- status: `Statically validated prototype`;
+- explicit note that native screenshots were not captured and the prototype is
+  not yet a `Visually complete prototype`;
 - `dataMode: prototype` and confirmation that no environment was selected;
 - the exact next step: `/prototype-to-real-app --working-dir <PROJECT_DIR>`.
 

@@ -18,6 +18,8 @@ local paths.
   "lastSyncedExecutionContractHash": null,
   "lastDataverseManifestHash": null,
   "lastDomainModelHash": "<sha256>",
+  "lastContextEnrichmentHash": "<sha256>",
+  "lastVisualCompositionHash": "<sha256>",
   "lastRepositoryMappingHash": "<sha256>",
   "lastFixtureRevision": "<sha256>",
   "lastValidation": {
@@ -25,7 +27,10 @@ local paths.
     "screenId": null,
     "status": "passed",
     "checkedAt": "<ISO timestamp>",
-    "buildPackRevision": "<sha256>"
+    "buildPackRevision": "<sha256>",
+    "qualityStatus": "statically-validated",
+    "nativeVisualEvidence": null,
+    "contentFingerprint": "<sha256>"
   },
   "lastSyncAt": null
 }
@@ -94,6 +99,10 @@ mode. It is `null` in prototype mode.
 `lastDomainModelHash` hashes `.tmp/prototype-domain-model.json`. The same
 neutral domain model remains canonical after Dataverse graduation.
 
+`lastContextEnrichmentHash` hashes `.tmp/context-enrichment-contract.json`.
+`lastVisualCompositionHash` hashes the canonical
+`visualCompositionIntent` projection from the Experience Contract.
+
 `lastRepositoryMappingHash` hashes
 `.tmp/dataverse-repository-mapping.json` when that mapping exists. In prototype
 mode it hashes the ordered operation-to-repository/method/hook projection from
@@ -105,7 +114,12 @@ independently of presentation-only edits.
 
 `lastValidation` records only the latest successful dispatcher run. Use
 `validate-mobile-app.js --record`; failed validation must never overwrite a
-previous passing record.
+previous passing record. Prototype completion in this workflow records
+`qualityStatus: statically-validated` and `nativeVisualEvidence: null`. It must
+not claim visual completion until a later native-evidence phase succeeds.
+`contentFingerprint` covers relevant source, assets, config, contracts,
+fixtures, and the build pack. A duplicate check may be skipped only when this
+fingerprint and the validation scope still match.
 
 Hash file bytes. A missing file maps to `null`, not the hash of an empty
 string.

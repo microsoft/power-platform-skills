@@ -15,7 +15,7 @@
         "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "primaryScreen": {
           "type": "object",
-          "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
+          "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "visualCompositionIntent", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
           "properties": {
             "route": { "type": "string", "pattern": "^/" },
             "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
@@ -25,6 +25,7 @@
             "regionOrder": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
             "primaryAction": { "type": "string", "minLength": 1 },
             "contentDensity": { "enum": ["sparse", "balanced", "dense"] },
+            "visualCompositionIntent": { "type": "object" },
             "signatureMotifs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
             "forbiddenDefaults": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
             "runtimeMarkers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
@@ -62,7 +63,7 @@
   "definitions": {
     "primaryScreen": {
       "type": "object",
-      "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
+      "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "visualCompositionIntent", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
       "properties": {
         "route": { "type": "string", "pattern": "^/" },
         "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
@@ -72,6 +73,7 @@
         "regionOrder": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "primaryAction": { "type": "string", "minLength": 1 },
         "contentDensity": { "enum": ["sparse", "balanced", "dense"] },
+        "visualCompositionIntent": { "type": "object" },
         "signatureMotifs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "forbiddenDefaults": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "runtimeMarkers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
@@ -142,10 +144,14 @@
           "properties": {
             "regionIds": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string" }, "uniqueItems": true },
             "focalPoint": { "type": "string", "minLength": 5 },
-            "maxRegions": { "type": "integer", "minimum": 1, "maximum": 5 }
+            "maxRegions": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "nextContentVisible": { "type": "boolean" },
+            "maxFeatureViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 }
           },
           "additionalProperties": false
         },
+        "context": { "$ref": "#/definitions/screenContext" },
+        "signatureComponent": { "$ref": "#/definitions/signatureComponent" },
         "header": {
           "type": "object",
           "required": ["mode", "title"],
@@ -159,7 +165,16 @@
             "id": { "type": "string", "minLength": 1 },
             "label": { "type": "string", "minLength": 1 },
             "placement": { "enum": ["inline", "sticky-bottom", "header", "floating"] },
-            "destination": { "type": "string" }
+            "destination": { "type": "string" },
+            "clearance": {
+              "type": "object",
+              "required": ["safeArea", "tabBar"],
+              "properties": {
+                "safeArea": { "const": true },
+                "tabBar": { "enum": ["above", "not-applicable"] }
+              },
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
@@ -172,6 +187,7 @@
             "aspectRatio": { "type": "string", "minLength": 3 },
             "minCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
             "fallback": { "enum": ["local-asset", "code-native-illustration", "text-only", "none"] }
+            ,"prominence": { "enum": ["none", "low", "medium", "high"] }
           },
           "additionalProperties": false
         },
@@ -207,8 +223,16 @@
         { "$ref": "#/definitions/screen" },
         {
           "type": "object",
-          "required": ["routeParameters", "navigation", "data"],
+          "required": ["routeParameters", "navigation", "context", "signatureComponent", "data"],
           "properties": {
+            "firstViewport": {
+              "type": "object",
+              "required": ["regionIds", "focalPoint", "maxRegions", "nextContentVisible", "maxFeatureViewportShare"]
+            },
+            "media": {
+              "type": "object",
+              "required": ["required", "role", "aspectRatio", "minCoverage", "fallback", "prominence"]
+            },
             "data": {
               "type": "object",
               "required": ["entities", "fixtureScenarios", "operations"]
@@ -237,6 +261,26 @@
         "writeFields": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "idField": { "type": "string", "minLength": 1 },
         "connectorOperationId": { "type": "string", "pattern": "^connector-[a-z0-9][a-z0-9-]*$" }
+      },
+      "additionalProperties": false
+    },
+    "screenContext": {
+      "type": "object",
+      "required": ["entryIds", "placementIntent", "assumptions"],
+      "properties": {
+        "entryIds": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "uniqueItems": true },
+        "placementIntent": { "enum": ["primary-screen-context-rail", "inline-label", "supporting-section", "none"] },
+        "assumptions": { "type": "array", "items": { "type": "string", "minLength": 10 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "signatureComponent": {
+      "type": "object",
+      "required": ["kind", "required", "testId"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 3 },
+        "required": { "type": "boolean" },
+        "testId": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },

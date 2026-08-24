@@ -52,11 +52,17 @@ node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaV
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "<working_dir>"
 test ! -f "<working_dir>/.tmp/screen-build-pack.json" || \
    node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "<working_dir>" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-lifecycle-readiness.js" \
+   --project-root "<working-dir>" --consumer preview
 ```
 
 If this fails, stop and route to `/edit-app` or `/sync-from-plan`; preview must
 not make a stale or legacy plan look build-ready. Projects without a generated
 plan remain previewable as unmanaged apps.
+
+The HTML preview consumes the recorded lifecycle status; it does not create or
+upgrade that status. It is an optional review artifact, never native screenshot
+evidence and never proof of a visually complete prototype.
 
 Read `memory-bank.md` if present to get the project name for the page title:
 

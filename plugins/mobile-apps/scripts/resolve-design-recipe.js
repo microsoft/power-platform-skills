@@ -22,6 +22,8 @@ function typographyRecipe(visualCharacter) {
       monoFamily: 'system-monospace',
       rationale: 'Use a platform-safe serif for display hierarchy and the native system sans for controls and prose; no font download is required.',
       supportsDynamicType: true,
+      roles: { display: '$heading', heading: '$heading', title: '$heading', body: '$body', label: '$body', caption: '$body' },
+      dynamicType: { enabled: true, maximumScale: 2, preserveLayout: true },
     };
   }
   return {
@@ -33,6 +35,8 @@ function typographyRecipe(visualCharacter) {
     monoFamily: 'system-monospace',
     rationale: `The ${visualCharacter} direction prioritizes native legibility and weight/scale contrast over a decorative display family.`,
     supportsDynamicType: true,
+    roles: { display: '$heading', heading: '$heading', title: '$heading', body: '$body', label: '$body', caption: '$body' },
+    dynamicType: { enabled: true, maximumScale: 2, preserveLayout: true },
   };
 }
 
@@ -43,6 +47,7 @@ function resolveDesignRecipe(contract, screenContract, brandContext = null, cont
   if (screenIssues.length) throw new Error(`Experience screen contract is invalid: ${screenIssues.join('; ')}`);
   const screens = normalizeScreenContract(screenContract, contract);
   const character = contract.visualCharacter;
+  const composition = contract.visualCompositionIntent;
   const quiet = ['quiet-editorial', 'minimal-refined'].includes(character);
   return {
     schemaVersion: 1,
@@ -53,18 +58,40 @@ function resolveDesignRecipe(contract, screenContract, brandContext = null, cont
     shape: {
       cornerCharacter: quiet ? 'restrained' : 'friendly',
       elevationCharacter: quiet ? 'low-contrast-layering' : 'focused-elevation',
+      borderCharacter: quiet ? 'hairline' : 'defined',
+      depthTreatment: quiet ? 'surface-separation' : 'focused-shadow',
     },
+    colorHierarchy: {
+      canvas: '$background', surface: '$surface', elevatedSurface: '$surfaceElevated', accent: '$accent', critical: '$danger',
+      contrastPairs: [['$background', '$text'], ['$surface', '$text'], ['$accent', '$accentText'], ['$danger', '$dangerText']],
+    },
+    spacing: { rhythm: quiet ? 'measured' : 'active', density: composition.density, minimumControlSize: 44 },
     mediaTreatment: {
       source: contract.mediaIntent?.source || (contract.assetPolicy.media === 'remote-cdn-cached' ? 'approved-cdn' : 'bundled'),
       delivery: contract.mediaIntent?.delivery || (contract.assetPolicy.media === 'remote-cdn-cached' ? 'device-cached' : 'bundled'),
       fallback: contract.mediaIntent?.fallback || 'code-native-illustration',
       avoidIconOnlyCriticalSurfaces: contract.mediaIntent?.criticality === 'required',
+      aspectRatios: { hero: '16:9', detail: '1:1', collection: '4:3' },
+      responsiveClamp: { enabled: true, maxViewportShare: composition.maxFeatureViewportShare },
     },
     hierarchy: {
       focalPoint: contract.firstViewport.focalPoint,
       primaryActionPlacement: contract.presentationIntent?.primaryActionPlacement || 'inline',
       maxFirstViewportRegions: contract.presentationIntent?.maxFirstViewportRegions || 4,
+      regionOrder: composition.regionOrder,
+      nextContentVisible: composition.nextContentVisible,
+      maxFeatureViewportShare: composition.maxFeatureViewportShare,
     },
+    actions: { primary: 'filled-accent', secondary: 'quiet-outline', destructive: 'explicit-danger' },
+    navigation: { silhouette: composition.navigationSilhouette, tabTreatment: composition.navigationSilhouette === 'tabs-stack' ? 'persistent-labeled' : 'not-applicable' },
+    icons: { family: 'Ionicons', strokeTreatment: 'consistent-optical-weight', criticalActionsRequireLabels: true },
+    signatureComponent: { ...composition.signatureComponent, construction: `Compose ${composition.signatureComponent.kind} from semantic tokens and task-owned content; do not substitute a generic card.` },
+    contextTreatment: {
+      mode: context.contextContract?.contextMode || 'none',
+      placement: context.contextContract?.displayContext?.some((entry) => entry.placementIntent === 'primary-screen-context-rail') ? 'compact-context-rail' : 'none',
+      mustRemainSupporting: true,
+    },
+    responsive: { longCopy: 'wrap-without-clipping', rtl: 'logical-order-and-edges', keyboard: 'avoid-active-inputs', reducedMotion: 'disable-nonessential-motion' },
     tokenReferences: {
       colors: 'brand/tokens.ts#color', typography: 'brand/tokens.ts#typography', spacing: 'brand/tokens.ts#spacing', radii: 'brand/tokens.ts#radius',
     },
@@ -114,11 +141,13 @@ function main(argv) {
     const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
     const schemaPath = path.join(root, '.tmp', 'dataverse-schema-contract.json');
     const executionPath = path.join(root, '.tmp', 'mobile-plan-execution-contract.json');
+    const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
     const dataContract = fs.existsSync(domainPath)
       ? readJson(domainPath, 'Prototype domain model')
       : fs.existsSync(schemaPath) ? readJson(schemaPath, 'Dataverse schema contract') : null;
     const executionContract = fs.existsSync(executionPath) ? readJson(executionPath, 'Mobile plan execution contract') : null;
-    const recipe = resolveDesignRecipe(contract, screenContract, brandPath ? readJson(brandPath, 'Brand context') : null, { dataContract, executionContract });
+    const contextContract = fs.existsSync(contextPath) ? readJson(contextPath, 'Context Enrichment Contract') : null;
+    const recipe = resolveDesignRecipe(contract, screenContract, brandPath ? readJson(brandPath, 'Brand context') : null, { dataContract, executionContract, contextContract });
     const output = path.resolve(root, args.output || 'brand/design-recipe.json');
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, `${JSON.stringify(recipe, null, 2)}\n`);

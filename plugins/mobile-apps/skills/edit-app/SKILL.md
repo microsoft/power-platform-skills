@@ -131,6 +131,11 @@ If `$ARGUMENTS` contains `--apply-plan`, require
 - for a Data Model change, current structured schema contract SHA-256 equals
   `structuredContractSha256`;
 - current schema-v3 screen contract SHA-256 equals `screenContractSha256`;
+- current Context Enrichment Contract SHA-256 equals
+  `contextEnrichmentSha256`;
+- current neutral Domain Model SHA-256 equals `domainModelSha256` when present;
+- the canonical Experience `visualCompositionIntent` hash equals
+  `visualCompositionSha256`;
 - current mobile plan execution contract SHA-256 equals
   `executionContractSha256`, and
   `validate-mobile-plan-execution-contract.js` passes;
@@ -152,6 +157,8 @@ Read if present:
 - `.datamodel-manifest.json` — existing Dataverse tables/columns
 - `.tmp/mobile-plan-execution-contract.json` — requirement, native,
   dependency, and connector execution authority
+- `.tmp/context-enrichment-contract.json` — evidence-bound reversible context
+- `.tmp/experience-contract.json` — product and Visual Composition authority
 - `.tmp/experience-screen-contract.json` — schema-v3 per-screen operations
 - `.tmp/prototype-domain-model.json` — canonical entities, fields, choices,
   operations, fixtures, and scenarios
@@ -487,7 +494,7 @@ mode.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
-After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the domain/repository/dependency/native-wrapper gates before screen work. Screen tasks must reflect validated contracts on disk, not an earlier plan.
+After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the domain/repository/dependency/native-wrapper gates before screen work. Recompile the single pack so in-memory screen work orders reflect validated contracts on disk, not an earlier plan.
 
 #### Step 5.5 — Refresh repository adapters
 
@@ -508,7 +515,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" --project-root "
 ```
 
 Do not write generated-service snapshots into the readable plan. Screens and
-builders consume immutable domain task packs, never SDK service files.
+builders consume one immutable pack through matching in-memory work orders,
+never SDK service files.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 

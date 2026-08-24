@@ -11,6 +11,8 @@ function domainModel() {
   return {
     schemaVersion: 1,
     mode: 'prototype-domain',
+    experienceContractSha256: 'a'.repeat(64),
+    contextEnrichmentSha256: 'b'.repeat(64),
     entities: [{
       key: 'Product', displayName: 'Product', displayPluralName: 'Products', description: 'A product available to browse.', primaryNameField: 'name', estimatedPrototypeRows: 1,
       fields: [{ key: 'id', displayName: 'ID', type: 'id', required: true }, { key: 'name', displayName: 'Name', type: 'text', required: true }],
@@ -20,6 +22,14 @@ function domainModel() {
     actors: [{ key: 'Shopper', displayName: 'Shopper' }],
     uxPermissions: [{ actor: 'Shopper', operation: 'listProducts', allowed: true }],
     offlineUxIntent: { connectivity: 'offline-required', requiredOperations: ['listProducts'] },
+    fixtureRequirements: [
+      { key: 'catalog-populated', state: 'populated', description: 'A populated product catalog.', entity: 'Product', minimumRecords: 1 },
+      { key: 'catalog-loading', state: 'loading', description: 'The catalog is loading.' },
+      { key: 'catalog-empty', state: 'empty', description: 'The catalog has no products.' },
+      { key: 'catalog-error', state: 'error', description: 'The catalog query failed.' },
+      { key: 'catalog-offline', state: 'offline', description: 'The catalog uses local records.' },
+    ],
+    mediaPolicy: { mode: 'not-applicable', requiredFields: [], requiresFallback: false },
     fixtures: { Product: [{ id: 'product-carry-on', name: 'Carry-on organizer' }] },
     fixtureScenarios: [
       { key: 'catalog-populated', state: 'populated', description: 'A populated product catalog.', entity: 'Product', recordIds: ['product-carry-on'] },

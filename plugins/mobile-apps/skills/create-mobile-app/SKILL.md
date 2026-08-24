@@ -775,7 +775,7 @@ Then wait for a normal textual response:
   Only after this command reports `status: approved` may the workflow continue
   to auth, native, connector, or Dataverse mutation steps.
 - Any requested edit - request a revised return-only bundle, stage it at the
-  same foreground path, validate it, persist the six fixed artifact slots, rerun
+  same foreground path, validate it, persist the seven fixed artifact slots, rerun
   Step 3.9 and plan validators, then run `plan-checkpoints.js --action draft`
   again for a fresh revision.
 - Any other response - restate the available textual choices without mutating
@@ -1896,7 +1896,7 @@ return (
 
 Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
-### Step 10.7 — Generate domain adapters and immutable screen tasks
+### Step 10.7 — Generate domain adapters and one immutable screen pack
 
 > **AUTHORITATIVE DOMAIN-FIRST OVERRIDE:** Execute this section and then jump
 > directly to Step 11. The older service-snapshot/view-model/skeleton reference
@@ -1924,23 +1924,27 @@ Any reconciliation conflict blocks screen work. Do not patch domain types or
 screens to resemble Dataverse. Only
 `src/data/repositories/dataverseRepositories.ts` may import generated services.
 
-Compile and validate the aggregate pack plus per-screen tasks:
+Compile and validate the single aggregate pack. It is the only persisted
+builder execution artifact:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" \
-  --project-root "$PROJECT_DIR"
 ```
 
-Generate one typed skeleton from each `.tmp/screen-tasks/<screen-id>.json`.
-Skeletons import task-listed hooks and helpers only from `@/data`, plus route,
+Generate one typed skeleton from each in-memory screen work order extracted
+from `.tmp/screen-build-pack.json`.
+Skeletons import work-order-listed hooks and helpers only from `@/data`, plus route,
 shell, and foundation dependencies. They contain literal route/header/operation
 bindings and a `// TODO: screen-builder fills JSX here` marker. Never put a
 fixture import, repository call, generated service, connector call,
 `toExperienceRecord`, or presentation adapter in a skeleton.
+
+Do not write per-screen Markdown or JSON files. Give each builder only its
+matching compact work order and the immutable pack revision, never the full
+aggregate pack.
 
 Run the type-check gate, then continue at Step 11.
 
@@ -2366,14 +2370,13 @@ Each prompt:
   screen_name: <work-order id>
   route: <work-order route>
   target_file: <working_dir>/<work-order file>
-  screen_task_path: <working_dir>/.tmp/screen-tasks/<screen-id>.json
-  screen_task_revision: <task revision>
+  screen_work_order: <compact JSON object extracted from the matching pack screen>
   screen_build_pack_revision: <pack revision>
   input_file_sha256: <foreground SHA-256 of target_file immediately before dispatch>
   artifact_protocol: return-only mobile-screen-artifact v1
   skeleton_exists: true
 
-  Follow screen-builder.md. Validate and use only the supplied immutable task.
+  Follow screen-builder.md. Validate and use only the supplied immutable work order.
   Its presentation,
   regions, firstViewport, header, primaryAction, media, states,
   qualityCriteria, testIds, data, dependencies, and forbiddenDefaults are
@@ -2383,7 +2386,7 @@ Each prompt:
   Do not write, edit, patch, or redirect output into any workspace file. Do not
   read the aggregate build pack, native-app-plan.md, the experience
   sidecars, brand/design-system.md, or broad plugin references unless the
-  task explicitly names a targeted guidanceRef. A missing/stale task is
+  work order explicitly names a targeted guidanceRef. A missing/stale work order is
   BLOCKED; there is no legacy-plan fallback. Return per AGENTS.md rule #12:
   on success use literal `DONE` or `DONE_WITH_CONCERNS:`, then one blank line,
   then exactly one fenced `mobile-screen-artifact` JSON object containing the
@@ -2523,7 +2526,6 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-task-pack.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"

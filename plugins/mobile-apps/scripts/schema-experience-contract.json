@@ -11,6 +11,7 @@
     "contentModel",
     "primarySurface",
     "assetPolicy",
+    "visualCompositionIntent",
     "promptEvidence",
     "entryMode",
     "navigationModel",
@@ -68,6 +69,7 @@
       },
       "additionalProperties": false
     },
+    "visualCompositionIntent": { "$ref": "#/definitions/visualCompositionIntent" },
     "navigationIntent": {
       "type": "object",
       "required": ["model", "initialRoute", "rationale"],
@@ -139,6 +141,33 @@
     }
   },
   "definitions": {
+    "visualCompositionIntent": {
+      "type": "object",
+      "required": ["compositionFamily", "visualCharacter", "density", "focalPoint", "regionOrder", "signatureComponent", "mediaProminence", "nextContentVisible", "navigationSilhouette", "maxFeatureViewportShare"],
+      "properties": {
+        "compositionFamily": { "enum": ["product-led-discovery", "progress-journey", "availability-led-choice", "next-action-workflow", "capture-led-utility", "conversation-led-inbox", "decision-led-overview", "content-led-feed", "guided-onboarding"] },
+        "visualCharacter": { "enum": ["quiet-editorial", "confident-utility", "warm-friendly", "energetic", "playful", "minimal-refined", "other"] },
+        "density": { "enum": ["sparse-focused", "balanced-rich", "dense-operational"] },
+        "focalPoint": { "type": "string", "minLength": 5 },
+        "regionOrder": { "type": "array", "minItems": 3, "maxItems": 7, "items": { "type": "string", "minLength": 2 }, "uniqueItems": true },
+        "signatureComponent": {
+          "type": "object",
+          "required": ["kind", "purpose", "required", "testId"],
+          "properties": {
+            "kind": { "type": "string", "minLength": 3 },
+            "purpose": { "type": "string", "minLength": 10 },
+            "required": { "const": true },
+            "testId": { "type": "string", "pattern": "^experience-signature-[a-z0-9-]+$" }
+          },
+          "additionalProperties": false
+        },
+        "mediaProminence": { "enum": ["none", "low", "medium", "high"] },
+        "nextContentVisible": { "const": true },
+        "navigationSilhouette": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
+        "maxFeatureViewportShare": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.6 }
+      },
+      "additionalProperties": false
+    },
     "presentationPattern": {
       "enum": ["editorial-hero", "image-card-grid", "image-list", "compact-list", "form", "timeline", "detail", "conversation", "summary", "capture", "guided-flow", "custom"]
     },

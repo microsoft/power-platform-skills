@@ -2,18 +2,27 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Screen Build Pack",
   "type": "object",
-  "required": ["schemaVersion", "screenContractVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "execution", "fixtures", "screens", "builderWaves", "buildOrder", "invalidation"],
+  "required": ["schemaVersion", "screenContractVersion", "revision", "sources", "sourcePaths", "experience", "context", "design", "shell", "navigation", "execution", "fixtures", "screens", "builderWaves", "buildOrder", "invalidation"],
   "properties": {
     "schemaVersion": { "const": 2 },
     "screenContractVersion": { "const": 3 },
     "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "sources": {
       "type": "object",
-      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "tokens", "domainModel", "executionContract"],
+      "required": ["confirmedBrief", "packageManifest", "experienceContract", "screenContract", "contextEnrichment", "foundationContract", "foundationRuntime", "designRecipe", "tokens", "domainModel", "domainLayer", "executionContract"],
       "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
     },
     "sourcePaths": { "type": "object" },
     "experience": { "type": "object", "required": ["audience", "primaryJob", "entryMode", "primarySurface", "assetPolicy", "mediaIntent", "presentationIntent", "navigationIntent", "forbiddenDefaults"] },
+    "context": {
+      "type": "object",
+      "required": ["mode", "forbiddenInferences"],
+      "properties": {
+        "mode": { "type": "string" },
+        "forbiddenInferences": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
     "design": { "type": "object", "required": ["tokensPath", "recipe", "primitives"] },
     "shell": {
       "type": "object",
@@ -56,7 +65,7 @@
       "minItems": 2,
       "items": {
         "type": "object",
-        "required": ["id", "route", "file", "role", "routeParameters", "navigation", "headerMode", "header", "purpose", "presentation", "regions", "firstViewport", "primaryAction", "media", "states", "qualityCriteria", "dependencies", "testIds", "forbiddenDefaults", "data"],
+        "required": ["id", "route", "file", "role", "routeParameters", "navigation", "headerMode", "header", "purpose", "presentation", "regions", "firstViewport", "context", "signatureComponent", "primaryAction", "media", "states", "qualityCriteria", "dependencies", "testIds", "forbiddenDefaults", "data"],
         "properties": {
           "role": { "enum": ["primary", "key-flow", "supporting"] },
           "routeParameters": { "type": "array" },
@@ -66,18 +75,36 @@
           "regions": { "type": "array", "minItems": 1 },
           "firstViewport": {
             "type": "object",
-            "required": ["regionIds", "focalPoint", "maxRegions", "visiblePrimaryAction", "primaryActionPlacement"],
+            "required": ["regionIds", "focalPoint", "maxRegions", "visiblePrimaryAction", "primaryActionPlacement", "nextContentVisible", "maxFeatureViewportShare"],
             "properties": {
               "visiblePrimaryAction": { "type": "boolean" },
-              "primaryActionPlacement": { "enum": ["inline", "sticky-bottom", "header", "floating", "none"] }
+              "primaryActionPlacement": { "enum": ["inline", "sticky-bottom", "header", "floating", "none"] },
+              "nextContentVisible": { "type": "boolean" },
+              "maxFeatureViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 }
             }
           },
+          "context": {
+            "type": "object",
+            "required": ["placementIntent", "entries", "assumptions", "forbiddenInferences"],
+            "properties": {
+              "entries": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "sampleValue", "source", "placementIntent", "assumption", "testId"],
+                  "properties": { "testId": { "type": "string", "pattern": "^experience-context-[a-z][a-z0-9-]*$" } }
+                }
+              }
+            }
+          },
+          "signatureComponent": { "type": "object", "required": ["kind", "required", "testId"] },
           "primaryAction": { "type": ["object", "null"] },
           "media": {
             "type": "object",
-            "required": ["required", "role", "aspectRatio", "minCoverage", "fallback", "source", "delivery", "sizing", "maxViewportShare"],
+            "required": ["required", "role", "aspectRatio", "minCoverage", "fallback", "prominence", "source", "delivery", "sizing", "maxViewportShare"],
             "properties": {
               "sizing": { "enum": ["responsive-clamped", "responsive-aspect", "not-applicable"] },
+              "prominence": { "enum": ["none", "low", "medium", "high"] },
               "maxViewportShare": { "type": "number", "minimum": 0, "maximum": 0.8 }
             }
           },
@@ -165,7 +192,7 @@
           "targets": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
           "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 5 },
           "dependsOn": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-          "gates": { "type": "array", "items": { "enum": ["typecheck", "native-visual-review"] }, "uniqueItems": true }
+          "gates": { "type": "array", "items": { "enum": ["typecheck", "static-quality-review"] }, "uniqueItems": true }
         },
         "additionalProperties": false
       }

@@ -18,7 +18,6 @@ test('domain-first workflow artifacts and executable gates are present', () => {
     'scripts/validate-prototype-domain-model.js',
     'scripts/schema-dataverse-repository-mapping.json',
     'scripts/reconcile-domain-dataverse.js',
-    'scripts/validate-screen-task-pack.js',
     'scripts/validate-mobile-app.js',
     'skills/create-mobile-prototype/scripts/gen-data-layer.js',
     'skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js',
@@ -47,7 +46,7 @@ test('domain-first workflow Markdown keeps fenced blocks balanced', () => {
   }
 });
 
-test('prototype creation plans a neutral domain and uses one consolidated review', () => {
+test('prototype creation plans a neutral domain with consolidated and explicit full local review modes', () => {
   const skill = read('skills/create-mobile-prototype/SKILL.md');
   assert.match(skill, /prototype-domain-model\.json/);
   assert.match(skill, /prototypeDomainModel/);
@@ -56,12 +55,14 @@ test('prototype creation plans a neutral domain and uses one consolidated review
   assert.match(skill, /mayAuthorizeExternalMutations: false/);
   assert.match(skill, /gen-data-layer\.js/);
   assert.match(skill, /PrototypeDataProvider/);
-  assert.match(skill, /validate-screen-task-pack\.js/);
-  assert.match(skill, /screen_task_path/);
+  assert.match(skill, /screen_work_order/);
+  assert.doesNotMatch(skill, /screen-tasks/);
   assert.match(skill, /validate-mobile-app\.js[\s\S]*--scope all --record/);
+  assert.match(skill, /After each wave, run the changed-file dispatcher[\s\S]*type-check/);
+  assert.match(skill, /validate-mobile-files\.js[\s\S]*--file "\$TARGET_FILE"/);
   assert.doesNotMatch(skill, /gen-mock-services\.js/);
   assert.doesNotMatch(skill, /placeholder `cr_|publisher prefix: cr/i);
-  assert.doesNotMatch(skill, /four textual|data-model\|native-capabilities\|connectors\|screen-plan/i);
+  assert.match(skill, /--review=consolidated\|full/);
 });
 
 test('planning agents keep Dataverse separate from canonical domain operations', () => {
@@ -82,11 +83,11 @@ test('planning agents keep Dataverse separate from canonical domain operations',
   assert.doesNotMatch(screenPlanner, /serviceMethod/);
 });
 
-test('screen builders receive one immutable task and cannot cross the domain boundary', () => {
+test('screen builders receive one in-memory work order and cannot cross the domain boundary', () => {
   const builder = read('agents/screen-builder.md');
-  assert.match(builder, /screen_task_path/);
-  assert.match(builder, /mobile-screen-task/);
-  assert.match(builder, /read only the supplied task/i);
+  assert.match(builder, /screen_work_order/);
+  assert.match(builder, /screen-build-pack\.json/);
+  assert.match(builder, /consume only the supplied work order/i);
   assert.match(builder, /Import app data only from `@\/data`/);
   assert.match(builder, /Never import `@\/data\/fixtures`, `@\/data\/repositories`, or `@\/generated`/);
   assert.match(builder, /isDomainRecordActionable/);
@@ -114,9 +115,32 @@ test('direct real creation uses the same domain adapter and task architecture', 
   assert.match(skill, /gen-data-layer\.js/);
   assert.match(skill, /reconcile-domain-dataverse\.js/);
   assert.match(skill, /gen-dataverse-repositories\.js/);
-  assert.match(skill, /validate-screen-task-pack\.js/);
-  assert.match(skill, /screen_task_path/);
+  assert.match(skill, /screen_work_order/);
   assert.match(skill, /Only[\s\S]*dataverseRepositories\.ts[\s\S]*generated services/i);
+});
+
+test('native and connector mutations require exact approved execution rows', () => {
+  const native = read('skills/add-native/SKILL.md');
+  const connector = read('skills/add-connector/SKILL.md');
+  assert.match(native, /capability\s+to exactly one `nativeCapabilities\[\]` row/i);
+  assert.match(native, /native capability is not in the approved execution\s+contract/);
+  assert.match(connector, /exactly one `connectorOperations\[\]` row by its stable\s+row ID/i);
+  assert.match(connector, /API\s+name alone is not permission/i);
+  assert.match(connector, /multiple rows remain ambiguous/i);
+});
+
+test('preview, debug, and deploy consume canonical lifecycle readiness', () => {
+  for (const [skillPath, consumer] of [
+    ['skills/preview-screens/SKILL.md', 'preview'],
+    ['skills/debug-app/SKILL.md', 'debug'],
+    ['skills/deploy/SKILL.md', 'deploy'],
+  ]) {
+    const skill = read(skillPath);
+    assert.match(skill, /validate-lifecycle-readiness\.js/);
+    assert.match(skill, new RegExp(`--consumer ${consumer}`));
+  }
+  assert.match(read('skills/deploy/SKILL.md'), /dataMode: dataverse/);
+  assert.match(read('skills/deploy/SKILL.md'), /qualityStatus: runtime-validated/);
 });
 
 test('edit and sync workflows regenerate repositories rather than screen services', () => {
@@ -132,7 +156,7 @@ test('edit and sync workflows regenerate repositories rather than screen service
   }
   assert.match(editPlan, /prototype-domain-model\.json/);
   assert.match(editPlan, /dataverseSchemaContract: null/);
-  assert.match(editPlan, /screen-tasks/);
+  assert.doesNotMatch(editPlan, /screen-tasks/);
 });
 
 test('runtime and lifecycle preserve host query ownership and revision identity', () => {

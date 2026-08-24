@@ -48,10 +48,17 @@ execution authority:
 node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all --record --reuse-if-unchanged
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-lifecycle-readiness.js" \
+  --project-root "$PROJECT_DIR" --consumer deploy
 ```
 
 If any check fails, STOP and route to `/edit-app` or `/sync-from-plan`. A legacy
 v1/v2 plan may be inspected but cannot be deployed without explicit re-planning.
+Deployment additionally requires lifecycle `dataMode: dataverse` and
+`qualityStatus: runtime-validated`; a statically validated local prototype is
+not deployable.
 
 First regenerate `connectorSchemas.ts` so `app/_layout.tsx`'s `schemaMap` import reflects every connector currently in `.power/schemas/`. The npm `prestart`/`preandroid`/`preios` hooks cover dev runs, but `npm run build` does **not** — if a connector was added since the last `npm run dev`, the bundled JS would ship a stale schema map. Always regenerate before build:
 

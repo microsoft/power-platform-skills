@@ -7,6 +7,9 @@ const {
   domainModelRevision,
   validatePrototypeDomainModel,
 } = require('../../../scripts/lib/prototype-domain-model');
+const { contractHash } = require('../../../scripts/experience-patterns');
+const { contextEnrichmentRevision } = require('../../../scripts/resolve-context-enrichment');
+const { validateContextEnrichment } = require('../../../scripts/validate-context-enrichment');
 const {
   materializeExperienceAssets,
   semanticMediaFamily,
@@ -224,6 +227,23 @@ function renderFixtures(model) {
   return `// ${MARKER}\nimport type { ${imports} } from './model';\n\nexport const FIXTURES = {\n${fixtures}\n} as const;\n\nexport const FIXTURE_SCENARIOS = ${JSON.stringify(model.fixtureScenarios, null, 2)} as const;\n`;
 }
 
+function renderContext(contextContract) {
+  const entries = Object.fromEntries((contextContract?.displayContext || []).map((entry) => [entry.id, {
+    label: entry.label,
+    value: entry.sampleValue,
+    valueType: entry.valueType,
+    source: entry.source,
+    placementIntent: entry.placementIntent,
+    assumption: entry.assumption,
+  }]));
+  return `// ${MARKER}\nexport const PROTOTYPE_CONTEXT = ${JSON.stringify({
+    mode: contextContract?.contextMode || 'none',
+    entries,
+    assumptions: contextContract?.assumptions || [],
+    forbiddenInferences: contextContract?.forbiddenInferences || [],
+  }, null, 2)} as const;\n`;
+}
+
 function renderValidation(model) {
   const relationships = JSON.stringify(model.relationships, null, 2);
   return `// ${MARKER}\nimport { FIXTURES } from './fixtures';\n\nconst RELATIONSHIPS = ${relationships} as const;\n\nexport function assertPrototypeFixtures(): void {\n  const ids = new Set<string>();\n  for (const [entity, rows] of Object.entries(FIXTURES)) {\n    for (const row of rows as ReadonlyArray<Record<string, unknown>>) {\n      const id = String(row.id || '');\n      if (!id || ids.has(id)) throw new Error(\`Invalid or duplicate fixture ID \${id} in \${entity}\`);\n      ids.add(id);\n    }\n  }\n  for (const relationship of RELATIONSHIPS) {\n    for (const row of FIXTURES[relationship.child] as ReadonlyArray<Record<string, unknown>>) {\n      const target = row[relationship.childField];\n      if (target && !ids.has(String(target))) throw new Error(\`Missing fixture reference \${String(target)} for \${relationship.key}\`);\n    }\n  }\n}\n`;
@@ -399,12 +419,21 @@ function renderMedia(manifest) {
 function renderIndex(model) {
   const models = model.entities.map((entity) => identifier(entity.key)).join(', ');
   const choices = model.choices.map((choice) => `${identifier(choice.key)}Options`).join(', ');
-  return `// ${MARKER}\nexport type { EntityId, Money, DomainMedia, DomainFile, ${models} } from './model';\nexport type { RepositoryMap } from './contracts';\n${choices ? `export { ${choices} } from './choices';\n` : ''}export { FIXTURES, FIXTURE_SCENARIOS } from './fixtures';\nexport { resolveDomainMedia } from './media';\nexport { PrototypeDataProvider, useRepositories } from './PrototypeDataProvider';\nexport * from './hooks';\n\nexport function isDomainRecordActionable(record: Record<string, unknown>): boolean {\n  const inventory = record.inventoryQuantity;\n  if (typeof inventory === 'number' && inventory <= 0) return false;\n  const status = String(record.status || record.availability || '').toLowerCase();\n  return !['sold-out', 'sold out', 'unavailable', 'blocked', 'inactive'].includes(status);\n}\n`;
+  return `// ${MARKER}\nexport type { EntityId, Money, DomainMedia, DomainFile, ${models} } from './model';\nexport type { RepositoryMap } from './contracts';\n${choices ? `export { ${choices} } from './choices';\n` : ''}export { PROTOTYPE_CONTEXT } from './context';\nexport { FIXTURES, FIXTURE_SCENARIOS } from './fixtures';\nexport { resolveDomainMedia } from './media';\nexport { PrototypeDataProvider, useRepositories } from './PrototypeDataProvider';\nexport * from './hooks';\n\nexport function isDomainRecordActionable(record: Record<string, unknown>): boolean {\n  const inventory = record.inventoryQuantity;\n  if (typeof inventory === 'number' && inventory <= 0) return false;\n  const status = String(record.status || record.availability || '').toLowerCase();\n  return !['sold-out', 'sold out', 'unavailable', 'blocked', 'inactive'].includes(status);\n}\n`;
 }
 
-function generateDataLayer(projectRoot, model, experienceContract = null, screenContract = null, executionContract = null) {
-  const validation = validatePrototypeDomainModel(model);
+function generateDataLayer(projectRoot, model, experienceContract = null, screenContract = null, executionContract = null, contextContract = null) {
+  const contextRevision = contextContract ? contextEnrichmentRevision(contextContract) : null;
+  const validation = validatePrototypeDomainModel(model, {
+    experienceContractSha256: experienceContract?.schemaVersion === 1 ? contractHash(experienceContract) : null,
+    contextEnrichmentSha256: contextRevision,
+  });
   if (!validation.valid) fail(validation.errors.join('; '));
+  if (contextContract) {
+    const contextValidation = validateContextEnrichment(contextContract, { experienceContract });
+    if (!contextValidation.valid) fail(contextValidation.errors.join('; '));
+  }
+  if (experienceContract?.assetPolicy?.media && model.mediaPolicy.mode !== experienceContract.assetPolicy.media) fail('domain mediaPolicy does not match the Experience Contract');
   const connectorOperations = plannedConnectorOperations(screenContract, executionContract, model);
   const root = fs.realpathSync(path.resolve(projectRoot));
   const manifestPath = path.join(root, MANIFEST_PATH);
@@ -424,6 +453,7 @@ function generateDataLayer(projectRoot, model, experienceContract = null, screen
     writeFile(stagingRoot, 'src/data/model.ts', renderModel(model), files);
     writeFile(stagingRoot, 'src/data/contracts.ts', renderContracts(model, connectorOperations), files);
     writeFile(stagingRoot, 'src/data/choices.ts', renderChoices(model), files);
+    writeFile(stagingRoot, 'src/data/context.ts', renderContext(contextContract), files);
     writeFile(stagingRoot, 'src/data/fixtures.ts', renderFixtures(model), files);
     writeFile(stagingRoot, 'src/data/validation.ts', renderValidation(model), files);
     writeFile(stagingRoot, 'src/data/repositories/mockRepositories.ts', renderMockRepositories(model), files);
@@ -439,7 +469,7 @@ function generateDataLayer(projectRoot, model, experienceContract = null, screen
     for (const operation of connectorOperations) writeFile(stagingRoot, `src/data/hooks/${operation.hook}.ts`, renderConnectorHook(operation), files);
     writeFile(stagingRoot, 'src/data/hooks/index.ts', renderHookIndex(model, connectorOperations), files);
 
-    const mediaPolicy = experienceContract?.assetPolicy?.media || 'local-first';
+    const mediaPolicy = model.mediaPolicy.mode;
     const assetManifest = buildAssetManifest(model, mediaPolicy);
     const materialized = materializeExperienceAssets(stagingRoot, assetManifest);
     files.push(...materialized.files);
@@ -451,6 +481,7 @@ function generateDataLayer(projectRoot, model, experienceContract = null, screen
       schemaVersion: 1,
       mode: 'prototype-domain',
       domainModelRevision: domainModelRevision(model),
+      contextEnrichmentRevision: contextRevision,
       domainModelPath: '.tmp/prototype-domain-model.json',
       provider: 'src/data/PrototypeDataProvider.tsx',
       repositoryFactory: 'src/data/repositories/index.ts',
@@ -479,9 +510,12 @@ function main(argv) {
     const experience = fs.existsSync(experiencePath) ? readJson(experiencePath, 'Experience Contract') : null;
     const screenPath = path.join(projectRoot, '.tmp', 'experience-screen-contract.json');
     const executionPath = path.join(projectRoot, '.tmp', 'mobile-plan-execution-contract.json');
+    const contextPath = path.join(projectRoot, '.tmp', 'context-enrichment-contract.json');
     const screen = fs.existsSync(screenPath) ? readJson(screenPath, 'Experience Screen Contract') : null;
     const execution = fs.existsSync(executionPath) ? readJson(executionPath, 'Mobile Plan Execution Contract') : null;
-    const manifest = generateDataLayer(projectRoot, model, experience, screen, execution);
+    if (!fs.existsSync(contextPath)) fail('context enrichment contract is missing');
+    const context = readJson(contextPath, 'Context Enrichment Contract');
+    const manifest = generateDataLayer(projectRoot, model, experience, screen, execution, context);
     process.stdout.write(`prototype-data: generated ${manifest.files.length} file(s) from ${manifest.domainModelRevision}\n`);
     return 0;
   } catch (error) {

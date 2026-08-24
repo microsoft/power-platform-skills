@@ -59,6 +59,10 @@ function defaultAction(screen, contract) {
       id: `${slug(screen.id)}-primary-action`,
       label: screen.outcome || 'Continue',
       placement: 'sticky-bottom',
+      clearance: {
+        safeArea: true,
+        tabBar: contract.navigationModel === 'tabs-stack' ? 'above' : 'not-applicable',
+      },
     };
   }
   return null;
@@ -108,10 +112,16 @@ function legacyScreenSpec(raw, role, contract, foundationComponents) {
       regionIds: regionIds.slice(0, contract.presentationIntent?.maxFirstViewportRegions || 4),
       focalPoint: role === 'primary' ? contract.firstViewport.focalPoint : raw.outcome || `${id} content`,
       maxRegions: contract.presentationIntent?.maxFirstViewportRegions || 4,
+      nextContentVisible: contract.visualCompositionIntent?.nextContentVisible ?? true,
+      maxFeatureViewportShare: contract.visualCompositionIntent?.maxFeatureViewportShare ?? 0.38,
     },
+    context: { entryIds: [], placementIntent: 'none', assumptions: [] },
+    signatureComponent: role === 'primary'
+      ? { ...(contract.visualCompositionIntent?.signatureComponent || { kind: 'experience-signature', required: true, testId: 'experience-signature-primary' }) }
+      : { kind: 'supporting-screen', required: false, testId: null },
     header: { mode: role === 'primary' ? 'root' : 'back', title: role === 'primary' ? '' : id.replace(/([a-z])([A-Z])/g, '$1 $2') },
     primaryAction: action,
-    media: defaultMedia(screen, contract, pattern),
+    media: { ...defaultMedia(screen, contract, pattern), prominence: role === 'primary' ? contract.visualCompositionIntent?.mediaProminence || 'medium' : 'low' },
     states: [...REQUIRED_STATES],
     qualityCriteria: [
       'Preserve one obvious focal point in the first viewport.',
@@ -135,6 +145,8 @@ function normalizeV2Screen(screen) {
     presentation: { ...screen.presentation },
     regions: (screen.regions || []).map((region) => ({ ...region })),
     firstViewport: { ...screen.firstViewport, regionIds: [...(screen.firstViewport?.regionIds || [])] },
+    context: screen.context ? { ...screen.context, entryIds: [...(screen.context.entryIds || [])], assumptions: [...(screen.context.assumptions || [])] } : undefined,
+    signatureComponent: screen.signatureComponent ? { ...screen.signatureComponent } : undefined,
     primaryAction: screen.primaryAction ? { ...screen.primaryAction } : null,
     media: { ...screen.media },
     states: [...(screen.states || [])],
@@ -221,11 +233,14 @@ function validateScreenSpec(screen, index, errors) {
   if (!Array.isArray(screen.firstViewport?.regionIds) || !screen.firstViewport.regionIds.length || screen.firstViewport.regionIds.some((id) => !regionIds.has(id))) errors.push(`${label}.firstViewport.regionIds must reference declared regions`);
   if (typeof screen.firstViewport?.focalPoint !== 'string' || screen.firstViewport.focalPoint.trim().length < 5) errors.push(`${label}.firstViewport.focalPoint is required`);
   if (!Number.isInteger(screen.firstViewport?.maxRegions) || screen.firstViewport.maxRegions < 1 || screen.firstViewport.maxRegions > 5 || (screen.firstViewport.regionIds || []).length > screen.firstViewport.maxRegions) errors.push(`${label}.firstViewport.maxRegions must be 1-5 and bound regionIds`);
+  if (screen.firstViewport?.nextContentVisible !== undefined && typeof screen.firstViewport.nextContentVisible !== 'boolean') errors.push(`${label}.firstViewport.nextContentVisible must be boolean`);
+  if (screen.firstViewport?.maxFeatureViewportShare !== undefined && (typeof screen.firstViewport.maxFeatureViewportShare !== 'number' || screen.firstViewport.maxFeatureViewportShare < 0 || screen.firstViewport.maxFeatureViewportShare > 0.6)) errors.push(`${label}.firstViewport.maxFeatureViewportShare is invalid`);
   if (!HEADER_MODES.has(screen.header?.mode)) errors.push(`${label}.header.mode is invalid`);
   if (typeof screen.header?.title !== 'string') errors.push(`${label}.header.title must be a string`);
   if (screen.primaryAction !== null && (typeof screen.primaryAction?.id !== 'string' || typeof screen.primaryAction?.label !== 'string' || !ACTION_PLACEMENTS.has(screen.primaryAction?.placement))) errors.push(`${label}.primaryAction is invalid`);
   if (typeof screen.media?.required !== 'boolean' || typeof screen.media?.role !== 'string' || typeof screen.media?.aspectRatio !== 'string' || typeof screen.media?.minCoverage !== 'number' || screen.media.minCoverage < 0 || screen.media.minCoverage > 1 || !MEDIA_FALLBACKS.has(screen.media?.fallback)) errors.push(`${label}.media is invalid`);
   if (screen.media?.required && screen.media.fallback === 'text-only') errors.push(`${label}.media cannot use text-only fallback when media is required`);
+  if (screen.media?.prominence !== undefined && !['none', 'low', 'medium', 'high'].includes(screen.media.prominence)) errors.push(`${label}.media.prominence is invalid`);
   if (!Array.isArray(screen.states) || !REQUIRED_STATES.every((state) => screen.states.includes(state))) errors.push(`${label}.states must include ${REQUIRED_STATES.join(', ')}`);
   if (!Array.isArray(screen.qualityCriteria) || screen.qualityCriteria.length < 3) errors.push(`${label}.qualityCriteria requires at least three checks`);
   if (!Array.isArray(screen.testIds) || !screen.testIds.length) errors.push(`${label}.testIds must be non-empty`);
@@ -536,7 +551,32 @@ function validateV3Operations(screenContract, contract, context, errors) {
   const operationIds = [];
   const routes = new Set(screenContract.screens.map((screen) => screen.route));
   const tabRoots = [];
+  const contextEntries = new Map((context.contextContract?.displayContext || []).map((entry) => [entry.id, entry]));
   for (const [screenIndex, screen] of screenContract.screens.entries()) {
+    const screenLabel = `screens[${screenIndex}]`;
+    if (!screen.context || !Array.isArray(screen.context.entryIds) || !Array.isArray(screen.context.assumptions) || !['primary-screen-context-rail', 'inline-label', 'supporting-section', 'none'].includes(screen.context.placementIntent)) {
+      errors.push(`${screenLabel}.context is invalid`);
+    } else {
+      if (!screen.context.entryIds.length && screen.context.placementIntent !== 'none') errors.push(`${screenLabel}.context placement must be none when no context entries are used`);
+      if (screen.context.entryIds.length && screen.context.placementIntent === 'none') errors.push(`${screenLabel}.context placement is required when context entries are used`);
+      for (const entryId of screen.context.entryIds) {
+        const entry = contextEntries.get(entryId);
+        if (!entry) errors.push(`${screenLabel}.context references unknown entry ${entryId}`);
+        else if (!screen.context.assumptions.includes(entry.assumption)) errors.push(`${screenLabel}.context must preserve the assumption for ${entryId}`);
+      }
+    }
+    if (typeof screen.firstViewport?.nextContentVisible !== 'boolean' || typeof screen.firstViewport?.maxFeatureViewportShare !== 'number') errors.push(`${screenLabel}.firstViewport requires nextContentVisible and maxFeatureViewportShare`);
+    if (!screen.signatureComponent || typeof screen.signatureComponent.required !== 'boolean' || typeof screen.signatureComponent.kind !== 'string') errors.push(`${screenLabel}.signatureComponent is invalid`);
+    if (!['none', 'low', 'medium', 'high'].includes(screen.media?.prominence)) errors.push(`${screenLabel}.media.prominence is required`);
+    if (screen.signatureComponent?.required && (!screen.signatureComponent.testId || !(screen.testIds || []).includes(screen.signatureComponent.testId))) errors.push(`${screenLabel}.signatureComponent testId must be present in screen.testIds`);
+    if (screen.role === 'primary' && contract?.visualCompositionIntent) {
+      const expectedSignature = contract.visualCompositionIntent.signatureComponent;
+      if (screen.signatureComponent?.kind !== expectedSignature.kind || screen.signatureComponent?.required !== true || screen.signatureComponent?.testId !== expectedSignature.testId) errors.push(`${screenLabel}.signatureComponent does not match visualCompositionIntent`);
+      if (screen.firstViewport.nextContentVisible !== contract.visualCompositionIntent.nextContentVisible) errors.push(`${screenLabel}.firstViewport.nextContentVisible does not match visualCompositionIntent`);
+      if (screen.firstViewport.maxFeatureViewportShare > contract.visualCompositionIntent.maxFeatureViewportShare) errors.push(`${screenLabel}.firstViewport exceeds visualCompositionIntent maxFeatureViewportShare`);
+      const requiredContextIds = (context.contextContract?.displayContext || []).filter((entry) => entry.placementIntent === 'primary-screen-context-rail').map((entry) => entry.id);
+      if (requiredContextIds.some((id) => !screen.context?.entryIds?.includes(id))) errors.push(`${screenLabel}.context drops primary-screen enriched context`);
+    }
     const navigation = screen.navigation;
     if (!navigation || !['tab-root', 'stack-root', 'pushed', 'modal'].includes(navigation.kind) || !['navigate', 'push', 'replace', 'present'].includes(navigation.intent)) {
       errors.push(`screens[${screenIndex}].navigation is invalid`);
@@ -549,6 +589,12 @@ function validateV3Operations(screenContract, contract, context, errors) {
       if (['pushed', 'modal'].includes(navigation.kind) && (!navigation.parentRoute || !routes.has(navigation.parentRoute))) errors.push(`screens[${screenIndex}] ${navigation.kind} navigation requires a declared parentRoute`);
       if (navigation.kind === 'pushed' && screen.header?.mode !== 'back') errors.push(`screens[${screenIndex}] pushed routes require back header mode`);
       if (navigation.kind === 'modal' && !['close', 'none'].includes(screen.header?.mode)) errors.push(`screens[${screenIndex}] modal routes require close or none header mode`);
+    }
+    if (screen.primaryAction?.placement === 'sticky-bottom') {
+      const expectedTabBar = contract?.navigationModel === 'tabs-stack' ? 'above' : 'not-applicable';
+      if (screen.primaryAction.clearance?.safeArea !== true || screen.primaryAction.clearance?.tabBar !== expectedTabBar) {
+        errors.push(`screens[${screenIndex}] sticky-bottom action requires safe-area clearance and tabBar ${expectedTabBar}`);
+      }
     }
     if (!Array.isArray(screen.routeParameters)) errors.push(`screens[${screenIndex}].routeParameters must be an array in schema version 3`);
     const parameterNames = [];
@@ -590,6 +636,18 @@ function validateV3Operations(screenContract, contract, context, errors) {
     if (tabRoots.length < 3 || tabRoots.length > 5) errors.push('tabs-stack navigation requires 3-5 declared tab-root screens');
     const primary = screenContract.screens.find((screen) => screen.role === 'primary');
     if (primary?.navigation?.kind !== 'tab-root') errors.push('tabs-stack primary screen must be a tab root');
+    const byRoute = new Map(screenContract.screens.map((screen) => [screen.route, screen]));
+    for (const screen of screenContract.screens) {
+      if (screen.navigation?.kind === 'stack-root') errors.push(`tabs-stack screen ${screen.id} cannot declare an independent stack root`);
+      if (screen.navigation?.kind !== 'pushed') continue;
+      const visited = new Set([screen.route]);
+      let parent = byRoute.get(screen.navigation.parentRoute);
+      while (parent?.navigation?.kind === 'pushed' && !visited.has(parent.route)) {
+        visited.add(parent.route);
+        parent = byRoute.get(parent.navigation.parentRoute);
+      }
+      if (parent?.navigation?.kind !== 'tab-root') errors.push(`tabs-stack pushed screen ${screen.id} must resolve to an owning tab root`);
+    }
     if (contract.primarySurface === 'product-led-discovery') {
       const labels = new Set(tabRoots.map((screen) => normalizedName(screen.navigation?.tabLabel)));
       for (const required of ['shop', 'categories', 'bag']) {

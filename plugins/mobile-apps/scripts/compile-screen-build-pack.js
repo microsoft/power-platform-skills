@@ -18,7 +18,9 @@ const {
 } = require('./experience-patterns');
 const { normalizeScreenContract, validateExperienceScreenContract } = require('./lib/experience-screen-contract');
 const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
-const { validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
+const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
+const { validateContextEnrichment } = require('./validate-context-enrichment');
 const { resolveDesignRecipe } = require('./resolve-design-recipe');
 
 function sha256(value) {
@@ -45,6 +47,46 @@ function requiredFile(projectRoot, relativePath, label) {
   const filePath = path.join(projectRoot, relativePath);
   if (!fs.existsSync(filePath)) throw new Error(`${label} is missing: ${relativePath}`);
   return filePath;
+}
+
+function projectOwnedFile(projectRoot, relativePath, label) {
+  if (typeof relativePath !== 'string' || !relativePath || path.isAbsolute(relativePath)) throw new Error(`${label} contains an unsafe path.`);
+  const root = path.resolve(projectRoot);
+  const target = path.resolve(root, relativePath);
+  if (!target.startsWith(`${root}${path.sep}`)) throw new Error(`${label} escapes the project root: ${relativePath}`);
+  let cursor = root;
+  for (const part of path.relative(root, target).split(path.sep).filter(Boolean)) {
+    cursor = path.join(cursor, part);
+    if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) throw new Error(`${label} contains a symlink: ${relativePath}`);
+  }
+  if (!fs.existsSync(target) || !fs.lstatSync(target).isFile()) throw new Error(`${label} is missing: ${relativePath}`);
+  return target;
+}
+
+function aggregateProjectFilesHash(projectRoot, relativePaths, label) {
+  if (!Array.isArray(relativePaths) || !relativePaths.length) throw new Error(`${label} must contain at least one file.`);
+  const files = [...new Set(relativePaths)].sort().map((relativePath) => ({
+    path: relativePath.split(path.sep).join('/'),
+    sha256: sha256(fs.readFileSync(projectOwnedFile(projectRoot, relativePath, label))),
+  }));
+  return sha256(stableStringify(files));
+}
+
+function domainLayerHash(projectRoot, manifestRelativePath = '.mobile-app/prototype-domain-manifest.json') {
+  const manifestPath = projectOwnedFile(projectRoot, manifestRelativePath, 'Prototype domain manifest');
+  const manifest = readJson(manifestPath, 'Prototype domain manifest');
+  if (manifest.schemaVersion !== 1 || manifest.mode !== 'prototype-domain' || !Array.isArray(manifest.files) || !manifest.files.length) {
+    throw new Error('Prototype domain manifest is incomplete.');
+  }
+  const filesHash = aggregateProjectFilesHash(projectRoot, manifest.files, 'Prototype domain layer');
+  return sha256(stableStringify({
+    schemaVersion: manifest.schemaVersion,
+    mode: manifest.mode,
+    domainModelRevision: manifest.domainModelRevision,
+    contextEnrichmentRevision: manifest.contextEnrichmentRevision || null,
+    files: [...new Set(manifest.files)].sort(),
+    filesHash,
+  }));
 }
 
 function toCells(line) {
@@ -104,6 +146,12 @@ function validateInputs(contract, screenContract, foundation, context) {
   if (!keyFlow || typeof keyFlow.route !== 'string' || keyFlow.route === primary.route || typeof keyFlow.file !== 'string' || typeof keyFlow.outcome !== 'string') {
     throw new Error('Experience screen contract requires a non-primary keyFlow.');
   }
+  const primarySpec = screenContract.screens.find((screen) => screen.role === 'primary');
+  const visual = contract.visualCompositionIntent;
+  if (!primarySpec?.signatureComponent?.required || primarySpec.signatureComponent.testId !== visual.signatureComponent.testId) throw new Error('Primary screen signature component does not match visualCompositionIntent.');
+  if (primarySpec.firstViewport?.nextContentVisible !== visual.nextContentVisible || primarySpec.firstViewport?.maxFeatureViewportShare > visual.maxFeatureViewportShare) throw new Error('Primary screen first viewport does not match visualCompositionIntent.');
+  const requiredContextIds = (context.contextContract?.displayContext || []).filter((entry) => entry.placementIntent === 'primary-screen-context-rail').map((entry) => entry.id);
+  if (requiredContextIds.some((id) => !primarySpec.context?.entryIds?.includes(id))) throw new Error('Primary screen drops required Context Enrichment entries.');
   const expectedFoundation = foundationContract(contract);
   if (foundation?.schemaVersion !== 1 || foundation.experienceContractSha256 !== expectedFoundation.experienceContractSha256) {
     throw new Error('Experience foundation contract is missing or stale.');
@@ -147,11 +195,14 @@ function inferredDataMode(projectRoot) {
     : 'prototype';
 }
 
-function dataIntent(projectRoot) {
+function dataIntent(projectRoot, experienceContract, contextContract) {
   const domainPath = path.join(projectRoot, '.tmp', 'prototype-domain-model.json');
   if (!fs.existsSync(domainPath)) throw new Error('Prototype domain model is missing: .tmp/prototype-domain-model.json');
   const domainModel = readJson(domainPath, 'Prototype domain model');
-  const validation = validatePrototypeDomainModel(domainModel);
+  const validation = validatePrototypeDomainModel(domainModel, {
+    experienceContractSha256: contractHash(experienceContract),
+    contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
+  });
   if (!validation.valid) throw new Error(`Prototype domain model is invalid: ${validation.errors.join('; ')}`);
   const dataMode = inferredDataMode(projectRoot);
   const entityContracts = domainModel.entities.map(normalizedDomainEntity);
@@ -256,7 +307,7 @@ function screenRuntimeBindings(screen, data, entities) {
   };
 }
 
-function screenRecord(screen, data, contract) {
+function screenRecord(screen, data, contract, contextContract) {
   const entities = screen.data.entities.length ? screen.data.entities : data.entities;
   const foundationFiles = screen.dependencies.foundation.map((component) => `foundation:${component}`);
   const fixtureDependencies = screen.dependencies.fixtures.length
@@ -266,6 +317,10 @@ function screenRecord(screen, data, contract) {
   const firstViewportRegions = screen.regions.filter((region) => firstViewportRegionIds.has(region.id));
   const mediaSharesViewport = screen.media.required
     && (firstViewportRegions.length > 1 || screen.primaryAction?.placement === 'inline');
+  const contextEntries = screen.context.entryIds
+    .map((id) => contextContract.displayContext.find((entry) => entry.id === id))
+    .filter(Boolean)
+    .map((entry) => ({ ...entry, testId: `experience-context-${entry.id}` }));
   return {
     id: screen.id,
     route: screen.route,
@@ -284,6 +339,7 @@ function screenRecord(screen, data, contract) {
       visiblePrimaryAction: Boolean(screen.primaryAction),
       primaryActionPlacement: screen.primaryAction?.placement || 'none',
     },
+    signatureComponent: screen.signatureComponent,
     primaryAction: screen.primaryAction,
     media: {
       ...screen.media,
@@ -302,7 +358,7 @@ function screenRecord(screen, data, contract) {
       screens: screen.dependencies.screens,
       artifacts: [...foundationFiles, ...fixtureDependencies],
     },
-    testIds: screen.testIds,
+    testIds: [...new Set([...screen.testIds, ...contextEntries.map((entry) => entry.testId)])],
     forbiddenDefaults: screen.forbiddenDefaults,
     data: {
       adapter: data.adapter,
@@ -317,6 +373,12 @@ function screenRecord(screen, data, contract) {
       operations: screen.data.operations,
       runtimeBindings: screenRuntimeBindings(screen, data, entities),
     },
+    context: {
+      placementIntent: screen.context.placementIntent,
+      entries: contextEntries,
+      assumptions: screen.context.assumptions,
+      forbiddenInferences: contextContract.forbiddenInferences,
+    },
   };
 }
 
@@ -326,51 +388,27 @@ function revisionForPack(pack) {
   return sha256(stableStringify(copy));
 }
 
-function revisionForTask(task) {
-  const copy = { ...task };
-  delete copy.revision;
-  return sha256(stableStringify(copy));
-}
-
-function screenTaskPacks(pack) {
-  return pack.screens.map((screen) => {
-    if (!/^[A-Za-z][A-Za-z0-9-]*$/.test(screen.id)) throw new Error(`Screen id cannot be used as an immutable task filename: ${screen.id}`);
-    const task = {
-      schemaVersion: 1,
-      kind: 'mobile-screen-task',
-      packRevision: pack.revision,
-      sourceHashes: pack.sources,
-      target: { screenId: screen.id, route: screen.route, file: screen.file },
-      experience: pack.experience,
-      design: pack.design,
-      shell: {
-        safeAreaOwner: pack.shell.safeAreaOwner,
-        rootSafeAreaProviderOnly: pack.shell.rootSafeAreaProviderOnly,
-        headerMode: screen.headerMode,
-      },
-      navigation: screen.navigation,
-      execution: pack.execution,
-      data: {
-        adapter: screen.data.adapter,
-        sourceModule: screen.data.sourceModule,
-        domainModel: screen.data.domainModel,
-        entities: screen.data.entities,
-        hooks: screen.data.hooks,
-        operations: screen.data.operations,
-        fixtureScenarios: screen.data.fixtureScenarios,
-        runtimeBindings: screen.data.runtimeBindings,
-      },
-      screen,
-      constraints: {
-        ownership: 'single-screen-file',
-        allowedDataImport: '@/data',
-        forbiddenImports: ['@/generated', '@/data/fixtures', '@/data/repositories'],
-        stableIdentity: 'domain-record-id',
-      },
-    };
-    task.revision = revisionForTask(task);
-    return task;
-  });
+function screenWorkOrder(pack, screenId) {
+  const screen = pack.screens.find((candidate) => candidate.id === screenId);
+  if (!screen) throw new Error(`Screen ${screenId} is not present in the build pack.`);
+  return {
+    packRevision: pack.revision,
+    target: { screenId: screen.id, route: screen.route, file: screen.file },
+    experience: pack.experience,
+    context: pack.context,
+    design: pack.design,
+    shell: { safeAreaOwner: pack.shell.safeAreaOwner, rootSafeAreaProviderOnly: pack.shell.rootSafeAreaProviderOnly, headerMode: screen.headerMode },
+    navigation: screen.navigation,
+    execution: pack.execution,
+    fixtures: pack.fixtures,
+    screen,
+    constraints: {
+      ownership: 'single-screen-file',
+      allowedDataImport: '@/data',
+      forbiddenImports: ['@/generated', '@/data/fixtures', '@/data/repositories'],
+      stableIdentity: 'domain-record-id',
+    },
+  };
 }
 
 function writeJsonAtomic(filePath, value) {
@@ -397,38 +435,6 @@ function safeOutputPath(projectRoot, value, label) {
   return target;
 }
 
-function writeScreenTaskPacks(projectRoot, pack, relativeDirectory = '.tmp/screen-tasks') {
-  const root = fs.realpathSync(path.resolve(projectRoot));
-  const directory = safeOutputPath(root, relativeDirectory, 'Screen task directory');
-  const tasks = screenTaskPacks(pack);
-  fs.mkdirSync(path.dirname(directory), { recursive: true });
-  const staging = path.join(path.dirname(directory), `.${path.basename(directory)}.stage-${process.pid}-${Date.now()}`);
-  const backup = path.join(path.dirname(directory), `.${path.basename(directory)}.backup-${process.pid}-${Date.now()}`);
-  fs.mkdirSync(staging);
-  let installed = false;
-  let backedUp = false;
-  try {
-    for (const task of tasks) writeJsonAtomic(path.join(staging, `${task.target.screenId}.json`), task);
-    if (fs.existsSync(directory)) {
-      const stat = fs.lstatSync(directory);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Screen task target must be a regular directory.');
-      fs.renameSync(directory, backup);
-      backedUp = true;
-    }
-    fs.renameSync(staging, directory);
-    installed = true;
-    fs.rmSync(backup, { recursive: true, force: true });
-  } catch (error) {
-    if (installed) fs.rmSync(directory, { recursive: true, force: true });
-    if (backedUp && fs.existsSync(backup)) fs.renameSync(backup, directory);
-    throw error;
-  } finally {
-    fs.rmSync(staging, { recursive: true, force: true });
-    fs.rmSync(backup, { recursive: true, force: true });
-  }
-  return tasks;
-}
-
 function compactExecutionContract(executionContract) {
   return {
     requirementIds: executionContract.requirements.filter((item) => item.status === 'planned').map((item) => item.id),
@@ -448,6 +454,7 @@ function compileScreenBuildPack(projectRoot) {
   const screenPath = requiredFile(root, '.tmp/experience-screen-contract.json', 'Experience screen contract');
   const foundationPath = requiredFile(root, '.tmp/experience-foundation-contract.json', 'Experience foundation contract');
   const executionPath = requiredFile(root, '.tmp/mobile-plan-execution-contract.json', 'Mobile plan execution contract');
+  const contextPath = requiredFile(root, '.tmp/context-enrichment-contract.json', 'Context Enrichment Contract');
   const briefPath = fs.existsSync(path.join(root, '.tmp', 'experience-brief.md'))
     ? path.join(root, '.tmp', 'experience-brief.md')
     : requiredFile(root, 'brief.md', 'Confirmed brief');
@@ -458,9 +465,18 @@ function compileScreenBuildPack(projectRoot) {
   const screenContract = readJson(screenPath, 'Experience screen contract');
   const foundation = readJson(foundationPath, 'Experience foundation contract');
   const executionContract = readJson(executionPath, 'Mobile plan execution contract');
-  const data = dataIntent(root);
+  const contextContract = readJson(contextPath, 'Context Enrichment Contract');
+  const contextValidation = validateContextEnrichment(contextContract, { experienceContract: contract, briefText: fs.readFileSync(briefPath, 'utf8') });
+  if (!contextValidation.valid) throw new Error(`Context Enrichment Contract is invalid: ${contextValidation.errors.join('; ')}`);
+  const data = dataIntent(root, contract, contextContract);
+  const domainManifestRelativePath = '.mobile-app/prototype-domain-manifest.json';
+  const domainManifest = readJson(projectOwnedFile(root, domainManifestRelativePath, 'Prototype domain manifest'), 'Prototype domain manifest');
+  if (domainManifest.domainModelRevision !== domainModelRevision(data.contract)
+    || domainManifest.contextEnrichmentRevision !== contextEnrichmentRevision(contextContract)) {
+    throw new Error('Prototype domain manifest is stale for the current Domain or Context contract.');
+  }
   const dataSurface = domainDataSurface(root);
-  const context = { dataContract: data.contract, executionContract };
+  const context = { dataContract: data.contract, executionContract, contextContract };
   validateInputs(contract, screenContract, foundation, context);
   for (const operation of screenContract.screens.flatMap((screen) => screen.data?.operations || [])) {
     if (!dataSurface.hooks.has(operation.hook)) throw new Error(`Domain hook ${operation.hook} is missing from src/data/hooks.`);
@@ -469,6 +485,8 @@ function compileScreenBuildPack(projectRoot) {
   const executionValidation = validateMobilePlanExecutionContract(executionContract, {
     briefText: fs.readFileSync(briefPath, 'utf8'),
     experienceContractSha256: contractHash(contract),
+    contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
+    domainModelSha256: domainModelRevision(data.contract),
     screenContract,
     dataContract: data.contract,
     packageJson: readJson(packagePath, 'Package manifest'),
@@ -487,8 +505,10 @@ function compileScreenBuildPack(projectRoot) {
   const primary = screenContract.primaryScreen;
   const keyFlow = screenContract.keyFlow;
   const foundationComponents = foundation.primitives.map((primitive) => primitive.component);
+  const foundationRuntimePaths = foundation.primitives.map((primitive) => primitive.file);
+  const foundationRuntimeHash = aggregateProjectFilesHash(root, foundationRuntimePaths, 'Experience foundation runtime');
   const normalizedScreens = normalizeScreenContract(screenContract, contract, screenMap, foundationComponents);
-  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract));
+  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract, contextContract));
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
   const designRecipePath = path.join(root, 'brand', 'design-recipe.json');
@@ -502,12 +522,17 @@ function compileScreenBuildPack(projectRoot) {
   const verticalSlice = screens.filter((screen) => criticalIds.includes(screen.id));
   const remainingScreens = screens.filter((screen) => !criticalIds.includes(screen.id));
   const sourcePaths = {
+    confirmedBrief: path.relative(root, briefPath).split(path.sep).join('/'),
+    packageManifest: 'package.json',
     experienceContract: '.tmp/experience-contract.json',
     screenContract: '.tmp/experience-screen-contract.json',
+    contextEnrichment: '.tmp/context-enrichment-contract.json',
     foundationContract: '.tmp/experience-foundation-contract.json',
+    foundationRuntime: foundationRuntimePaths,
     designSystem: 'brand/design-system.md',
     tokens: 'brand/tokens.ts',
     domainModel: data.path,
+    domainLayer: domainManifestRelativePath,
     executionContract: '.tmp/mobile-plan-execution-contract.json',
     designRecipe: hasDesignRecipe ? 'brand/design-recipe.json' : null,
   };
@@ -515,11 +540,16 @@ function compileScreenBuildPack(projectRoot) {
     schemaVersion: 2,
     screenContractVersion: screenContract.schemaVersion,
     sources: {
+      confirmedBrief: sha256(fs.readFileSync(briefPath, 'utf8')),
+      packageManifest: sha256(fs.readFileSync(packagePath, 'utf8')),
       experienceContract: sha256(fs.readFileSync(experiencePath, 'utf8')),
       screenContract: sha256(fs.readFileSync(screenPath, 'utf8')),
+      contextEnrichment: sha256(fs.readFileSync(contextPath, 'utf8')),
       foundationContract: sha256(fs.readFileSync(foundationPath, 'utf8')),
+      foundationRuntime: foundationRuntimeHash,
       designRecipe: hasDesignRecipe ? sha256(fs.readFileSync(designRecipePath, 'utf8')) : sha256(stableStringify(designRecipe)),
       domainModel: data.hash,
+      domainLayer: domainLayerHash(root, domainManifestRelativePath),
       executionContract: sha256(fs.readFileSync(executionPath, 'utf8')),
       tokens: sha256(fs.readFileSync(tokensPath, 'utf8')),
     },
@@ -539,6 +569,10 @@ function compileScreenBuildPack(projectRoot) {
       firstViewport: contract.firstViewport,
       signatureMotifs: contract.signatureMotifs,
       promptEvidence: contract.promptEvidence,
+    },
+    context: {
+      mode: contextContract.contextMode,
+      forbiddenInferences: contextContract.forbiddenInferences,
     },
     design: {
       tokensPath: 'brand/tokens.ts',
@@ -585,7 +619,7 @@ function compileScreenBuildPack(projectRoot) {
       },
       {
         id: 'vertical-slice', kind: 'screen', targets: verticalSlice.map((screen) => screen.id),
-        maxConcurrency: Math.min(5, Math.max(1, verticalSlice.length)), dependsOn: ['foundations'], gates: ['typecheck', 'native-visual-review'],
+        maxConcurrency: Math.min(5, Math.max(1, verticalSlice.length)), dependsOn: ['foundations'], gates: ['typecheck', 'static-quality-review'],
       },
       ...(remainingScreens.length ? [{
         id: 'remaining-screens', kind: 'screen', targets: remainingScreens.map((screen) => screen.id),
@@ -602,12 +636,12 @@ function compileScreenBuildPack(projectRoot) {
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['screenContract', 'designRecipe', 'tokens', 'domainModel', 'executionContract']
-        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'domainModel', 'executionContract']])),
-      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['experienceContract', 'domainModel', 'executionContract']])),
+        ? ['confirmedBrief', 'packageManifest', 'screenContract', 'contextEnrichment', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']
+        : ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']])),
+      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['confirmedBrief', 'experienceContract', 'contextEnrichment', 'domainModel', 'domainLayer', 'executionContract']])),
       validatorDependencies: {
-        experience: ['experienceContract', 'screenContract', 'foundationContract', 'executionContract'],
-        nativeVisual: ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'executionContract'],
+        experience: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'domainLayer', 'executionContract'],
+        staticComposition: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainLayer', 'executionContract'],
       },
     },
   };
@@ -636,8 +670,7 @@ function main(argv) {
     const pack = compileScreenBuildPack(root);
     const output = safeOutputPath(root, args.output || '.tmp/screen-build-pack.json', 'Screen build pack output');
     writeJsonAtomic(output, pack);
-    const tasks = writeScreenTaskPacks(root, pack);
-    if (args.json) process.stdout.write(`${JSON.stringify({ output, revision: pack.revision, screenTasks: tasks.map((task) => `.tmp/screen-tasks/${task.target.screenId}.json`) }, null, 2)}\n`);
+    if (args.json) process.stdout.write(`${JSON.stringify({ output, revision: pack.revision }, null, 2)}\n`);
     else process.stdout.write(`Screen build pack written: ${output} (${pack.revision})\n`);
     return 0;
   } catch (error) {
@@ -651,12 +684,12 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 module.exports = {
   compactExecutionContract,
   compileScreenBuildPack,
+  aggregateProjectFilesHash,
+  domainLayerHash,
   domainDataSurface,
   parseScreenMap,
   revisionForPack,
-  revisionForTask,
-  screenTaskPacks,
+  screenWorkOrder,
   sha256,
   stableStringify,
-  writeScreenTaskPacks,
 };

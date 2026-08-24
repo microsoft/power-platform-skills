@@ -29,6 +29,7 @@ const PHASE_ORDER = [
 ];
 const APPROVAL_ARTIFACT_HASH_KEYS = [
   'nativeAppPlanSha256',
+  'contextEnrichmentContractSha256',
   'prototypeDomainModelSha256',
   'dataverseSchemaContractSha256',
   'experienceContractSha256',
@@ -38,6 +39,7 @@ const APPROVAL_ARTIFACT_HASH_KEYS = [
   'mobilePlanExecutionPreflightSha256',
 ];
 const OPTIONAL_APPROVAL_ARTIFACT_HASH_KEYS = new Set([
+  'contextEnrichmentContractSha256',
   'prototypeDomainModelSha256',
   'dataverseSchemaContractSha256',
 ]);

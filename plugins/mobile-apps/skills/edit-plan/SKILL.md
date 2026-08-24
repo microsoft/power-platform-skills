@@ -197,6 +197,9 @@ Write `.mobile-app/plan-change.json`:
   "previousPlanSha256": "<hash before edit>",
   "approvedPlanSha256": "<hash after edit>",
   "structuredContractSha256": "<hash or null>",
+  "contextEnrichmentSha256": "<hash of .tmp/context-enrichment-contract.json>",
+  "domainModelSha256": "<hash of .tmp/prototype-domain-model.json or null>",
+  "visualCompositionSha256": "<hash of the canonical Experience visualCompositionIntent>",
   "screenContractSha256": "<hash of .tmp/experience-screen-contract.json>",
   "executionContractSha256": "<hash of .tmp/mobile-plan-execution-contract.json>",
   "affectedScreens": ["<screen ids, or empty when none>"],
@@ -207,10 +210,14 @@ Write `.mobile-app/plan-change.json`:
 
 Use the actual lifecycle mode. `structuredContractSha256` is required for a
 Data Model edit and otherwise preserves the current value when one exists.
-`screenContractSha256` and `executionContractSha256` are always required.
+`contextEnrichmentSha256`, `visualCompositionSha256`,
+`screenContractSha256`, and `executionContractSha256` are always required.
+`domainModelSha256` is required when the app has a neutral domain. Recompute
+all dependent contracts when Context or Visual Composition changes; never
+preserve a downstream hash across changed input semantics.
 
 After the updated plan and sidecars validate, remove
-`.tmp/screen-build-pack.json` and `.tmp/screen-tasks/`. The approved pending record preserves the hashes
+`.tmp/screen-build-pack.json`. The approved pending record preserves the hashes
 needed by `/edit-app --apply-plan`; deleting the derived pack prevents preview,
 debug, deploy, or direct sync from treating the previous operations as current.
 `/edit-app --apply-plan` recompiles it after mode-specific specialists finish.

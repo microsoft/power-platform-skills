@@ -68,11 +68,14 @@ schema-v3 screen contract and run both read-only gates:
 node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-lifecycle-readiness.js" --project-root "$PROJECT_DIR" --consumer debug
 ```
 
 On failure, stop and route to `/edit-app` or `/sync-from-plan`. Debugging may
 repair implementation defects, but it must not infer missing operations,
 dependencies, or connector methods and thereby create new planning truth.
+Lifecycle readiness proves the last validated planning/build baseline; it does
+not prevent this skill from diagnosing a later runtime or implementation defect.
 
 ### 0.0 Resolve the Metro terminal
 

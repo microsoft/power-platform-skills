@@ -17,6 +17,7 @@ const {
 } = require('../plan-approval');
 const { validateApprovalReceipt } = require('../build-dataverse-operation-manifest');
 const approvalScript = path.resolve(__dirname, '..', 'plan-approval.js');
+const { contextEnrichmentRevision, resolveContextEnrichment } = require('../resolve-context-enrichment');
 
 function makeProject(context) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-plan-approval-'));
@@ -56,12 +57,15 @@ function makeProject(context) {
 
 function writeExperienceArtifacts(root) {
   const experience = { schemaVersion: 1 };
+  const contextContract = resolveContextEnrichment('Approve this app plan.', experience);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify(experience)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), '{"schemaVersion":3,"screens":[]}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), '{"schemaVersion":1}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), `${JSON.stringify({
     schemaVersion: 1,
     experienceContractSha256: contractHash(experience),
+    contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
     briefSha256: executionSha256('Approve this app plan.'),
     requirements: [{ id: 'req-approve-plan', source: 'Approve this app plan.', priority: 'required', kind: 'job', satisfiedBy: ['screen-plan'], status: 'planned' }],
     nativeCapabilities: [], javascriptDependencies: [], connectorOperations: [],
@@ -126,6 +130,7 @@ test('a changed plan revision invalidates an earlier textual approval', (context
 test('schema and experience sidecars invalidate an earlier textual approval', (context) => {
   for (const relativePath of [
     '.tmp/dataverse-schema-contract.json',
+    '.tmp/context-enrichment-contract.json',
     '.tmp/experience-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/experience-foundation-contract.json',

@@ -252,11 +252,21 @@ function connectorFactContent(item) {
 function validateMobilePlanExecutionContract(contract, context = {}) {
   const errors = [];
   if (!contract || typeof contract !== 'object' || Array.isArray(contract)) return { valid: false, errors: ['executionContract must be an object'] };
-  exactKeys(contract, EXECUTION_SCHEMA.required, 'executionContract', errors);
+  exactKeys(contract, Object.keys(EXECUTION_SCHEMA.properties), 'executionContract', errors, EXECUTION_SCHEMA.required);
   if (contract.schemaVersion !== 1) errors.push('executionContract.schemaVersion must be 1');
   if (!SHA256.test(String(contract.experienceContractSha256 || ''))) errors.push('executionContract.experienceContractSha256 is invalid');
+  if (contract.contextEnrichmentSha256 !== undefined && !SHA256.test(String(contract.contextEnrichmentSha256))) errors.push('executionContract.contextEnrichmentSha256 is invalid');
+  if (contract.domainModelSha256 !== undefined && !SHA256.test(String(contract.domainModelSha256))) errors.push('executionContract.domainModelSha256 is invalid');
   if (!SHA256.test(String(contract.briefSha256 || ''))) errors.push('executionContract.briefSha256 is invalid');
   if (context.experienceContractSha256 && contract.experienceContractSha256 !== context.experienceContractSha256) errors.push('executionContract does not match the foreground Experience Contract');
+  if (Object.prototype.hasOwnProperty.call(context, 'contextEnrichmentSha256')) {
+    if (context.contextEnrichmentSha256 && contract.contextEnrichmentSha256 !== context.contextEnrichmentSha256) errors.push('executionContract does not match the Context Enrichment Contract');
+    if (!context.contextEnrichmentSha256 && contract.contextEnrichmentSha256 !== undefined) errors.push('executionContract retains a Context Enrichment hash without a context contract');
+  }
+  if (Object.prototype.hasOwnProperty.call(context, 'domainModelSha256')) {
+    if (context.domainModelSha256 && contract.domainModelSha256 !== context.domainModelSha256) errors.push('executionContract does not match the Prototype Domain Model');
+    if (!context.domainModelSha256 && contract.domainModelSha256 !== undefined) errors.push('executionContract retains a Domain Model hash without a domain contract');
+  }
   if (typeof context.briefText === 'string' && contract.briefSha256 !== sha256(context.briefText)) errors.push('executionContract does not match the confirmed brief bytes');
 
   const preflight = context.preflight;
