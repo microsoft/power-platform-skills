@@ -30,6 +30,159 @@ test('the handoff regression scenarios are represented exactly once', () => {
   }
 });
 
+test('shared push docs record verified Firebase, gcloud, and Azure MCP boundaries', () => {
+  const fs = require('node:fs');
+  const shared = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/shared-instructions.md'),
+    'utf8',
+  );
+  const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
+  const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
+  const addPush = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const createFlow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const officialMcp = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/official-mcp-servers.md'),
+    'utf8',
+  );
+
+  assert.match(shared, /Firebase MCP required/);
+  assert.match(shared, /gcloud MCP required for `\/setup-push-wif`/);
+  assert.match(shared, /mcp__azure__role/);
+  assert.match(shared, /mcp__azure__functionapp/);
+  assert.match(shared, /mcp__azure__appservice/);
+  assert.doesNotMatch(shared, /mcp__azure__keyvault/);
+  assert.match(shared, /role_assignment_list/);
+  assert.match(shared, /functionapp_get/);
+  assert.match(shared, /appservice_webapp_get/);
+  assert.match(shared, /appservice_webapp_deployment_get/);
+  assert.match(shared, /appservice_webapp_settings_get-appsettings/);
+  assert.match(shared, /appservice_webapp_settings_update-appsettings/);
+  assert.match(shared, /does not expose the `keyvault` namespace/i);
+  assert.match(shared, /value-carrying secret operations/i);
+  assert.match(shared, /Do \*\*not\*\* rely on nonexistent names such[\s\S]*`functionapp_list` or `keyvault_secret_list`/);
+  assert.doesNotMatch(shared, /azmcp_/);
+
+  assert.match(readme, /`\/setup-fcm`.*vendor-official Firebase MCP/);
+  assert.match(
+    readme,
+    /\| `\/setup-fcm` \| .*vendor-official Firebase MCP to list\/select\/create Firebase projects.*No CLI fallback\./,
+  );
+  assert.match(readme, /gcloud MCP for `\/setup-push-wif` Google Cloud operations/);
+  assert.match(readme, /`functionapp_get`/);
+  assert.match(readme, /does not expose the `keyvault` namespace/i);
+
+  assert.match(agents, /Firebase MCP for `\/setup-fcm`/);
+  assert.match(agents, /gcloud MCP for `\/setup-push-wif`/);
+  assert.match(agents, /`role_assignment_list`, `functionapp_get`, `appservice_webapp_get`/);
+  assert.match(agents, /does not expose Azure MCP's `keyvault` namespace/i);
+  assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
+  assert.match(officialMcp, /\/setup-push-wif[\s\S]*gcloud`, `azure[\s\S]*mcp__gcloud__run_gcloud_command[\s\S]*mcp__azure__role/s);
+  assert.match(officialMcp, /\/setup-push-service-account[\s\S]*azure[\s\S]*mcp__azure__functionapp[\s\S]*mcp__azure__appservice/s);
+  assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(officialMcp, /Do \*\*not\*\* silently fall back[\s\S]*shell CLIs/i);
+
+  assert.match(addPush, /vendor-official Firebase MCP\s+only/);
+  assert.doesNotMatch(addPush, /Firebase MCP[\s\S]*plus gcloud MCP/);
+  assert.match(createFlow, /vendor-official Firebase MCP only/);
+});
+
+test('push sender auth skills pin GA MCP versions and namespace semantics', () => {
+  const fs = require('node:fs');
+  const wifSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-wif/SKILL.md'),
+    'utf8',
+  );
+  const wifReference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-wif.md'),
+    'utf8',
+  );
+  const endpointSkill = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-service-account/SKILL.md'),
+    'utf8',
+  );
+  const functionReference = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-push-service-account/references/function-endpoint.md'),
+    'utf8',
+  );
+
+  assert.match(wifSkill, /allowed-tools: .*mcp__gcloud__run_gcloud_command.*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role/s);
+  assert.match(wifSkill, /MCP readiness gate/);
+  assert.match(wifSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(wifSkill, /show both servers connected with the[\s\S]*required tools/i);
+  assert.match(wifSkill, /@google-cloud\/gcloud-mcp@0\.5\.3/);
+  assert.match(wifSkill, /@azure\/mcp@2\.0\.5/);
+  assert.match(wifSkill, /mcp__azure__subscription/);
+  assert.match(wifSkill, /mcp__azure__group/);
+  assert.doesNotMatch(wifSkill, /allowed-tools: .*mcp__azure__keyvault/s);
+  assert.match(wifSkill, /mcp__azure__role/);
+  assert.match(wifSkill, /role_assignment_list/);
+  assert.match(wifSkill, /namespace tool plus[\s\S]*routed command\/parameters/);
+  assert.match(wifSkill, /prepends the `gcloud` executable itself/);
+  assert.match(wifSkill, /args"\s*:\s*\[\s*"config",\s*"list",\s*"account",\s*"--format=json"/s);
+  assert.doesNotMatch(wifSkill, /"args"\s*:\s*\[\s*"gcloud"/s);
+  assert.match(wifSkill, /does not expose the `keyvault` namespace/i);
+  assert.match(wifSkill, /value-carrying Key[\s\S]*Vault secret operations/i);
+  assert.match(wifSkill, /mcp__azure__azmcp_role_assignment_list/);
+  assert.match(wifSkill, /keyvault_secret_list/);
+  assert.doesNotMatch(wifSkill, /mcp__azure__azmcp_role_assignment_list.*allowed-tools/s);
+
+  assert.match(wifReference, /@google-cloud\/gcloud-mcp@0\.5\.3/);
+  assert.match(wifReference, /@azure\/mcp@2\.0\.5/);
+  assert.match(wifReference, /mcp__azure__subscription/);
+  assert.match(wifReference, /mcp__azure__group/);
+  assert.doesNotMatch(wifReference, /mcp__azure__keyvault/);
+  assert.match(wifReference, /mcp__azure__role/);
+  assert.match(wifReference, /role_assignment_list/);
+  assert.match(wifReference, /Call the namespace tool with routed command\/parameters/);
+  assert.match(wifReference, /prepends the `gcloud` executable itself/);
+  assert.match(wifReference, /does not expose its[\s\S]*`keyvault` namespace/i);
+  assert.match(wifReference, /no safe[\s\S]*metadata-only route/i);
+
+  assert.match(endpointSkill, /allowed-tools: .*mcp__azure__subscription.*mcp__azure__group.*mcp__azure__role.*mcp__azure__functionapp.*mcp__azure__appservice/s);
+  assert.match(endpointSkill, /MCP readiness gate/);
+  assert.match(endpointSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(endpointSkill, /show `azure` connected with the required[\s\S]*tools/i);
+  assert.match(endpointSkill, /@azure\/mcp@2\.0\.5/);
+  assert.match(endpointSkill, /mcp__azure__subscription/);
+  assert.match(endpointSkill, /mcp__azure__group/);
+  assert.doesNotMatch(endpointSkill, /allowed-tools: .*mcp__azure__keyvault/s);
+  assert.match(endpointSkill, /mcp__azure__functionapp/);
+  assert.match(endpointSkill, /mcp__azure__appservice/);
+  assert.doesNotMatch(endpointSkill, /allowed-tools: .*mcp__azure__deploy/s);
+  assert.match(endpointSkill, /mcp__azure__role/);
+  assert.match(endpointSkill, /Use the namespace[\s\S]*tool plus routed command\/parameters/);
+  assert.match(endpointSkill, /does not[\s\S]*expose the `keyvault` namespace/i);
+  assert.match(endpointSkill, /mcp__azure__azmcp_functionapp_get/);
+  assert.match(endpointSkill, /mcp__azure__azmcp_role_assignment_list/);
+  assert.match(endpointSkill, /functionapp_list/);
+  assert.match(endpointSkill, /keyvault_secret_list/);
+
+  assert.match(functionReference, /@azure\/mcp@2\.0\.5/);
+  assert.match(functionReference, /mcp__azure__subscription/);
+  assert.match(functionReference, /mcp__azure__group/);
+  assert.doesNotMatch(functionReference, /mcp__azure__keyvault/);
+  assert.match(functionReference, /mcp__azure__functionapp/);
+  assert.match(functionReference, /functionapp_get/);
+  assert.match(functionReference, /mcp__azure__appservice/);
+  assert.match(functionReference, /appservice_webapp_get/);
+  assert.match(functionReference, /appservice_webapp_deployment_get/);
+  assert.match(functionReference, /appservice_webapp_settings_get-appsettings/);
+  assert.match(functionReference, /appservice_webapp_settings_update-appsettings/);
+  assert.match(functionReference, /mcp__azure__role/);
+  assert.match(functionReference, /role_assignment_list/);
+  assert.match(functionReference, /does not expose a safe[\s\S]*metadata-only Key Vault namespace route/i);
+  assert.match(functionReference, /Function creation\/deployment and other unsupported mutation edges/);
+  assert.match(functionReference, /Do not use `keyvault_secret_get` or `keyvault_secret_create`/);
+  assert.doesNotMatch(functionReference, /mcp__azure__deploy/);
+  assert.match(functionReference, /do not\s+invent nonexistent tool names such as `mcp__azure__azmcp_functionapp_get` or\s+`functionapp_list`/i);
+});
+
 test('push orchestration documents independent resumable setup tracks', () => {
   const orchestration = require(ORCHESTRATION_EVAL_PATH);
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
@@ -95,6 +248,78 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   assert.match(readme, /certificates, private keys, provisioning profiles, device\s+UDIDs/s);
   assert.match(agents, /36 skills \+ 5 agents/);
   assert.match(agents, /Apple certificates, private keys/);
+});
+
+test('push docs require official MCP-first orchestration boundaries', () => {
+  const fs = require('node:fs');
+  const shared = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/shared-instructions.md'),
+    'utf8',
+  );
+  const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
+  const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
+  const addPush = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const createFlow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const verify = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/verify-ios-push/SKILL.md'),
+    'utf8',
+  );
+  const apple = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/setup-apple-ios/SKILL.md'),
+    'utf8',
+  );
+
+  assert.match(shared, /official MCP-first/i);
+  assert.match(shared, /firebase-tools` \*\*15\.27\.0\*\*/);
+  assert.match(shared, /15\.28\.1.*main\/unpublished/);
+  assert.match(shared, /gcloud MCP \*\*0\.5\.3\*\*/);
+  assert.match(shared, /Azure MCP GA \*\*2\.0\.5\*\*/);
+  assert.match(shared, /Firebase MCP required/);
+  assert.match(shared, /gcloud MCP required for `\/setup-push-wif`/);
+  assert.match(shared, /Azure MCP required for covered operations/);
+  assert.match(shared, /role_assignment_list/);
+  assert.match(shared, /functionapp_get/);
+  assert.match(shared, /appservice_webapp_get/);
+  assert.match(shared, /appservice_webapp_deployment_get/);
+  assert.match(shared, /appservice_webapp_settings_get-appsettings/);
+  assert.match(shared, /appservice_webapp_settings_update-appsettings/);
+  assert.match(shared, /secret values and are intentionally excluded/i);
+  assert.match(shared, /RBAC mutations/);
+  assert.match(shared, /Function\s+creation\/deployment\/auth\/managed identity/);
+  assert.match(shared, /Entra resource work/);
+  assert.match(shared, /secret-safe writes/);
+  assert.match(shared, /FlowAgent remains the Power Automate mutation path/);
+  assert.match(shared, /Apple provisioning intentionally stays on Fastlane/);
+  assert.match(readme, /Push cloud setup is \*\*official MCP-first\*\*/);
+  assert.match(readme, /No CLI fallback/);
+  assert.match(readme, /Microsoft Learn MCP\/docs remain the authoritative\s+source/);
+  assert.match(readme, /firebase-tools` \*\*15\.27\.0\*\*/);
+  assert.match(readme, /gcloud MCP \*\*0\.5\.3\*\*/);
+  assert.match(readme, /Azure MCP GA \*\*2\.0\.5\*\*/);
+  assert.match(readme, /`role_assignment_list`/);
+  assert.match(readme, /`functionapp_get`/);
+  assert.match(readme, /does not expose the `keyvault` namespace/i);
+  assert.match(readme, /RBAC mutations/);
+  assert.match(agents, /Push cloud setup is \*\*official MCP-first\*\*/);
+  assert.match(agents, /firebase-tools` 15\.27\.0/);
+  assert.match(agents, /gcloud MCP 0\.5\.3/);
+  assert.match(agents, /Azure MCP GA 2\.0\.5/);
+  assert.match(agents, /`role_assignment_list`, `functionapp_get`, `appservice_webapp_get`/);
+  assert.match(agents, /secret-safe writes remain explicit `az` gaps/);
+  assert.match(addPush, /vendor-official Firebase MCP\s+only/);
+  assert.match(
+    createFlow,
+    /Do not fall\s+back to `firebase-tools`, `gcloud`, or Azure provisioning from this skill/,
+  );
+  assert.match(verify, /consumes only previously validated MCP-first handoffs/i);
+  assert.match(apple, /does not provide a vendor-official MCP/);
+  assert.match(apple, /community\/unofficial MCP servers are out of scope/);
 });
 
 test('iOS push contract is consent-first and registers background handling before Router', () => {

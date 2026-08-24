@@ -10,19 +10,20 @@
 // Usage:
 //   npx expo config --type public --json | node scripts/resolve-firebase-app-identity.js
 //   node scripts/resolve-firebase-app-identity.js --project-root . --input expo-public.json
-//   firebase apps:list ANDROID --json | node scripts/resolve-firebase-app-identity.js \
+//   node scripts/resolve-firebase-app-identity.js --input firebase/.android-apps.mcp.yaml \
 //     --match-platform android --identifier com.contoso.app
-//   firebase apps:list ANDROID --json | node scripts/resolve-firebase-app-identity.js \
+//   node scripts/resolve-firebase-app-identity.js --input firebase/.android-apps.mcp.yaml \
 //     --match-platform android --identifier com.contoso.app \
 //     --selected-app-id 1:123:android:abc
 //
 // Exit codes:
 //   0 - identities are ready, matching completed, or safe duplicate selection is required
-//   1 - invocation, path-safety, read, or JSON parsing error
+//   1 - invocation, path-safety, read, or input parsing error
 //   2 - config identity is invalid, or Firebase app records are ambiguous/conflicting
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { firstUnsafeMcpValue } = require('./lib/mcp-result-safety');
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const PLACEHOLDER_IDENTIFIER = 'com.contoso.powerappsapp';
@@ -243,6 +244,8 @@ function unwrapFirebaseAppsList(input) {
   if (!input || typeof input !== 'object') {
     throw new SafeError('apps-list-invalid', 'Firebase apps:list JSON must be an object or array.');
   }
+  const unsafe = firstUnsafeMcpValue(input, { context: 'Firebase apps:list' });
+  if (unsafe) throw new SafeError(unsafe.code, unsafe.message);
   if (typeof input.status === 'string' && input.status !== 'success') {
     throw new SafeError('apps-list-failed', 'Firebase apps:list did not return success status.');
   }
@@ -253,20 +256,37 @@ function unwrapFirebaseAppsList(input) {
   // these known data envelopes rather than recursively trusting arbitrary JSON.
   if ('result' in input) return unwrapFirebaseAppsList(input.result);
   if (Array.isArray(input.apps)) return input.apps;
-  if (input.apps && typeof input.apps === 'object') {
-    return Object.values(input.apps).flatMap((value) => (Array.isArray(value) ? value : []));
+  if (input.apps && typeof input.apps === 'object' && !Array.isArray(input.apps)) {
+    const flattened = [];
+    for (const [bucket, value] of Object.entries(input.apps)) {
+      if (!Array.isArray(value)) {
+        throw new SafeError(
+          'apps-list-shape-unsupported',
+          `Firebase apps:list bucket ${bucket} must be an array.`,
+        );
+      }
+      flattened.push(...value);
+    }
+    return flattened;
   }
   throw new SafeError('apps-list-shape-unsupported', 'Firebase apps:list JSON has no app array.');
 }
 
 function summarizeFirebaseApp(record) {
-  return {
+  const summary = {
     appId: typeof record.appId === 'string' ? record.appId : null,
     displayName: typeof record.displayName === 'string' ? record.displayName : null,
     platform: typeof record.platform === 'string' ? record.platform.toUpperCase() : null,
     packageName: typeof record.packageName === 'string' ? record.packageName : null,
     bundleId: typeof record.bundleId === 'string' ? record.bundleId : null,
   };
+  if (Object.values(summary).every((value) => value === null)) {
+    throw new SafeError(
+      'apps-list-record-unsupported',
+      'Firebase apps:list record has no supported identity fields.',
+    );
+  }
+  return summary;
 }
 
 function matchFirebaseApp(input, platform, identifier, selectedAppId = null) {
@@ -277,9 +297,19 @@ function matchFirebaseApp(input, platform, identifier, selectedAppId = null) {
   }
 
   const records = unwrapFirebaseAppsList(input);
+  const unsafe = firstUnsafeMcpValue(records, { context: 'Firebase apps:list' });
+  if (unsafe) throw new SafeError(unsafe.code, unsafe.message);
   const apps = records.map((record) => {
     if (!record || typeof record !== 'object' || Array.isArray(record)) {
       throw new SafeError('apps-list-record-invalid', 'Firebase apps:list contains a non-object record.');
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === 'object') {
+        throw new SafeError(
+          'apps-list-record-nested',
+          'Firebase apps:list records must stay flat scalar objects.',
+        );
+      }
     }
     return summarizeFirebaseApp(record);
   });
@@ -410,10 +440,80 @@ async function readStdin(stream) {
   return input;
 }
 
-function parseJson(raw) {
+function parseYamlScalar(rawValue) {
+  const value = rawValue.trim();
+  if (value === '' || value === 'null' || value === '~') return null;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (value.startsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output has an invalid quoted value.');
+    }
+  }
+  if (value.startsWith("'")) {
+    if (!value.endsWith("'")) {
+      throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output has an invalid quoted value.');
+    }
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  if (/[\[\]{}|>&*!]/.test(value)) {
+    throw new SafeError(
+      'unsupported-mcp-yaml',
+      'Firebase MCP app output contains an unsupported YAML value.',
+    );
+  }
+  return value;
+}
+
+function parseFirebaseMcpAppsYaml(raw) {
+  const trimmed = raw.trim();
+  if (trimmed === '[]') return [];
+
+  // `firebase_list_apps` serializes its array with js-yaml as a flat sequence:
+  //   - name: projects/example/androidApps/1:123:android:abc
+  //     appId: 1:123:android:abc
+  //     platform: ANDROID
+  //     packageName: com.contoso.app
+  // Native app identity fields are scalar, so reject nested collections, tags,
+  // anchors, and block scalars rather than accepting general-purpose YAML.
+  const records = [];
+  let current = null;
+  for (const originalLine of raw.split(/\r?\n/)) {
+    if (originalLine.trim() === '') continue;
+    if (originalLine.includes('\t')) {
+      throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output must not contain tabs.');
+    }
+    const recordStart = /^- ([A-Za-z][A-Za-z0-9_]*):(?: (.*))?$/.exec(originalLine);
+    const property = /^  ([A-Za-z][A-Za-z0-9_]*):(?: (.*))?$/.exec(originalLine);
+    if (recordStart) {
+      current = {};
+      records.push(current);
+      current[recordStart[1]] = parseYamlScalar(recordStart[2] || '');
+    } else if (property && current) {
+      if (Object.prototype.hasOwnProperty.call(current, property[1])) {
+        throw new SafeError('duplicate-mcp-yaml-field', 'Firebase MCP app output repeats a field.');
+      }
+      current[property[1]] = parseYamlScalar(property[2] || '');
+    } else {
+      throw new SafeError(
+        'unsupported-mcp-yaml',
+        'Firebase MCP app output is not the expected flat app-list shape.',
+      );
+    }
+  }
+  if (records.length === 0) {
+    throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output contains no app records.');
+  }
+  return records;
+}
+
+function parseInput(raw, allowMcpAppsYaml) {
   try {
     return JSON.parse(raw);
   } catch {
+    if (allowMcpAppsYaml) return parseFirebaseMcpAppsYaml(raw);
     throw new SafeError('invalid-json', 'Input is not valid JSON.');
   }
 }
@@ -426,9 +526,9 @@ function usage() {
     '         [--project-root <path>] [--input <project-local-path>]',
     '',
     'Without match arguments, input is evaluated Expo public-config JSON.',
-    'With match arguments, input is Firebase apps:list --json output.',
+    'With match arguments, input is Firebase app-list JSON or the raw firebase_list_apps MCP YAML text.',
     'Safe duplicate exact matches require a second call with --selected-app-id.',
-    'Without --input, JSON is read from stdin.',
+    'Without --input, input is read from stdin.',
   ].join('\n');
 }
 
@@ -459,7 +559,7 @@ async function main(argv = process.argv.slice(2), stdin = process.stdin, cwd = p
       source = { kind: 'stdin' };
     }
 
-    const parsedInput = parseJson(raw);
+    const parsedInput = parseInput(raw, Boolean(args.matchPlatform));
     const result = args.matchPlatform
       ? matchFirebaseApp(
         parsedInput,
@@ -492,6 +592,8 @@ if (require.main === module) {
 module.exports = {
   isWithinRoot,
   parseArgs,
+  parseFirebaseMcpAppsYaml,
+  parseInput,
   matchFirebaseApp,
   resolveFirebaseAppIdentity,
   resolveInputPath,

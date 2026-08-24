@@ -2,7 +2,7 @@
 name: setup-push-wif
 description: Use when provisioning, validating, reusing, or repairing the keyless Entra-to-Google Workload Identity Federation used by a Power Automate FCM sender, including JWT claim discovery, Google STS, sender service-account impersonation, or Azure Key Vault RBAC.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__gcloud__run_gcloud_command, mcp__azure__subscription, mcp__azure__group, mcp__azure__role
 model: opus
 ---
 
@@ -12,6 +12,10 @@ model: opus
 
 **Sender-auth handoff: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
 
+**Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
+use the `/setup-push-wif` row as a hard preflight for required gcloud/Azure MCP
+availability.
+
 # Set up push sender WIF
 
 Validate, reuse, repair, or provision—and then prove—the keyless identity chain
@@ -19,16 +23,70 @@ used by the push notification flow:
 
 `dedicated Entra sender app -> Google STS -> sender service account -> FCM`
 
-Use `az` for Entra ID and Key Vault operations and `gcloud` for all Google
-Cloud IAM/WIF operations. Never create or download a Google service-account
-key.
+## MCP readiness gate
+
+Before any Google Cloud or Azure MCP read-back in this workflow, verify the
+official MCP surfaces required by `/setup-push-wif`. If either the `gcloud` or
+`azure` server is missing, disconnected, or any required tool from the shared
+official-MCP readiness table is unavailable, STOP and give these Copilot CLI
+steps in this exact order:
+
+```text
+/mcp
+/setup
+/restart
+/mcp
+```
+
+Require the second `/mcp` check to show both servers connected with the
+required tools before continuing. Do not silently fall back to `gcloud` or
+replace covered Azure MCP reads with ad-hoc CLI calls.
+
+Use the official MCP tools with explicit boundaries:
+
+- **Pinned versions for this workflow** — target
+  `@google-cloud/gcloud-mcp@0.5.3` and `@azure/mcp@2.0.5`. Do not switch this
+  skill to Azure MCP 3.x beta semantics or tool assumptions.
+- **Google Cloud resource operations** — use
+  `mcp__gcloud__run_gcloud_command` for every Google Cloud read, create,
+  update, delete, IAM, WIF, and read-back step. It accepts a tokenized
+  `args` array for exactly one `gcloud` command per call, and the MCP tool
+  prepends the `gcloud` executable itself. Therefore `args` must start with the
+  subcommand (for example `config`, `iam`, or `services`), never a literal
+  `"gcloud"` token. Do not pass a shell string, and do not use pipes,
+  redirects, command substitution, chaining, or multi-command sequences.
+  Prefer `--format=json(...)`; if a projection path is unknown, discover it
+  with a separate `--limit=1 --format=json` call first.
+- **Azure MCP covered reads** — Azure MCP GA `2.0.5` runs in namespace mode in
+  this plugin. Relevant namespaces here are `mcp__azure__subscription`,
+  `mcp__azure__group`, and `mcp__azure__role`. Use the namespace tool plus
+  routed command/parameters—for example, `mcp__azure__role` with
+  `role_assignment_list` for RBAC inventory. Do not rely on nonexistent names
+  such as `mcp__azure__azmcp_role_assignment_list` or `keyvault_secret_list`.
+  The package's full Azure MCP GA `2.0.5` surface includes value-carrying Key
+  Vault secret operations but no safe metadata-only route for this workflow,
+  so the plugin does not expose the `keyvault` namespace. Keep Key Vault secret
+  transfer and metadata on the documented `az` safe path.
+- **Narrow `az` exceptions** — keep `az` only for Entra
+  app/service-principal/credential work and for the secret-safe Key Vault
+  metadata/write path that Azure MCP GA `2.0.5` docs/source do not expose
+  without value disclosure. Do not silently fall back to `az` for covered Azure
+  MCP reads or for any Google Cloud resource operation.
+
+Never create or download a Google service-account key.
 
 ## Safety and required inputs
 
 Before creating or changing cloud resources:
 
 1. Read `memory-bank.md` and the WIF reference.
-2. Verify `az account show` and `gcloud config list account --format=json`.
+2. Verify `az account show` and `mcp__gcloud__run_gcloud_command` with:
+
+   ```json
+   {
+     "args": ["config", "list", "account", "--format=json"]
+   }
+   ```
 3. Collect tenant ID, Azure subscription, Key Vault name/secret name, Google
    project ID/project number, pool/provider IDs, Firebase project ID, and the
    proposed sender service-account name.
@@ -72,6 +130,14 @@ the presence of the required narrow one. Normalize only documented
 representation differences (for example, audience list ordering and the
 helper-provided trailing-slash normalization); do not rewrite expressions or
 treat semantically broader conditions as equal.
+
+For Azure inventory in this skill:
+
+- use `mcp__azure__role` with `role_assignment_list` for RBAC read-back at the
+  vault, secret, or resource scope;
+- use `az keyvault secret show --query '{id:id,enabled:attributes.enabled,expires:attributes.expires}'`
+  for metadata-only secret state because the plugin intentionally does not
+  expose Azure MCP's value-carrying `keyvault` namespace.
 
 Classify the inventory into exactly one route:
 
@@ -197,10 +263,37 @@ the live provider. A provider/claim mismatch is Route B material, not a reason
 to weaken the condition. Stop before proof until the user explicitly approves
 and the repair is read back successfully.
 
-## 4. Provision or repair Google WIF with gcloud
+## 4. Provision or repair Google WIF with gcloud MCP
 
-Enable the STS, IAM Credentials, IAM, and FCM APIs. Use `gcloud iam
-workload-identity-pools` and
+Use `mcp__gcloud__run_gcloud_command` for all Google operations in this step.
+Pass exactly one tokenized command per call, for example:
+
+```json
+{
+  "args": [
+    "iam",
+    "workload-identity-pools",
+    "providers",
+    "describe",
+    "<provider-id>",
+    "--location=global",
+    "--workload-identity-pool=<pool-id>",
+    "--project=<project-id>",
+    "--format=json"
+  ]
+}
+```
+
+The MCP tool prepends `gcloud` itself, so `args` must begin with the
+subcommand (`iam` here), not the executable name.
+
+Do not start by enabling APIs. The official `run_gcloud_command` guidance says
+to assume required APIs are already enabled. If a specific command fails because
+STS, IAM Credentials, IAM, or FCM is disabled, stop, show the exact API, obtain
+approval, run one explicit `gcloud services enable <api>` call, and then reread
+the affected resource before continuing.
+
+Use `gcloud iam workload-identity-pools` and
 `gcloud iam workload-identity-pools providers create-oidc` with:
 
 - the observed normalized issuer;
@@ -211,10 +304,11 @@ workload-identity-pools` and
 - an attribute condition comparing that mapped attribute to the dedicated
   Entra sender client ID.
 
-Read the provider back with `gcloud ... providers describe` and compare issuer,
-audience, mapping, and condition before granting access. A mismatch is
-incompatible with reuse; do not compensate by broadening the condition. Repair
-only through the approved Route B plan, then read it back again.
+Read the provider back with a separate `mcp__gcloud__run_gcloud_command` call
+to `gcloud ... providers describe --format=json` and compare issuer, audience,
+mapping, and condition before granting access. A mismatch is incompatible with
+reuse; do not compensate by broadening the condition. Repair only through the
+approved Route B plan, then read it back again.
 
 Create a dedicated sender service account. Grant
 `roles/iam.workloadIdentityUser` on that service account only to the exact

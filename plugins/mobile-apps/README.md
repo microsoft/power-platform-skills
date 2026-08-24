@@ -212,15 +212,14 @@ iOS route is:
 -> /verify-ios-push
 ```
 
-Run `/setup-fcm` to list accessible Firebase projects, select one, create a new
-project, or add Firebase to an existing Google Cloud project. The workflow keeps
-Google credentials separated: `gcloud` verifies the active account and
-Application Default Credentials (ADC), while `npx firebase-tools` performs
-Firebase project and app operations without a global install. Android package
-names and iOS bundle identifiers are resolved from Expo config, so matching
-Firebase apps are reused and only missing registrations are created. One exact
-match is reused automatically; multiple safe exact matches require an explicit
-Android/iOS app-ID choice, which is revalidated before client-config download.
+Push cloud setup is **official MCP-first**. `/setup-fcm` is the only supported
+owner for Firebase project/app selection and requires the vendor-official
+Firebase MCP; do not fall back to `firebase-tools` or other CLI/browser
+automation when that MCP path is unavailable. Android package names and iOS
+bundle identifiers are resolved from Expo config, so matching Firebase apps are
+reused and only missing registrations are created. One exact match is reused
+automatically; multiple safe exact matches require an explicit Android/iOS
+app-ID choice, which is revalidated before client-config download.
 
 Validated client files are stored as
 `firebase/google-services.json` and
@@ -260,22 +259,52 @@ cases. Firebase acceptance, a `Sent` outbox row, simulator, Expo Go, Metro, or
 configuration checks alone do not prove delivery.
 
 Run `/setup-push-wif` before flow authoring when the Google trust is not already
-verified. WIF is the preferred sender mode: it inspects a real Entra app-only
+verified. WIF is the preferred sender mode: it uses the official gcloud MCP and
+Azure MCP where its current coverage applies, inspects a real Entra app-only
 token, configures the provider from the observed issuer and application claim,
 and proves the Google STS and service-account impersonation exchange without
-storing a Google private key.
+storing a Google private key. Azure MCP GA `2.0.5` is used here for covered
+read-back/settings operations; RBAC mutations, Function
+provisioning/deployment/auth/managed identity, Entra resource work, and
+secret-safe provisioning gaps remain explicit `az` work owned by the sender-auth
+skills.
 
 Organizations with an existing Firebase service-account integration may
 instead run `/setup-push-service-account`. It validates or deploys an
-Entra-protected Azure Function that uses managed identity to read the existing
-JSON from Azure Key Vault and mint short-lived Google tokens. The skill never
-creates or downloads a Firebase Admin key. `/create-push-notification-flow`
-then consumes the validated sender-auth handoff and uses FlowAgent to create
-the outbox sender and producer flow. The producer defaults to a Dataverse
-row-created trigger and resolves the row owner to a lowercase Entra OID topic.
+Entra-protected Azure Function, using Azure MCP only for covered read-back /
+settings surfaces such as `role_assignment_list`, `functionapp_get`, and App
+Service web app/deployment/appsettings/diagnostics reads. The package's full
+Azure MCP GA `2.0.5` surface includes value-carrying Key Vault secret tools,
+so this plugin does not expose the `keyvault` namespace. RBAC
+mutations, Function provisioning/deployment/auth/managed identity, Entra
+resource work, and secret-safe writes remain explicit `az` gaps. The skill
+never creates or downloads a Firebase Admin key.
+`/create-push-notification-flow` then consumes the validated sender-auth
+handoff and uses FlowAgent to create the outbox sender and producer flow. The
+producer defaults to a Dataverse row-created trigger and resolves the row owner
+to a lowercase Entra OID topic. When Microsoft-side semantics are uncertain,
+use Microsoft Learn docs rather than guessed contracts.
 
 #### Push notification cloud prerequisites
 
+- **Required MCP servers:** vendor-official Firebase MCP for Firebase
+  project/app work, gcloud MCP for `/setup-push-wif` Google Cloud operations,
+  Azure MCP for covered read-back/settings work, and FlowAgent for Power
+  Automate mutation/read-back. There is no CLI fallback for Firebase or gcloud
+  in the documented push architecture. Azure MCP GA `2.0.5` currently covers
+  `role_assignment_list`, `functionapp_get`,
+  `appservice_webapp_get`, `appservice_webapp_deployment_get`,
+  `appservice_webapp_settings_get-appsettings`,
+  `appservice_webapp_settings_update-appsettings`, and diagnostics. This plugin
+  intentionally does not expose the `keyvault` namespace because its available
+  secret operations can return or accept secret values.
+  Azure CLI remains the explicit gap path for RBAC mutations, Function
+  provisioning/deployment/auth/managed identity, Entra resource work,
+  secret-safe writes, plus narrow local identity checks.
+  Microsoft Learn MCP/docs remain the authoritative source for
+  Microsoft-platform behavior. Tested stable package baselines for this path
+  are Firebase MCP package `firebase-tools` **15.27.0** (`15.28.1` is
+  main/unpublished), gcloud MCP **0.5.3**, and Azure MCP GA **2.0.5**.
 - **Common:** a Firebase project, matching wrapped physical-device runtime,
   Dataverse environment, Power Automate access, and licensing for Dataverse
   plus the premium connectors/actions selected by FlowAgent.
@@ -294,7 +323,10 @@ row-created trigger and resolves the row owner to a lowercase Entra OID topic.
   Automate. Azure hosting charges and Power Platform premium licensing may
   apply.
 - **iOS configuration:** Apple Developer access and manual APNs `.p8` upload
-  to Firebase. The agent never handles the key or its local path.
+  to Firebase. The agent never handles the key or its local path. Apple
+  provisioning stays on pinned local Fastlane because no vendor-official Apple
+  provisioning MCP exists for the required Developer Portal workflow, and
+  community MCPs are excluded.
 - **iOS build and verification:** macOS Wrap/Xcode tooling, a registered
   physical device, and Apple signing assets retained outside the repository.
   `/setup-apple-ios` pins managed Ruby 3.3+, Bundler 4.0.19, and Fastlane
@@ -361,14 +393,14 @@ Example edit flows:
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/add-push-notifications` | 🟡 preview | End-to-end notification client setup: permission UX, FCM topics on Android/iOS, Entra OID ↔ `allUsers` lifecycle, and Expo Router deep links. Requires a matching wrapped runtime; the template exposes a GUID-validated signed-in OID through its guarded native-host compatibility patch. |
-| `/setup-fcm` | 🟡 preview | List/select/create Firebase projects with `npx firebase-tools` after `gcloud` ADC identity checks; idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. |
+| `/setup-fcm` | 🟡 preview | Official MCP-first Firebase owner — uses the vendor-official Firebase MCP to list/select/create Firebase projects, idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. No CLI fallback. |
 | `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, validate the Firebase iOS identity plus exact Apple Team/identifier/Push handoff, then guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
-| `/setup-apple-ios` | 🟡 preview | Scaffold pinned local Bundler/Fastlane tooling; prove the exact Apple Team and Expo/Firebase bundle ID; create/reuse the explicit identifier, Push capability, registered devices, modern certificates, and verified development/ad-hoc profiles; emit the fresh non-secret build handoff. Creates no App Store Connect listing and does not build. |
+| `/setup-apple-ios` | 🟡 preview | Scaffold pinned local Bundler/Fastlane tooling; prove the exact Apple Team and Expo/Firebase bundle ID; create/reuse the explicit identifier, Push capability, registered devices, modern certificates, and verified development/ad-hoc profiles; emit the fresh non-secret build handoff. Fastlane stays because Apple provides no vendor-official provisioning MCP for this workflow, and community MCPs are excluded. Creates no App Store Connect listing and does not build. |
 | `/build-ios` | 🟡 preview | Build a registered-device development or ad-hoc IPA through `npm run build:ios` (`wrap ios`), requiring the fresh exact Apple provisioning handoff and a secure dedicated-keychain/profile/APNs proof immediately before Wrap. The previous keychain search list is always restored. Not for simulator, TestFlight, App Store, or enterprise distribution. |
 | `/verify-ios-push` | 🟡 preview | Verify the exact fresh wrapped IPA and published producer/sender flows on a registered physical iPhone/iPad across permission, foreground/background/terminated delivery, deep links, topic transitions, opt-out, and re-registration recovery. |
-| `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation with `gcloud`, then prove the complete exchange and write the non-secret sender-auth handoff. |
-| `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: validate/reuse or deploy an Entra-protected Azure Function that reads the existing JSON from Key Vault through managed identity. Never creates or downloads a Firebase Admin key. |
-| `/create-push-notification-flow` | 🟡 preview | Resume directly from an already integrated Firebase client, validate one sender-auth mode, then create the Dataverse outbox sender and row-created producer through FlowAgent. User notifications use lowercase Entra OID topics; broadcasts use exact `allUsers`. |
+| `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation through the official gcloud MCP plus Azure MCP read-back/settings coverage, while explicit `az` gaps remain for RBAC, Function provisioning/auth/managed identity, Entra resource work, and secret-safe writes that Azure MCP GA 2.0.5 does not cover. Then prove the complete exchange and write the non-secret sender-auth handoff. |
+| `/setup-push-service-account` | 🟡 preview | Compatibility path for an existing Firebase service-account integration: use Azure MCP for covered read-back/settings work, but keep RBAC mutations, Function provisioning/deployment/auth/managed identity, Entra resource work, and secret-safe writes on the documented `az` gap path. Never creates or downloads a Firebase Admin key. |
+| `/create-push-notification-flow` | 🟡 preview | Resume directly from an already integrated Firebase client, validate one sender-auth mode from the MCP-first owner skills, then create the Dataverse outbox sender and row-created producer through FlowAgent. User notifications use lowercase Entra OID topics; broadcasts use exact `allUsers`. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |

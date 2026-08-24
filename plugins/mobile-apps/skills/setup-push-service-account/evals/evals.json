@@ -16,7 +16,7 @@
     {
       "id": 32,
       "prompt": "We already have a service-account JSON outside the repo. Upload it to Key Vault and deploy the bundled sender Function.",
-      "expected_output": "The skill shows the resource/RBAC/auth/deployment plan and requires explicit confirmation, never reads or echoes the JSON, uploads it only with a non-echoing Key Vault --file command, grants the Function identity narrow secret read, and verifies live configuration.",
+      "expected_output": "The skill shows the resource/RBAC/auth/deployment plan and requires explicit confirmation, uses Azure MCP for covered function-app and RBAC reads, uses az only for the unsupported Function/authsettings/app-settings/deployment edges and the non-echoing Key Vault --file upload, never reads or echoes the JSON, grants the Function identity narrow secret read, and verifies live configuration.",
       "files": []
     },
     {
@@ -28,7 +28,7 @@
     {
       "id": 34,
       "prompt": "The Function exists and FCM validateOnly works with my Azure CLI login, but the Power Automate connection identity has not been tested. Write sender-auth.json anyway.",
-      "expected_output": "The skill withholds the handoff until the exact flow invoke identity is authorized and completes the Entra, Key Vault, Google OAuth, and FCM validateOnly proof chain.",
+      "expected_output": "The skill withholds the handoff until the exact flow invoke identity is authorized and completes the Entra, Key Vault, Google OAuth, and FCM validateOnly proof chain, without substituting broad Azure CLI inventory for the covered Azure MCP reads.",
       "files": []
     }
   ]

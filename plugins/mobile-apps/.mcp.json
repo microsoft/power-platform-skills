@@ -1,7 +1,28 @@
 {
   "$schema": "https://modelcontextprotocol.io/schema/mcp-server.json",
-  "_comment": "Optional MCP servers shipped with the mobile-app plugin. The host (Claude Code, Copilot Chat) launches these on demand; no install step required by the user. The microsoft-learn server is a hosted HTTP MCP that returns authoritative Microsoft docs (Dataverse Web API, Power Platform CLI, connectors, Graph) — use it whenever a Microsoft-platform behavior is uncertain rather than guessing. Runtime diagnosis, when requested, is driven by /debug-app reading the captured Metro terminal, not by React Native Web or direct Metro HTTP probes.",
+  "_comment": "Optional MCP servers shipped with the mobile-app plugin. The host (Claude Code, Copilot Chat) launches these on demand; no install step required by the user. Firebase, gcloud, and Azure launch through scripts/launch-official-mcp.js so version pins and capability narrowing stay centralized and testable. The microsoft-learn server is a hosted HTTP MCP that returns authoritative Microsoft docs (Dataverse Web API, Power Platform CLI, connectors, Graph) — use it whenever a Microsoft-platform behavior is uncertain rather than guessing. Runtime diagnosis, when requested, is driven by /debug-app reading the captured Metro terminal, not by React Native Web or direct Metro HTTP probes.",
   "mcpServers": {
+    "firebase": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const fs=require('node:fs'); const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd(); const entry=path.resolve(root,'scripts','launch-official-mcp.js'); if(!fs.existsSync(entry)) throw new Error('Could not resolve mobile-apps plugin root; set PLUGIN_ROOT or launch from the plugin root'); require(entry).launch('firebase', { pluginRoot: root });"
+      ]
+    },
+    "gcloud": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const fs=require('node:fs'); const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd(); const entry=path.resolve(root,'scripts','launch-official-mcp.js'); if(!fs.existsSync(entry)) throw new Error('Could not resolve mobile-apps plugin root; set PLUGIN_ROOT or launch from the plugin root'); require(entry).launch('gcloud', { pluginRoot: root });"
+      ]
+    },
+    "azure": {
+      "command": "node",
+      "args": [
+        "-e",
+        "const fs=require('node:fs'); const path=require('node:path'); const root=process.env.PLUGIN_ROOT||process.env.CLAUDE_PLUGIN_ROOT||process.cwd(); const entry=path.resolve(root,'scripts','launch-official-mcp.js'); if(!fs.existsSync(entry)) throw new Error('Could not resolve mobile-apps plugin root; set PLUGIN_ROOT or launch from the plugin root'); require(entry).launch('azure', { pluginRoot: root });"
+      ]
+    },
     "microsoft-learn": {
       "type": "http",
       "url": "https://learn.microsoft.com/api/mcp"

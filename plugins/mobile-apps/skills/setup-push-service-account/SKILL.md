@@ -2,7 +2,7 @@
 name: setup-push-service-account
 description: Use when a Power Apps mobile push sender must call an Entra-protected Azure Function that sends FCM HTTP v1 with an existing Firebase service-account JSON stored in Azure Key Vault. Use this skill to validate and reuse an existing endpoint or, after explicit confirmation, scaffold and deploy the bundled least-privilege Function. Never create or download a Firebase Admin key.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__azure__subscription, mcp__azure__group, mcp__azure__role, mcp__azure__functionapp, mcp__azure__appservice
 model: opus
 ---
 
@@ -12,15 +12,72 @@ model: opus
 
 **Function security and proof: [function-endpoint.md](${PLUGIN_ROOT}/skills/setup-push-service-account/references/function-endpoint.md)**.
 
+**Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
+use the `/setup-push-service-account` row as a hard preflight for required
+Azure MCP availability.
+
 # Set up an FCM service-account Function endpoint
 
 Set up the compatibility sender path:
 
 `Power Automate invoke identity -> Entra-protected Azure Function -> managed identity -> Key Vault -> Google OAuth -> FCM HTTP v1`
 
+## MCP readiness gate
+
+Before any Azure MCP inventory or read-back in this workflow, verify the
+official MCP surface required by `/setup-push-service-account`. If the `azure`
+server is missing, disconnected, or any required tool from the shared
+official-MCP readiness table is unavailable, STOP and give these Copilot CLI
+steps in this exact order:
+
+```text
+/mcp
+/setup
+/restart
+/mcp
+```
+
+Require the second `/mcp` check to show `azure` connected with the required
+tools before continuing. Do not silently replace covered Azure MCP reads with
+`az`; only the documented post-readiness safe gaps remain on the `az` path.
+
 This path is for organizations that already possess a Firebase service-account
 JSON and cannot yet use `/setup-push-wif`. Prefer WIF for new deployments because
 this mode retains a long-lived Google private key in Key Vault.
+
+Use Azure MCP and `az` with a narrow coverage policy:
+
+- **Pinned versions for this workflow** — target `@azure/mcp@2.0.5`. This
+  compatibility path does not adopt Azure MCP 3.x beta semantics.
+- **Azure MCP covered reads/settings** — Azure MCP GA `2.0.5` runs in
+  namespace mode in this plugin. Relevant namespaces here are
+  `mcp__azure__subscription`, `mcp__azure__group`, `mcp__azure__role`,
+  `mcp__azure__functionapp`, and `mcp__azure__appservice`. Use the namespace
+  tool plus routed command/parameters:
+  `mcp__azure__functionapp` for `functionapp_get`,
+  `mcp__azure__appservice` for the documented
+  webapp/deployment/appsettings/diagnostic read-back surfaces, and
+  `mcp__azure__role` for `role_assignment_list`. Do not rely on nonexistent
+  names such as `mcp__azure__azmcp_functionapp_get`,
+  `mcp__azure__azmcp_role_assignment_list`, `functionapp_list`, or
+  `keyvault_secret_list`.
+- **Do not use secret-returning Key Vault MCP tools here** — Azure MCP GA
+  `2.0.5` docs/source show only value-carrying Key Vault secret operations and
+  no safe metadata-only route for this workflow. The plugin therefore does not
+  expose the `keyvault` namespace; keep sender-auth Key Vault work on the
+  documented secret-safe `az` path.
+- **Narrow `az` exceptions only** — keep `az` for Entra
+  app/service-principal/credential work, the non-echoing
+  `az keyvault secret set --file` upload, metadata-only Key Vault queries, and
+  proven unsupported Function edges from Azure MCP GA `2.0.5` docs/source:
+  exact resource ID/identity-principal discovery, authsettingsV2 read/write,
+  managed-identity enablement, Function creation/deployment, and other
+  unsupported Function/App Service mutations. Do not silently fall back to `az`
+  for covered Azure MCP reads/settings.
+
+This compatibility path performs no Google Cloud resource administration. Do
+not introduce `gcloud`, Firebase Admin key creation, or Google MCP operations
+here.
 
 ## Non-negotiable credential boundary
 
@@ -110,10 +167,13 @@ npm install
 npm test
 ```
 
-Use Azure CLI to create or reuse resources exactly as approved. Enable managed
+Use Azure MCP for the covered inventory/read-back/settings steps and use `az`
+only for the approved unsupported Function edges above. Enable managed
 identity, assign only the narrow Key Vault secret-read role, configure
 authsettingsV2 to return 401 and allow only the exact audience/caller
-application, then deploy. Read every setting and role back after mutation.
+application, then deploy. Read every setting and role back after mutation; do
+not substitute broad Azure CLI inventory for an available Azure MCP
+read/settings operation.
 
 ### Existing-key upload
 

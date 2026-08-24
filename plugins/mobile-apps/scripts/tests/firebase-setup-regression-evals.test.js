@@ -302,7 +302,7 @@ test('sanitized SDK fixtures cover exact project, app, package, and bundle valid
   );
 });
 
-test('fixtures and workflow remain sanitized and require no network or Admin key', () => {
+test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI fallback', () => {
   const fixtureNames = fs.readdirSync(FIXTURE_ROOT).sort();
   assert.strictEqual(fixtureNames.length, 18);
   for (const name of fixtureNames) {
@@ -311,21 +311,81 @@ test('fixtures and workflow remain sanitized and require no network or Admin key
     assert.doesNotMatch(content, /ya29\.|AIza[0-9A-Za-z_-]{20,}/);
   }
 
+  const provisioning = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/firebase-cli-provisioning.md'),
+    'utf8',
+  );
+  const officialMcp = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/official-mcp-servers.md'),
+    'utf8',
+  );
+  assert.match(officialMcp, /Workflow readiness gates and `\/mcp` recovery/);
+  assert.match(officialMcp, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(officialMcp, /\/setup-fcm[\s\S]*firebase[\s\S]*mcp__firebase__firebase_get_environment[\s\S]*mcp__firebase__firebase_get_sdk_config/s);
+  assert.match(officialMcp, /\/setup-apns[\s\S]*firebase[\s\S]*mcp__firebase__firebase_get_environment[\s\S]*mcp__firebase__firebase_list_apps/s);
+  assert.match(officialMcp, /Do \*\*not\*\* silently fall back[\s\S]*shell CLIs/i);
+  assert.match(provisioning, /mcp__firebase__firebase_get_environment/);
+  assert.match(provisioning, /mcp__firebase__firebase_login/);
+  assert.match(provisioning, /mcp__firebase__firebase_list_projects/);
+  assert.match(provisioning, /mcp__firebase__firebase_create_project/);
+  assert.match(provisioning, /mcp__firebase__firebase_list_apps/);
+  assert.match(provisioning, /mcp__firebase__firebase_create_app/);
+  assert.match(provisioning, /mcp__firebase__firebase_get_sdk_config/);
+  assert.match(provisioning, /extract-firebase-sdk-config\.js/);
+  assert.match(provisioning, /firebase\/\.android-sdk-config\.mcp\.txt/);
+  assert.match(provisioning, /firebase\/\.ios-sdk-config\.mcp\.txt/);
+  assert.match(provisioning, /15\.27\.0/);
+  assert.match(provisioning, /organization[\s\S]*folder[\s\S]*Do not fall back to CLI parent flags/i);
+  assert.match(provisioning, /no separate addFirebase core MCP tool/i);
+  assert.doesNotMatch(provisioning, /npx firebase-tools/);
+  assert.doesNotMatch(provisioning, /15\.28\.1/);
+
   const skill = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-fcm/SKILL.md'), 'utf8');
-  assert.match(skill, /projects:create <PROJECT_ID>/);
-  assert.match(skill, /projects:addfirebase <PROJECT_ID>/);
-  assert.match(skill, /apps:create ANDROID/);
-  assert.match(skill, /apps:create IOS/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_environment/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_login/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_update_environment/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_projects/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_project/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_create_project/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_apps/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_create_app/);
+  assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_sdk_config/);
+  assert.match(skill, /MCP readiness gate/);
+  assert.match(skill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(skill, /show `firebase` connected with the required[\s\S]*tools/i);
+  assert.match(skill, /extract-firebase-sdk-config\.js/);
+  assert.match(skill, /firebase\/\.android-sdk-config\.mcp\.txt/);
+  assert.match(skill, /firebase\/\.ios-sdk-config\.mcp\.txt/);
   assert.match(skill, /--selected-app-id "<ANDROID_APP_ID>"/);
   assert.match(skill, /selection-required/);
   assert.match(skill, /\/setup-apns/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
-  assert.doesNotMatch(skill, /firebase-tools\s+(?:login|login:add|logout)(?:\s|`)/);
+  assert.match(skill, /Do not run `firebase-tools`, raw REST, or browser automation as fallback/);
+  assert.match(skill, /The official Firebase MCP `firebase_create_project` tool[\s\S]*Do not fall back to CLI parent flags/);
+  assert.match(skill, /15\.27\.0/);
+  assert.match(skill, /no separate addFirebase core MCP tool/i);
+  assert.doesNotMatch(skill, /npx firebase-tools/);
+  assert.doesNotMatch(skill, /15\.28\.1/);
+  assert.doesNotMatch(skill, /projects:create <PROJECT_ID>/);
+  assert.doesNotMatch(skill, /projects:addfirebase <PROJECT_ID>/);
+  assert.doesNotMatch(skill, /apps:create ANDROID/);
+  assert.doesNotMatch(skill, /apps:sdkconfig ANDROID/);
 
   const apnsSkill = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/setup-apns/SKILL.md'), 'utf8');
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_environment/);
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_login/);
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_update_environment/);
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_projects/);
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_project/);
+  assert.match(apnsSkill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_apps/);
+  assert.match(apnsSkill, /MCP readiness gate/);
+  assert.match(apnsSkill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
+  assert.match(apnsSkill, /show `firebase` connected with the required[\s\S]*tools/i);
   assert.match(apnsSkill, /--selected-app-id "<IOS_APP_ID>"/);
   assert.match(apnsSkill, /selected-app-id-not-found/);
   assert.match(apnsSkill, /selected-app-identity-mismatch/);
+  assert.match(apnsSkill, /firebase\/\.ios-apps\.mcp\.yaml/);
+  assert.doesNotMatch(apnsSkill, /\.ios-apps\.mcp\.json/);
   assert.match(apnsSkill, /never fall back[\s\S]*exact-bundle candidate/i);
   assert.match(apnsSkill, /configured, device verification\s+pending/i);
   assert.match(apnsSkill, /Only `\/verify-ios-push` may change the status to physically verified/);
@@ -336,9 +396,10 @@ test('fixtures and workflow remain sanitized and require no network or Admin key
   assert.match(apnsSkill, /route the user to `\/setup-apple-ios`/i);
   assert.match(apnsSkill, /only supported Firebase credential route[\s\S]*authentication key \(`\.p8`\)/i);
   assert.match(apnsSkill, /Do not use Fastlane `pem`/);
-  assert.match(apnsSkill, /There is no supported\s+Firebase CLI or Firebase Management API operation/i);
+  assert.match(apnsSkill, /There is no supported\s+Firebase MCP, Firebase CLI, or Firebase Management API operation/i);
   assert.match(apnsSkill, /outside this and every other repository/);
   assert.match(apnsSkill, /exact immutable iOS app ID and\s+bundle ID validated in Phase 1/i);
   assert.match(apnsSkill, /confirmation that the manual upload succeeded plus the safe Key\s+ID and Team ID/i);
+  assert.doesNotMatch(apnsSkill, /npx firebase-tools/);
   assert.doesNotMatch(apnsSkill, /apps:create IOS/);
 });

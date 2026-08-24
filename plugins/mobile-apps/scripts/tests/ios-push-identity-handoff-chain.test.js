@@ -45,7 +45,9 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
   assert.ok(skill.includes('Record non-secret setup state'), 'documents state recording');
   assert.ok(skill.includes('memory-bank.md'), 'uses memory-bank.md');
   assert.ok(skill.includes('Do not record Google account details'), 'blocks credential storage');
-  assert.ok(skill.includes('Never print the token'), 'blocks token printing');
+  assert.ok(skill.includes('mcp__firebase__firebase_get_environment'), 'uses Firebase MCP environment readback');
+  assert.ok(skill.includes('mcp__firebase__firebase_login'), 'uses Firebase MCP login');
+  assert.ok(skill.includes('Session ID'), 'requires session-id verification during login');
   assert.match(skill, /Hand off first to `\/setup-apple-ios`/);
   assert.match(skill, /Only after that succeeds, hand off to\s+`\/setup-apns`/);
 });

@@ -34,6 +34,13 @@ client completion does not prove that sender authentication or delivery flows
 exist. Do not build an IPA or execute physical delivery cases here; route those
 stages to their owner skills.
 
+Push cloud setup around this skill is **official MCP-first**. `/setup-fcm` is
+the only supported Firebase owner and requires the vendor-official Firebase MCP
+only; do not substitute `firebase-tools`, `gcloud`, or browser automation from
+here. `/setup-push-wif` separately owns Google-side WIF provisioning through
+gcloud MCP, `/setup-push-service-account` owns the Azure compatibility path,
+and FlowAgent remains the only Power Automate mutation path.
+
 ## Workflow
 
 1. Verify app and runtime -> 2. Verify auth identity -> 3. Resume/establish
@@ -97,7 +104,9 @@ identifier. One exact match is reused automatically. Multiple safe exact
 matches require an immutable Firebase app-ID choice independently for Android
 and iOS, followed by a fresh exact-identity read-back. New client integrations
 still go through `/setup-fcm`; never skip it based only on an existing Firebase
-project or similarly named Firebase app.
+project or similarly named Firebase app. If `/setup-fcm` cannot prove the
+Firebase MCP path, stop and repair that owner workflow rather than falling back
+to CLI or console automation here.
 
 ### 4. Resume APNs setup when needed
 
@@ -244,4 +253,6 @@ For an already integrated native client, the user may run
 client project and resumes sender authentication as needed: WIF is preferred;
 an existing service-account integration is supported only through the secure
 Key Vault + managed identity + Entra-protected Azure Function compatibility
-path owned by `/setup-push-service-account`.
+path owned by `/setup-push-service-account`. For Microsoft-stack uncertainty,
+use the Microsoft Learn guidance in `shared/shared-instructions.md` instead of
+guessing connector, Entra, or Power Platform behavior.

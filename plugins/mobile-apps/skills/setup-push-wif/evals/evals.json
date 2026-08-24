@@ -22,7 +22,7 @@
     {
       "id": 26,
       "prompt": "All named WIF, sender service-account, FCM role, and Key Vault resources already exist. Reuse them and write sender-auth.json without changing anything.",
-      "expected_output": "The skill takes the validate/reuse route only after reading back provider issuer, audiences, mapping and condition; the exact app-restricted workloadIdentityUser binding; the dedicated enabled sender account and exact FCM custom-role permission/binding; the Key Vault secret reference and actual runtime connection principal RBAC; and a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
+      "expected_output": "The skill takes the validate/reuse route only after reading Google resources through mcp__gcloud__run_gcloud_command one command at a time, reading Azure RBAC through the GA 2.0.5 namespace tool mcp__azure__role with role_assignment_list, checking Key Vault metadata without exposing the secret value, and comparing a fresh observed Entra claim shape. It then completes a new Entra-to-STS-to-impersonation-to-FCM validateOnly proof before writing and validating the versioned non-secret handoff.",
       "files": []
     },
     {
@@ -34,13 +34,13 @@
     {
       "id": 28,
       "prompt": "The provider matches, but the sender account lacks the exact app-restricted workloadIdentityUser binding and the Power Automate Key Vault connection principal has Contributor rather than Key Vault Secrets User.",
-      "expected_output": "The skill treats both missing IAM and Key Vault data-plane RBAC as incompatible with reuse, identifies the exact principal-set member and runtime principal/scope required, requires explicit repair approval, and does not work around the failure with a broader pool binding or copied secret.",
+      "expected_output": "The skill treats both missing IAM and Key Vault data-plane RBAC as incompatible with reuse, identifies the exact principal-set member and runtime principal/scope required, uses Azure MCP for the covered RBAC inventory instead of broad az fallback, requires explicit repair approval, and does not work around the failure with a broader pool binding or copied secret.",
       "files": []
     },
     {
       "id": 29,
       "prompt": "Some dedicated WIF resources exist with repairable drift, while provisioning isolated replacements is also possible. Go ahead with whichever route is easiest.",
-      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
+      "expected_output": "The skill presents repair and new provisioning as distinct resource/RBAC plans, obtains explicit approval for exactly one route before mutation, keeps Google mutations on run_gcloud_command, keeps az limited to Entra plus secret-safe Azure gaps, does not treat inspection or repair approval as replacement approval, and reruns complete read-back comparison plus fresh end-to-end proof before writing the handoff.",
       "files": []
     }
   ]

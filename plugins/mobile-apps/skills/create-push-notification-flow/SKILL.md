@@ -34,6 +34,13 @@ Select exactly one sender-auth mode from a fresh validated project-local
 `sender-auth.json`. Never add a second mode as a fallback, migration branch, or
 failure handler.
 
+This skill consumes the validated Firebase/client and sender-auth handoffs
+produced by the official MCP-first owner skills. `/setup-fcm` owns Firebase
+through the vendor-official Firebase MCP only; `/setup-push-wif` owns
+Google-side WIF provisioning through gcloud MCP, and
+`/setup-push-service-account` owns the Azure compatibility path. Do not
+recreate that work here with CLI fallbacks.
+
 FlowAgent tools are named below without a client prefix. Claude Code exposes
 them as `mcp__flowagent__<tool>` and Copilot CLI as `flowagent-<tool>`.
 
@@ -77,7 +84,9 @@ pac auth who
 
 Treat the resolved environment ID, Dataverse URL, and tenant ID as the expected
 target. The auth stores for `npx power-apps`, `az`, `pac`, and FlowAgent are
-independent; changing one does not change another.
+independent; changing one does not change another. In this skill, `az` is a
+narrow local identity check only — Azure resource provisioning stays in the
+Azure MCP owner skills.
 
 1. Verify the active `npx power-apps` account is the intended maker and belongs
    to the resolved tenant. Compare the tenant/home-account information returned
@@ -150,7 +159,8 @@ After the owner skill returns, rerun the validator with the same expected
 Firebase project. Do not translate one mode into another, construct a handoff
 inside this skill, or author until validation succeeds. Record the validated
 mode, Firebase project, safe connection/resource identifiers, verifier, and
-proof timestamp; never record credentials or proof response bodies.
+proof timestamp; never record credentials or proof response bodies. Do not fall
+back to `firebase-tools`, `gcloud`, or Azure provisioning from this skill.
 
 ## 4. Ensure and resolve the outbox
 
@@ -213,6 +223,9 @@ by `get_operation_details`. Discover at minimum:
 Use `resolve_params`, `resolve_refs`, and `invoke_operation` for dynamic values.
 Never infer an operation ID, parameter name, enum, action type, API ID,
 connection reference, or choice integer.
+
+If a Dataverse, Power Automate, Entra, or Key Vault contract is unclear, query
+Microsoft Learn per `shared/shared-instructions.md` before guessing.
 
 Use `list_connections`, `pick_or_create_connection`, and `test_connection`.
 Require connected Embedded references for Dataverse and every mode-specific

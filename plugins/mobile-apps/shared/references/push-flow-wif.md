@@ -11,8 +11,38 @@ Google authentication and FCM in that mode.
 
 ## Identity setup, reuse, and repair
 
-Run `/setup-push-wif`. It uses `az` for Entra/Key Vault and `gcloud` for Google
-Cloud. It first inventories live resources, then explicitly selects
+Run `/setup-push-wif`. It is MCP-first with explicit tool boundaries:
+
+- **Pinned versions** — target `@google-cloud/gcloud-mcp@0.5.3` and
+  `@azure/mcp@2.0.5`. Do not reinterpret this reference through Azure MCP 3.x
+  beta behavior.
+- **Google Cloud** — all Google resource reads, mutations, IAM, WIF, and
+  read-backs use the official `mcp__gcloud__run_gcloud_command` tool. It takes
+  `args: string[]`, one tokenized `gcloud` command per call, and the tool
+  prepends the `gcloud` executable itself. Therefore `args` must start with the
+  subcommand (`config`, `iam`, `services`, and so on), never a literal
+  `"gcloud"` token. Use no pipes, redirects, command substitution, or chained
+  commands. Prefer
+  `--format=json(...)`; if a key path is unknown, discover it first with a
+  separate `--limit=1 --format=json` call.
+- **Azure covered reads** — Azure MCP GA `2.0.5` docs/source expose
+  the relevant namespace-mode tools here:
+  `mcp__azure__subscription`, `mcp__azure__group`, and `mcp__azure__role`.
+  Call the namespace tool with routed command/parameters; for example, use
+  `mcp__azure__role` with operation `role_assignment_list` for RBAC inventory.
+  Do not rely on nonexistent names such as
+  `mcp__azure__azmcp_role_assignment_list` or `keyvault_secret_list`. Azure
+  MCP GA `2.0.5` has value-carrying Key Vault operations but no safe
+  metadata-only route for this workflow, so the plugin does not expose its
+  `keyvault` namespace. Keep the Key Vault step on the documented `az` safe
+  path.
+- **Narrow `az` exceptions** — keep `az` only for Entra
+  app/service-principal/credential work and for the Key Vault metadata/write
+  sequence that Azure MCP GA `2.0.5` docs/source do not expose without secret
+  value disclosure. Do not silently replace covered Azure MCP reads with `az`,
+  and do not use `az` for Google Cloud resource administration.
+
+The skill first inventories live resources, then explicitly selects
 validate/reuse, approved repair, or approved new provisioning. Every route must
 complete a fresh end-to-end token proof before writing `sender-auth.json` or
 before flow authoring. Resource existence and old handoff proof are not proof
@@ -30,7 +60,8 @@ of current authorization.
    without verifying/signing and emits only non-secret `iss`, `aud`, present
    `appid`/`azp`, `selectedAppClaim`, and `googleProviderIssuer`. Provider
    configuration is based on this output, not assumptions about the endpoint.
-4. In Google Cloud, validate or create an OIDC workload identity provider with:
+4. In Google Cloud, validate or create an OIDC workload identity provider using
+   `mcp__gcloud__run_gcloud_command` with:
    - issuer: the normalized, observed `iss`;
    - allowed audience: the exact, observed `aud`;
    - `google.subject=assertion.sub`;
@@ -59,13 +90,22 @@ Do not assume that a v2 token endpoint guarantees a v2-shaped token or an
   audience from an app registration field, or fall back to tenant-only trust.
 - If neither `appid` nor `azp` is present, stop and repair the token contract.
 
-Read the provider back with `gcloud` and verify issuer, audience, mapping, and
-condition before adding IAM bindings. For reuse, also read back the exact
-app-restricted `roles/iam.workloadIdentityUser` principal-set binding, sender
-service account, FCM project binding/custom-role permission set, Key Vault
-secret reference, and the Power Automate Key Vault connection principal's
-effective `Key Vault Secrets User` assignment. Missing or mismatched state
-requires an explicit repair choice; it must not silently fall through to
+Read the provider back with a separate `mcp__gcloud__run_gcloud_command` call
+and verify issuer, audience, mapping, and condition before adding IAM
+bindings. Do not proactively enable Google APIs; if a specific command fails
+because a required API is disabled, stop, show the exact API, obtain approval,
+issue one explicit enable call, and reread the affected resource.
+
+For reuse, also read back the exact app-restricted
+`roles/iam.workloadIdentityUser` principal-set binding, sender service account,
+FCM project binding/custom-role permission set, Key Vault secret reference, and
+the Power Automate Key Vault connection principal's effective
+`Key Vault Secrets User` assignment. Use `mcp__azure__role` with
+`role_assignment_list` for RBAC read-back. Do not use
+`keyvault_secret_get` or `keyvault_secret_create` in sender-auth flows because
+Azure MCP GA `2.0.5` docs/source show those tools can handle secret values, and
+GA `2.0.5` does not expose a safe `keyvault_secret_list`. Missing or mismatched
+state requires an explicit repair choice; it must not silently fall through to
 provisioning.
 
 Keep tenant ID, client ID, audience, project identifiers, pool/provider IDs, and

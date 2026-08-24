@@ -23,6 +23,10 @@ FCM request as device delivery.
 FlowAgent tools are named below without a client prefix. Claude Code exposes
 them as `mcp__flowagent__<tool>` and Copilot CLI as `flowagent-<tool>`.
 
+This skill consumes only previously validated MCP-first handoffs. Repair
+Firebase, Google Cloud, Azure, or sender-auth prerequisites in their owner
+skills; do not substitute CLI fallbacks here.
+
 ## Non-negotiable test boundary
 
 Require all of the following:
@@ -112,7 +116,8 @@ evidence -> 6. Complete or keep APNs pending
 Bootstrap FlowAgent exactly as documented by
 `/create-push-notification-flow`. If unavailable or disconnected, stop with
 that skill's supported marketplace/install/restart/setup sequence. Do not use
-portal automation, shell-authored flow calls, or guessed schemas.
+portal automation, shell-authored flow calls, or guessed schemas. FlowAgent
+remains the only supported flow inspection path in this workflow.
 
 1. Resolve `power.config.json` and set/get the same FlowAgent environment.
    Require environment ID, Dataverse URL, and tenant continuity with the
@@ -284,7 +289,9 @@ error category. Do not resubmit repeatedly. Route configuration/build/APNs
 issues to `/setup-apns` or `/build-ios`, sender-auth issues to its verifier
 skill, and flow/run issues to `/create-push-notification-flow`. After the owner
 fix, create a new case label and rerun only the failed case plus any dependent
-topic transition/control case.
+topic transition/control case. For Microsoft-stack uncertainty, use the
+Microsoft Learn guidance in `shared/shared-instructions.md` instead of
+guessing Dataverse, Power Platform, Entra, or Key Vault behavior.
 
 ## 6. Record safe outcomes and completion
 

@@ -19,6 +19,11 @@ identifier/Push capability provisioning, and the retained project signing
 keychain, plus explicit development-device registration, modern certificates,
 and exact development/ad-hoc provisioning profiles.
 
+This Apple provisioning branch intentionally stays on pinned local Fastlane.
+Apple does not provide a vendor-official MCP for the required Developer Portal
+provisioning operations, and community/unofficial MCP servers are out of scope
+for this plugin.
+
 ## Credential and account boundary
 
 Apple account handling means authentication, exact team selection, and safe
@@ -109,7 +114,8 @@ bundle exec fastlane --version
 
 Every Fastlane invocation in this and later phases uses only
 `bundle exec fastlane`; never call `fastlane`, `npx fastlane`, or a global
-Fastlane executable.
+Fastlane executable. Do not replace these lanes with browser automation or
+community MCP tooling.
 
 ## Phase 3 — Choose the explicit route
 

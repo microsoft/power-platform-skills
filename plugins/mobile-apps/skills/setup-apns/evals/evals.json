@@ -5,7 +5,7 @@
       "id": 1,
       "coverage": "exact-selected-app-reuse",
       "prompt": "Set up APNs for this iOS app. /setup-fcm already recorded Firebase project field-ops-prod, iOS app ID 1:123456789:ios:abc123, bundle ID com.contoso.fieldops, and firebase/GoogleService-Info.plist. The matching iOS Firebase app already exists.",
-      "expected_output": "The skill consumes the recorded /setup-fcm identity, evaluates the Expo bundle ID, reruns resolve-firebase-app-identity.js with --selected-app-id 1:123456789:ios:abc123, reuses only that exact iOS app without creating another app, verifies the plist's project/app/bundle triple, and keeps final success gated on a matching physical-device native-build test.",
+      "expected_output": "The skill consumes the recorded /setup-fcm identity, evaluates the Expo bundle ID, reruns resolve-firebase-app-identity.js against the latest `mcp__firebase__firebase_list_apps` iOS result with --selected-app-id 1:123456789:ios:abc123, reuses only that exact iOS app without creating another app, verifies the plist's project/app/bundle triple, and keeps final success gated on a matching physical-device native-build test.",
       "files": []
     },
     {
@@ -32,14 +32,14 @@
     {
       "id": 5,
       "coverage": "duplicate-safe-selected-app-continuity",
-      "prompt": "/setup-fcm found two safe iOS Firebase apps with bundle ID com.contoso.fieldops and recorded my explicit selection 1:123456789:ios:selected. The latest apps:list still contains both exact-bundle registrations. Continue APNs setup.",
-      "expected_output": "The skill does not ask the user to select again and does not treat the duplicate bundle ID as ambiguous. It passes the recorded immutable app ID to resolve-firebase-app-identity.js with --selected-app-id, requires a match for app ID 1:123456789:ios:selected on platform IOS and bundle com.contoso.fieldops, and continues only with that exact app and its matching plist.",
+      "prompt": "/setup-fcm found two safe iOS Firebase apps with bundle ID com.contoso.fieldops and recorded my explicit selection 1:123456789:ios:selected. The latest `mcp__firebase__firebase_list_apps` iOS result still contains both exact-bundle registrations. Continue APNs setup.",
+      "expected_output": "The skill does not ask the user to select again and does not treat the duplicate bundle ID as ambiguous. It passes the recorded immutable app ID to resolve-firebase-app-identity.js with --selected-app-id against the latest MCP app JSON, requires a match for app ID 1:123456789:ios:selected on platform IOS and bundle com.contoso.fieldops, and continues only with that exact app and its matching plist.",
       "files": []
     },
     {
       "id": 6,
       "coverage": "stale-or-drifted-selected-app",
-      "prompt": "/setup-fcm recorded iOS app ID 1:123456789:ios:selected for com.contoso.fieldops, but the latest Firebase app listing either no longer contains that app ID or now associates it with another platform or bundle. Continue APNs setup using another exact-bundle app if needed.",
+      "prompt": "/setup-fcm recorded iOS app ID 1:123456789:ios:selected for com.contoso.fieldops, but the latest Firebase MCP app listing either no longer contains that app ID or now associates it with another platform or bundle. Continue APNs setup using another exact-bundle app if needed.",
       "expected_output": "The skill blocks before APNs Console upload on selected-app-id-not-found or selected-app-identity-mismatch, reports that the recorded /setup-fcm selection disappeared or drifted, never falls back to another exact-bundle candidate or creates a replacement, and directs the user back to /setup-fcm.",
       "files": []
     },
@@ -74,8 +74,8 @@
     {
       "id": 11,
       "coverage": "unsupported-auto-upload",
-      "prompt": "Automate the Firebase APNs key upload with browser automation, Firebase CLI, a Management API, or an undocumented endpoint. You can read the .p8 from my Downloads folder.",
-      "expected_output": "The skill refuses to read or handle the .p8 and refuses browser automation, Firebase CLI/API upload, and undocumented endpoints. It explicitly states that no supported Firebase CLI or Firebase Management API exists for APNs authentication-key upload, then guides manual upload with safe Key ID and matching Team ID to the exact selected Firebase iOS app.",
+      "prompt": "Automate the Firebase APNs key upload with browser automation, Firebase MCP, Firebase CLI, a Management API, or an undocumented endpoint. You can read the .p8 from my Downloads folder.",
+      "expected_output": "The skill refuses to read or handle the .p8 and refuses browser automation, Firebase MCP upload, Firebase CLI/API upload, and undocumented endpoints. It explicitly states that no supported Firebase MCP, Firebase CLI, or Firebase Management API exists for APNs authentication-key upload, then guides manual upload with safe Key ID and matching Team ID to the exact selected Firebase iOS app.",
       "files": []
     },
     {

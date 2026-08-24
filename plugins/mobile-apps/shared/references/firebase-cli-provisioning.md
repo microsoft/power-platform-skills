@@ -1,165 +1,275 @@
-# Firebase CLI provisioning preflight
+# Firebase MCP provisioning preflight
 
-Use this workflow for local, interactive provisioning. It combines the `gcloud`
-active account and Application Default Credentials (ADC) with an on-demand
-Firebase CLI. Never install `firebase-tools` globally, print access tokens, pass
-tokens on the command line, or commit Firebase Admin service-account JSON.
+Use this workflow for local, interactive Firebase provisioning through the
+**official Firebase MCP server** backed by stable `firebase-tools` **15.27.0**. Use
+Firebase MCP for Firebase project discovery, selection, creation, native app
+registration, and SDK config retrieval. Do **not** fall back to `firebase-tools`
+CLI commands, raw REST calls, or browser automation when those Firebase MCP
+operations are unavailable.
+
 Native client SDK configuration may be committed when the app workflow validates
 it and the project intentionally keeps it under `firebase/`; these files contain
 client identifiers, not an Admin private key.
 
-## 1. Verify Google identity and ADC
+## 1. Verify Firebase MCP authentication
 
-```bash
-gcloud auth list --filter=status:ACTIVE --format='value(account)'
-ADC_TOKEN="$(gcloud auth application-default print-access-token)"
-ADC_EMAIL="$(
-  curl --silent --show-error --fail \
-    --header "Authorization: Bearer ${ADC_TOKEN}" \
-    https://openidconnect.googleapis.com/v1/userinfo |
-    jq -er '.email'
-)"
-unset ADC_TOKEN
-test "$ADC_EMAIL" = "<INTENDED_GOOGLE_ACCOUNT>"
+Start with the current Firebase MCP environment:
+
+- Call `mcp__firebase__firebase_get_environment` (`firebase_get_environment`) with `{}`.
+- Read only the authenticated user, available accounts, active project, and
+  detected app IDs.
+
+If the authenticated user already matches the intended Google account, continue.
+If another already-signed-in account should be active, switch only through the
+official MCP environment tool:
+
+```json
+{
+  "active_user_account": "<INTENDED_GOOGLE_ACCOUNT>"
+}
 ```
 
-The first command reports the principal used by `gcloud`; the user-info call
-proves which principal ADC represents. Keep the token only in a shell variable
-and never print it or its authorization header. These credential stores are
-independent. If ADC is missing, expired, cannot return an email, or belongs to
-the wrong user, repair it interactively:
+Call that payload with `mcp__firebase__firebase_update_environment`
+(`firebase_update_environment`), then rerun
+`mcp__firebase__firebase_get_environment` and require the intended account.
 
-```bash
-gcloud auth application-default login --account "<INTENDED_GOOGLE_ACCOUNT>"
+If the intended account is not already authenticated, use only
+`mcp__firebase__firebase_login` (`firebase_login`):
+
+1. Call it with `{}`.
+2. Display **both** the returned login URL and Session ID to the user.
+3. Instruct the user to verify that the Session ID shown in the browser matches
+   the Session ID returned by the tool before granting access.
+4. After the user pastes the authorization code back, call the tool again with:
+
+```json
+{
+  "authCode": "<AUTH_CODE>"
+}
 ```
 
-Complete the browser flow with the intended Google account, then rerun both
-checks. Do not capture or log the token.
+5. Rerun `mcp__firebase__firebase_get_environment` and require the intended
+   authenticated user.
 
-## 2. Verify Firebase access through ADC
+If credentials are stale or the user explicitly wants to switch accounts, use
+`mcp__firebase__firebase_login` with `{ "reauth": true }` only after approval.
+Do not record Google account details, login URLs, Session IDs, or authorization
+codes in `memory-bank.md`.
 
-Firebase CLI prefers its own signed-in account store when one exists and falls
-back to ADC otherwise. Inspect that store without changing it:
+`gcloud` / ADC checks are **not required** for Firebase project/app/config work
+owned by Firebase MCP. Keep separate Google Cloud CLI identity checks in other
+owner workflows only when they explicitly need local `gcloud` continuity.
 
-```bash
-npx firebase-tools login:list
+## 2. List, select, and activate a Firebase project
+
+List accessible Firebase projects with the official MCP tool:
+
+```json
+{
+  "page_size": 1000
+}
 ```
 
-If it contains no authorized account, require the verified ADC email from Step
-1, then verify the machine-readable result:
+Call that payload with `mcp__firebase__firebase_list_projects`
+(`firebase_list_projects`). If the tool returns `next_page_token`, keep paging
+with the returned token until the selected project appears or the list is
+exhausted. Parse only non-secret project metadata such as `projectId` and
+`displayName`.
 
-```bash
-npx firebase-tools projects:list --json |
-  jq -e '.status == "success" and (.result | type == "array")' >/dev/null
+Ask the user to choose one path:
+
+- **Existing Firebase project:** select one exact `projectId` from the latest
+  MCP result.
+- **New project without parent-placement requirements:** provide a globally
+  unique project ID and optional display name.
+- **Existing Google Cloud project:** provide its exact project ID and use the
+  official MCP create tool to add Firebase.
+
+If the user requires a **new** project under a specific **organization** or
+**folder**, STOP. The official Firebase MCP `firebase_create_project` tool in
+stable `firebase-tools` 15.27.0 exposes `project_id` and `display_name`, but **no**
+organization/folder parent arguments. Do not fall back to CLI parent flags.
+
+For an existing Firebase project, confirm the authenticated user and exact
+project ID, then activate it with `mcp__firebase__firebase_update_environment`:
+
+```json
+{
+  "active_project": "<PROJECT_ID>"
+}
 ```
 
-To verify a particular project is visible, retain only its non-secret project ID:
+## 3. Create a project or add Firebase to an existing Google Cloud project
 
-```bash
-npx firebase-tools projects:list --json |
-  jq -e --arg id "<PROJECT_ID>" \
-    '.status == "success" and any(.result[]; .projectId == $id)' >/dev/null
+Creation and Firebase enablement are persistent actions. Show the authenticated
+user, project ID, and display name first.
+
+Use `mcp__firebase__firebase_create_project` (`firebase_create_project`) with:
+
+```json
+{
+  "project_id": "<PROJECT_ID>",
+  "display_name": "<DISPLAY_NAME>"
+}
 ```
 
-If `login:list` names a different account, do **not** treat that as an ADC
-failure and do not delete, rename, or edit the Firebase credential store. Either:
+Source-verified behavior in stable `firebase-tools` 15.27.0:
 
-- use the matching stored account explicitly with `--account <EMAIL>`; or
-- run the ADC-only `projects:list --json` check from a clean OS user/profile or
-  CI environment that has ADC but no Firebase CLI login.
+- if the Cloud project does **not** exist, the tool creates a new Firebase
+  project;
+- if the Cloud project already exists and already has Firebase enabled, the tool
+  reports that state without recreating it;
+- if the Cloud project exists but is **not** Firebase-enabled, the same tool
+  adds Firebase to that existing Google Cloud project.
 
-Do not use `firebase login`, `login:add`, or `logout` merely to make the stores
-match. If interactive Firebase login is intentionally required, get the user's
-approval because it changes a separate persistent credential store.
+There is **no separate addFirebase core MCP tool** in this stable surface. For
+an existing GCP project that needs Firebase enabled, use
+`mcp__firebase__firebase_create_project`; do **not** invent another MCP tool or
+emulate the path with CLI commands.
 
-## 3. Provision only after confirmation
+On permission, billing, organization-policy, auth, or ownership failures,
+report the exact MCP error and STOP.
 
-Listing is read-only. Before either command below, show the selected account,
-project ID, display name, and organization/folder (if any), then obtain explicit
-confirmation. Project IDs are globally unique and cannot be changed.
+## 4. Read back active-project readiness
 
-Create a new Google Cloud project and add Firebase:
+After selecting or creating/upgrading a project:
 
-```bash
-npx firebase-tools projects:create <PROJECT_ID> \
-  --display-name "<DISPLAY_NAME>"
+1. Rerun `mcp__firebase__firebase_list_projects` and require the exact
+   `projectId` to appear in the latest paginated result set.
+2. Call `mcp__firebase__firebase_update_environment` with
+   `{ "active_project": "<PROJECT_ID>" }`.
+3. Call `mcp__firebase__firebase_get_project` (`firebase_get_project`) with `{}`
+   and require the returned current project to match the exact selected
+   `projectId`.
+
+If the project is missing, the active project drifts, or the authenticated user
+is wrong, STOP before app registration or SDK config retrieval.
+
+## 5. List, register, and re-read native Firebase apps
+
+Always work against the **active** Firebase project selected above.
+
+List apps with `mcp__firebase__firebase_list_apps` (`firebase_list_apps`):
+
+```json
+{ "platform": "android" }
+{ "platform": "ios" }
+{ "platform": "all" }
 ```
 
-Optionally add exactly one parent:
+When deterministic local matching is required, write the **exact text result**
+from the MCP tool to a project-local scratch file (for example
+`firebase/.android-apps.mcp.yaml` or `firebase/.ios-apps.mcp.yaml`) and pass it
+unchanged to `scripts/resolve-firebase-app-identity.js`. The resolver accepts
+the official server's flat js-yaml app-list format and rejects general-purpose
+YAML features. Never synthesize, truncate, or hand-edit the output before
+matching.
 
-```bash
---organization <ORGANIZATION_ID>
---folder <FOLDER_ID>
+Register a native app only after explicit confirmation and only for a selected
+native platform. Use `mcp__firebase__firebase_create_app`
+(`firebase_create_app`) with one of these shapes:
+
+```json
+{
+  "platform": "android",
+  "display_name": "<DISPLAY_NAME>",
+  "android_config": {
+    "package_name": "<ANDROID_PACKAGE_NAME>"
+  }
+}
 ```
 
-Upgrade an existing Google Cloud project by adding Firebase resources:
-
-```bash
-npx firebase-tools projects:addfirebase <PROJECT_ID>
+```json
+{
+  "platform": "ios",
+  "display_name": "<DISPLAY_NAME>",
+  "ios_config": {
+    "bundle_id": "<IOS_BUNDLE_ID>",
+    "app_store_id": "<APP_STORE_ID>"
+  }
+}
 ```
 
-Treat `projects:addfirebase` as a persistent project upgrade, not a harmless
-lookup. Never infer permission to create or upgrade from permission to list.
+Never create a Web app in these mobile push workflows. After every creation,
+rerun `mcp__firebase__firebase_list_apps` and the deterministic local resolver.
+A rerun with unchanged Expo identity must reuse the same app IDs and require no
+additional creation.
 
-## 4. List, register, and configure apps
+## 6. Retrieve SDK config through Firebase MCP
 
-Always pass `--project <PROJECT_ID>` rather than relying on a local alias.
-Platforms are `IOS`, `ANDROID`, or `WEB` (case-insensitive).
+For native apps, use `mcp__firebase__firebase_get_sdk_config`
+(`firebase_get_sdk_config`) with the **exact selected app ID**:
 
-```bash
-npx firebase-tools apps:list --project <PROJECT_ID>
-npx firebase-tools apps:list ANDROID --project <PROJECT_ID>
-
-npx firebase-tools apps:create ANDROID "<DISPLAY_NAME>" \
-  --package-name <ANDROID_PACKAGE_NAME> --project <PROJECT_ID>
-npx firebase-tools apps:create IOS "<DISPLAY_NAME>" \
-  --bundle-id <IOS_BUNDLE_ID> --project <PROJECT_ID>
-npx firebase-tools apps:create IOS "<DISPLAY_NAME>" \
-  --bundle-id <IOS_BUNDLE_ID> --app-store-id <APP_STORE_ID> \
-  --project <PROJECT_ID>
-npx firebase-tools apps:create WEB "<DISPLAY_NAME>" --project <PROJECT_ID>
-
-npx firebase-tools apps:sdkconfig ANDROID <APP_ID> \
-  --project <PROJECT_ID> --out firebase/google-services.download.json
-npx firebase-tools apps:sdkconfig IOS <APP_ID> \
-  --project <PROJECT_ID> --out firebase/GoogleService-Info.download.plist
-npx firebase-tools apps:sdkconfig WEB <APP_ID> --project <PROJECT_ID>
+```json
+{ "app_id": "<ANDROID_APP_ID>" }
+{ "app_id": "<IOS_APP_ID>" }
 ```
 
-App creation is persistent; confirm the project, platform, display name, and
-package/bundle ID first. Treat generated SDK configuration as environment-bound
-configuration. Download to a non-canonical project-local candidate, validate it,
-and compare it with any existing canonical file before moving or replacing it.
+For Android and iOS, the tool returns the config filename plus a fenced code
+block containing the raw file contents. Require the expected filename before
+writing anything:
 
-## 5. APNs credentials are a manual Console boundary
+- Android must return `google-services.json`
+- iOS must return `GoogleService-Info.plist`
 
-The supported Firebase CLI app-management commands stop at project/app
-registration and SDK configuration. There is no supported Firebase CLI or
-Firebase Management API operation for uploading an Apple APNs authentication
-key.
+Write the **exact raw MCP tool text** to a project-local scratch file first:
 
-For iOS push, use only an Apple APNs authentication key (`.p8`) created or
-selected manually on the exact validated Apple Team, downloaded once to a
-user-controlled location outside every repository, and manually uploaded with
-its safe Key ID and matching Team ID to the exact selected Firebase iOS app in
-Firebase Console. An agent must never request, read, copy, encode, validate, or
-upload the `.p8`.
+- `firebase/.android-sdk-config.mcp.txt`
+- `firebase/.ios-sdk-config.mcp.txt`
 
+Then pass that scratch file through the deterministic local extractor:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/extract-firebase-sdk-config.js" \
+  --project-root . --platform android \
+  --input firebase/.android-sdk-config.mcp.txt \
+  --output firebase/google-services.download.json
+
+node "${PLUGIN_ROOT}/scripts/extract-firebase-sdk-config.js" \
+  --project-root . --platform ios \
+  --input firebase/.ios-sdk-config.mcp.txt \
+  --output firebase/GoogleService-Info.download.plist
+```
+
+The extractor accepts only the documented `SDK config content for \`<file>\``
+wrapper, rejects extra prose, prompt-injection-shaped filenames, and
+credential-/token-shaped payloads, then writes only the fenced file contents to
+the non-canonical candidate path:
+
+- `firebase/google-services.download.json`
+- `firebase/GoogleService-Info.download.plist`
+
+Do not write directly onto a canonical file and do not normalize or reformat
+contents before validation. Then run the deterministic local validator and move
+or reuse files only according to its structured result.
+
+## 7. APNs credentials remain a manual Console boundary
+
+The official Firebase MCP server does **not** expose an APNs authentication-key
+upload tool. There is no supported Firebase MCP, Firebase CLI, or Firebase
+Management API operation for uploading an Apple APNs authentication key.
+
+For iOS push, use only a manually handled Apple APNs authentication key (`.p8`)
+created or selected on the exact validated Apple Team, downloaded once to a
+user-controlled location outside every repository, and manually uploaded by the
+user in Firebase Console to the exact selected Firebase iOS app.
+
+An agent must never request, read, copy, encode, validate, or upload the `.p8`.
 Do not use Fastlane `pem`, APNs certificate/`.p12` generation, certificate-based
-Firebase credentials, browser automation, undocumented endpoints, or reverse
-engineered upload calls as substitutes. Those routes do not provide a supported,
-auditable handoff and may expose long-lived Apple credentials.
+Firebase credentials, browser automation, undocumented endpoints, or reverse-
+engineered upload calls as substitutes.
 
 ## Official references
 
-- [Firebase CLI documentation](https://firebase.google.com/docs/cli)
-- [Firebase projects and Google Cloud projects](https://firebase.google.com/docs/projects/learn-more)
-- [Provide credentials to ADC](https://cloud.google.com/docs/authentication/provide-credentials-adc)
-- [`gcloud auth application-default login`](https://cloud.google.com/sdk/gcloud/reference/auth/application-default/login)
-- [`gcloud auth application-default print-access-token`](https://cloud.google.com/sdk/gcloud/reference/auth/application-default/print-access-token)
-- Firebase CLI source: [`projects:list`](https://github.com/firebase/firebase-tools/blob/main/src/commands/projects-list.ts),
-  [`projects:create`](https://github.com/firebase/firebase-tools/blob/main/src/commands/projects-create.ts),
-  [`projects:addfirebase`](https://github.com/firebase/firebase-tools/blob/main/src/commands/projects-addfirebase.ts),
-  [`apps:list`](https://github.com/firebase/firebase-tools/blob/main/src/commands/apps-list.ts),
-  [`apps:create`](https://github.com/firebase/firebase-tools/blob/main/src/commands/apps-create.ts), and
-  [`apps:sdkconfig`](https://github.com/firebase/firebase-tools/blob/main/src/commands/apps-sdkconfig.ts)
+- [Firebase MCP server documentation](https://firebase.google.com/docs/ai-assistance/mcp-server)
+- [Firebase MCP README in firebase-tools 15.27.0](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/README.md)
+- Firebase MCP source in `firebase-tools` 15.27.0:
+  - [`get_environment`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/get_environment.ts)
+  - [`login`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/login.ts)
+  - [`update_environment`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/update_environment.ts)
+  - [`list_projects`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/list_projects.ts)
+  - [`get_project`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/get_project.ts)
+  - [`create_project`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/create_project.ts)
+  - [`list_apps`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/list_apps.ts)
+  - [`create_app`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/create_app.ts)
+  - [`get_sdk_config`](https://github.com/firebase/firebase-tools/blob/v15.27.0/src/mcp/tools/core/get_sdk_config.ts)

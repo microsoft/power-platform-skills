@@ -1,0 +1,28 @@
+{
+  "allow": [
+    "projects describe",
+    "projects get-iam-policy",
+    "projects add-iam-policy-binding",
+    "projects remove-iam-policy-binding",
+    "services list",
+    "services enable",
+    "iam workload-identity-pools list",
+    "iam workload-identity-pools describe",
+    "iam workload-identity-pools create",
+    "iam workload-identity-pools providers list",
+    "iam workload-identity-pools providers describe",
+    "iam workload-identity-pools providers create-oidc",
+    "iam workload-identity-pools providers update-oidc",
+    "iam service-accounts list",
+    "iam service-accounts describe",
+    "iam service-accounts create",
+    "iam service-accounts get-iam-policy",
+    "iam service-accounts add-iam-policy-binding",
+    "iam service-accounts remove-iam-policy-binding",
+    "iam service-accounts keys list",
+    "iam roles list",
+    "iam roles describe",
+    "iam roles create",
+    "iam roles update"
+  ]
+}

@@ -2,7 +2,7 @@
 name: setup-apns
 description: Use when enabling iOS push notifications for a Power Apps Expo mobile app through Firebase Cloud Messaging and APNs, including APNs authentication keys, Firebase APNs upload, iOS entitlements, or troubleshooting iOS FCM topic delivery.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__firebase__firebase_get_environment, mcp__firebase__firebase_login, mcp__firebase__firebase_update_environment, mcp__firebase__firebase_list_projects, mcp__firebase__firebase_get_project, mcp__firebase__firebase_list_apps
 model: sonnet
 ---
 
@@ -10,10 +10,36 @@ model: sonnet
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)**.
 
+**Firebase MCP provisioning: [firebase-cli-provisioning.md](${PLUGIN_ROOT}/shared/references/firebase-cli-provisioning.md)** —
+use the read-only identity and project checks here whenever the `/setup-fcm`
+Firebase MCP session state is unavailable.
+
+**Official MCP readiness: [official-mcp-servers.md](${PLUGIN_ROOT}/shared/references/official-mcp-servers.md)** —
+use the `/setup-apns` row as a hard preflight for Firebase MCP availability.
+
 # Setup APNs through Firebase
 
 FCM topics work on iOS because Firebase Messaging maps the APNs device token to
 an FCM registration token. `expo-notifications` alone is insufficient.
+
+## MCP readiness gate
+
+Before any Firebase identity/project/app read-back in this workflow, verify the
+official Firebase MCP surface required by `/setup-apns`. If the `firebase`
+server is missing, disconnected, or any required tool from the shared
+official-MCP readiness table is unavailable, STOP and give these Copilot CLI
+steps in this exact order:
+
+```text
+/mcp
+/setup
+/restart
+/mcp
+```
+
+Require the second `/mcp` check to show `firebase` connected with the required
+Firebase tools before continuing. Do not fall back to `firebase-tools`, raw
+REST, browser automation, or guessed Firebase Console behavior.
 
 ## Phase 1 — Consume the `/setup-fcm` handoff
 
@@ -35,34 +61,55 @@ APNs setup extends the exact Firebase iOS app already configured by
    to equal the handoff path. Resolve its real path and require it to remain
    inside the real project root and be a regular non-symlink file. Do not accept
    a newly supplied path or identity as a substitute for `/setup-fcm` output.
-5. Reuse the Google account route confirmed by `/setup-fcm`. If that route is
-   not available in the current session, repeat the read-only identity preflight
-   from `firebase-cli-provisioning.md`; do not infer or switch accounts. With
-   either route, rerun `projects:list --json` and require the user-intended
-   identity to see the exact recorded project ID in that fresh machine-readable
-   result. STOP on a missing project or project/account drift.
+5. Reuse the Firebase MCP authenticated user confirmed by `/setup-fcm`. If that
+   session state is not available in the current session, rerun the read-only
+   identity preflight from `firebase-cli-provisioning.md`: use only
+   `mcp__firebase__firebase_get_environment`,
+   `mcp__firebase__firebase_update_environment`, and
+   `mcp__firebase__firebase_login` to restore the exact intended account. Do not
+   infer or switch accounts outside those tools.
 
-   List iOS apps in that exact project and revalidate the recorded immutable app
+   Rerun `mcp__firebase__firebase_list_projects` with `{ "page_size": 1000 }`
+   and page until the exact recorded project ID appears or the list is
+   exhausted. Require the intended authenticated user to see that project ID in
+   the latest MCP result, then activate it with:
+
+   ```json
+   {
+     "active_project": "<PROJECT_ID>"
+   }
+   ```
+
+   Call that payload with `mcp__firebase__firebase_update_environment`, then
+   call `mcp__firebase__firebase_get_project` with `{}` and require the returned
+   current project to match the recorded `projectId`.
+
+   Next, call `mcp__firebase__firebase_list_apps` with:
+
+   ```json
+   {
+     "platform": "ios"
+   }
+   ```
+
+   Write the **exact text result** from the MCP tool to
+   `firebase/.ios-apps.mcp.yaml`, then revalidate the recorded immutable app
    selection against the evaluated bundle identifier using the same
    deterministic resolver as `/setup-fcm`:
 
    ```bash
-   IOS_MATCH="$(
-     npx firebase-tools apps:list IOS --project "<PROJECT_ID>" --json \
-       --account "<EMAIL>" |
-       node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
-         --project-root . --match-platform ios \
-         --identifier "<IOS_BUNDLE_ID>" \
-         --selected-app-id "<IOS_APP_ID>"
-   )"
+   node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
+     --project-root . --input firebase/.ios-apps.mcp.yaml \
+     --match-platform ios \
+     --identifier "<IOS_BUNDLE_ID>" \
+     --selected-app-id "<IOS_APP_ID>"
    ```
 
-   Omit `--account` only when `/setup-fcm` recorded the confirmed ADC route.
    Require `status == "match"`, `.selectedExplicitly == true`,
    `.app.appId == "<IOS_APP_ID>"`, `.app.platform == "IOS"`, and
    `.app.bundleId == "<IOS_BUNDLE_ID>"`. This remains deterministic when other
    safe registrations have the same bundle ID: only the app ID selected by
-   `/setup-fcm` may continue, without a new selection prompt or `apps:create`.
+   `/setup-fcm` may continue, without a new selection prompt or app creation.
    STOP on `selection-required`, `no-match`, `ambiguous`, `error`, project
    mismatch, or any selected app-ID/platform/bundle drift. In particular,
    `selected-app-id-not-found` means the recorded selection disappeared and
@@ -93,6 +140,7 @@ APNs setup extends the exact Firebase iOS app already configured by
        --expected-identifier "<IOS_BUNDLE_ID>"
    )"
    rm -- "$PLIST_CHECK"
+   rm -f -- firebase/.ios-apps.mcp.yaml
    ```
 
    Require `status == "reuse"`. Together with the selected-app resolver result,
@@ -154,8 +202,8 @@ The only supported Firebase credential route is a manually uploaded Apple APNs
 authentication key (`.p8`). Do not use Fastlane `pem`, generate or upload an
 APNs certificate/`.p12`, automate either website, call undocumented endpoints,
 or substitute certificate-based APNs credentials. There is no supported
-Firebase CLI or Firebase Management API operation for uploading an APNs
-authentication key; Firebase Console is the required handoff.
+Firebase MCP, Firebase CLI, or Firebase Management API operation for uploading
+an APNs authentication key; Firebase Console is the required handoff.
 
 1. Guide the user to Apple Developer -> Certificates, Identifiers & Profiles ->
    Keys while signed into the **exact validated Apple Team ID** from Phase 2.
@@ -168,8 +216,8 @@ authentication key; Firebase Console is the required handoff.
    never paste it into chat, provide its path, or place it in a project. The
    agent must not request, read, list, copy, move, inspect, encode, validate, or
    upload the `.p8`, including through `Read`, `Bash`, Fastlane, Apple APIs,
-   browser automation, Firebase CLI, Firebase APIs, or an undocumented
-   endpoint.
+   browser automation, Firebase MCP, Firebase CLI, Firebase APIs, or an
+   undocumented endpoint.
 3. Guide the user to Firebase Console -> the exact recorded Firebase project ->
    Project settings -> Cloud Messaging -> the **exact immutable iOS app ID and
    bundle ID validated in Phase 1** -> APNs authentication key. The user
@@ -181,9 +229,9 @@ authentication key; Firebase Console is the required handoff.
    ASCII letters or digits, and require the Team ID to equal the validated
    handoff. These identifiers are not the key. Never persist the `.p8`, its
    contents, a derived value, a local path, or browser/session evidence. If the
-   user asks for Fastlane `pem`, `.p12` generation, browser automation, or
-   automatic upload, decline that unsupported portion and continue only with
-   the manual `.p8` Console steps.
+   user asks for Fastlane `pem`, `.p12` generation, browser automation, Firebase
+   MCP upload, Firebase CLI/API upload, or undocumented endpoints, decline that
+   unsupported portion and continue only with the manual `.p8` Console steps.
 
 ## Phase 4 — App configuration and verification
 

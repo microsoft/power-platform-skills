@@ -4,6 +4,42 @@ Use this reference for both existing-endpoint validation and confirmed
 deployment. Azure CLI syntax can change; query Microsoft Learn before mutation
 when the installed CLI does not expose the documented authsettingsV2 fields.
 
+## Official Azure MCP coverage and narrow `az` fallbacks
+
+Target `@azure/mcp@2.0.5` here. Do not reinterpret this reference through
+Azure MCP 3.x beta behavior.
+
+Use Azure MCP GA `2.0.5` namespace tools where the docs/source actually expose
+them:
+
+- `mcp__azure__subscription` and `mcp__azure__group` for subscription/resource
+  group inventory when needed
+- `mcp__azure__functionapp` with `functionapp_get`
+- `mcp__azure__appservice` with the documented
+  `appservice_webapp_get`, `appservice_webapp_deployment_get`,
+  `appservice_webapp_settings_get-appsettings`,
+  `appservice_webapp_settings_update-appsettings`, and diagnostics surfaces
+- `mcp__azure__role` with `role_assignment_list`
+
+Keep `az` only for the sender-auth-safe gaps that Azure MCP GA `2.0.5`
+docs/source do not cover or would expose unsafely:
+
+- exact Function/App Service resource IDs and identity principal IDs;
+- authsettingsV2 read/write;
+- managed-identity enablement;
+- Function creation/deployment and other unsupported mutation edges;
+- Key Vault metadata-only reads that avoid secret values;
+- the non-echoing `az keyvault secret set --file ...` upload;
+- Entra app/service-principal/credential work.
+
+Do not use `keyvault_secret_get` or `keyvault_secret_create` in
+this workflow because Azure MCP GA `2.0.5` docs/source define them as
+secret-value operations, and GA `2.0.5` does not expose a safe
+metadata-only Key Vault namespace route for this workflow.
+Do not silently replace covered Azure MCP reads/settings with `az`, and do not
+invent nonexistent tool names such as `mcp__azure__azmcp_functionapp_get` or
+`functionapp_list`.
+
 ## Runtime contract
 
 The bundled Node.js Azure Function accepts only this strict JSON shape:
@@ -90,19 +126,26 @@ https://firebase.google.com/docs/cloud-messaging/auth-server
 
 ## Existing endpoint read-back checklist
 
-1. `az functionapp show`: exact resource ID, HTTPS-only, identity principal.
-2. `az functionapp auth show`: authsettingsV2 fields above.
-3. `az functionapp config appsettings list`: inspect names and non-secret policy;
-   stop if any credential value is present. Do not print all settings in shared
-   logs.
-4. `az role assignment list --assignee <function-principal>`: exact Key Vault
-   role/scope and no unnecessary broad roles.
-5. Key Vault secret metadata query: ID and enabled state only, never value.
-6. Google IAM policy read-back: exact project, service account, and send role.
-7. Unauthenticated endpoint request: exact 401.
-8. Intended flow identity `validateOnly` request: accepted with a bounded safe
+1. `mcp__azure__functionapp` with `functionapp_get`: exact app name, resource
+   group, hostname, status, and app-service-plan association of the intended
+   Function.
+2. `az functionapp show`: exact resource ID and identity principal ID because
+   Azure MCP GA `2.0.5` function-app docs/source do not return them.
+3. `az functionapp auth show`: authsettingsV2 fields above.
+4. `mcp__azure__appservice` with
+   `appservice_webapp_get`, `appservice_webapp_deployment_get`, and
+   `appservice_webapp_settings_get-appsettings` as needed to inspect the
+   endpoint, deployment/readiness, and non-secret policy. Stop if any
+   credential value is present. Do not print all settings in shared logs.
+5. `mcp__azure__role` with `role_assignment_list`: exact Key Vault role/scope
+   at the relevant vault or secret scope; verify no unnecessary broad roles.
+6. Key Vault secret metadata query with `az`: ID and enabled state only, never
+   value. Do not use `keyvault_secret_get`.
+7. Google IAM policy read-back: exact project, service account, and send role.
+8. Unauthenticated endpoint request: exact 401.
+9. Intended flow identity `validateOnly` request: accepted with a bounded safe
    provider message ID/result.
-9. Negative validation probes: safe 400 responses before Google/FCM calls.
+10. Negative validation probes: safe 400 responses before Google/FCM calls.
 
 ## Retry and error policy
 
