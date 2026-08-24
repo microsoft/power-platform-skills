@@ -1,0 +1,111 @@
+Type of customization,Guidance,Snippet,Location
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"      {% editable page 'adx_copy' type: 'html', liquid: true %}
+      {% editable page 'adx_copy' type: 'html', liquid: true %}
+      {% editable page 'adx_copy' type: 'html', liquid: true %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\default-studio-template\Default-studio-template.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% assign homeurl = website.adx_partialurl %}
+{% assign homeurl = website.adx_partialurl %}
+{% assign homeurl = website.adx_partialurl %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\header\Header.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"    <h1>{% editable page 'adx_title' type: 'html', liquid: true %}</h1>
+    <h1>{% editable page 'adx_title' type: 'html', liquid: true %}</h1>
+    <h1>{% editable page 'adx_title' type: 'html', liquid: true %}</h1>
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-header\Page-Header.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"    {% editable page 'adx_copy' type: 'html', liquid: true %}
+    {% editable page 'adx_copy' type: 'html', liquid: true %}
+    {% editable page 'adx_copy' type: 'html', liquid: true %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\page-copy\Page-Copy.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% assign botConfig = botconsumer.adx_configjson %}
+{% assign botConfig = botconsumer.adx_configjson %}
+{% assign botConfig = botconsumer.adx_configjson %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"            ""botSchemaName"": ""{{ botconsumer.adx_botschemaname }}"",
+            ""botSchemaName"": ""{{ botconsumer.adx_botschemaname }}"",
+            ""botSchemaName"": ""{{ botconsumer.adx_botschemaname }}"",
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\power-virtual-agents\Power-Virtual-Agents.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% assign snippet = snippets['adx_name'] %}
+{% assign snippet = snippets['adx_name'] %}
+{% assign snippet = snippets['adx_name'] %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\search\Search.webtemplate.source.html"
+Liquid contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"  {% assign url = page.adx_partialurl %}
+  {% assign url = page.adx_partialurl %}
+  {% assign url = page.adx_partialurl %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\navigation\Navigation.webtemplate.source.html"
+FetchXml contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% fetchxml roles %}
+<fetch version=""1.0"">
+  <entity name=""adx_webrole"">
+    <attribute name=""adx_name"" />
+    <filter><condition attribute=""statecode"" operator=""eq"" value=""0"" /></filter>
+  </entity>
+</fetch>
+{% endfetchxml %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\profile\Profile.webtemplate.source.html"
+FetchXml contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% fetchxml pages %}
+<fetch version=""1.0"" top=""10"">
+  <entity name=""adx_webpage"">
+    <attribute name=""adx_name"" />
+    <attribute name=""adx_partialurl"" />
+    <filter><condition attribute=""adx_publishingstateid"" operator=""not-null"" /></filter>
+  </entity>
+</fetch>
+{% endfetchxml %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\sitemap\Sitemap.webtemplate.source.html"
+FetchXml contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% fetchxml lists %}
+<fetch version=""1.0"">
+  <entity name=""adx_entitylist"">
+    <attribute name=""adx_name"" />
+    <attribute name=""adx_entityname"" />
+    <filter><condition attribute=""statecode"" operator=""eq"" value=""0"" /></filter>
+  </entity>
+</fetch>
+{% endfetchxml %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\entity-list\Entity-List.webtemplate.source.html"
+FetchXml contains adx references,https://go.microsoft.com/fwlink/?linkid=2247170,"{% fetchxml snippets %}
+<fetch version=""1.0"">
+  <entity name=""adx_contentsnippet"">
+    <attribute name=""adx_name"" />
+    <attribute name=""adx_value"" />
+    <filter><condition attribute=""adx_name"" operator=""eq"" value=""Footer/Copyright"" /></filter>
+  </entity>
+</fetch>
+{% endfetchxml %}
+","\\?\C:\Users\user\AppData\Local\Temp\mysite\web-templates\footer\Footer.webtemplate.source.html"
+Custom workflow,https://go.microsoft.com/fwlink/?linkid=2247170,"Remove Web Role From Contact"
+Custom workflow,https://go.microsoft.com/fwlink/?linkid=2247170,"Send Welcome Email on Registration"
+Custom workflow,https://go.microsoft.com/fwlink/?linkid=2247170,"Expire Web File on Date"
+Custom workflow,https://go.microsoft.com/fwlink/?linkid=2247170,"Contact Portal Registration Notification"
+Custom workflow,https://go.microsoft.com/fwlink/?linkid=2247170,"Sync Account to Portal Access"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : iscompressedName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : IsCompressed"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : isautonomouslycreatedName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : isAutonomouslyCreated"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : DummyRegarding"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : annotation   Column name : DummyFileName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_poll   Column name : mspp_webtemplateidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_poll   Column name : mspp_webtemplateid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_poll   Column name : mspp_websiteidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_poll   Column name : mspp_websiteid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webtemplateidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webtemplateid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_websiteidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_websiteid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webpageidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webpageid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webfileidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_webfileid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_redirectwebfileidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_redirectwebfileid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_publishingstateidName"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_ad   Column name : mspp_publishingstateid"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_webpage   Column name : contoso_redirecturl"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_webpage   Column name : contoso_expirydate"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_entityform   Column name : contoso_successredirecturl"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_webform   Column name : contoso_completionmessage"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_contentsnippet   Column name : contoso_snippettype"
+Data Model Extension,https://go.microsoft.com/fwlink/?linkid=2247170,"Table name : adx_sitesetting   Column name : contoso_environment"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin   Step name : Adxstudio.Xrm.Plugins.MultiLanguage.WebsiteLanguageCreatePlugin: Create of adx_websitelanguage  Entity Name : adx_websitelanguage"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Microsoft.Crm.ObjectModel.SyncWorkflowExecutionPlugin   Step name :   Entity Name : adx_webrole"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Contoso.Plugins.WebPageAuditPlugin   Step name : Contoso.Plugins.WebPageAuditPlugin: Update of adx_webpage  Entity Name : adx_webpage"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Contoso.Plugins.ContentSnippetCachePlugin   Step name : Contoso.Plugins.ContentSnippetCachePlugin: Create of adx_contentsnippet  Entity Name : adx_contentsnippet"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Contoso.Plugins.EntityFormSubmitPlugin   Step name : Contoso.Plugins.EntityFormSubmitPlugin: Create of adx_entityform  Entity Name : adx_entityform"
+Plugins registered on adx entities,https://go.microsoft.com/fwlink/?linkid=2247170,"Plugin name : Contoso.Plugins.WebRoleAssignmentPlugin   Step name : Contoso.Plugins.WebRoleAssignmentPlugin: Associate of adx_webrole  Entity Name : adx_webrole"
