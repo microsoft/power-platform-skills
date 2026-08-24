@@ -9,6 +9,7 @@ Internal reference used by `/create-mobile-app` Step 9b after `/design-system` w
 Keep generated screens on one stable token contract:
 
 - Always provide `$surface0`-`$surface3`, `$mediaSurface`, and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
+- Always provide runtime `$heading`, `$body`, and `$mono` roles matching the design recipe.
 - Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
 - Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` owns the provider and portal infrastructure. In Tamagui 2, `Toaster` is a sibling component rather than a provider wrapper.
 
@@ -114,9 +115,45 @@ When `brand/tokens.ts` exists, reuse `withSemanticAliases`, map its colors into 
 
 ```ts
 // CUSTOMIZATION START - DO NOT REMOVE OR RENAME
-import { createTokens } from '@tamagui/core';
+import { createFont, createTokens } from '@tamagui/core';
 import { animations } from '@tamagui/config/v5-rn';
+import { Platform } from 'react-native';
 import { tokens as brandTokens } from './brand/tokens';
+
+const platformSerifFamily = Platform.select({ ios: 'Georgia', android: 'serif', default: 'Georgia' }) ?? 'serif';
+const systemSansFamily = Platform.select({ ios: 'System', android: 'sans-serif', default: 'system-ui' }) ?? 'system-ui';
+const systemMonoFamily = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) ?? 'monospace';
+
+function runtimeFamily(family: string) {
+  if (family === 'platform-serif') return platformSerifFamily;
+  if (family === 'system-sans') return systemSansFamily;
+  if (family === 'system-monospace') return systemMonoFamily;
+  if (family.startsWith('bundled:')) return family.slice('bundled:'.length);
+  throw new Error(`Unsupported design typography family: ${family}`);
+}
+
+const roleSizes = {
+  1: brandTokens.typography.caption.size,
+  2: brandTokens.typography.bodySm.size,
+  3: brandTokens.typography.bodySm.size,
+  4: brandTokens.typography.body.size,
+  5: brandTokens.typography.title.size,
+  6: brandTokens.typography.heading.size,
+  7: brandTokens.typography.display.size,
+};
+const roleLineHeights = {
+  1: Math.round(brandTokens.typography.caption.size * brandTokens.typography.caption.lineHeight),
+  2: Math.round(brandTokens.typography.bodySm.size * brandTokens.typography.bodySm.lineHeight),
+  3: Math.round(brandTokens.typography.bodySm.size * brandTokens.typography.bodySm.lineHeight),
+  4: Math.round(brandTokens.typography.body.size * brandTokens.typography.body.lineHeight),
+  5: Math.round(brandTokens.typography.title.size * brandTokens.typography.title.lineHeight),
+  6: Math.round(brandTokens.typography.heading.size * brandTokens.typography.heading.lineHeight),
+  7: Math.round(brandTokens.typography.display.size * brandTokens.typography.display.lineHeight),
+};
+const roleWeights = { 4: '400', 5: '500', 6: '600', 7: '700' } as const;
+const headingFont = createFont({ family: runtimeFamily(brandTokens.typography.headingFamily), size: roleSizes, lineHeight: roleLineHeights, weight: roleWeights });
+const bodyFont = createFont({ family: runtimeFamily(brandTokens.typography.bodyFamily), size: roleSizes, lineHeight: roleLineHeights, weight: roleWeights });
+const monoFont = createFont({ family: runtimeFamily(brandTokens.typography.monoFamily), size: roleSizes, lineHeight: roleLineHeights, weight: roleWeights });
 
 const tokens = createTokens({
   ...defaultConfig.tokens,
@@ -149,6 +186,7 @@ const customConfig = {
   animations,
   tokens,
   themes,
+  fonts: { ...defaultConfig.fonts, heading: headingFont, body: bodyFont, mono: monoFont },
 };
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 ```
@@ -162,11 +200,13 @@ blue-and-coral, green, purple, or otherwise branded app. `brand/tokens.ts`
 remains the only raw-color source; `src/tokens/index.ts` may transform those
 values into gradients/shadows but must not introduce a second palette.
 
-The generated typography object is not automatically consumed by
-`createTokens` above. Shared branded primitives must explicitly map its
-family/size/weight/tracking roles, or the integration must report typography
-as not yet applied. Never report the design system fully integrated when only
-colors, spacing, sizes, and radii are wired.
+`platform-serif`, `system-sans`, and `system-monospace` are semantic family
+names, not literal React Native families. Resolve them with `Platform.select`
+as above. This gives editorial directions visible typographic character without
+a network/font-install step. A `system-native` recipe is also valid, but its
+recipe rationale remains mandatory. Shared headers, heroes, and section titles
+consume `$heading`; controls and prose consume `$body`; data-only values may
+use `$mono`. Never disable font scaling.
 
 ## Root Provider Wiring
 

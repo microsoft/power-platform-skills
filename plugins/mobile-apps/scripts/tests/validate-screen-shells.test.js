@@ -31,11 +31,19 @@ function buildPack() {
   });
 }
 
+const viewModelSource = [
+  'export function toExperienceRecord() {}',
+  'export function getExperienceAsset() {}',
+  'export function isExperienceRecordActionable() {}',
+  'export function relatedExperienceRecords() {}',
+  '',
+].join('\n');
+
 test('accepts provider-only root layout and pack-matched route shells', (context) => {
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': buildPack(),
     'assets/experience/manifest.json': JSON.stringify({ assets: {}, fallbacks: {} }),
-    'src/generated/experience-view-model.ts': 'export function toExperienceRecord() {}\nexport function getExperienceAsset() {}\n',
+    'src/generated/experience-view-model.ts': viewModelSource,
     'app/_layout.tsx': "export default function Root() { return <SafeAreaProvider><Slot /></SafeAreaProvider>; }\n",
     'app/(app)/home.tsx': "import { ScreenShell } from '@/components'; export default function Home() { return <ScreenShell headerMode=\"root\" title=\"Home\" />; }\n",
     'app/(app)/products/[id].tsx': "import { ScreenShell } from '@/components'; export default function Detail() { return <ScreenShell headerMode=\"back\" title=\"Detail\" />; }\n",
@@ -48,7 +56,7 @@ test('reports root and route safe-area ownership plus header-mode drift', (conte
   const root = makeProject(context, {
     '.tmp/screen-build-pack.json': buildPack(),
     'assets/experience/manifest.json': JSON.stringify({ assets: {}, fallbacks: {} }),
-    'src/generated/experience-view-model.ts': 'export function toExperienceRecord() {}\nexport function getExperienceAsset() {}\n',
+    'src/generated/experience-view-model.ts': viewModelSource,
     'app/_layout.tsx': "export default function Root() { return <SafeAreaView><Slot /></SafeAreaView>; }\n",
     'app/(app)/home.tsx': "import { SafeAreaView } from 'react-native-safe-area-context'; export default function Home() { return <SafeAreaView />; }\n",
     'app/(app)/products/[id].tsx': "import { ScreenShell } from '@/components'; export default function Detail() { return <ScreenShell headerMode=\"root\" title=\"Detail\" />; }\n",

@@ -1075,7 +1075,7 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /Do \*\*not\*\* run Bash discovery/);
   assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>/);
   assert.match(architect, /NEEDS_CONTEXT: proposed-dataverse-names:<comma-separated-logical-names>/);
-  assert.match(architect, /\.tmp\/data-model-planning-status\.json/);
+  assert.doesNotMatch(architect, /data-model-planning-status\.json/);
   assert.match(planner, /Dataverse planning forwarding is verbatim/);
   assert.match(planner, /Do not duplicate raw evidence/);
   assert.match(createSkill, /render-dataverse-planning-evidence\.js/);

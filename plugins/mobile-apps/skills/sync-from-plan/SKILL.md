@@ -112,9 +112,11 @@ conversion conditions hold: `dataMode === "transitioning"`,
 Then set it to `dataverse`. Any other transitioning invocation is blocked and
 must return to `/prototype-to-real-app`.
 
-Capture current SHA-256 hashes for the plan and real manifest. Compare them
-with `lastSyncedPlanHash` and `lastDataverseManifestHash` to determine whether
-the sync is structural, data-binding-only, or already current.
+Capture current SHA-256 hashes for the plan, schema-v3 screen contract,
+execution contract, and real manifest. Compare them with
+`lastSyncedPlanHash`, `lastSyncedScreenContractHash`,
+`lastSyncedExecutionContractHash`, and `lastDataverseManifestHash` to determine
+whether the sync is structural, operation/data-binding-only, or already current.
 
 ### Step 2 - Validate Mode-Specific Data Contract
 
@@ -123,10 +125,15 @@ Run the plan contract validator first:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
   "$PROJECT_DIR/native-app-plan.md"
+node -e "const c=require(process.argv[1]); if(c.schemaVersion!==3) process.exit(1)" \
+  "$PROJECT_DIR/.tmp/experience-screen-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
 If it fails, stop and repair/re-plan the contract before writing routes or
-screens.
+screens. Missing execution contracts and v1/v2 screen contracts are viewable
+legacy plans, not build inputs; require an explicit re-plan.
 
 #### Prototype Mode (`EFFECTIVE_DATA_MODE=prototype`)
 
@@ -168,13 +175,18 @@ generated-service adapter. Inspect their contracts for:
 - choice integer/label pairs;
 - file/image logical names;
 - the approved formatted-lookup or bounded chained-fetch strategy.
+- exact schema-v3 operation IDs, service methods, query fields, pagination,
+  route bindings, and relationship schema names.
 
-When bindings are absent or stale, invoke `mobile-app:screen-planner` in edit
-mode with the current plan and manifest. Replace only affected per-screen
-contracts. Present semantic changes for approval. Do not guess a lookup schema
-name or choice value inline. Shared data helpers are first-class rebind targets:
-repair them before screen builders run, and include every consuming screen in
 the target set when the helper's behavior changes.
+When bindings are absent or stale, invoke `mobile-app:screen-planner` in edit
+mode with the current plan and manifest. It returns a fenced `screen-plan-draft`
+JSON payload; it does not write contracts, sidecars, previews, or source files.
+The foreground validates and applies only approved affected per-screen contract
+changes. Do not guess a lookup schema name or choice value inline. Shared data
+helpers are first-class rebind targets: repair them before screen builders run,
+and include every consuming screen in the target set when the helper's behavior
+changes.
 
 ### Step 3 - Reconcile Services And Navigation
 
@@ -264,7 +276,9 @@ data mode, exact target path, matching build-pack entry, literal header mode,
 and stable-ID view model. In Dataverse mode include the manifest facts for that
 screen.
 
-Parse each first-line status using the plugin protocol. Retry
+Parse each first-line status using the plugin protocol. On
+`NEEDS_USER_APPROVAL`, pause the sync and use the outer textual checkpoint
+protocol before any external mutation or later build wave. Retry
 `NEEDS_CONTEXT` once with concrete service/manifest context. Stop on
 `BLOCKED`. After each wave, run `npm --prefix "$PROJECT_DIR" run type-check`;
 group errors by root cause and cap repair attempts at two per screen.
@@ -283,6 +297,10 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
   --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+  --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-runtime.js" \
   --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
@@ -349,6 +367,8 @@ Only after all hard gates pass, update `.mobile-app/state.json`:
 - for an approved transitioning sync, set `dataMode: "dataverse"` and
   `transition: null`;
 - `lastSyncedPlanHash`: current plan SHA-256;
+- `lastSyncedScreenContractHash`: current screen contract SHA-256;
+- `lastSyncedExecutionContractHash`: current execution contract SHA-256;
 - `lastDataverseManifestHash`: current manifest SHA-256 in Dataverse mode,
   otherwise `null`;
 - `lastSyncAt`: current ISO timestamp.

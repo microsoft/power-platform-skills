@@ -1,6 +1,9 @@
 # Connector Planning Reference
 
-Shared logic for inferring and confirming Power Platform connectors from app requirements. Used by `native-app-planner` (Gate 3) and `setup-datamodel` (Phase 2).
+Human-readable connector policy. The foreground preflight uses the versioned
+`scripts/mobile-plan-preflight-catalog.json`; the final execution authority is
+`.tmp/mobile-plan-execution-contract.json → connectorOperations[]`. Used by
+`native-app-planner` and `setup-datamodel` to render and review those facts.
 
 ---
 
@@ -68,21 +71,24 @@ If no connectors: write "None — this app uses only Dataverse and/or device-nat
 
 ---
 
-## Step 4 — Pass to Screen Planner
+## Step 4 — Pass structured operations to Screen Planner
 
-When spawning the screen-planner agent, include the confirmed connector list in the prompt:
+When spawning the screen-planner agent, include the resolved execution-contract
+rows, not only the display list:
 
 ```
-Connectors confirmed:
-- Office 365 Outlook (office365) — send task completion notifications
-- SharePoint Online (sharepointonline) — read project milestones list
+Connector operations confirmed:
+- id, API name, generated service, exact method
+- typed input/output and failure state
+- requirement/screen consumers
 
-Per-screen specs must reference the correct generated service for each data access:
+Schema-v3 per-screen operations reference the correct generated service for each data access:
 - Dataverse tables → use Cr123_<Table>Service from src/generated/services/
 - Connectors → use <ConnectorName>Service from src/generated/services/
 ```
 
-This ensures every screen spec names the exact service the screen-builder agent will import.
+The execution-contract validator rejects unresolved connector methods before
+approval, and the build-pack validator rejects service drift before builders.
 
 ---
 

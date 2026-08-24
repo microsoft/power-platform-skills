@@ -41,6 +41,18 @@ If absent, continue — the project may have been created without the plugin. Re
 **Print before starting:**
 > "→ Building production web bundle via `npm run build` (= `expo export --platform web`). ~30–90 seconds."
 
+Before generating schemas or building a plugin-generated app, require current
+execution authority:
+
+```bash
+node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+```
+
+If any check fails, STOP and route to `/edit-app` or `/sync-from-plan`. A legacy
+v1/v2 plan may be inspected but cannot be deployed without explicit re-planning.
+
 First regenerate `connectorSchemas.ts` so `app/_layout.tsx`'s `schemaMap` import reflects every connector currently in `.power/schemas/`. The npm `prestart`/`preandroid`/`preios` hooks cover dev runs, but `npm run build` does **not** — if a connector was added since the last `npm run dev`, the bundled JS would ship a stale schema map. Always regenerate before build:
 
 ```bash

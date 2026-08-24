@@ -2,14 +2,14 @@
  * Utility barrel — import everything from `@/utils`.
  *
  * Usage:
- *   import { formatDate, formatDateTime, formatRelative,
+ *   import { formatDate, formatDateTime, formatRelative, formatCurrency,
  *            truncate, pluralize,
  *            choiceLabel, STATUS_TONES,
  *            lookupName, formattedValue, extractSkipToken,
  *             escapeODataString, containsFilter, normalizeDataverseGuid, newId } from '@/utils';
  */
 
-export { formatDate, formatDateTime, formatRelative } from './formatters';
+export { formatDate, formatDateTime, formatRelative, formatCurrency } from './formatters';
 export { truncate, pluralize } from './text';
 export { choiceLabel, STATUS_TONES } from './choices';
 export type { ChoiceMap, StatusTone } from './choices';

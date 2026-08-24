@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Plan Artifact Bundle",
+  "type": "object",
+  "required": ["version", "kind", "workflow", "planningMode", "artifacts", "sections", "warnings"],
+  "properties": {
+    "version": { "const": 2 },
+    "kind": { "const": "mobile-plan-artifact-bundle" },
+    "workflow": { "enum": ["create-mobile-app", "create-mobile-prototype"] },
+    "planningMode": { "enum": ["required", "prototype", "connector-only"] },
+    "artifacts": {
+      "type": "object",
+      "required": ["nativeAppPlanMarkdown", "dataverseSchemaContract", "experienceScreenContract", "experienceFoundationContract", "executionContract"],
+      "additionalProperties": false,
+      "properties": {
+        "nativeAppPlanMarkdown": { "type": "string", "minLength": 1 },
+        "dataverseSchemaContract": { "type": ["object", "null"] },
+        "experienceScreenContract": { "type": "object" },
+        "experienceFoundationContract": { "type": "object" },
+        "executionContract": { "type": "object" }
+      }
+    },
+    "sections": {
+      "type": "object",
+      "required": ["dataModel", "nativeCapabilities", "connectors", "screenPlan"],
+      "additionalProperties": false,
+      "properties": {
+        "dataModel": { "$ref": "#/definitions/section" },
+        "nativeCapabilities": { "$ref": "#/definitions/section" },
+        "connectors": { "$ref": "#/definitions/section" },
+        "screenPlan": { "$ref": "#/definitions/section" }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "section": {
+      "type": "object",
+      "required": ["summary", "markdown"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "markdown": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

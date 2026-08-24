@@ -39,6 +39,10 @@ test -f power.config.json && test -f app.config.js
 MANIFEST=$(test -f .datamodel-manifest.json && echo ".datamodel-manifest.json" || \
            (test -f docs/plan-artifacts/.datamodel-manifest.json && echo "docs/plan-artifacts/.datamodel-manifest.json"))
 test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
+test -f .tmp/mobile-plan-execution-contract.json
+node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" \
+  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
@@ -157,7 +161,15 @@ prompt:
   Environment URL: <envUrl>
   Publisher prefix: <prefix>
   Mode: default
+  Screen operations: <workdir>/.tmp/experience-screen-contract.json#screens[].data.operations
+  Execution requirements: <workdir>/.tmp/mobile-plan-execution-contract.json
 ```
+
+The architect derives required tables, selected columns, lookup associations,
+and sync-critical relationships from schema-v3 `data.operations[]` first.
+Source-code grep is only a regression check for undeclared reads; it is not the
+authority for scope. If an offline-required operation cannot be satisfied by
+the proposed profile, return `BLOCKED` before any profile POST.
 
 The agent returns `_offline_section.md` in the working directory. Read it. Parse its first-line status code:
 

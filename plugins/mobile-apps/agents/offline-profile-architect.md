@@ -46,7 +46,7 @@ You will be invoked by `/setup-offline-profile` with a prompt that includes:
 
 ---
 
-## Step 1 — Read app's data model + screen list
+## Step 1 — Read app's data model + executable screen operations
 
 **Print before starting:**
 > "→ Reading .datamodel-manifest.json and native-app-plan.md to enumerate app tables + screens…"
@@ -56,7 +56,9 @@ Inputs you MUST read (use `Read` tool):
 | File | Purpose |
 |---|---|
 | `<workdir>/.datamodel-manifest.json` OR `<workdir>/docs/plan-artifacts/.datamodel-manifest.json` | Authoritative list of app tables, columns, and FK relationships. Check root first; newer scaffolds (Step 10b+) put it under `docs/plan-artifacts/`. The orchestrator's spawn prompt also passes the resolved path explicitly — prefer that when present. |
-| `<workdir>/native-app-plan.md` `## Screens` section | Per-screen specs — tells you which tables each screen reads/writes |
+| `<workdir>/.tmp/experience-screen-contract.json` | Schema-v3 `screens[].data.operations` — authoritative tables, selected/read/write fields, route filters, pagination, and relationship bindings |
+| `<workdir>/.tmp/mobile-plan-execution-contract.json` | Requirement IDs and offline/connectivity constraints that make operations mandatory |
+| `<workdir>/native-app-plan.md` `## Screens` section | Human review context only; never override structured operations |
 | `<workdir>/memory-bank.md` | Resume state if prior architect runs left notes |
 
 If `.datamodel-manifest.json` is absent at BOTH `<workdir>/.datamodel-manifest.json` AND `<workdir>/docs/plan-artifacts/.datamodel-manifest.json`, the data model hasn't been created yet. STOP and return `NEEDS_CONTEXT: data model must exist before designing offline profile — run /add-dataverse first.`
@@ -75,6 +77,14 @@ tables:
       screens: [HomeScreen, NoteListScreen, NoteDetailScreen, NoteFormScreen]
       readOnly: false
 ```
+
+Populate `usedBy`, selected columns, and relationships from
+`screens[].data.operations` first. Every selected/filter/sort/write/id field is
+required offline for an operation in offline scope. Every `related-list`
+relationship is a required association unless its requirement is explicitly
+not planned for offline use. Source grep may detect undeclared reads as a
+regression, but it cannot add scope silently; return `BLOCKED` and require the
+screen operation contract to be repaired.
 
 ## Step 2 — Verify Dataverse access + discover offline-enabled tables
 

@@ -36,6 +36,21 @@ test('accepts a complete Screen Map and Navigation Contracts table', () => {
   assert.deepEqual(validateScreenContracts(validPlan()), []);
 });
 
+test('accepts routes and Expo Router files formatted as Markdown inline code', () => {
+  const plan = validPlan()
+    .replace(
+      '| Home | /(app)/home | app/(app)/home.tsx |',
+      '| Home | `/(app)/home` | `app/(app)/home.tsx` |',
+    )
+    .replace(
+      '| Profile | /(app)/profile | app/(app)/profile.tsx |',
+      '| Profile | `/(app)/profile` | `app/(app)/profile.tsx` |',
+    )
+    .replace('| /(app)/home | none |', '| `/(app)/home` | none |')
+    .replace('| /(app)/profile | none |', '| `/(app)/profile` | none |');
+  assert.deepEqual(validateScreenContracts(plan), []);
+});
+
 test('rejects duplicate routes and a missing canonical Home file', () => {
   const plan = validPlan()
     .replace('app/(app)/home.tsx', 'app/(app)/index.tsx')

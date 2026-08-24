@@ -19,6 +19,14 @@ Two paths:
 
 1. Verify project & auth → 2. Resolve plan/operation manifest → 3. Setup Dataverse Web API auth → 4. Validate manifest or reconcile live metadata → 5. Execute sequential metadata phases → 6. Add data sources → 6b. Publish fallback customizations → 6c. Verify tables → 6d. Write manifest → 7. Inspect generated files → 8. Type-check → 8.5. Offline profile reconciliation → 9. Summary
 
+For a plugin-generated app with `.tmp/mobile-plan-execution-contract.json`,
+run `validate-mobile-plan-execution-contract.js` before resolving an operation
+manifest. Require `.tmp/experience-screen-contract.json` schema version 3 and
+reconcile every `screens[].data.operations[]` field, write, pagination, and
+relationship binding against the proposed schema. A schema mutation that would
+orphan an operation is blocking until the foreground re-plans it. Standalone
+unmanaged data-source use may continue without these generated-plan artifacts.
+
 ---
 
 ### Step 1 — Verify project & auth
@@ -133,7 +141,7 @@ Then:
 
 ### Step 2.6 — Path B: Spawn architect agent
 
-If the user picked Path B (or the user-provided diagram parse failed), spawn the `mobile-app:data-model-architect` agent via `Task` (the `mobile-app:` plugin-name prefix is required) with the user's high-level requirements as input. The agent returns `_dm_section.md`. Embed it in `native-app-plan.md`, present via `EnterPlanMode` for approval, then continue to Step 3.
+If the user picked Path B (or the user-provided diagram parse failed), spawn the `mobile-app:data-model-architect` agent via `Task` (the `mobile-app:` plugin-name prefix is required) with the user's high-level requirements as input. The agent returns one fenced JSON `data-model-draft` with `dataModelMarkdown`, `dataverseSchemaContract`, and `warnings`; it never writes a project file. The foreground workflow validates the returned contract, inserts `dataModelMarkdown` into `native-app-plan.md`, and presents that foreground-owned draft for approval before continuing to Step 3.
 
 If they need new tables and refuse both paths, recommend they run `/setup-datamodel` (alias of this skill) explicitly, or `native-app-planner` for a full app-level plan. STOP if neither.
 

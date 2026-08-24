@@ -14,6 +14,7 @@ const {
   buildExperienceViewModel,
   renderExperienceViewModel,
 } = require('./lib/experience-view-model');
+const { materializeExperienceAssets } = require('./lib/experience-media');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -50,6 +51,7 @@ function normalizedSchemaEntities(schema) {
           name: String(column.logicalName || ''),
           type: normalizeType(column.type || column.attributeType),
           primaryName: column.primaryName === true,
+          lookupTarget: column.lookupTarget || column.target || null,
         }))
         .filter((column) => column.name),
     }));
@@ -66,6 +68,7 @@ function prototypeManifestEntities(manifest) {
       name: String(field.name || ''),
       type: normalizeType(field.type),
       primaryName: field.primaryName === true,
+      lookupTarget: field.lookupTarget || null,
     })).filter((field) => field.name),
   }));
 }
@@ -116,6 +119,7 @@ function materializeExperienceViewModel(projectRoot) {
   const rowsByEntity = loadRows(root, entities);
   const assetManifestPath = 'assets/experience/manifest.json';
   const assetManifest = buildExperienceAssetManifest(entities, rowsByEntity, loadExperienceContract(root));
+  materializeExperienceAssets(root, assetManifest);
   const viewModel = buildExperienceViewModel(entities, rowsByEntity, assetManifestPath, assetManifest);
   writeFile(root, assetManifestPath, `${JSON.stringify(assetManifest, null, 2)}\n`);
   writeFile(root, 'src/generated/experience-view-model.ts', renderExperienceViewModel(viewModel));

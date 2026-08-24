@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Screen Artifact",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "packRevision",
+    "screenId",
+    "route",
+    "file",
+    "inputFileSha256",
+    "source",
+    "warnings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "mobile-screen-artifact" },
+    "packRevision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "screenId": { "type": "string", "minLength": 1 },
+    "route": { "type": "string", "minLength": 1 },
+    "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
+    "inputFileSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "source": { "type": "string", "minLength": 1, "maxLength": 524288 },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

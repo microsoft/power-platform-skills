@@ -185,9 +185,23 @@ test -f app.config.js && test -f power.config.json && test -f package.json
 
 ### Step 2 — Resolve capability
 
-If `$ARGUMENTS` includes a capability name, package name, or control name, use it. Otherwise look for a `## Native Capabilities` section in `native-app-plan.md` and present the planned capabilities for confirmation. If neither exists, prompt the user with the supported-capabilities list above plus any relevant installed package from `package.json` that directly matches their request.
+If `$ARGUMENTS` includes a capability name, package name, or control name, use
+it. Otherwise, when `.tmp/mobile-plan-execution-contract.json` exists, present
+its `nativeCapabilities[]` rows. Only an unmanaged project without that
+contract may fall back to `## Native Capabilities` or the supported-capability
+list.
 
 Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`.
+
+When `.tmp/mobile-plan-execution-contract.json` exists, run
+`validate-mobile-plan-execution-contract.js` and resolve the normalized
+capability to exactly one `nativeCapabilities[]` row. Require
+`support.status: supported`, the current `catalogRevision`, exact
+`templatePackage`/`templateVersion`, and `execution: add-native` (or
+`existing-runtime` when no wrapper is needed). A raw capability absent from the
+contract is `BLOCKED: native capability is not in the approved execution
+contract`; route the user through `/edit-app`. Standalone unmanaged projects
+without a generated plan may continue through the normal gate below.
 
 When the user asks for "location" or "GPS", disambiguate by intent: continuous/background tracking or durable Dataverse upload → `geolocation` (`@microsoft/power-apps-native-bglocation`); a single foreground coordinate read → `location` (`expo-location`). If the intent is unclear, ask once before routing.
 
@@ -213,7 +227,9 @@ esac
 
 ### Step 4 — Verify module is template-shipped
 
-Confirm the underlying native-capability package is actually present in the project's `package.json` (catches the case where the user hand-removed it or the template version is older than expected):
+Confirm the exact `templatePackage` recorded by the execution-contract row (or
+the resolved package for an unmanaged project) is actually present at the
+recorded version in `package.json`:
 
 ```bash
 node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template should ship it. Re-scaffold via /create-mobile-app, restore it from upstream, or wait for the template release that adds it — this skill will not install it.'); process.exit(1); }"

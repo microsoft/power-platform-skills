@@ -20,6 +20,7 @@ const {
   validateExperienceContract,
 } = require('./experience-patterns');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const { validateExperienceScreenContract } = require('./lib/experience-screen-contract');
 
 function normalize(value) {
   return String(value || '').trim();
@@ -82,9 +83,12 @@ function hasContractSummary(designSection, contract) {
 function validateScreenContract(contract, screenContract, issues) {
   if (!screenContract) return;
   const expected = primaryComposition(contract);
-  if (screenContract.schemaVersion !== 1) {
-    issues.push({ rule: 'invalid-screen-contract-schema', message: 'Experience screen contract schemaVersion must be 1.' });
+  if (![1, 2, 3].includes(screenContract.schemaVersion)) {
+    issues.push({ rule: 'invalid-screen-contract-schema', message: 'Experience screen contract schemaVersion must be 1, 2, or 3.' });
     return;
+  }
+  for (const message of validateExperienceScreenContract(screenContract, contract)) {
+    issues.push({ rule: 'invalid-screen-contract', message });
   }
   if (screenContract.experienceContractSha256 !== contractHash(contract)) {
     issues.push({ rule: 'experience-contract-hash-drift', message: 'Screen contract is bound to a stale experience contract.' });
@@ -129,9 +133,10 @@ function validateScreenContract(contract, screenContract, issues) {
     issues.push({ rule: 'forbidden-dashboard-default', message: `Entry mode ${contract.entryMode} cannot fall back to a dashboard primary composition.` });
   }
   const forbidden = new Set(contract.forbiddenDefaults || []);
-  if (forbidden.has('crud-triad') && Array.isArray(screenContract.requiredScreens)) {
-    const archetypes = screenContract.requiredScreens.map((screen) => screen.archetype).filter(Boolean);
-    if (['list', 'detail', 'form'].every((archetype) => archetypes.includes(archetype)) && screenContract.requiredScreens.length <= 4) {
+  const plannedScreens = screenContract.schemaVersion >= 2 ? screenContract.screens : screenContract.requiredScreens;
+  if (forbidden.has('crud-triad') && Array.isArray(plannedScreens)) {
+    const archetypes = plannedScreens.map((screen) => screen.archetype || screen.presentation?.pattern).filter(Boolean);
+    if (['list', 'detail', 'form'].every((archetype) => archetypes.includes(archetype)) && plannedScreens.length <= 4) {
       issues.push({ rule: 'forbidden-crud-triad', message: 'Primary experience falls back to mandatory CRUD List/Detail/Form generation.' });
     }
   }

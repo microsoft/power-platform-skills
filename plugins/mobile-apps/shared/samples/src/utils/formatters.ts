@@ -39,3 +39,28 @@ export function formatRelative(iso: string | undefined | null): string {
     return iso;
   }
 }
+
+/** Format money from the record's ISO 4217 currency code; never assume a symbol. */
+export function formatCurrency(
+  amount: number | undefined | null,
+  currencyCode: string | undefined | null,
+  locale?: string,
+): string {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return '—';
+  const code = String(currencyCode || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) {
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  }
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: code,
+      currencyDisplay: 'symbol',
+    }).format(amount);
+  } catch {
+    return `${code} ${amount.toFixed(2)}`;
+  }
+}

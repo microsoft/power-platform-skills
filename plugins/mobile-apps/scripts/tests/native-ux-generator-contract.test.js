@@ -21,7 +21,13 @@ test('screen builder inherits the configured model and requires route shell plus
   assert.match(builder, /resolveExperienceMedia/);
   assert.match(builder, /Category-to-catalog context is mandatory/);
   assert.match(builder, /remote-cdn-cached/);
+  assert.match(builder, /media=\{resolveExperienceMedia\(record\)\}/);
+  assert.match(builder, /Do not define, wrap, shadow/);
   assert.match(builder, /canonical experience data assets are missing/);
+  assert.match(builder, /return-only agent/);
+  assert.match(builder, /mobile-screen-artifact/);
+  const frontmatter = builder.match(/^---\n([\s\S]*?)\n---/)[1];
+  assert.doesNotMatch(frontmatter, /^\s+-\s+(?:Write|Edit|Bash)\s*$/m);
 });
 
 test('explicit CDN media and category context remain policy-driven planning inputs', () => {
@@ -70,7 +76,18 @@ test('shared scaffold exposes the route shell and local illustration recipe boun
   assert.match(components, /media\?: ExperienceMedia/);
   assert.match(components, /from 'expo-image'/);
   assert.match(components, /cachePolicy="memory-disk"/);
+  assert.match(components, /fallbackSource\?: ImageSourcePropType/);
+  assert.match(components, /source=\{bundledSource\}/);
   assert.match(components, /recyclingKey=\{media\?\.imageCacheKey \|\| imageUrl\}/);
   assert.match(components, /onError=\{\(\) => setRemoteFailed\(true\)\}/);
+  assert.match(components, /media\?\.sourcePriority !== 'local' && imageUrl && !remoteFailed/);
   assert.match(components, /bg="\$mediaSurface"/);
+});
+
+test('shared formatting and typography do not invent currency or negative tracking', () => {
+  const formatters = read('shared/samples/src/utils/formatters.ts');
+  const tamagui = read('shared/samples/tamagui.config.ts');
+  assert.doesNotMatch(formatters, /currencyCode \|\| 'USD'/);
+  assert.match(formatters, /if \(!\/\^\[A-Z\]\{3\}\$\/\.test\(code\)\)/);
+  assert.match(tamagui, /letterSpacing: \{ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 \}/);
 });

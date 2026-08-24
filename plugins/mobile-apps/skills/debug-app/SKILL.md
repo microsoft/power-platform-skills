@@ -61,6 +61,19 @@ Mark each cycle complete (clean OR fixed) before starting the next.
 
 Before entering the loop:
 
+For a plugin-generated project (`native-app-plan.md` exists), first require a
+schema-v3 screen contract and run both read-only gates:
+
+```bash
+node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+```
+
+On failure, stop and route to `/edit-app` or `/sync-from-plan`. Debugging may
+repair implementation defects, but it must not infer missing operations,
+dependencies, or connector methods and thereby create new planning truth.
+
 ### 0.0 Resolve the Metro terminal
 
 The Metro terminal is the **only** log source. The dev-player routes all JS output there.

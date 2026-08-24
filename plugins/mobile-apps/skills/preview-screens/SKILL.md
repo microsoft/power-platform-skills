@@ -44,6 +44,20 @@ Glob pattern="power.config.json" path="<working_dir>"
 
 If missing, check for `package.json`. If neither exists, report the error and stop.
 
+For a plugin-generated app with `native-app-plan.md`, require current execution
+artifacts before rendering:
+
+```bash
+node -e "const c=require('./.tmp/experience-screen-contract.json'); if(c.schemaVersion!==3) process.exit(1)"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "<working_dir>"
+test ! -f "<working_dir>/.tmp/screen-build-pack.json" || \
+   node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "<working_dir>" --pack ".tmp/screen-build-pack.json"
+```
+
+If this fails, stop and route to `/edit-app` or `/sync-from-plan`; preview must
+not make a stale or legacy plan look build-ready. Projects without a generated
+plan remain previewable as unmanaged apps.
+
 Read `memory-bank.md` if present to get the project name for the page title:
 
 ```text

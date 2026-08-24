@@ -1,6 +1,6 @@
 ---
 name: design-system
-description: Creates the Tamagui brand system for an Expo/React Native Power Apps mobile app, including design-system.md, tokens.ts, and an HTML gallery.
+description: Creates the structured design recipe and Tamagui brand system for an Expo/React Native Power Apps mobile app, including design-recipe.json, design-system.md, tokens.ts, and an optional HTML gallery.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch
 model: opus
@@ -10,11 +10,15 @@ model: opus
 
 # Design System
 
-Source of truth for every screen built in a Power Apps mobile app. Produces three artifacts:
+Source of truth for every screen built in a Power Apps mobile app. Produces three
+required artifacts and one optional companion:
 
-1. `brand/design-system.md` — full spec (palette, typography, spacing, components, negatives)
-2. `brand/tokens.ts` — importable Tamagui token export
-3. `brand/design-system.html` — deterministic visual gallery (zero LLM cost)
+1. `brand/design-recipe.json` — compact machine-readable hierarchy, media,
+   presentation, and screen-scoped component decisions
+2. `brand/design-system.md` — human-readable spec (palette, typography,
+   spacing, components, negatives)
+3. `brand/tokens.ts` — importable Tamagui token export
+4. `brand/design-system.html` — optional deterministic visual gallery
 
 Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9b applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
 
@@ -298,11 +302,21 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 - **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
 - **(c) Brand preview** → skip Sub-steps 3–6, render the contract primary screen plus up to two supporting screens with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — preserve the primary composition first.
 - **(c) Apply experience baseline / (d) Minimal contract baseline** → skip the free composition picker. Run these in order:
-  1. **Contract-derived Sub-step 4** — always write both `brand/design-system.md` and `brand/tokens.ts` from the Product Experience Contract. Select accessible palette relationships, typography, surfaces, density, motion, and action treatment from `visualCharacter`, audience, interaction/entry mode, focal point, motifs, and forbidden defaults. Do not load an industry direction file. Record the chosen rationale in `memory-bank.md` under `## Design`.
+  1. **Contract-derived Sub-step 4** — always write
+     `brand/design-recipe.json`, `brand/design-system.md`, and
+     `brand/tokens.ts` from the Product Experience Contract and structured
+     screen graph. Select accessible palette relationships, typography,
+     surfaces, density, motion, and action treatment from `visualCharacter`,
+     audience, interaction/entry mode, focal point, motifs, and forbidden
+     defaults. Do not load an industry direction file. Record the chosen
+     rationale in `memory-bank.md` under `## Design`.
   2. **Product-first preview** — for (c), render the contract primary screen plus up to two supporting screens using the approved primary composition; do not force List + Form + Detail examples. For (d), the gallery is optional but the spec and tokens remain mandatory. Write `<working_dir>/_design_preview.html` when rendered and state that it is a design review, not native visual QA.
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
-  **Never return DONE without writing `brand/design-system.md`, `brand/tokens.ts`, and `## Product Experience Primitives`.** A product baseline must be inspectable and must preserve the primary experience even when the user supplies no brand asset.
+  **Never return DONE without writing `brand/design-recipe.json`,
+  `brand/design-system.md`, `brand/tokens.ts`, and `## Product Experience
+  Primitives`.** A product baseline must be inspectable and must preserve the
+  primary experience even when the user supplies no brand asset.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -364,10 +378,24 @@ viewport order, primary action, motifs, and forbidden defaults.
 
 ---
 
-## Sub-step 4 — Write brand/design-system.md + brand/tokens.ts
+## Sub-step 4 — Write the design recipe, design-system.md, and tokens.ts
 
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
+
+First compile the screen-scoped machine recipe from the approved contracts:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-design-recipe.js" \
+  --project-root "<working_dir>" \
+  --output "brand/design-recipe.json"
+```
+
+This JSON is the downstream runtime authority for hierarchy, presentation,
+media treatment, action placement, and scoped negatives. The Markdown below is
+its human-readable companion; do not introduce a conflicting global rule while
+rendering it. A Home-only hero restriction, for example, cannot prohibit a
+Catalog grid selected by the screen recipe.
 
 Generate the full spec deterministically from the Product Experience Contract,
 optional explicit brand input, and optional `picked_expression`. Follow the
@@ -412,6 +440,12 @@ neutral large-content fallback. Neither may reuse a saturated `accent` value.
 ## Typography
 | Role | Family | Size | Weight | Line | Tracking |
 ...7 roles: Display, Heading, Title, Body, Body-sm, Caption, Mono
+
+- Runtime strategy: {{design-recipe.typography.runtimeStrategy}}
+- Heading family: {{design-recipe.typography.headingFamily}}
+- Body family: {{design-recipe.typography.bodyFamily}}
+- Rationale: {{design-recipe.typography.rationale}}
+- Dynamic Type: required; never set `allowFontScaling={false}`
 
 ## Spacing
 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64
@@ -498,18 +532,31 @@ export const tokens = {
     full: 9999,
   },
   typography: {
-    display: { family: '{{font}}', size: {{28|32}}, weight: '{{600|700}}', lineHeight: {{1.2}}, tracking: {{-0.01|0}} },
-    heading: { family: '{{font}}', size: {{22|24}}, weight: '{{600}}', lineHeight: {{1.25}}, tracking: {{-0.005|0}} },
-    title: { family: '{{font}}', size: {{18|20}}, weight: '{{600}}', lineHeight: {{1.3}}, tracking: 0 },
-    body: { family: '{{font}}', size: 16, weight: '400', lineHeight: 1.5, tracking: 0 },
-    bodySm: { family: '{{font}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
-    caption: { family: '{{font}}', size: 12, weight: '500', lineHeight: 1.3, tracking: {{0.02|0}} },
-    mono: { family: '{{monoFont}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
+    runtimeStrategy: '{{design-recipe.typography.runtimeStrategy}}',
+    headingFamily: '{{design-recipe.typography.headingFamily}}',
+    bodyFamily: '{{design-recipe.typography.bodyFamily}}',
+    monoFamily: '{{design-recipe.typography.monoFamily}}',
+    rationale: '{{design-recipe.typography.rationale}}',
+    supportsDynamicType: true,
+    display: { family: '{{design-recipe.typography.headingFamily}}', size: {{28|32}}, weight: '{{600|700}}', lineHeight: {{1.2}}, tracking: {{-0.01|0}} },
+    heading: { family: '{{design-recipe.typography.headingFamily}}', size: {{22|24}}, weight: '{{600}}', lineHeight: {{1.25}}, tracking: {{-0.005|0}} },
+    title: { family: '{{design-recipe.typography.headingFamily}}', size: {{18|20}}, weight: '{{600}}', lineHeight: {{1.3}}, tracking: 0 },
+    body: { family: '{{design-recipe.typography.bodyFamily}}', size: 16, weight: '400', lineHeight: 1.5, tracking: 0 },
+    bodySm: { family: '{{design-recipe.typography.bodyFamily}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
+    caption: { family: '{{design-recipe.typography.bodyFamily}}', size: 12, weight: '500', lineHeight: 1.3, tracking: {{0.02|0}} },
+    mono: { family: '{{design-recipe.typography.monoFamily}}', size: 14, weight: '400', lineHeight: 1.4, tracking: 0 },
   },
 } as const;
 
 export type BrandTokens = typeof tokens;
 ```
+
+The recipe's semantic family names are deliberate runtime inputs. The normal
+automatic path uses `platform-serif` for an editorial display role and
+`system-sans` for body/UI, or records an explicit `system-native` rationale.
+Do not replace either path with the literal family `System` throughout the app.
+Only use `bundled-custom` when the font files are already supplied and loaded;
+prompt-only generation never downloads a font to satisfy the visual recipe.
 
 **Snapshot to history:**
 
@@ -747,7 +794,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
-| `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
+| `screen-builder` | Pack-embedded slice of `brand/design-recipe.json` | Presentation and screen-scoped negatives are binding; Markdown is a human compatibility fallback only. |
 | Tamagui integration reference | `brand/tokens.ts` | Imported into `tamagui.config.ts` by `/create-mobile-app` Step 9b |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
@@ -784,7 +831,10 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 
 ## Notes
 
-- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
+- **Read-only with respect to app source code.** This skill writes only to
+  `brand/` (including `design-recipe.json`), `_design_vibe.html`,
+  `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or
+  generated code.
 - **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

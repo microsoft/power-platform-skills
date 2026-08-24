@@ -14,6 +14,8 @@ local paths.
   "environment": null,
   "transition": null,
   "lastSyncedPlanHash": null,
+  "lastSyncedScreenContractHash": null,
+  "lastSyncedExecutionContractHash": null,
   "lastDataverseManifestHash": null,
   "lastSyncAt": null
 }
@@ -68,6 +70,11 @@ skill arguments:
 
 `lastSyncedPlanHash` is the SHA-256 hash of `native-app-plan.md` after the most
 recent successful `/sync-from-plan` run.
+
+`lastSyncedScreenContractHash` and `lastSyncedExecutionContractHash` are the
+SHA-256 hashes of `.tmp/experience-screen-contract.json` and
+`.tmp/mobile-plan-execution-contract.json`. A mismatch triggers sync even when
+the readable plan text did not change.
 
 `lastDataverseManifestHash` is the SHA-256 hash of
 `.datamodel-manifest.json` after the most recent successful sync in `dataverse`

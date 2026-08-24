@@ -59,6 +59,16 @@ Common connector API names:
 - `office365`, `office365users`, `office365groups`
 - `sql`, `commondataservice`
 
+When `.tmp/mobile-plan-execution-contract.json` exists, run
+`validate-mobile-plan-execution-contract.js`, then resolve the selected API name
+to one or more `connectorOperations[]` rows. Require every row to name the same
+exact API/service pairing and retain its operation, input, output, failure, and
+`requiredBy` contract. If no row exists, stop with
+`BLOCKED: connector is not in the approved execution contract` and route to
+`/edit-app`. Do not infer a method from the connector display label or generated
+file after approval. Unmanaged projects without a generated plan retain the
+interactive discovery path below.
+
 **Cloud flows are supported by the Power Apps CLI, but they are not connector data sources.** If the user wants to invoke an existing Power Automate cloud flow from the app, use the flow-specific commands instead of `add-data-source`:
 
 ```bash
@@ -148,6 +158,10 @@ Grep pattern="async \w+" path="src/generated/services/<Connector>Service.ts"
 ```
 
 Files to check:
+
+- Every approved `connectorOperations[]` row must resolve to its exact
+	`<service>.<operation>` export. A missing or renamed method is blocking; do
+	not rewrite screens to a nearby generated operation without a plan revision.
 
 - `src/generated/services/<Connector>Service.ts` — available operations and their parameters
 - `src/generated/models/<Connector>Model.ts` — TypeScript interfaces (if generated)

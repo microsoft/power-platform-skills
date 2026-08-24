@@ -27,6 +27,15 @@ const PHASE_ORDER = [
   'alternateKeys',
   'publish',
 ];
+const APPROVAL_ARTIFACT_HASH_KEYS = [
+  'nativeAppPlanSha256',
+  'dataverseSchemaContractSha256',
+  'experienceContractSha256',
+  'experienceScreenContractSha256',
+  'experienceFoundationContractSha256',
+  'mobilePlanExecutionContractSha256',
+  'mobilePlanExecutionPreflightSha256',
+];
 const DECISIONS = new Set([
   'reuse',
   'extend',
@@ -841,6 +850,35 @@ function validateApprovalReceipt(approvalReceipt, {
     errors.push('native-app-plan.md is required');
   } else if (approvalReceipt.approvedPlanSha256 !== sha256(planBytes)) {
     errors.push('mobile plan approval receipt plan hash does not match native-app-plan.md');
+  }
+  const artifactHashes = approvalReceipt.artifactHashes;
+  if (!artifactHashes || typeof artifactHashes !== 'object' || Array.isArray(artifactHashes)) {
+    errors.push('mobile plan approval receipt artifact hashes are required');
+  } else {
+    const artifactHashKeys = Object.keys(artifactHashes).sort();
+    const unknownArtifactKeys = artifactHashKeys.filter(
+      (key) => !APPROVAL_ARTIFACT_HASH_KEYS.includes(key),
+    );
+    const missingArtifactKeys = APPROVAL_ARTIFACT_HASH_KEYS.filter(
+      (key) => !artifactHashKeys.includes(key),
+    );
+    if (unknownArtifactKeys.length) {
+      errors.push(`mobile plan approval receipt artifact hashes have unknown keys: ${unknownArtifactKeys.join(', ')}`);
+    }
+    if (missingArtifactKeys.length) {
+      errors.push(`mobile plan approval receipt artifact hashes are missing: ${missingArtifactKeys.join(', ')}`);
+    }
+    for (const key of APPROVAL_ARTIFACT_HASH_KEYS) {
+      if (!/^[a-f0-9]{64}$/i.test(String(artifactHashes[key] || ''))) {
+        errors.push(`mobile plan approval receipt artifact hash ${key} must be a SHA-256 hex value`);
+      }
+    }
+    if (artifactHashes.nativeAppPlanSha256 !== sha256(planBytes)) {
+      errors.push('mobile plan approval receipt artifact plan hash does not match native-app-plan.md');
+    }
+    if (approvalReceipt.artifactRevisionSha256 !== sha256(stableJson(artifactHashes))) {
+      errors.push('mobile plan approval receipt artifact revision hash does not match artifact hashes');
+    }
   }
   const contractValidation = validateContract(contract);
   if (!contractValidation.valid) {

@@ -281,7 +281,7 @@ function experienceFromIntent(intent, profile, text) {
       signatureMotifs: ['featured-product-media', 'category-browse', 'cart-action'],
       forbiddenDefaults: ['dashboard-first-home', 'crud-triad', 'warehouse-operations', 'airline-operations', 'status-card-catalog'],
       visualCharacter: clean ? 'minimal-refined' : 'warm-friendly',
-      navigationModel: 'stack',
+      navigationModel: 'tabs-stack',
       evidence: ['consumer', 'commerce', 'product', 'category', 'cart', 'media', 'discovery'],
     },
     booking: {
@@ -312,14 +312,46 @@ function experienceFromIntent(intent, profile, text) {
   const selected = byIntent[intent] || {
     audience: signalCount(profile, 'consumer') ? 'consumer' : signalCount(profile, 'employee') ? 'employee' : 'mixed', primaryJob: 'Understand the product and take the first useful action.', interactionMode: 'create', entryMode: 'onboarding', contentModel: ['records'], primarySurface: 'guided-onboarding', primaryAction: 'Start the guided flow', focalPoint: 'The clearest first step for the user', signatureMotifs: ['guided-start', 'value-preview'], forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'premature-tab-bar'], visualCharacter: 'warm-friendly', navigationModel: 'stack', evidence: [],
   };
-  const explicitCachedCdn = signalCount(profile, 'cachedCdn') > 0 && selected.contentModel.includes('media');
+  const hasMedia = selected.contentModel.includes('media');
+  const mediaCritical = hasMedia && ['product-led-discovery', 'content-led-feed', 'learning-journey', 'detail-led-decision'].includes(selected.primarySurface);
+  const mediaSource = !hasMedia
+    ? 'not-applicable'
+    : selected.primarySurface === 'capture-led-utility' ? 'user-content' : mediaCritical ? 'approved-cdn' : 'code-native';
+  const mediaDelivery = !hasMedia
+    ? 'not-applicable'
+    : mediaSource === 'approved-cdn' ? 'device-cached' : 'bundled';
   const assetPolicy = {
     connectivity: signalCount(profile, 'offline') ? 'offline-preferred' : 'network-optional',
-    media: explicitCachedCdn
-      ? 'remote-cdn-cached'
-      : signalCount(profile, 'offline') && selected.contentModel.includes('media') ? 'local-first' : selected.contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
+    // Connectivity and source are separate decisions. An offline-capable app can
+    // still originate media from a CDN when the runtime caches it on the device.
+    media: !hasMedia ? 'not-applicable' : mediaSource === 'approved-cdn' ? 'remote-cdn-cached' : 'local-first',
   };
-  return { ...selected, assetPolicy, text };
+  const presentationBySurface = {
+    'product-led-discovery': ['editorial-hero', 'image-card-grid', 'inline'],
+    'availability-led-discovery': ['guided-flow', 'compact-list', 'inline'],
+    'task-led-workflow': ['guided-flow', 'compact-list', 'sticky-bottom'],
+    'learning-journey': ['editorial-hero', 'image-list', 'inline'],
+    'conversation-led-inbox': ['conversation', 'compact-list', 'inline'],
+    'decision-led-overview': ['summary', 'compact-list', 'inline'],
+    'capture-led-utility': ['capture', 'compact-list', 'sticky-bottom'],
+    'content-led-feed': ['editorial-hero', 'image-list', 'floating'],
+    'detail-led-decision': ['detail', 'image-list', 'sticky-bottom'],
+    'guided-onboarding': ['guided-flow', 'compact-list', 'inline'],
+  };
+  const [primaryPattern, collectionPattern, primaryActionPlacement] = presentationBySurface[selected.primarySurface] || ['custom', 'compact-list', 'inline'];
+  return {
+    ...selected,
+    assetPolicy,
+    mediaIntent: {
+      criticality: !hasMedia ? 'not-applicable' : mediaCritical ? 'required' : 'supporting',
+      source: mediaSource,
+      delivery: mediaDelivery,
+      minimumCoverage: mediaCritical ? 0.9 : 0,
+      fallback: !hasMedia ? 'none' : mediaCritical ? 'code-native-illustration' : 'text-only',
+    },
+    presentationIntent: { primaryPattern, collectionPattern, primaryActionPlacement, maxFirstViewportRegions: 4 },
+    text,
+  };
 }
 
 function normalizeMediaPolicy(value) {
@@ -369,7 +401,14 @@ function deriveExperienceFromBrief(brief, options = {}) {
   const intent = semanticIntent?.id || (fallback?.rule.id === 'browse' ? 'commerce' : fallback?.rule.id);
   const semantic = experienceFromIntent(intent, profile, text);
   const mediaPolicy = normalizeMediaPolicy(options.mediaPolicy);
-  if (mediaPolicy) semantic.assetPolicy.media = mediaPolicy;
+  if (mediaPolicy) {
+    semantic.assetPolicy.media = mediaPolicy;
+    semantic.mediaIntent = {
+      ...semantic.mediaIntent,
+      source: mediaPolicy === 'remote-cdn-cached' || mediaPolicy === 'remote-allowed' ? 'approved-cdn' : mediaPolicy === 'not-applicable' ? 'not-applicable' : 'bundled',
+      delivery: mediaPolicy === 'remote-cdn-cached' ? 'device-cached' : mediaPolicy === 'remote-allowed' ? 'remote' : mediaPolicy === 'not-applicable' ? 'not-applicable' : 'bundled',
+    };
+  }
   const score = semanticIntent?.score || fallback?.count || 0;
   const margin = winner.score - (runnerUp?.score || 0);
   const confidence = score >= 6 && margin >= 2 ? 'high' : score >= 3 ? 'medium' : 'low';
@@ -385,6 +424,8 @@ function deriveExperienceFromBrief(brief, options = {}) {
     contentModel: semantic.contentModel,
     primarySurface: semantic.primarySurface,
     assetPolicy: semantic.assetPolicy,
+    mediaIntent: semantic.mediaIntent,
+    presentationIntent: semantic.presentationIntent,
     promptEvidence: {
       audience: audienceEvidence,
       primaryJob: primaryEvidence,
@@ -396,6 +437,15 @@ function deriveExperienceFromBrief(brief, options = {}) {
     },
     entryMode: semantic.entryMode,
     navigationModel: semantic.navigationModel,
+    navigationIntent: {
+      model: semantic.navigationModel,
+      initialRoute: '/(app)/home',
+      rationale: semantic.navigationModel === 'tabs-stack'
+        ? intent === 'commerce'
+          ? 'Shopping, category browsing, and the bag are durable independent destinations, so persistent tabs reduce return-path friction.'
+          : 'The primary job benefits from persistent access to distinct top-level destinations.'
+        : 'The primary job is a focused progression, so stack navigation avoids premature persistent tabs.',
+    },
     primaryScreen: {
       id: 'home',
       route: '/(app)/home',
@@ -417,7 +467,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
       : mediaPolicy
         ? [`Use the explicitly selected ${mediaPolicy} media policy.`]
         : semantic.assetPolicy.connectivity === 'offline-preferred'
-        ? ['Use bundled or local media before attempting a network fetch.']
+        ? ['Cache required media on the device and keep a complete local fallback.']
         : [],
     source: options.referenceOverride ? 'brief-plus-reference' : 'brief',
   };
@@ -446,6 +496,25 @@ function validateExperienceContract(contract) {
   const surfaces = new Set(['product-led-discovery', 'availability-led-discovery', 'task-led-workflow', 'learning-journey', 'conversation-led-inbox', 'decision-led-overview', 'capture-led-utility', 'content-led-feed', 'detail-led-decision', 'guided-onboarding', 'other']);
   if (!surfaces.has(contract?.primarySurface)) issues.push('primarySurface is invalid');
   if (!['offline-preferred', 'network-optional', 'unknown'].includes(contract?.assetPolicy?.connectivity) || !['local-first', 'remote-cdn-cached', 'remote-allowed', 'not-applicable'].includes(contract?.assetPolicy?.media)) issues.push('assetPolicy is invalid');
+  if (contract?.mediaIntent !== undefined) {
+    const media = contract.mediaIntent;
+    if (!['required', 'supporting', 'not-applicable'].includes(media?.criticality)
+      || !['approved-cdn', 'bundled', 'code-native', 'user-content', 'dataverse', 'not-applicable'].includes(media?.source)
+      || !['bundled', 'device-cached', 'remote', 'not-applicable'].includes(media?.delivery)
+      || typeof media?.minimumCoverage !== 'number' || media.minimumCoverage < 0 || media.minimumCoverage > 1
+      || !['local-asset', 'code-native-illustration', 'text-only', 'none'].includes(media?.fallback)) issues.push('mediaIntent is invalid');
+    if (media?.criticality === 'required' && (media.minimumCoverage < 0.8 || media.fallback === 'text-only')) issues.push('required mediaIntent needs at least 0.8 coverage and a visual fallback');
+  }
+  if (contract?.presentationIntent !== undefined) {
+    const presentation = contract.presentationIntent;
+    const patterns = ['editorial-hero', 'image-card-grid', 'image-list', 'compact-list', 'form', 'timeline', 'detail', 'conversation', 'summary', 'capture', 'guided-flow', 'custom'];
+    if (!patterns.includes(presentation?.primaryPattern) || !patterns.includes(presentation?.collectionPattern)
+      || !['inline', 'sticky-bottom', 'header', 'floating'].includes(presentation?.primaryActionPlacement)
+      || !Number.isInteger(presentation?.maxFirstViewportRegions) || presentation.maxFirstViewportRegions < 1 || presentation.maxFirstViewportRegions > 5) issues.push('presentationIntent is invalid');
+  }
+  if (contract?.navigationIntent !== undefined && (contract.navigationIntent?.model !== contract.navigationModel
+    || contract.navigationIntent?.initialRoute !== contract.primaryScreen?.route
+    || typeof contract.navigationIntent?.rationale !== 'string' || contract.navigationIntent.rationale.trim().length < 10)) issues.push('navigationIntent is invalid');
   const evidenceFields = ['audience', 'primaryJob', 'interactionMode', 'entryMode', 'contentModel', 'primarySurface', 'assetPolicy'];
   for (const field of evidenceFields) {
     const spans = contract?.promptEvidence?.[field];

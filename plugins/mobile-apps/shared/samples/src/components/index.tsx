@@ -10,7 +10,7 @@
  */
 
 import React from 'react';
-import { ScrollView, Image as RNImage } from 'react-native';
+import { ScrollView, Image as RNImage, type ImageSourcePropType } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -131,11 +131,11 @@ export function Hero({
       <YStack px="$5" pt="$6" pb="$5" gap="$1">
         <XStack items="center" justify="space-between">
           <YStack gap="$1" flex={1}>
-            <Text fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
+            <Text fontFamily="$heading" fontSize="$7" fontWeight="700" color="white" numberOfLines={1}>
               {title}
             </Text>
             {subtitle && (
-              <Text fontSize="$3" color="white" numberOfLines={2}>
+              <Text fontFamily="$body" fontSize="$3" color="white" numberOfLines={2}>
                 {subtitle}
               </Text>
             )}
@@ -167,7 +167,7 @@ export function SectionHeader({
 }) {
   return (
     <XStack items="center" justify="space-between" mb="$2">
-      <Text fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
+      <Text fontFamily="$heading" fontSize="$5" fontWeight="600" color="$color11">{title}</Text>
       {action && (
         <Button size="$2" chromeless onPress={action.onPress}>
           <Text fontSize="$3" color="$blue10">{action.label}</Text>
@@ -330,8 +330,8 @@ export function ErrorState({
   return (
     <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
       <Ionicons name="alert-circle" size={48} color={theme.statusOverdue.val} />
-      <Text fontSize="$6" fontWeight="700" color="$color12">{title}</Text>
-      <Text color="$color10" text="center">{message}</Text>
+      <Text fontFamily="$heading" fontSize="$6" fontWeight="700" color="$color12">{title}</Text>
+      <Text fontFamily="$body" color="$color10" text="center">{message}</Text>
       <Button onPress={onRetry}>Try again</Button>
     </YStack>
   );
@@ -357,8 +357,8 @@ export function EmptyState({
   return (
     <YStack flex={1} items="center" justify="center" p="$6" gap="$3">
       <Ionicons name={icon} size={48} color={theme.color10.val} />
-      <Text fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
-      <Text color="$color10" text="center" fontSize="$4">{message}</Text>
+      <Text fontFamily="$heading" fontSize="$5" fontWeight="600" color="$color12">{title}</Text>
+      <Text fontFamily="$body" color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
         <Button bg="$blue10" onPress={onAction}>
           <Button.Text color="$accentOnAccent">{actionLabel}</Button.Text>
@@ -485,6 +485,7 @@ export function ScreenShell({
   onBack,
   onClose,
   fallbackHref = '/(app)/home',
+  scroll = false,
   children,
 }: {
   headerMode?: HeaderMode;
@@ -494,6 +495,7 @@ export function ScreenShell({
   onBack?: () => void;
   onClose?: () => void;
   fallbackHref?: string;
+  scroll?: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -519,7 +521,13 @@ export function ScreenShell({
           rightAction={rightAction}
         />
       ) : null}
-      <YStack flex={1}>{children}</YStack>
+      <YStack flex={1}>
+        {scroll ? (
+          <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
+            {children}
+          </ScrollView>
+        ) : children}
+      </YStack>
     </SafeAreaView>
   );
 }
@@ -545,8 +553,9 @@ export function ScreenHeader({
   onBack?: () => void;
   onClose?: () => void;
 }) {
+  const balancedNavigationSlots = headerMode === 'back' || headerMode === 'close';
   const leading = headerMode === 'back' ? (
-    <Button chromeless width={48} height={48} minWidth={48} minHeight={48} onPress={onBack} aria-label="Back">
+    <Button chromeless width={48} height={48} minWidth={48} minHeight={48} onPress={onBack} aria-label="Back to previous screen">
       <Ionicons name="chevron-back" size={24} />
     </Button>
   ) : headerMode === 'close' ? (
@@ -560,14 +569,18 @@ export function ScreenHeader({
         {leading}
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
-            <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
+            <Text fontFamily="$heading" fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
             {status}
           </XStack>
           {subtitle && (
-            <Text fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
+            <Text fontFamily="$body" fontSize={13} color="$color10" fontWeight="500">{subtitle}</Text>
           )}
         </YStack>
-        {rightAction}
+        {balancedNavigationSlots ? (
+          <XStack width={48} minWidth={48} height={48} items="center" justify="center">
+            {rightAction}
+          </XStack>
+        ) : rightAction}
       </XStack>
       {meta}
       {children}
@@ -593,7 +606,7 @@ export function ModalHeader({
   return (
     <XStack px="$4" pt="$5" pb="$3" items="center" justify="space-between">
       <Button chromeless onPress={onCancel}>Cancel</Button>
-      <Text fontSize={17} fontWeight="700">{title}</Text>
+      <Text fontFamily="$heading" fontSize={17} fontWeight="700">{title}</Text>
       {onSave ? (
         <Button chromeless onPress={onSave} disabled={saving}>
           <Text fontWeight="600">{saveLabel}</Text>
@@ -616,7 +629,7 @@ export function FormField({
 }) {
   return (
     <YStack gap="$2">
-      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0.6}>
+      <Text fontSize={11} fontWeight="700" color="$color10" letterSpacing={0}>
         {label.toUpperCase()}
       </Text>
       {children}
@@ -661,7 +674,7 @@ export function RowPick({
 
 export type LocalIllustrationRecipe = {
   key: string;
-  kind: 'local-illustration';
+  kind: 'bundled-raster' | 'local-illustration';
   family: string;
   label: string;
   category: string | null;
@@ -672,6 +685,11 @@ export type ExperienceMedia = {
   imageAltText?: string | null;
   imageCacheKey?: string | null;
   imageAssetKey?: string | null;
+  /** Primary source returned by the canonical resolver. */
+  imageSource?: ImageSourcePropType | null;
+  /** Metro-bundled source used when the remote source cannot load. */
+  fallbackSource?: ImageSourcePropType | null;
+  sourcePriority?: 'local' | 'remote';
 };
 
 /**
@@ -707,8 +725,17 @@ export function EntityImage({
   const theme = useTheme();
   const imageUrl = media?.imageUrl || (source?.startsWith('http') || source?.startsWith('data:') ? source : null);
   const [remoteFailed, setRemoteFailed] = React.useState(false);
-  React.useEffect(() => setRemoteFailed(false), [imageUrl]);
+  const [localFailed, setLocalFailed] = React.useState(false);
+  React.useEffect(() => {
+    setRemoteFailed(false);
+    setLocalFailed(false);
+  }, [imageUrl, media?.imageCacheKey, media?.imageAssetKey, media?.fallbackSource]);
   const localKey = assetKey || media?.imageAssetKey || assetRecipe?.key || (source?.startsWith('asset://') ? source : null);
+  const primaryUri = media?.imageSource && typeof media.imageSource === 'object' && !Array.isArray(media.imageSource)
+    && 'uri' in media.imageSource ? String(media.imageSource.uri || '') : '';
+  const bundledSource = media?.fallbackSource
+    || (media?.sourcePriority === 'remote' && /^https:\/\//i.test(primaryUri) ? null : media?.imageSource)
+    || null;
   const semantic = `${assetRecipe?.family || ''} ${assetRecipe?.category || ''} ${assetRecipe?.label || ''} ${category || ''} ${title || ''} ${localKey || ''}`.toLowerCase();
   const illustration = /beauty|skin|care/.test(semantic)
     ? { icon: 'sparkles' as IoniconName, label: 'Beauty collection' }
@@ -719,7 +746,24 @@ export function EntityImage({
         : { icon: 'cube-outline' as IoniconName, label: 'Product collection' };
   const localIllustration = localKey || (!source && (title || category));
 
-  if (imageUrl && !remoteFailed) {
+  if (bundledSource && !localFailed && (media?.sourcePriority === 'local' || !imageUrl || remoteFailed)) {
+    return (
+      <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$mediaSurface">
+        <ExpoImage
+          source={bundledSource}
+          cachePolicy="memory-disk"
+          recyclingKey={media?.imageCacheKey || localKey || 'bundled-experience-media'}
+          contentFit="cover"
+          style={{ width: '100%', height: '100%' }}
+          accessible={true}
+          accessibilityLabel={media?.imageAltText || accessibilityLabel || title}
+          onError={() => setLocalFailed(true)}
+        />
+      </YStack>
+    );
+  }
+
+  if (media?.sourcePriority !== 'local' && imageUrl && !remoteFailed) {
     return (
       <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$mediaSurface">
         <ExpoImage
@@ -744,18 +788,19 @@ export function EntityImage({
         borderRadius={borderRadius}
         bg="$mediaSurface"
         overflow="hidden"
-        p="$3"
-        justify="space-between"
+        items="center"
+        justify="center"
         accessibilityRole="image"
         aria-label={media?.imageAltText || accessibilityLabel || `${title || assetRecipe?.label || illustration.label} illustration`}
       >
-        <YStack width={56} height={56} rounded="$10" bg="$accentSoft" items="center" justify="center">
-          <Ionicons name={illustration.icon} size={28} color={theme.accentBase.val} />
-        </YStack>
-        <YStack gap="$1">
-          {category ? <Text fontSize="$2" color="$text1" numberOfLines={1}>{category}</Text> : null}
-          <Text fontSize="$4" fontWeight="700" color="$text0" numberOfLines={2}>{title || assetRecipe?.label || illustration.label}</Text>
-        </YStack>
+        <LinearGradient
+          colors={[theme.mediaSurface.val, theme.accentSoft.val]}
+          style={{ width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <YStack width={88} height={88} rounded="$10" bg="$surface0" opacity={0.88} items="center" justify="center">
+            <Ionicons name={illustration.icon} size={44} color={theme.accentBase.val} />
+          </YStack>
+        </LinearGradient>
       </YStack>
     );
   }

@@ -9,11 +9,11 @@ one-line or few-line brief; a screenshot, HTML page, or image is optional.
 
 | Artifact | Owner | Purpose |
 |---|---|---|
-| `.tmp/experience-contract.json` | `native-app-planner` or foreground creation workflow | Brief-derived product experience |
-| `.tmp/experience-screen-contract.json` | `screen-planner` | Canonical primary-screen composition and runtime anchors |
-| `.tmp/experience-foundation-contract.json` | `screen-planner` | Hash-bound ownership of the 2-5 reusable motif components |
+| `.tmp/experience-contract.json` | foreground creation workflow | Brief-derived product experience |
+| `.tmp/experience-screen-contract.json` | foreground creation workflow, from the return-only `screen-planner` contract | Canonical primary-screen composition and runtime anchors |
+| `.tmp/experience-foundation-contract.json` | foreground creation workflow, from the return-only `screen-planner` contract | Hash-bound ownership of the 2-5 reusable motif components |
 | `.tmp/screen-build-pack.json` | compiler/orchestrator | Compact revision-bound assembly sheet for builders, mocks, refiner, and validation |
-| `native-app-plan.md` → `## Design` | `native-app-planner` | Human-reviewable Product Experience Contract mirror |
+| `native-app-plan.md` → `## Design` | foreground creation workflow, from the return-only `native-app-planner` bundle | Human-reviewable Product Experience Contract mirror |
 | `brand/design-system.md` → `## Product Experience Primitives` | `/design-system` | Token/component translation of motifs and hierarchy |
 | `.tmp/experience-visual-review.json` | native review/refiner | Native evidence for the product experience |
 

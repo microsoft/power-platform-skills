@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "runtimeBannedPackages": ["expo-haptics"],
+  "requirementSignals": [
+    { "id": "offline", "pattern": "\\b(?:in[-\\s]?flight|offline|no connection|airplane mode|disconnected)\\b" },
+    { "id": "cached-cdn", "pattern": "\\b(?:cdn|cache-backed|cached\\s+(?:cdn|image|media)|device\\s+cache|remote-cdn-cached)\\b" },
+    { "id": "cart", "pattern": "\\b(?:cart|basket|add to cart|checkout)\\b" },
+    { "id": "accessibility", "pattern": "\\b(?:accessible|accessibility|screen reader|large text|dynamic type|contrast)\\b" }
+  ],
+  "nativeCapabilities": [
+    { "capability": "barcode-scanner", "pattern": "\\b(?:barcode|qr)(?: code)?\\b", "package": "expo-camera" },
+    { "capability": "camera", "pattern": "\\b(?:camera|take (?:a )?photo|photograph)\\b", "package": "expo-camera" },
+    { "capability": "image-picker", "pattern": "\\b(?:image picker|photo library|gallery)\\b", "package": "expo-image-picker" },
+    { "capability": "document-picker", "pattern": "\\b(?:pick|import|upload|attach)\\b[^.\\n]*\\b(?:pdf|document|file)\\b", "package": "expo-document-picker" },
+    { "capability": "pdf-report", "pattern": "\\b(?:generate|export|print)\\b[^.\\n]*\\bpdf\\b|\\bevidence packet\\b", "package": "expo-print" },
+    { "capability": "pdf-viewer", "pattern": "\\b(?:view|open|preview)\\b[^.\\n]*\\bpdf\\b", "package": "@microsoft/power-apps-native-pdf-viewer" },
+    { "capability": "pen-input", "pattern": "\\b(?:pen input|signature|sign off|ink|draw)\\b", "package": "@microsoft/power-apps-native-pen-input" },
+    { "capability": "geolocation", "pattern": "\\b(?:background|continuous)\\b[^.\\n]*\\b(?:gps|location|tracking)\\b", "package": "@microsoft/power-apps-native-bglocation" },
+    { "capability": "location", "pattern": "\\b(?:current location|one-shot location|tag with coordinates)\\b", "package": "expo-location" },
+    { "capability": "secure-store", "pattern": "\\b(?:secure storage|store credentials|store token|pin storage)\\b", "package": "expo-secure-store" },
+    { "capability": "sharing", "pattern": "\\b(?:share sheet|share (?:a )?(?:file|report|pdf))\\b", "package": "expo-sharing" }
+  ],
+  "connectorHints": [
+    { "connector": "Office 365 Outlook", "apiName": "office365", "pattern": "\\b(?:email|outlook|meeting|calendar sync|office 365 calendar)\\b" },
+    { "connector": "SharePoint Online", "apiName": "sharepointonline", "pattern": "\\b(?:sharepoint|document library)\\b" },
+    { "connector": "Microsoft Teams", "apiName": "teams", "pattern": "\\b(?:teams|channel|@mention)\\b" },
+    { "connector": "Excel Online (Business)", "apiName": "excelonlinebusiness", "pattern": "\\b(?:excel|spreadsheet|workbook|\\.xlsx)\\b" },
+    { "connector": "OneDrive for Business", "apiName": "onedriveforbusiness", "pattern": "\\b(?:onedrive)\\b" },
+    { "connector": "Azure DevOps", "apiName": "azuredevops", "pattern": "\\b(?:azure devops|work item|pipeline|sprint)\\b" },
+    { "connector": "SQL Server", "apiName": "sql", "pattern": "\\b(?:azure sql|sql server)\\b" }
+  ],
+  "javascriptDependencies": [
+    { "id": "calendar", "pattern": "\\b(?:month|week|agenda) calendar\\b|\\bcalendar view\\b", "package": "react-native-calendars", "version": "1.1314.0" }
+  ]
+}

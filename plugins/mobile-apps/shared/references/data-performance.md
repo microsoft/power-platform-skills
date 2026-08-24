@@ -12,7 +12,9 @@ Apply these patterns whenever a List screen queries a Dataverse table that can g
 
 **Skip for:** small lookup tables (status types, categories, job types) where total rows are bounded and known.
 
-The `screen-planner` flags this in the per-screen spec as `pagination: cursor` or `pagination: none`.
+The `screen-planner` records this in each schema-v3 list operation as
+`pagination.mode: cursor` or `pagination.mode: none`; `none` also requires a
+bounded reason and maximum expected count.
 
 ---
 
@@ -25,7 +27,13 @@ Microsoft Learn's Dataverse Web API guidance is the source of truth:
 - Use deterministic ordering for paged results. Include a unique key, preferably the table primary key, after the user-facing sort.
 - Select only the columns the UI renders.
 
-The native code-app rule is service-first: use generated services from `src/generated/`, not direct Dataverse REST. Current real generated Dataverse services call `retrieveMultipleRecordsAsync` and accept `getAll({ maxPageSize, filter, orderBy, select, skipToken })`; the result is `IOperationResult<T[]>` with `data` and optional `skipToken`. Older mock/prototype services may only expose `getAll({ filter, orderBy, top, select })` and return an array; those are single-page mocks and are not enough for an unbounded production list.
+The native code-app rule is service-first: use generated services from
+`src/generated/`, not direct Dataverse REST. Current real generated Dataverse
+services and current schema-v3 prototype services accept
+`getAll({ maxPageSize, filter, orderBy, select, skipToken })`; the result has
+`data` and an optional `skipToken`. Legacy prototype services that return an
+array are single-page compatibility inputs only and require explicit re-planning
+before new screen generation.
 
 ### Cursor list with the shared hook
 
@@ -232,10 +240,12 @@ external projection.
 
 ### How the data-model-architect proposes this
 
-The screen-planner emits a `related_entity_fields` block with cardinality,
-archetype, and one of `formatted-lookup`, `chained-fetch`, or
-`external-projection-required`. The data-model architect audits that every
-field has a supported read path; it does not synthesize formula metadata.
+The screen planner emits an exact schema-v3 operation with relationship schema
+name, source/target entities and fields, route binding, query fields, and one
+of `formatted-lookup`, `chained-fetch`, or
+`external-projection-required` in its operation intent. The data-model
+architect's operation-audit pass verifies that every field has a supported read
+path; it does not synthesize formula metadata.
 
 ---
 
@@ -258,7 +268,7 @@ field has a supported read path; it does not synthesize formula metadata.
 ## Where This Is Enforced
 
 - `shared/references/mobile-ui-patterns.md` — pagination is a required rule for List screens that query unbounded tables
-- `screen-planner` — flags `pagination: cursor` in per-screen spec for List archetypes with unbounded data; emits `related_entity_fields` block per screen
+- `screen-planner` — emits schema-v3 list pagination and exact related-read bindings per operation
 - `screen-builder` — applies pagination pattern when spec says `pagination: cursor`; applies the Cross-entity Field Resolution rule on every UI field
-- `data-model-architect` — Step 6a verifies every related field has a supported read path
+- `data-model-architect` — operation-audit mode verifies every related field has a supported read path
 - `/setup-datamodel` and `/add-dataverse` — never synthesize formula definitions; they validate any user-supplied computed dependency before reuse

@@ -52,8 +52,17 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 3. **Fresh-template mode** — `/create-mobile-app` and `/create-mobile-prototype` validate and prepare an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
-6. **Plan mode** — Enter plan mode before multi-file work; per-section approval gates (data model → native APIs → screen plan).
-7. **Persisted plan + experience contract** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the human-reviewable source of truth. Before data or screen planning, persist `.tmp/experience-contract.json` from the brief; it defines audience, primary job, content model, primary surface, asset policy, entry mode, first viewport, motifs, forbidden defaults, visual character, and prompt-evidence spans. `screen-planner` derives `.tmp/experience-screen-contract.json` with canonical primary composition, key flow, and runtime anchors plus `.tmp/experience-foundation-contract.json` with 2-5 reusable motif components. After design and data intent are available, `compile-screen-build-pack.js` writes `.tmp/screen-build-pack.json`, a revision-bound compact execution sheet for builders, mocks, refiner, and validation; downstream consumers read it and never mutate it. A screenshot/HTML input is optional; industry terms may refine vocabulary or compliance needs but never select Home composition or a visual preset. Local-first media contracts reject remote placeholders.
+6. **Host-neutral planning** — Nested planning agents return bundles and
+specialist draft objects without requiring a host-specific approval UI or a
+writable workspace. The foreground workflow alone validates and persists
+`native-app-plan.md`, the schema contract, screen contract, and foundation
+contract, then owns textual checkpoints and approval state. Local prototypes
+require four textual checkpoints but never authorize external mutation; real
+external mutations require a current matching textual receipt. Screen builders
+follow the same host-neutral boundary: they return one schema-bound, complete
+TSX artifact while the foreground validates and atomically persists only the
+target authorized by `.tmp/screen-build-pack.json`.
+7. **Persisted plan + execution contracts** — Write `native-app-plan.md` as the human-reviewable source of truth. Before planning, the foreground persists `.tmp/experience-contract.json` and `.tmp/mobile-plan-execution-preflight.json` from the confirmed brief and selected template; approval hashes bind both. The planner returns bundle version 2 with five fixed output artifacts: the plan, data contract, schema-v3 screen contract, foundation contract, and `.tmp/mobile-plan-execution-contract.json`. The execution contract preserves every preflight requirement ID and trusted native/dependency/connector fact. `compile-screen-build-pack.js` writes a revision-bound compact execution sheet containing exact per-screen operations; downstream consumers read it and never mutate it. A screenshot/HTML input is optional; industry terms may refine vocabulary or compliance needs but never select Home composition or a visual preset. Local-first media contracts reject remote placeholders.
 8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — Do not add `hooks/hooks.json`: Claude loads plugin hooks during unrelated workflows, so a mobile write hook can block Canvas Apps tool calls. Mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
@@ -64,12 +73,24 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     |---|---|---|
     | `DONE` | Completed cleanly | Log and continue |
     | `DONE_WITH_CONCERNS: <list>` | Worked but flagged doubts | Surface to user before next step; record in `memory-bank.md` |
+    | `NEEDS_USER_APPROVAL: <json>` | A return-only plan bundle is ready for portable textual checkpoints | Stage the returned bundle in the foreground, validate it, persist only the five fixed planning artifacts, then present the named draft section and wait for a textual `approve` or edits. `mayAuthorizeExternalMutations` is true only for a current approved real-app receipt. |
     | `NEEDS_CONTEXT: <missing>` | Cannot proceed without more info | Re-dispatch with the info filled in (cap 2 retries) |
     | `BLOCKED: <reason>` | Hit a hard wall | STOP, escalate to user, never silently retry |
 
     Hard rules:
-    - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary.
+    - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary. `native-app-planner` follows `NEEDS_USER_APPROVAL: <json>` with exactly one fenced `mobile-plan-artifact-bundle`; it does not return paths, approval IDs, or write instructions.
     - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
+    - Nested planners, data-model architects, and screen planners never write planning artifacts, scratch sections, previews, or checkpoint state. The foreground writes only the five fixed planning targets through `scripts/write-plan-artifact-bundle.js` after `scripts/validate-plan-artifact-bundle.js` succeeds.
+    - Screen builders are also return-only. A successful builder returns exactly
+      one fenced `mobile-screen-artifact` JSON object after its status line.
+      The foreground stages it at a numeric path, validates the whole wave with
+      `scripts/validate-screen-artifact.js`, and persists each result through
+      `scripts/write-screen-artifact.js`, passing the foreground-expected
+      builder-wave screen ID to both. The writer derives the only target from
+      that screen's validated pack entry and rejects screen/route/file
+      substitution or a changed skeleton hash.
+    - Orchestrators MUST NOT treat `NEEDS_USER_APPROVAL` as `BLOCKED` or silently continue. A revision over the plan, schema, Experience Contract, screen contract, and foundation contract invalidates its prior checkpoint state; use `scripts/plan-checkpoints.js --action status` before external mutation and before prototype screen build.
+    - `mayAuthorizeExternalMutations` is `false` for every prototype and every unapproved real draft. Only a current approved `create-mobile-app` receipt emits `true`; no external operation may run for any other result.
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - A low-confidence Product Experience Contract permits one focused clarification about the first user outcome before normal planning resumes. Do not use industry or generic style-picker early-return signals.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
@@ -78,7 +99,14 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 ## Decisions made
 
 - ✅ Markdown plan with Mermaid (no HTML rendering)
-- ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
+- ✅ **Host-neutral return-only planning.** Planners return a bundle; the
+    foreground validates and atomically persists the four planning artifacts.
+    Prototype checkpoints are local review only; a current real-app receipt is
+    required before external mutations.
+- ✅ **Host-neutral return-only screen waves.** Screen agents produce complete
+    one-screen TSX artifacts concurrently without workspace write access; the
+    foreground validates each against the immutable build pack and atomically
+    persists only its fixed screen target.
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ `/create-mobile-prototype` produces the same approved plan/design/screen quality as real creation, but uses deterministic in-memory CRUD services and connector throw-stubs with no environment, Dataverse, or app-registration call.
 - ✅ `/prototype-to-real-app` converts in place through a resumable lifecycle transaction: archive non-executable prototype approvals, bind environment, live-reconcile schema, replace services/connectors, consume seeds, fail-closed cleanup, restore auth/runtime, then one `/sync-from-plan`.

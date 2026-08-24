@@ -3,14 +3,28 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { revisionForPack, sha256 } = require('./compile-screen-build-pack');
+const {
+  compactExecutionContract,
+  generatedServiceSurface,
+  revisionForPack,
+  sha256,
+  stableStringify,
+} = require('./compile-screen-build-pack');
+const { resolveDesignRecipe } = require('./resolve-design-recipe');
+const { validateScreenComposition } = require('./validate-screen-composition');
+const { normalizeScreenContract } = require('./lib/experience-screen-contract');
 
 function currentSourceHash(projectRoot, relativePath, source) {
   if (source === 'designRecipe') {
-    const design = path.join(projectRoot, 'brand/design-system.md');
-    const tokens = path.join(projectRoot, 'brand/tokens.ts');
-    if (!fs.existsSync(design) || !fs.existsSync(tokens)) return null;
-    return sha256(`${fs.readFileSync(design, 'utf8')}\n${fs.readFileSync(tokens, 'utf8')}`);
+    if (relativePath) {
+      const recipePath = path.join(projectRoot, relativePath);
+      return fs.existsSync(recipePath) ? sha256(fs.readFileSync(recipePath, 'utf8')) : null;
+    }
+    try {
+      const contract = JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp', 'experience-contract.json'), 'utf8'));
+      const screens = JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), 'utf8'));
+      return sha256(stableStringify(resolveDesignRecipe(contract, screens)));
+    } catch { return null; }
   }
   const filePath = path.join(projectRoot, relativePath);
   return fs.existsSync(filePath) ? sha256(fs.readFileSync(filePath, 'utf8')) : null;
@@ -19,13 +33,16 @@ function currentSourceHash(projectRoot, relativePath, source) {
 function validateScreenBuildPack(projectRoot, pack) {
   const issues = [];
   const staleTargets = new Set();
-  if (!pack || pack.schemaVersion !== 1) {
-    return { issues: [{ rule: 'invalid-schema-version', message: 'Screen build pack requires schemaVersion: 1.' }], staleTargets: [] };
+  if (!pack || pack.schemaVersion !== 2) {
+    return { issues: [{ rule: 'invalid-schema-version', message: 'Screen build pack requires schemaVersion: 2.' }], staleTargets: [] };
   }
   if (!/^[a-f0-9]{64}$/i.test(String(pack.revision || '')) || pack.revision !== revisionForPack(pack)) {
     issues.push({ rule: 'revision-drift', message: 'Screen build pack revision does not match its deterministic content.' });
   }
-  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent'];
+  if (pack.screenContractVersion !== 3) {
+    issues.push({ rule: 'legacy-screen-contract', message: 'Screen build pack requires a schema-version-3 Experience Screen Contract. Re-plan before building.' });
+  }
+  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'dataIntent', 'executionContract'];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -48,7 +65,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');
   const keyFlow = (pack.screens || []).find((screen) => screen.role === 'key-flow');
   if (!primary || !keyFlow) issues.push({ rule: 'missing-primary-or-key-flow', message: 'Screen build pack requires primary and key-flow screens.' });
-  if (!primary?.firstViewport?.length || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !Array.isArray(primary?.dependencies) || !Array.isArray(primary?.testIds)) {
+  if (!primary?.firstViewport?.regionIds?.length || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !primary?.dependencies || !Array.isArray(primary?.testIds)) {
     issues.push({ rule: 'incomplete-primary-screen', message: 'Primary build-pack screen requires viewport, action, states, dependencies, and test IDs.' });
   }
   if (pack.shell?.safeAreaOwner !== 'screen' || pack.shell?.rootSafeAreaProviderOnly !== true || !pack.shell?.headerModes || primary?.headerMode !== 'root' || keyFlow?.headerMode !== 'back') {
@@ -61,16 +78,100 @@ function validateScreenBuildPack(projectRoot, pack) {
     if (screen.data?.recordIdentity !== 'stable-primary-key' || screen.data?.viewModel !== 'src/generated/experience-view-model.ts' || !Array.isArray(screen.data?.entities)) {
       issues.push({ rule: 'screen-data-identity-missing', message: `Screen build pack requires stable-ID view-model data for ${screen.route || screen.id}.` });
     }
+    if (!Array.isArray(screen.data?.operations)) {
+      issues.push({ rule: 'missing-screen-operations', message: `Screen build pack lacks executable operations for ${screen.route || screen.id}.` });
+    }
     if (screen.data?.mediaPolicy !== pack.fixtures?.mediaPolicy || !Array.isArray(screen.data?.mediaFields) || screen.data.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
       issues.push({ rule: 'screen-media-intent-drift', message: `Screen build pack media intent drift for ${screen.route || screen.id}.` });
     }
+    const bindings = screen.data?.runtimeBindings;
+    if (bindings?.canonicalRecord?.mapper !== 'toExperienceRecord'
+      || bindings?.canonicalRecord?.stableId !== 'id'
+      || bindings?.availability?.stateProperty !== 'availabilityState'
+      || bindings?.availability?.predicate !== 'isExperienceRecordActionable'
+      || !Array.isArray(bindings?.availability?.entities)
+      || bindings?.relatedMedia?.resolver !== 'resolveExperienceMedia'
+      || bindings?.relatedMedia?.join !== 'relatedExperienceRecords'
+      || !Array.isArray(bindings?.relatedMedia?.relationships)
+      || bindings?.aggregateFreshness?.policy !== 'focus-revalidate-after-mutation'
+      || bindings?.aggregateFreshness?.hook !== 'useFocusEffect'
+      || !Array.isArray(bindings?.aggregateFreshness?.entities)) {
+      issues.push({ rule: 'screen-runtime-bindings-missing', message: `Screen build pack lacks canonical availability, relationship, or focus-refresh bindings for ${screen.route || screen.id}.` });
+    }
+    if (bindings?.availability?.required === true
+      && (!screen.primaryAction || bindings.availability.disabledActionId !== screen.primaryAction.id || !bindings.availability.entities.length)) {
+      issues.push({ rule: 'availability-action-binding-drift', message: `Screen ${screen.route || screen.id} requires an unavailable-state action binding to its primary action.` });
+    }
+    if (bindings?.relatedMedia?.required === true && !bindings.relatedMedia.relationships.length) {
+      issues.push({ rule: 'related-media-binding-drift', message: `Screen ${screen.route || screen.id} requires related media but declares no executable relationship.` });
+    }
   }
-  if (!pack.design?.tokensPath || !Array.isArray(pack.design?.primitives) || !pack.design.primitives.length) {
+  const executionPath = pack.sourcePaths?.executionContract
+    ? path.join(projectRoot, pack.sourcePaths.executionContract)
+    : null;
+  if (executionPath && fs.existsSync(executionPath)) {
+    try {
+      const executionContract = JSON.parse(fs.readFileSync(executionPath, 'utf8'));
+      if (stableStringify(pack.execution) !== stableStringify(compactExecutionContract(executionContract))) {
+        issues.push({ rule: 'execution-contract-drift', message: 'Screen build pack execution facts do not match the approved execution contract.' });
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-execution-contract', message: `Cannot read the approved execution contract: ${error.message}` });
+    }
+  }
+  const screenContractPath = pack.sourcePaths?.screenContract
+    ? path.join(projectRoot, pack.sourcePaths.screenContract)
+    : null;
+  if (screenContractPath && fs.existsSync(screenContractPath)) {
+    try {
+      const screenContract = JSON.parse(fs.readFileSync(screenContractPath, 'utf8'));
+      const planned = new Map(normalizeScreenContract(screenContract, null).map((screen) => [screen.id, screen]));
+      for (const screen of pack.screens || []) {
+        const approved = planned.get(screen.id);
+        if (stableStringify(screen.data?.operations || []) !== stableStringify(approved?.data?.operations || [])) {
+          issues.push({ rule: 'screen-operation-drift', message: `Screen build pack operations drift from the approved contract for ${screen.id}.` });
+        }
+        if (stableStringify(screen.routeParameters || []) !== stableStringify(approved?.routeParameters || [])) {
+          issues.push({ rule: 'route-parameter-drift', message: `Screen build pack route parameters drift from the approved contract for ${screen.id}.` });
+        }
+        if (stableStringify(screen.navigation || {}) !== stableStringify(approved?.navigation || {})) {
+          issues.push({ rule: 'screen-navigation-drift', message: `Screen build pack navigation ownership drifts from the approved contract for ${screen.id}.` });
+        }
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-screen-contract', message: `Cannot read the approved screen contract: ${error.message}` });
+    }
+  }
+  const serviceSurface = generatedServiceSurface(projectRoot);
+  for (const screen of pack.screens || []) {
+    for (const operation of screen.data?.operations || []) {
+      const methods = serviceSurface[operation.service];
+      if (!methods || !methods.includes(operation.serviceMethod)) {
+        issues.push({ rule: 'unavailable-service-method', message: `Operation ${operation.id} requires missing ${operation.service}.${operation.serviceMethod}.` });
+      }
+    }
+  }
+  const packagePath = path.join(projectRoot, 'package.json');
+  if (fs.existsSync(packagePath)) {
+    try {
+      const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+      const installed = { ...(packageJson.dependencies || {}), ...(packageJson.devDependencies || {}) };
+      for (const dependency of pack.execution?.javascriptDependencies || []) {
+        if (installed[dependency.package] !== dependency.version) {
+          issues.push({ rule: 'approved-dependency-missing', message: `Approved dependency ${dependency.package}@${dependency.version} is not installed exactly.` });
+        }
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-package-manifest', message: `Cannot validate approved dependencies: ${error.message}` });
+    }
+  }
+  if (!pack.design?.tokensPath || !pack.design?.recipe || !Array.isArray(pack.design?.primitives) || !pack.design.primitives.length) {
     issues.push({ rule: 'missing-design-primitives', message: 'Screen build pack requires design tokens and foundation primitives.' });
   }
   if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.viewModel !== 'src/generated/experience-view-model.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
     issues.push({ rule: 'missing-fixture-intent', message: 'Screen build pack requires fixture adapter, entities, and asset policy.' });
   }
+  issues.push(...validateScreenComposition(pack));
   return { issues, staleTargets: [...staleTargets].sort() };
 }
 

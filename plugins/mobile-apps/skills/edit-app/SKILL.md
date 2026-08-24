@@ -130,6 +130,10 @@ If `$ARGUMENTS` contains `--apply-plan`, require
 - current `native-app-plan.md` SHA-256 equals `approvedPlanSha256`;
 - for a Data Model change, current structured schema contract SHA-256 equals
   `structuredContractSha256`;
+- current schema-v3 screen contract SHA-256 equals `screenContractSha256`;
+- current mobile plan execution contract SHA-256 equals
+  `executionContractSha256`, and
+  `validate-mobile-plan-execution-contract.js` passes;
 - `previousPlanSha256` equals the lifecycle state's `lastSyncedPlanHash` when
   that hash was present at edit time;
 - no uncommitted user changes overlap the specialist/screen targets without
@@ -146,6 +150,9 @@ Read if present:
 
 - `memory-bank.md` — project facts, target environment, visual companion flag, prior blocks
 - `.datamodel-manifest.json` — existing Dataverse tables/columns
+- `.tmp/mobile-plan-execution-contract.json` — requirement, native,
+  dependency, and connector execution authority
+- `.tmp/experience-screen-contract.json` — schema-v3 per-screen operations
 - `brand/design-system.md` and `brand/tokens.ts` — design constraints and token availability
 - `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
 
@@ -158,6 +165,7 @@ Run these existing-app health checks before any mutation:
 | `src/components/index.tsx`, `src/hooks/index.ts`, `src/utils/index.ts`, `src/tokens/index.ts` exist | Restore missing shared scaffold from `shared/samples/src/` before screen-builder work; do not overwrite existing files |
 | `app/_layout.tsx` still wraps providers and SafeAreaProvider correctly | Patch conservatively before screen work; route/safe-area validators depend on this |
 | `src/generated/` compiles when the edit depends on generated services | Regenerate schemas/services first, or block before screen work |
+| execution contract and schema-v3 screen operations validate | Re-plan the affected requirement/data/screen section; never infer missing operations from source |
 | `node_modules` and package scripts needed for verification exist | If missing, ask user to run install; do not pretend verification passed |
 
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
@@ -366,11 +374,11 @@ Inline fallback rules:
 - Native Capabilities and Connectors: already handled inline by this skill.
 - Never skip approval just because a leaf agent is unavailable.
 
-| Section | Agent (read-only) | Output file |
+| Section | Agent (read-only) | Returned contract |
 |---|---|---|
-| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
-| Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
-| Screens | `mobile-app:screen-planner` | `_screens_section.md` |
+| Data Model | `mobile-app:data-model-architect` | fenced `data-model-draft` JSON with `dataModelMarkdown`, `dataverseSchemaContract`, and warnings |
+| Native Capabilities | (handled inline — no separate agent) | foreground-owned Markdown section |
+| Screens | `mobile-app:screen-planner` | fenced `screen-plan-draft` JSON with `screensMarkdown`, screen/foundation contracts, and warnings |
 
 ```
 Spawn agent: mobile-app:<agent-name>
@@ -385,10 +393,12 @@ Prompt:
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
-  Return the updated section as a markdown file.
+  Return the updated section in the agent's fenced JSON return contract. Do not
+  write any project, sidecar, preview, or scratch file; the foreground workflow
+  validates the returned content and owns the later plan/sidecar updates.
 ```
 
-Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
+Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_USER_APPROVAL:` pauses the edit and enters the outer textual approval protocol before any external mutation, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
@@ -586,7 +596,7 @@ Batch affected screens in waves of up to 5. For each wave:
 
 1. Print the wave start: `Wave <N>/<W> starting: <screen names>`.
 2. Spawn all builders in one message so they can run in parallel.
-3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`). Unknown first lines are `BLOCKED`.
+3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_USER_APPROVAL`, `NEEDS_CONTEXT`, `BLOCKED`). `NEEDS_USER_APPROVAL` pauses the wave for textual approval; unknown first lines are `BLOCKED`.
 4. Retry `NEEDS_CONTEXT` once with the missing context from plan/files/services.
 5. Stop on `BLOCKED` unless the user chooses to skip with an approved placeholder.
 6. Run `npx tsc --noEmit` after the wave before launching the next wave.

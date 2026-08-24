@@ -45,6 +45,39 @@
       },
       "additionalProperties": false
     },
+    "mediaIntent": {
+      "type": "object",
+      "required": ["criticality", "source", "delivery", "minimumCoverage", "fallback"],
+      "properties": {
+        "criticality": { "enum": ["required", "supporting", "not-applicable"] },
+        "source": { "enum": ["approved-cdn", "bundled", "code-native", "user-content", "dataverse", "not-applicable"] },
+        "delivery": { "enum": ["bundled", "device-cached", "remote", "not-applicable"] },
+        "minimumCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fallback": { "enum": ["local-asset", "code-native-illustration", "text-only", "none"] }
+      },
+      "additionalProperties": false
+    },
+    "presentationIntent": {
+      "type": "object",
+      "required": ["primaryPattern", "collectionPattern", "primaryActionPlacement", "maxFirstViewportRegions"],
+      "properties": {
+        "primaryPattern": { "$ref": "#/definitions/presentationPattern" },
+        "collectionPattern": { "$ref": "#/definitions/presentationPattern" },
+        "primaryActionPlacement": { "enum": ["inline", "sticky-bottom", "header", "floating"] },
+        "maxFirstViewportRegions": { "type": "integer", "minimum": 1, "maximum": 5 }
+      },
+      "additionalProperties": false
+    },
+    "navigationIntent": {
+      "type": "object",
+      "required": ["model", "initialRoute", "rationale"],
+      "properties": {
+        "model": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
+        "initialRoute": { "type": "string", "pattern": "^/" },
+        "rationale": { "type": "string", "minLength": 10, "maxLength": 220 }
+      },
+      "additionalProperties": false
+    },
     "promptEvidence": {
       "type": "object",
       "required": ["audience", "primaryJob", "interactionMode", "entryMode", "contentModel", "primarySurface", "assetPolicy"],
@@ -106,6 +139,9 @@
     }
   },
   "definitions": {
+    "presentationPattern": {
+      "enum": ["editorial-hero", "image-card-grid", "image-list", "compact-list", "form", "timeline", "detail", "conversation", "summary", "capture", "guided-flow", "custom"]
+    },
     "evidenceSpans": {
       "type": "array",
       "minItems": 1,

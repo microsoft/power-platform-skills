@@ -16,6 +16,9 @@ const {
   primaryComposition,
   validateExperienceContract,
 } = require('./experience-patterns');
+const { normalizeScreenContract, validateExperienceScreenContract } = require('./lib/experience-screen-contract');
+const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execution-contract');
+const { resolveDesignRecipe } = require('./resolve-design-recipe');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -83,12 +86,14 @@ function identifier(value) {
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('') || 'Screen';
 }
 
-function validateInputs(contract, screenContract, foundation) {
+function validateInputs(contract, screenContract, foundation, context) {
   const issues = validateExperienceContract(contract);
   if (issues.length) throw new Error(`Experience contract is invalid: ${issues.join('; ')}`);
-  if (screenContract?.schemaVersion !== 1 || screenContract.experienceContractSha256 !== contractHash(contract)) {
-    throw new Error('Experience screen contract is missing or stale.');
+  if (screenContract?.schemaVersion !== 3 || screenContract.experienceContractSha256 !== contractHash(contract)) {
+    throw new Error('Experience screen contract must be a current schema-version-3 contract. Re-plan legacy v1/v2 screens before building.');
   }
+  const screenIssues = validateExperienceScreenContract(screenContract, contract, context);
+  if (screenIssues.length) throw new Error(`Experience screen contract is invalid: ${screenIssues.join('; ')}`);
   const composition = primaryComposition(contract);
   const primary = screenContract.primaryScreen;
   if (!primary || primary.route !== contract.primaryScreen.route || primary.file !== contract.primaryScreen.file || primary.compositionKind !== composition.compositionKind) {
@@ -111,24 +116,54 @@ function validateInputs(contract, screenContract, foundation) {
   }
 }
 
+function activeDataTable(table) {
+  return table?.logicalName
+    && table.serviceRequired !== false
+    && String(table.plannedDecision || table.decision || '').toLowerCase() !== 'defer';
+}
+
+function normalizedDataEntity(table) {
+  const fields = (table.columns || table.fields || [])
+    .filter((field) => String(field.plannedDecision || field.decision || '').toLowerCase() !== 'defer')
+    .map((field) => ({
+      name: String(field.logicalName || field.name || ''),
+      type: String(field.type || field.attributeType || '').toLowerCase(),
+      lookupTarget: field.lookupTarget || field.target || null,
+    }))
+    .filter((field) => field.name);
+  return {
+    logicalName: String(table.logicalName),
+    displayName: String(table.displayName || table.logicalName),
+    fields,
+  };
+}
+
 function dataIntent(projectRoot) {
   const schemaPath = path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json');
   const prototypePath = path.join(projectRoot, 'src', 'generated', '.prototype-manifest.json');
   if (fs.existsSync(schemaPath)) {
     const schema = readJson(schemaPath, 'Data intent');
-    const tables = Array.isArray(schema.tables) ? schema.tables : [];
+    const tables = Array.isArray(schema?.tables) ? schema.tables : [];
+    const entityContracts = tables.filter(activeDataTable).map(normalizedDataEntity);
     return {
       adapter: schema.planningMode === 'prototype' ? 'local' : 'dataverse',
-      entities: tables.filter((table) => table.serviceRequired !== false && table.logicalName).map((table) => table.displayName || table.logicalName),
+      entities: entityContracts.map((table) => table.displayName),
+      entityContracts,
+      contract: schema,
       path: '.tmp/dataverse-schema-contract.json',
       hash: sha256(fs.readFileSync(schemaPath, 'utf8')),
     };
   }
   if (fs.existsSync(prototypePath)) {
     const manifest = readJson(prototypePath, 'Prototype data intent');
+    const entityContracts = Array.isArray(manifest.tableSchemas)
+      ? manifest.tableSchemas.filter(activeDataTable).map(normalizedDataEntity)
+      : (manifest.tables || []).map((logicalName) => normalizedDataEntity({ logicalName }));
     return {
       adapter: 'local',
-      entities: Array.isArray(manifest.tables) ? manifest.tables : [],
+      entities: entityContracts.map((table) => table.displayName),
+      entityContracts,
+      contract: manifest,
       path: 'src/generated/.prototype-manifest.json',
       hash: sha256(fs.readFileSync(prototypePath, 'utf8')),
     };
@@ -136,39 +171,154 @@ function dataIntent(projectRoot) {
   throw new Error('Data intent is missing: expected .tmp/dataverse-schema-contract.json or src/generated/.prototype-manifest.json.');
 }
 
-function screenRecord(screen, primary, keyFlow, foundation, data, contract) {
-  const isPrimary = screen.route === primary.route;
-  const isKeyFlow = screen.route === keyFlow.route;
-  const foundationComponents = foundation.primitives.map((primitive) => primitive.component);
+function generatedServiceSurface(projectRoot) {
+  const directory = path.join(projectRoot, 'src', 'generated', 'services');
+  if (!fs.existsSync(directory)) return {};
+  const surface = {};
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts') || ['index.ts', 'dataSourcesInfo.ts'].includes(entry.name)) continue;
+    const source = fs.readFileSync(path.join(directory, entry.name), 'utf8');
+    const methods = new Set();
+    for (const pattern of [/(?:static\s+)?async\s+([A-Za-z_$][\w$]*)\s*\(/g, /^\s*([A-Za-z_$][\w$]*)\s*:\s*async\s*\(/gm]) {
+      let match;
+      while ((match = pattern.exec(source)) !== null) methods.add(match[1]);
+    }
+    surface[path.basename(entry.name, '.ts')] = [...methods].sort();
+  }
+  return surface;
+}
+
+function semanticEntityName(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function resolveDataEntity(data, value) {
+  const key = semanticEntityName(value);
+  return (data.entityContracts || []).find((entity) => [entity.logicalName, entity.displayName]
+    .some((candidate) => semanticEntityName(candidate) === key));
+}
+
+function availabilityField(entity) {
+  return entity?.fields.find((field) => /available|availability|inventory|stock/i.test(field.name))?.name || null;
+}
+
+function relationshipMediaEntity(entity) {
+  const semantic = `${entity?.logicalName || ''} ${entity?.displayName || ''}`;
+  return /media|image|photo|asset|artwork/i.test(semantic);
+}
+
+function aggregateEntity(entity) {
+  return /cart|basket|selection|saved|favorite|notification|message|order.?line|line.?item/i
+    .test(`${entity?.logicalName || ''} ${entity?.displayName || ''}`);
+}
+
+function screenRuntimeBindings(screen, data, entities) {
+  const scoped = entities.map((entity) => resolveDataEntity(data, entity)).filter(Boolean);
+  const availabilityEntities = scoped
+    .map((entity) => ({ entity: entity.logicalName, field: availabilityField(entity) }))
+    .filter((binding) => binding.field);
+  const actionText = `${screen.primaryAction?.label || ''} ${screen.purpose || ''}`;
+  const scenarios = (screen.data.fixtureScenarios || []).map((scenario) => (
+    typeof scenario === 'string' ? scenario : JSON.stringify(scenario)
+  )).join(' ');
+  const availabilityAction = Boolean(screen.primaryAction && availabilityEntities.length && (
+    screen.presentation?.pattern === 'detail'
+    || /\b(?:add|select|choose|reserve|book|buy|purchase|order|checkout|confirm|submit|save)\b/i.test(actionText)
+    || /\b(?:unavailable|out[ -]of[ -]stock|sold[ -]out|cannot be (?:added|selected|chosen|reserved|booked))\b/i.test(scenarios)
+  ));
+  const scopedNames = new Set(scoped.map((entity) => entity.logicalName));
+  const relationships = scoped.flatMap((source) => source.fields
+    .map((field) => ({ field, target: field.lookupTarget ? resolveDataEntity(data, field.lookupTarget) : null }))
+    .filter(({ target }) => target && scopedNames.has(target.logicalName))
+    .map(({ field, target }) => ({
+      sourceEntity: source.logicalName,
+      sourceField: field.name,
+      targetEntity: target.logicalName,
+    })))
+    .filter((relationship) => relationshipMediaEntity(resolveDataEntity(data, relationship.sourceEntity)));
+  const aggregateEntities = scoped.filter(aggregateEntity).map((entity) => entity.logicalName);
   return {
-    id: isPrimary ? 'Home' : isKeyFlow ? identifier(keyFlow.route) : identifier(screen.id),
+    canonicalRecord: { mapper: 'toExperienceRecord', stableId: 'id' },
+    availability: {
+      required: availabilityAction,
+      entities: availabilityEntities,
+      stateProperty: 'availabilityState',
+      predicate: 'isExperienceRecordActionable',
+      disabledActionId: availabilityAction ? screen.primaryAction.id : null,
+    },
+    relatedMedia: {
+      required: Boolean(screen.media?.required && relationships.length),
+      resolver: 'resolveExperienceMedia',
+      join: 'relatedExperienceRecords',
+      relationships,
+    },
+    aggregateFreshness: {
+      requiredWhenRendered: aggregateEntities.length > 0,
+      entities: aggregateEntities,
+      policy: 'focus-revalidate-after-mutation',
+      hook: 'useFocusEffect',
+    },
+  };
+}
+
+function screenRecord(screen, data, contract) {
+  const entities = screen.data.entities.length ? screen.data.entities : data.entities;
+  const foundationFiles = screen.dependencies.foundation.map((component) => `foundation:${component}`);
+  const fixtureDependencies = screen.dependencies.fixtures.length
+    ? screen.dependencies.fixtures.map((fixture) => `fixture:${fixture}`)
+    : entities.map((entity) => `fixture:${entity}`);
+  const firstViewportRegionIds = new Set(screen.firstViewport.regionIds);
+  const firstViewportRegions = screen.regions.filter((region) => firstViewportRegionIds.has(region.id));
+  const mediaSharesViewport = screen.media.required
+    && (firstViewportRegions.length > 1 || screen.primaryAction?.placement === 'inline');
+  return {
+    id: screen.id,
     route: screen.route,
     file: screen.file,
-    role: isPrimary ? 'primary' : isKeyFlow ? 'key-flow' : 'supporting',
-    headerMode: isPrimary ? 'root' : 'back',
-    purpose: isPrimary ? contract.primaryJob : isKeyFlow ? keyFlow.outcome : `Support ${contract.primaryJob.toLowerCase()}`,
-    firstViewport: isPrimary
-      ? [...contract.firstViewport.regionOrder.map((region) => `experience-region-${region}`), ...foundationComponents]
-      : [],
-    primaryAction: isPrimary ? contract.firstViewport.primaryAction : null,
-    states: ['loading', 'empty', 'error', 'offline'],
-    dependencies: isPrimary
-      ? [...foundation.primitives.map((primitive) => primitive.file), ...data.entities.map((entity) => `fixture:${entity}`)]
-      : isKeyFlow
-        ? [`screen:${primary.route}`, ...foundation.primitives.map((primitive) => primitive.file)]
-        : [],
-    testIds: isPrimary
-      ? primary.runtimeMarkers
-      : isKeyFlow
-        ? ['experience-key-flow']
-        : [],
+    role: screen.role,
+    routeParameters: screen.routeParameters,
+    navigation: screen.navigation,
+    contractSource: screen.contractSource,
+    headerMode: screen.header.mode,
+    header: screen.header,
+    purpose: screen.purpose,
+    presentation: screen.presentation,
+    regions: screen.regions,
+    firstViewport: {
+      ...screen.firstViewport,
+      visiblePrimaryAction: Boolean(screen.primaryAction),
+      primaryActionPlacement: screen.primaryAction?.placement || 'none',
+    },
+    primaryAction: screen.primaryAction,
+    media: {
+      ...screen.media,
+      source: contract.mediaIntent?.source || 'bundled',
+      delivery: contract.mediaIntent?.delivery || (contract.assetPolicy.media === 'remote-cdn-cached' ? 'device-cached' : 'bundled'),
+      sizing: screen.media.required
+        ? mediaSharesViewport ? 'responsive-clamped' : 'responsive-aspect'
+        : 'not-applicable',
+      maxViewportShare: screen.media.required ? mediaSharesViewport ? 0.55 : 0.72 : 0,
+    },
+    states: screen.states,
+    qualityCriteria: screen.qualityCriteria,
+    dependencies: {
+      foundation: screen.dependencies.foundation,
+      fixtures: screen.dependencies.fixtures.length ? screen.dependencies.fixtures : entities,
+      screens: screen.dependencies.screens,
+      artifacts: [...foundationFiles, ...fixtureDependencies],
+    },
+    testIds: screen.testIds,
+    forbiddenDefaults: screen.forbiddenDefaults,
     data: {
       adapter: data.adapter,
-      entities: data.entities,
+      entities,
+      fixtureScenarios: screen.data.fixtureScenarios,
       viewModel: 'src/generated/experience-view-model.ts',
       recordIdentity: 'stable-primary-key',
       mediaPolicy: contract.assetPolicy.media,
       mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
+      operations: screen.data.operations,
+      runtimeBindings: screenRuntimeBindings(screen, data, entities),
     },
   };
 }
@@ -179,32 +329,74 @@ function revisionForPack(pack) {
   return sha256(stableStringify(copy));
 }
 
+function compactExecutionContract(executionContract) {
+  return {
+    requirementIds: executionContract.requirements.filter((item) => item.status === 'planned').map((item) => item.id),
+    nativeCapabilities: executionContract.nativeCapabilities.map((item) => ({
+      id: item.id,
+      capability: item.capability,
+      execution: item.execution,
+    })),
+    javascriptDependencies: executionContract.javascriptDependencies,
+    connectorOperations: executionContract.connectorOperations,
+  };
+}
+
 function compileScreenBuildPack(projectRoot) {
   const root = path.resolve(projectRoot);
   const experiencePath = requiredFile(root, '.tmp/experience-contract.json', 'Experience contract');
   const screenPath = requiredFile(root, '.tmp/experience-screen-contract.json', 'Experience screen contract');
   const foundationPath = requiredFile(root, '.tmp/experience-foundation-contract.json', 'Experience foundation contract');
-  const planPath = requiredFile(root, 'native-app-plan.md', 'Native app plan');
-  const designSystemPath = requiredFile(root, 'brand/design-system.md', 'Design recipe');
+  const executionPath = requiredFile(root, '.tmp/mobile-plan-execution-contract.json', 'Mobile plan execution contract');
+  const briefPath = fs.existsSync(path.join(root, '.tmp', 'experience-brief.md'))
+    ? path.join(root, '.tmp', 'experience-brief.md')
+    : requiredFile(root, 'brief.md', 'Confirmed brief');
+  const packagePath = requiredFile(root, 'package.json', 'Package manifest');
+  const planPath = path.join(root, 'native-app-plan.md');
   const tokensPath = requiredFile(root, 'brand/tokens.ts', 'Design tokens');
   const contract = readJson(experiencePath, 'Experience contract');
   const screenContract = readJson(screenPath, 'Experience screen contract');
   const foundation = readJson(foundationPath, 'Experience foundation contract');
-  validateInputs(contract, screenContract, foundation);
+  const executionContract = readJson(executionPath, 'Mobile plan execution contract');
   const data = dataIntent(root);
-  const screenMap = parseScreenMap(fs.readFileSync(planPath, 'utf8'));
+  const serviceSurface = generatedServiceSurface(root);
+  const context = { dataContract: data.contract, executionContract, serviceSurface };
+  validateInputs(contract, screenContract, foundation, context);
+  const executionValidation = validateMobilePlanExecutionContract(executionContract, {
+    briefText: fs.readFileSync(briefPath, 'utf8'),
+    experienceContractSha256: contractHash(contract),
+    screenContract,
+    dataContract: data.contract,
+    packageJson: readJson(packagePath, 'Package manifest'),
+  });
+  if (!executionValidation.valid) throw new Error(`Mobile plan execution contract is invalid: ${executionValidation.errors.join('; ')}`);
+  const packageJson = readJson(packagePath, 'Package manifest');
+  const installedDependencies = { ...(packageJson.dependencies || {}), ...(packageJson.devDependencies || {}) };
+  for (const dependency of executionContract.javascriptDependencies) {
+    if (installedDependencies[dependency.package] !== dependency.version) {
+      throw new Error(`Approved dependency ${dependency.package}@${dependency.version} must be installed exactly before build-pack compilation.`);
+    }
+  }
+  const screenMap = screenContract.schemaVersion === 1
+    ? parseScreenMap(fs.readFileSync(requiredFile(root, 'native-app-plan.md', 'Native app plan'), 'utf8'))
+    : [];
   const primary = screenContract.primaryScreen;
   const keyFlow = screenContract.keyFlow;
-  const mergedScreens = [...screenMap];
-  for (const screen of [
-    { id: 'Home', route: primary.route, file: primary.file },
-    { id: identifier(keyFlow.route), route: keyFlow.route, file: keyFlow.file },
-  ]) {
-    if (!mergedScreens.some((candidate) => candidate.route === screen.route)) mergedScreens.push(screen);
-  }
-  const screens = mergedScreens.map((screen) => screenRecord(screen, primary, keyFlow, foundation, data, contract));
+  const foundationComponents = foundation.primitives.map((primitive) => primitive.component);
+  const normalizedScreens = normalizeScreenContract(screenContract, contract, screenMap, foundationComponents);
+  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract));
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
+  const designRecipePath = path.join(root, 'brand', 'design-recipe.json');
+  const hasDesignRecipe = fs.existsSync(designRecipePath);
+  const designRecipe = hasDesignRecipe
+    ? readJson(designRecipePath, 'Design recipe')
+    : resolveDesignRecipe(contract, screenContract);
+  const criticalIds = screenContract.schemaVersion >= 2
+    ? screenContract.criticalFlow.screenIds
+    : [primaryScreen.id, keyFlowScreen.id];
+  const verticalSlice = screens.filter((screen) => criticalIds.includes(screen.id));
+  const remainingScreens = screens.filter((screen) => !criticalIds.includes(screen.id));
   const sourcePaths = {
     experienceContract: '.tmp/experience-contract.json',
     screenContract: '.tmp/experience-screen-contract.json',
@@ -212,15 +404,20 @@ function compileScreenBuildPack(projectRoot) {
     designSystem: 'brand/design-system.md',
     tokens: 'brand/tokens.ts',
     dataIntent: data.path,
+    executionContract: '.tmp/mobile-plan-execution-contract.json',
+    designRecipe: hasDesignRecipe ? 'brand/design-recipe.json' : null,
   };
   const pack = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    screenContractVersion: screenContract.schemaVersion,
     sources: {
       experienceContract: sha256(fs.readFileSync(experiencePath, 'utf8')),
       screenContract: sha256(fs.readFileSync(screenPath, 'utf8')),
       foundationContract: sha256(fs.readFileSync(foundationPath, 'utf8')),
-      designRecipe: sha256(`${fs.readFileSync(designSystemPath, 'utf8')}\n${fs.readFileSync(tokensPath, 'utf8')}`),
+      designRecipe: hasDesignRecipe ? sha256(fs.readFileSync(designRecipePath, 'utf8')) : sha256(stableStringify(designRecipe)),
       dataIntent: data.hash,
+      executionContract: sha256(fs.readFileSync(executionPath, 'utf8')),
+      tokens: sha256(fs.readFileSync(tokensPath, 'utf8')),
     },
     sourcePaths,
     experience: {
@@ -231,6 +428,9 @@ function compileScreenBuildPack(projectRoot) {
       primarySurface: contract.primarySurface,
       contentModel: contract.contentModel,
       assetPolicy: contract.assetPolicy,
+      mediaIntent: contract.mediaIntent || designRecipe.mediaTreatment,
+      presentationIntent: contract.presentationIntent || designRecipe.hierarchy,
+      navigationIntent: contract.navigationIntent || { model: contract.navigationModel, initialRoute: contract.primaryScreen.route, rationale: 'Legacy experience contract.' },
       forbiddenDefaults: contract.forbiddenDefaults,
       firstViewport: contract.firstViewport,
       signatureMotifs: contract.signatureMotifs,
@@ -239,6 +439,8 @@ function compileScreenBuildPack(projectRoot) {
     design: {
       tokensPath: 'brand/tokens.ts',
       designSystemPath: 'brand/design-system.md',
+      recipePath: hasDesignRecipe ? 'brand/design-recipe.json' : null,
+      recipe: designRecipe,
       primitives: foundation.primitives.map((primitive) => ({
         motif: primitive.motif,
         component: primitive.component,
@@ -255,7 +457,9 @@ function compileScreenBuildPack(projectRoot) {
       initialRoute: primary.route,
       keyFlowRoute: keyFlow.route,
       routes: screens.map((screen) => screen.route),
+      criticalFlow: { screenIds: criticalIds, outcome: screenContract.criticalFlow?.outcome || keyFlow.outcome },
     },
+    execution: compactExecutionContract(executionContract),
     fixtures: {
       adapter: data.adapter,
       entities: data.entities,
@@ -269,20 +473,36 @@ function compileScreenBuildPack(projectRoot) {
       mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
     },
     screens,
+    builderWaves: [
+      {
+        id: 'foundations', kind: 'foundation', targets: foundationComponents,
+        maxConcurrency: Math.min(5, Math.max(1, foundationComponents.length)), dependsOn: [], gates: ['typecheck'],
+      },
+      {
+        id: 'vertical-slice', kind: 'screen', targets: verticalSlice.map((screen) => screen.id),
+        maxConcurrency: Math.min(5, Math.max(1, verticalSlice.length)), dependsOn: ['foundations'], gates: ['typecheck', 'native-visual-review'],
+      },
+      ...(remainingScreens.length ? [{
+        id: 'remaining-screens', kind: 'screen', targets: remainingScreens.map((screen) => screen.id),
+        maxConcurrency: Math.min(5, remainingScreens.length), dependsOn: ['vertical-slice'], gates: ['typecheck'],
+      }] : []),
+    ],
     buildOrder: [
       ...foundation.primitives.map((primitive) => ({ kind: 'foundation', id: primitive.component, file: primitive.file, dependsOn: [] })),
       { kind: 'screen', id: primaryScreen.id, route: primaryScreen.route, dependsOn: foundation.primitives.map((primitive) => primitive.component) },
-      { kind: 'screen', id: keyFlowScreen.id, route: keyFlowScreen.route, dependsOn: [primaryScreen.id, ...foundation.primitives.map((primitive) => primitive.component)] },
-      ...screens.filter((screen) => !['primary', 'key-flow'].includes(screen.role)).map((screen) => ({ kind: 'screen', id: screen.id, route: screen.route, dependsOn: [primaryScreen.id] })),
+      ...screens.filter((screen) => screen.id !== primaryScreen.id).map((screen) => ({
+        kind: 'screen', id: screen.id, route: screen.route,
+        dependsOn: [...foundationComponents, ...screen.dependencies.screens],
+      })),
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['screenContract', 'designRecipe', 'dataIntent']
-        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent']])),
-      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['experienceContract', 'dataIntent']])),
+        ? ['screenContract', 'designRecipe', 'tokens', 'dataIntent', 'executionContract']
+        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'dataIntent', 'executionContract']])),
+      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['experienceContract', 'dataIntent', 'executionContract']])),
       validatorDependencies: {
-        experience: ['experienceContract', 'screenContract', 'foundationContract'],
-        nativeVisual: ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe'],
+        experience: ['experienceContract', 'screenContract', 'foundationContract', 'executionContract'],
+        nativeVisual: ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'tokens', 'executionContract'],
       },
     },
   };
@@ -323,4 +543,12 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { compileScreenBuildPack, parseScreenMap, revisionForPack, sha256, stableStringify };
+module.exports = {
+  compactExecutionContract,
+  compileScreenBuildPack,
+  generatedServiceSurface,
+  parseScreenMap,
+  revisionForPack,
+  sha256,
+  stableStringify,
+};

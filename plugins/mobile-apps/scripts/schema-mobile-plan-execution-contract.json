@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Plan Execution Contract",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "experienceContractSha256",
+    "briefSha256",
+    "requirements",
+    "nativeCapabilities",
+    "javascriptDependencies",
+    "connectorOperations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "briefSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/requirement" }
+    },
+    "nativeCapabilities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/nativeCapability" }
+    },
+    "javascriptDependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/javascriptDependency" }
+    },
+    "connectorOperations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/connectorOperation" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "requirement": {
+      "type": "object",
+      "required": ["id", "source", "priority", "kind", "satisfiedBy", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^req-[a-z0-9][a-z0-9-]*$" },
+        "source": { "type": "string", "minLength": 1 },
+        "priority": { "enum": ["required", "optional"] },
+        "kind": { "enum": ["job", "data", "screen", "native", "connector", "dependency", "constraint", "quality"] },
+        "satisfiedBy": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "status": { "enum": ["planned", "not-planned"] },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "planned" } } },
+          "then": { "properties": { "satisfiedBy": { "minItems": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "not-planned" } } },
+          "then": { "required": ["reason"] }
+        }
+      ]
+    },
+    "nativeCapability": {
+      "type": "object",
+      "required": ["id", "capability", "requiredBy", "platforms", "support", "execution"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^native-[a-z0-9][a-z0-9-]*$" },
+        "capability": { "type": "string", "minLength": 1 },
+        "requiredBy": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^req-[a-z0-9][a-z0-9-]*$" },
+          "uniqueItems": true
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["ios", "android", "web"] },
+          "uniqueItems": true
+        },
+        "support": {
+          "type": "object",
+          "required": ["status", "templatePackage", "templateVersion", "catalogRevision"],
+          "properties": {
+            "status": { "enum": ["supported", "unsupported", "needs-decision"] },
+            "templatePackage": { "type": ["string", "null"] },
+            "templateVersion": { "type": ["string", "null"] },
+            "catalogRevision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "execution": { "enum": ["add-native", "existing-runtime", "none"] }
+      },
+      "additionalProperties": false
+    },
+    "javascriptDependency": {
+      "type": "object",
+      "required": ["package", "version", "requiredBy", "classification", "resolution"],
+      "properties": {
+        "package": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+        "requiredBy": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "classification": { "const": "pure-js" },
+        "resolution": { "enum": ["installed", "approved-before-build"] }
+      },
+      "additionalProperties": false
+    },
+    "connectorOperation": {
+      "type": "object",
+      "required": ["id", "connector", "apiName", "service", "operation", "requiredBy", "input", "output", "failure", "prototype"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^connector-[a-z0-9][a-z0-9-]*$" },
+        "connector": { "type": "string", "minLength": 1 },
+        "apiName": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+        "service": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*Service$" },
+        "operation": { "type": "string", "minLength": 1 },
+        "requiredBy": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "input": { "type": "object" },
+        "output": { "type": "object", "minProperties": 1 },
+        "failure": {
+          "type": "object",
+          "required": ["state", "userAction"],
+          "properties": {
+            "state": { "enum": ["empty", "error", "offline", "unavailable"] },
+            "userAction": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "prototype": {
+          "type": "object",
+          "required": ["behavior"],
+          "properties": {
+            "behavior": { "const": "typed-throw-stub" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

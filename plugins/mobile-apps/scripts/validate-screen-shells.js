@@ -67,11 +67,14 @@ function screenShellIssues(projectRoot, pack) {
       });
     } else {
       const content = fs.readFileSync(viewModelPath, 'utf8');
-      if (!/export function toExperienceRecord\b/.test(content) || !/export function getExperienceAsset\b/.test(content)) {
+      if (!/export function toExperienceRecord\b/.test(content)
+        || !/export function getExperienceAsset\b/.test(content)
+        || !/export function isExperienceRecordActionable\b/.test(content)
+        || !/export function relatedExperienceRecords\b/.test(content)) {
         issues.push({
           rule: 'invalid-experience-view-model',
           file: normalizeRelativePath(pack.fixtures.viewModel),
-          message: 'Experience view model must expose record and local asset adapters.',
+          message: 'Experience view model must expose canonical record, availability, relationship, and local asset adapters.',
         });
       }
     }

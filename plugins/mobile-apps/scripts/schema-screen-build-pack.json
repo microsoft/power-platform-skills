@@ -2,18 +2,19 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Screen Build Pack",
   "type": "object",
-  "required": ["schemaVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "fixtures", "screens", "buildOrder", "invalidation"],
+  "required": ["schemaVersion", "screenContractVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "execution", "fixtures", "screens", "builderWaves", "buildOrder", "invalidation"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
+    "screenContractVersion": { "const": 3 },
     "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "sources": {
       "type": "object",
-      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "dataIntent"],
+      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "tokens", "dataIntent", "executionContract"],
       "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
     },
     "sourcePaths": { "type": "object" },
-    "experience": { "type": "object", "required": ["audience", "primaryJob", "entryMode", "primarySurface", "forbiddenDefaults"] },
-    "design": { "type": "object", "required": ["tokensPath", "primitives"] },
+    "experience": { "type": "object", "required": ["audience", "primaryJob", "entryMode", "primarySurface", "assetPolicy", "mediaIntent", "presentationIntent", "navigationIntent", "forbiddenDefaults"] },
+    "design": { "type": "object", "required": ["tokensPath", "recipe", "primitives"] },
     "shell": {
       "type": "object",
       "required": ["safeAreaOwner", "rootSafeAreaProviderOnly", "headerModes"],
@@ -23,7 +24,18 @@
         "headerModes": { "type": "object" }
       }
     },
-    "navigation": { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes"] },
+    "navigation": { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes", "criticalFlow"] },
+    "execution": {
+      "type": "object",
+      "required": ["requirementIds", "nativeCapabilities", "javascriptDependencies", "connectorOperations"],
+      "properties": {
+        "requirementIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "nativeCapabilities": { "type": "array", "items": { "type": "object", "required": ["id", "capability", "execution"] } },
+        "javascriptDependencies": { "type": "array" },
+        "connectorOperations": { "type": "array" }
+      },
+      "additionalProperties": false
+    },
     "fixtures": {
       "type": "object",
       "required": ["adapter", "entities", "assetPolicy", "assetManifest", "viewModel", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
@@ -42,21 +54,116 @@
       "minItems": 2,
       "items": {
         "type": "object",
-        "required": ["id", "route", "file", "role", "headerMode", "data"],
+        "required": ["id", "route", "file", "role", "routeParameters", "navigation", "headerMode", "header", "purpose", "presentation", "regions", "firstViewport", "primaryAction", "media", "states", "qualityCriteria", "dependencies", "testIds", "forbiddenDefaults", "data"],
         "properties": {
+          "role": { "enum": ["primary", "key-flow", "supporting"] },
+          "routeParameters": { "type": "array" },
+          "navigation": { "type": "object", "required": ["kind", "intent"] },
           "headerMode": { "enum": ["root", "back", "close", "none"] },
+          "presentation": { "type": "object", "required": ["pattern", "density", "hierarchy"] },
+          "regions": { "type": "array", "minItems": 1 },
+          "firstViewport": {
+            "type": "object",
+            "required": ["regionIds", "focalPoint", "maxRegions", "visiblePrimaryAction", "primaryActionPlacement"],
+            "properties": {
+              "visiblePrimaryAction": { "type": "boolean" },
+              "primaryActionPlacement": { "enum": ["inline", "sticky-bottom", "header", "floating", "none"] }
+            }
+          },
+          "primaryAction": { "type": ["object", "null"] },
+          "media": {
+            "type": "object",
+            "required": ["required", "role", "aspectRatio", "minCoverage", "fallback", "source", "delivery", "sizing", "maxViewportShare"],
+            "properties": {
+              "sizing": { "enum": ["responsive-clamped", "responsive-aspect", "not-applicable"] },
+              "maxViewportShare": { "type": "number", "minimum": 0, "maximum": 0.8 }
+            }
+          },
+          "states": { "type": "array", "minItems": 4 },
+          "qualityCriteria": { "type": "array", "minItems": 3 },
+          "dependencies": { "type": "object", "required": ["foundation", "fixtures", "screens", "artifacts"] },
+          "testIds": { "type": "array", "minItems": 1 },
+          "forbiddenDefaults": { "type": "array" },
           "data": {
             "type": "object",
-            "required": ["adapter", "entities", "viewModel", "recordIdentity", "mediaPolicy", "mediaFields"],
+            "required": ["adapter", "entities", "fixtureScenarios", "viewModel", "recordIdentity", "mediaPolicy", "mediaFields", "operations", "runtimeBindings"],
             "properties": {
               "entities": { "type": "array" },
+              "fixtureScenarios": { "type": "array" },
               "viewModel": { "const": "src/generated/experience-view-model.ts" },
               "recordIdentity": { "const": "stable-primary-key" },
-              "mediaPolicy": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
-              "mediaFields": { "const": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }
+              "mediaFields": { "const": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] },
+              "operations": { "type": "array" },
+              "runtimeBindings": {
+                "type": "object",
+                "required": ["canonicalRecord", "availability", "relatedMedia", "aggregateFreshness"],
+                "properties": {
+                  "canonicalRecord": {
+                    "type": "object",
+                    "required": ["mapper", "stableId"],
+                    "properties": {
+                      "mapper": { "const": "toExperienceRecord" },
+                      "stableId": { "const": "id" }
+                    },
+                    "additionalProperties": false
+                  },
+                  "availability": {
+                    "type": "object",
+                    "required": ["required", "entities", "stateProperty", "predicate", "disabledActionId"],
+                    "properties": {
+                      "required": { "type": "boolean" },
+                      "entities": { "type": "array" },
+                      "stateProperty": { "const": "availabilityState" },
+                      "predicate": { "const": "isExperienceRecordActionable" },
+                      "disabledActionId": { "type": ["string", "null"] }
+                    },
+                    "additionalProperties": false
+                  },
+                  "relatedMedia": {
+                    "type": "object",
+                    "required": ["required", "resolver", "join", "relationships"],
+                    "properties": {
+                      "required": { "type": "boolean" },
+                      "resolver": { "const": "resolveExperienceMedia" },
+                      "join": { "const": "relatedExperienceRecords" },
+                      "relationships": { "type": "array" }
+                    },
+                    "additionalProperties": false
+                  },
+                  "aggregateFreshness": {
+                    "type": "object",
+                    "required": ["requiredWhenRendered", "entities", "policy", "hook"],
+                    "properties": {
+                      "requiredWhenRendered": { "type": "boolean" },
+                      "entities": { "type": "array" },
+                      "policy": { "const": "focus-revalidate-after-mutation" },
+                      "hook": { "const": "useFocusEffect" }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
             }
           }
         }
+      }
+    },
+    "builderWaves": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "targets", "maxConcurrency", "dependsOn", "gates"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["foundation", "screen"] },
+          "targets": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "maxConcurrency": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "dependsOn": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "gates": { "type": "array", "items": { "enum": ["typecheck", "native-visual-review"] }, "uniqueItems": true }
+        },
+        "additionalProperties": false
       }
     },
     "buildOrder": { "type": "array", "minItems": 3 },

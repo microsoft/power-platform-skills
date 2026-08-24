@@ -24,7 +24,12 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "Teams", "chat", "message" | Teams connector |
 | "report", "dashboard", "history", "view all" | Read/list screens |
 
-Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
+Do not infer capabilities the template does not ship. The foreground runs
+`scripts/prepare-mobile-plan-execution-contract.js`, which resolves every native
+signal against the selected app's `package.json` and the versioned
+`scripts/mobile-plan-preflight-catalog.json`. If a package is absent or
+runtime-banned, resolve alternatives before planner dispatch instead of
+pretending the capability exists.
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.

@@ -2,7 +2,7 @@
 name: edit-plan
 description: Use when the user wants to change one approved section of an existing native-app-plan.md without applying app, Dataverse, connector, native, or design mutations yet; records a lifecycle-aware pending change for /edit-app --apply-plan.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 model: opus
 ---
 
@@ -54,11 +54,18 @@ Require:
 test -f "$PROJECT_DIR/native-app-plan.md"
 test -f "$PROJECT_DIR/package.json"
 test -f "$PROJECT_DIR/.mobile-app/state.json"
+test -f "$PROJECT_DIR/.tmp/mobile-plan-execution-contract.json"
+node -e "const c=require(process.argv[1]); if(c.schemaVersion!==3) process.exit(1)" \
+  "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 ```
 
 Read the plan, lifecycle state, memory bank, current structured schema contract
 when present, real Dataverse manifest when present, and
 `.mobile-app/plan-change.json` when present.
+
+If the screen contract is v1/v2 or the execution contract is absent, stop with
+`BLOCKED: legacy plan requires explicit schema-v3 re-plan before editing`.
+Never infer missing operations from existing TSX or Markdown.
 
 If a pending plan change already exists, show its sections/request/hash and ask:
 
@@ -101,14 +108,16 @@ For `dataMode: prototype`, pass:
 Dataverse planning mode: prototype
 Target environment: NOT SUPPLIED
 Publisher prefix: cr (prototype placeholder only)
-Structured schema contract output: <PROJECT_DIR>/.tmp/dataverse-schema-contract.json
 Mode: edit; preserve unaffected table/column identities and stable choice values.
 ```
 
-Require `_dm_section.md` plus a normalized contract with prototype/non-executable
-markers. The agent must not reset unchanged option integers, primary keys,
-logical names, relationships, or alternate keys merely because one field
-changed.
+Require one fenced `data-model-draft` JSON response with `dataModelMarkdown`,
+`dataverseSchemaContract`, and warnings. The foreground workflow validates the
+returned contract and writes the approved section/sidecar; the agent never
+writes a project or scratch file. For prototypes, the contract must retain
+`planningMode: "prototype"` and `executionEligible: false`. The agent must not
+reset unchanged option integers, primary keys, logical names, relationships, or
+alternate keys merely because one field changed.
 
 For `dataMode: dataverse`, pass the current real manifest and environment facts
 for read-only reconciliation. Draft Reuse/Extend/Create/Adapt/Defer decisions,
@@ -141,7 +150,9 @@ Edit only the selected design dimension in the plan. Do not invoke
 `/design-system` here because that mutates `brand/`; `/edit-app --apply-plan`
 owns the later brand/token update.
 
-Parse every agent result using the literal first-line status protocol. Retry
+Parse every agent result using the literal first-line status protocol. On
+`NEEDS_USER_APPROVAL`, persist or request the matching outer textual approval
+before applying the plan; do not classify it as `BLOCKED` or silently continue. Retry
 `NEEDS_CONTEXT` at most twice, surface `DONE_WITH_CONCERNS`, and stop on
 `BLOCKED` or malformed status.
 
@@ -163,6 +174,13 @@ For Data Model edits, approval covers both the human section and the exact
 machine schema contract hash. If either changes after approval, approval is
 invalid.
 
+Every section edit also reconciles `.tmp/mobile-plan-execution-contract.json`:
+preserve all requirement IDs/source text, update `satisfiedBy` targets and
+native/dependency/connector facts when affected, and validate all schema-v3
+screen operations against the resulting data/execution contracts. A data or
+screen edit writes the corresponding updated sidecar in the same foreground
+transaction. Do not leave an old execution contract beside a new plan.
+
 ### Step 5 - Write Plan And Pending-Apply Record
 
 Replace only the approved section; preserve all other plan bytes. Validate
@@ -181,6 +199,8 @@ Write `.mobile-app/plan-change.json`:
   "previousPlanSha256": "<hash before edit>",
   "approvedPlanSha256": "<hash after edit>",
   "structuredContractSha256": "<hash or null>",
+  "screenContractSha256": "<hash of .tmp/experience-screen-contract.json>",
+  "executionContractSha256": "<hash of .tmp/mobile-plan-execution-contract.json>",
   "affectedScreens": ["<screen ids, or empty when none>"],
   "sampleDataImpact": "preserve-compatible-seeds|none|review-required",
   "createdAt": "<ISO timestamp>"
@@ -189,6 +209,13 @@ Write `.mobile-app/plan-change.json`:
 
 Use the actual lifecycle mode. `structuredContractSha256` is required for a
 Data Model edit and otherwise preserves the current value when one exists.
+`screenContractSha256` and `executionContractSha256` are always required.
+
+After the updated plan and sidecars validate, remove
+`.tmp/screen-build-pack.json`. The approved pending record preserves the hashes
+needed by `/edit-app --apply-plan`; deleting the derived pack prevents preview,
+debug, deploy, or direct sync from treating the previous operations as current.
+`/edit-app --apply-plan` recompiles it after mode-specific specialists finish.
 
 Do not update lifecycle sync hashes. Append one Plan history row to
 `memory-bank.md` with section, request, pending status, and new plan hash.

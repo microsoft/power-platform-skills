@@ -77,15 +77,21 @@ Prompt:
   Working directory: <cwd>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
 
-  Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
-  reuse/extend/create table, and dependency-tier ordering. If requirements mention
-  signatures, pen/ink, generated PDFs, report exports, evidence packets, or uploaded
-  documents, include the artifact storage target: on-device/share-only, Dataverse
-  Image column, Dataverse File column, or child Evidence/Attachment table. Retained
-  PDF content must use a File column, not long text/base64.
+  Follow your agent file. Return one fenced `data-model-draft` JSON object with
+  `dataModelMarkdown`, `dataverseSchemaContract`, and warnings. The Markdown
+  includes Mermaid ER diagram, reuse/extend/create table decisions, and
+  dependency-tier ordering. If requirements mention signatures, pen/ink,
+  generated PDFs, report exports, evidence packets, or uploaded documents,
+  include the artifact storage target: on-device/share-only, Dataverse Image
+  column, Dataverse File column, or child Evidence/Attachment table. Retained
+  PDF content must use a File column, not long text/base64. Do not write project,
+  sidecar, preview, or scratch files.
 ```
 
-Present the returned section via `EnterPlanMode` / `ExitPlanMode` for approval.
+The foreground validates the returned contract and presents the resulting
+foreground-owned section for approval. Use ordinary textual approval when a
+richer host adapter is unavailable; an adapter may display the same draft but
+must not be required for progress.
 
 #### Path C — No Dataverse
 
@@ -140,18 +146,22 @@ Arguments:
 
 `/add-dataverse` creates tables in tier order, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, publishes customizations, writes `.datamodel-manifest.json`, and type-checks. Wait for it to return before Phase 6.
 
-**Cross-entity reads from the screen plan** — the approved
-`### Cross-entity Reads` subsection contains formatted lookups, bounded chained
-fetches, or `external-projection-required` blockers. `/add-dataverse` never
-synthesizes calculated/formula definitions through code. A user-supplied,
-maker-created computed column is validated as an existing dependency during
-reconciliation before it can be reused.
+**Cross-entity reads from the screen contract** — require schema-v3
+`.tmp/experience-screen-contract.json` and validate each related operation's
+exact relationship, fields, filter, pagination, and route binding against the
+approved data contract before invoking `/add-dataverse`. Markdown may summarize
+formatted lookups, bounded chained fetches, or
+`external-projection-required` blockers, but it is not execution authority.
+`/add-dataverse` never synthesizes calculated/formula definitions through code.
+A user-supplied, maker-created computed column is validated as an existing
+dependency during reconciliation before it can be reused.
 
 Skip if Phase 2 chose Path C (no Dataverse).
 
 ### Phase 6 — Execute Connectors
 
-Read `## Connectors` from `native-app-plan.md`. For each connector row, invoke `/add-connector`:
+Read `.tmp/mobile-plan-execution-contract.json → connectorOperations[]`, group
+by exact `apiName` and `service`, and invoke `/add-connector` once per group:
 
 ```
 Invoke skill: /add-connector
@@ -161,7 +171,8 @@ Arguments:
   --connector <api-name>
 ```
 
-Run sequentially. Skip if `## Connectors` is "None".
+Run sequentially. Skip when the structured array is empty. Every generated
+service must expose each declared operation before screen work begins.
 
 ### Phase 6.5 — Offline profile reconciliation
 

@@ -328,6 +328,15 @@ function buildInputs(contract, reconciliation, plan = '# Plan\n') {
     ])).values()],
   };
   const approvedContract = contractApprovalContent(normalized);
+  const artifactHashes = {
+    nativeAppPlanSha256: sha256(planBytes),
+    dataverseSchemaContractSha256: sha256(stableJson(approvedContract)),
+    experienceContractSha256: sha256('experience-contract'),
+    experienceScreenContractSha256: sha256('experience-screen-contract'),
+    experienceFoundationContractSha256: sha256('experience-foundation-contract'),
+    mobilePlanExecutionContractSha256: sha256('mobile-plan-execution-contract'),
+    mobilePlanExecutionPreflightSha256: sha256('mobile-plan-execution-preflight'),
+  };
   const approvalReceipt = {
     schemaVersion: 1,
     workflow: 'create-mobile-app',
@@ -343,6 +352,8 @@ function buildInputs(contract, reconciliation, plan = '# Plan\n') {
     },
     approvedPlanSha256: sha256(planBytes),
     approvedContractSha256: sha256(stableJson(approvedContract)),
+    artifactHashes,
+    artifactRevisionSha256: sha256(stableJson(artifactHashes)),
     approvedContract,
     serviceRequiredTables: serviceDependencies.serviceRequiredTables,
   };
@@ -1081,6 +1092,18 @@ test('mobile plan approval receipt binds exact contract and service dependencies
     () => bindContractToPlan(contract, inputs.planBytes, pendingReceipt),
     /screenPlan status must be approved/,
   );
+
+  const alteredArtifactReceipt = structuredClone(inputs.approvalReceipt);
+  alteredArtifactReceipt.artifactHashes.nativeAppPlanSha256 = '0'.repeat(64);
+  alteredArtifactReceipt.artifactRevisionSha256 = sha256(
+    stableJson(alteredArtifactReceipt.artifactHashes),
+  );
+  delete alteredArtifactReceipt.integritySha256;
+  alteredArtifactReceipt.integritySha256 = sha256(stableJson(alteredArtifactReceipt));
+  assert.throws(
+    () => bindContractToPlan(contract, inputs.planBytes, alteredArtifactReceipt),
+    /artifact plan hash does not match native-app-plan\.md/,
+  );
   assert.throws(
     () => bindContractToPlan(contract, inputs.planBytes, null),
     /mobile plan approval receipt must be an object/,
@@ -1558,7 +1581,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
-    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+    /Textual plan approval protocol[\s\S]*--action approve[\s\S]*--response approve/,
   );
   const planner = fs.readFileSync(path.join(
     __dirname,
@@ -1566,12 +1589,9 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   ), 'utf8');
   assert.match(
     planner,
-    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+    /NEEDS_USER_APPROVAL[\s\S]*mayAuthorizeExternalMutations/,
   );
-  assert.match(
-    planner,
-    /Do not call the manifest builder to create or restamp this receipt/,
-  );
+  assert.doesNotMatch(planner, /approvalId|plan-checkpoints\.js/);
 });
 
 test('publish checkpoint retries PublishXml after schema writes become idempotent', () => {

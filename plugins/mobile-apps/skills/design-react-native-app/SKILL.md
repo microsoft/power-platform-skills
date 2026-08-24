@@ -75,9 +75,20 @@ Route shell and data integrity remain binding during refinement:
    illustration recipe via `getExperienceAsset` and `EntityImage`. Do not add a
    remote URL, Unsplash source, or generic icon-only media replacement.
 - When `assetPolicy.media` is `remote-cdn-cached`, preserve
-   `resolveExperienceMedia(record)` → `EntityImage` with its cache key and local
-   fallback identity. Do not replace it with a screen-local URL, a generic icon
-   block, or a strong accent-color media rectangle.
+  `resolveExperienceMedia(record)` → `EntityImage` with its cache key and local
+  fallback identity. Do not replace it with a screen-local URL, a generic icon
+  block, or a strong accent-color media rectangle.
+- Treat `primaryAction.placement` as runtime structure. For `sticky-bottom`,
+  preserve `ScreenShell scroll={false}`, explicit scrollable content, and a
+  sibling `BottomActionBar` that owns the contracted action. Never move that
+  action into scroll content during visual polish.
+- Preserve every first-viewport region marker and the work-order order. When a
+  media-bearing region shares that viewport, keep responsive aspect-ratio
+  sizing and do not add `minH`/`minHeight`; actual fit is verified by native
+  captures rather than inferred from source pixels.
+- Preserve canonical currency formatting. Do not replace a shared
+  amount-plus-currency-code formatter with a visually convenient literal
+  currency symbol during refinement.
 
 After edits, run:
 
@@ -89,6 +100,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
    --project-root "<working_dir>" \
    --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+   --project-root "<working_dir>" \
+   --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
    --project-root "<working_dir>" \
    --pack ".tmp/screen-build-pack.json"
 ```

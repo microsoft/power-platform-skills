@@ -2,7 +2,7 @@
 name: prototype-to-real-app
 description: Use when the user wants to convert or graduate an existing mock-data Power Apps mobile prototype into a real app backed by a selected Power Platform environment, Dataverse, and real connector services without scaffolding a new project.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, Skill, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Skill
 model: opus
 ---
 
@@ -85,6 +85,9 @@ test -f "$PROJECT_DIR/app.config.js"
 test -f "$PROJECT_DIR/native-app-plan.md"
 test -f "$PROJECT_DIR/src/generated/.prototype-manifest.json"
 test -f "$PROJECT_DIR/.mobile-app/state.json"
+test -f "$PROJECT_DIR/.tmp/mobile-plan-execution-contract.json"
+node -e "const c=require(process.argv[1]); if(c.schemaVersion!==3) process.exit(1)" \
+  "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 ```
 
 For a fresh conversion, also require the non-executable planner artifacts:
@@ -92,7 +95,6 @@ For a fresh conversion, also require the non-executable planner artifacts:
 ```bash
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false) process.exit(1)" \
   "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
-test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 ```
 
 Read `.tmp/final-validation.md`. It must be current for the plan hash and record
@@ -182,13 +184,27 @@ Before binding, create `.tmp/prototype-plan-artifacts/` and move these files
 there on the first run:
 
 - `.tmp/dataverse-schema-contract.json`
-- `.tmp/mobile-plan-status.json`
+- `.tmp/mobile-plan-execution-contract.json` as
+  `mobile-plan-execution-contract.prototype.json`
+- `.tmp/mobile-plan-execution-preflight.json` as
+  `mobile-plan-execution-preflight.prototype.json`
+- `.tmp/experience-screen-contract.json` as
+  `experience-screen-contract.prototype.json`
 - prototype `power.config.json` as `power.config.prototype.json`
 
 Do not overwrite an existing archive on resume. Verify the archived contract
 still has `planningMode: prototype` and `executionEligible: false`. Do not pass
 any archived path as `--schema-contract`, `--approval-receipt`,
 `--operation-manifest`, or related fast-path arguments.
+
+Remove `.tmp/screen-build-pack.json` immediately after archiving these
+prototype identities. It is derived from the archived operations and must not
+survive into Dataverse reconciliation. Recompile only after the real screen and
+execution contracts validate.
+
+If a legacy `.tmp/mobile-plan-status.json` exists, archive it as optional
+historical context only. It is not a real-app authorization and must not be
+passed to a mutation command.
 
 Remove only the zero-environment prototype `power.config.json`, then bind the
 existing project:
@@ -243,8 +259,8 @@ metadata checks, customization capability checks, and no-dead-end taxonomy.
 Stop before Step 5 writes anything. Write the resulting matrix to
 `.tmp/prototype-plan-artifacts/live-reconciliation.md`.
 
-Present the live matrix in plan mode. Highlight every change from prototype
-assumptions:
+Present the live matrix as a concise textual draft summary. Highlight every
+change from prototype assumptions:
 
 - Reuse or Extend instead of Create;
 - publisher/name aliases;
@@ -253,10 +269,37 @@ assumptions:
 - standard-table mappings;
 - any user-visible field or relationship impact.
 
-Ask Approve / Revise data intent / Cancel. On approval, replace the Data Model
-section's prototype assumption matrix with the live decisions while preserving
-its business schema and archived history. Any reconciliation drift between
-this gate and `/add-dataverse` below returns to this gate.
+Ask for a normal textual response: `approve`, requested data-intent edits, or
+cancel. On `approve`, replace the Data Model section's prototype assumption
+matrix with the live decisions while preserving its business schema and archived
+history. Before persisting a fresh real-app receipt, write a current real
+`.tmp/dataverse-schema-contract.json`, regenerate schema-v3 screen operations
+with every prototype entity/field/relationship mapped to the approved live
+identity, regenerate `.tmp/mobile-plan-execution-contract.json` from the
+archived requirement IDs plus current template/connector facts, and run both
+plan-bundle and execution-contract validators. No prototype operation identity
+may remain unless the live map explicitly preserves it. Then persist the
+receipt:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+  --project-root "$PROJECT_DIR" \
+  --action draft \
+  --workflow create-mobile-app
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+  --project-root "$PROJECT_DIR" \
+  --action approve \
+  --workflow create-mobile-app \
+  --section all \
+  --response approve
+```
+
+The resulting status must be `approved` with
+`mayAuthorizeExternalMutations: true`. The archived prototype checkpoint is
+always local-only and cannot satisfy this requirement. Any reconciliation,
+plan, schema, Experience Contract, screen contract, or foundation contract
+drift after this point invalidates the receipt and requires a fresh textual
+approval before `/add-dataverse` below.
 
 Also write
 `.tmp/prototype-plan-artifacts/live-name-map.json`, bound to the approved plan
@@ -292,6 +335,18 @@ identity bridge used by sample-data migration and field-binding repair.
 From the project root, execute `/add-dataverse --skip-planning`. This is the
 standalone fallback path by design: pass no archived prototype contract,
 receipt, reconciliation, operation manifest, or publish checkpoint.
+
+First verify the current real plan is still approved:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+  --project-root "$PROJECT_DIR" \
+  --action status \
+  --workflow create-mobile-app
+```
+
+Do not invoke `/add-dataverse` when this check is pending, stale, or does not
+report `mayAuthorizeExternalMutations: true`.
 
 `--skip-planning` suppresses duplicate sample-data/offline prompts. The child
 must still perform its own fresh live reconciliation, execute metadata changes
@@ -337,11 +392,12 @@ Advance transition phase to `connectors`.
 
 ### Step 6 - Replace Connector Stubs And Verify Native Wrappers
 
-Read `## Connectors`. For each non-none row, sequentially execute
-`/add-connector <api-name>` from the project root, following its connection,
-dataset/table, and schema-generation prompts. Use the exact API ID mapping from
-the connector reference; do not assume the prototype filename is the real
-connector ID.
+Read the regenerated real
+`.tmp/mobile-plan-execution-contract.json → connectorOperations[]`, group rows
+by exact API/service pairing, and sequentially execute `/add-connector
+<api-name>` from the project root. Follow its connection, dataset/table, and
+schema-generation prompts. Do not infer a connector or method from archived
+prototype Markdown.
 
 After each connector, verify a real generated service replaced or superseded
 the corresponding throw-stub. A planned connector that cannot be provisioned

@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Design Recipe",
+  "type": "object",
+  "required": ["schemaVersion", "experienceContractSha256", "paletteStrategy", "visualCharacter", "typography", "shape", "mediaTreatment", "hierarchy", "tokenReferences", "signatureComponents", "screens", "qualityCriteria", "forbiddenDefaults"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "paletteStrategy": { "enum": ["brand-provided", "prompt-inferred-original"] },
+    "visualCharacter": { "type": "string", "minLength": 1 },
+    "typography": {
+      "type": "object",
+      "required": ["displayRole", "bodyRole", "runtimeStrategy", "headingFamily", "bodyFamily", "monoFamily", "rationale", "supportsDynamicType"],
+      "properties": {
+        "displayRole": { "enum": ["editorial-display", "clear-emphasis"] },
+        "bodyRole": { "const": "accessible-system-body" },
+        "runtimeStrategy": { "enum": ["platform-safe-editorial", "system-native", "bundled-custom"] },
+        "headingFamily": { "type": "string", "minLength": 1 },
+        "bodyFamily": { "type": "string", "minLength": 1 },
+        "monoFamily": { "type": "string", "minLength": 1 },
+        "rationale": { "type": "string", "minLength": 20 },
+        "supportsDynamicType": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "shape": { "type": "object", "required": ["cornerCharacter", "elevationCharacter"] },
+    "mediaTreatment": { "type": "object", "required": ["source", "delivery", "fallback", "avoidIconOnlyCriticalSurfaces"] },
+    "hierarchy": { "type": "object", "required": ["focalPoint", "primaryActionPlacement", "maxFirstViewportRegions"] },
+    "tokenReferences": { "type": "object", "required": ["colors", "typography", "spacing", "radii"] },
+    "signatureComponents": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+    "screens": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["id", "pattern", "density", "mediaRequired", "actionPlacement"] } },
+    "qualityCriteria": { "type": "array", "minItems": 3, "items": { "type": "string" } },
+    "forbiddenDefaults": { "type": "object", "required": ["global", "byScreen"] }
+  },
+  "additionalProperties": false
+}

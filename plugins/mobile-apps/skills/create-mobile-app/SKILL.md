@@ -2,11 +2,17 @@
 name: create-mobile-app
 description: Use when the user wants to start a new Power Apps mobile app (Expo / React Native / TypeScript, targeting iOS and Android) from scratch.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
 model: opus
 ---
 
 **📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
+
+**Host-neutral interaction:** Any reference below to `AskUserQuestion`, a plan
+dialog, or a richer approval control is an optional adapter only. When that
+adapter is unavailable, present the same choices as normal text and wait for a
+normal textual response. Do not block planning or approval because a named host
+interaction tool is absent.
 
 # Create Power Apps Code App (Native)
 
@@ -28,7 +34,7 @@ do not reduce it to adjectives such as clean, premium, or modern.
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort) → 3. Draft plan + textual approval → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -372,14 +378,14 @@ retail catalog, or static HTML preview to become the de facto design.
 
 Set tentative defaults (used by Step 3b before `/design-system` runs):
 
-- `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
+- `<visual_companion> = yes` — open an optional draft preview after planning when one exists. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
 - `<experience_direction> = contract-first` — the planner and screen builders use the contract now; `/design-system` may refine token expression later without changing entry composition.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no` and skips optional brand interaction only. The Product Experience Contract and semantic token aliases remain mandatory; screen builders never fall back to industry-inferred defaults.
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (a staged planning bundle, foreground validation, and architect tokens already spent).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -403,12 +409,12 @@ Based on your confirmed brief, before any agent runs:
 
 Scope (proxy estimates — actual numbers come from architects):
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
+  Connectors    <N> inferred      ← <comma-separated names>  (included in draft)
   Screens     ~<low>-<high>       ← from <N> features × ~2-3 screens each
-  Approval gates  4               ← fixed (data model, native, connectors, screen plan)
+  Textual approval  1             ← required only before real external mutation
 
-Time (rough — agent time only, excludes your approval latency at gates):
-  Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
+Time (rough — agent time only, excludes textual approval latency):
+  Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
   Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
 
@@ -416,10 +422,10 @@ Token tier: Opus everywhere in v0 (model routing not yet shipped).
 
 ⚠ These are proxies, not measurements:
   • Table count is "noun count in brief" — architect may collapse or split
-  • Time excludes your approval latency at the 4 gates
+  • Time excludes the one textual approval before real external mutation
   • If the first user outcome is low-confidence, +1 focused clarification
   • Optional brand input may add a design-system prompt after scaffolding
-  • If any gate is rejected, that section regenerates (~2-3 min each)
+  • Requested plan edits create a new draft revision (~2-3 min each)
 
 Proceed, edit brief, or abort? [proceed/edit/abort]
 ─────────────────────────────────────────────────────────
@@ -440,25 +446,23 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
-> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Data-model readiness is quality-first, with a 10–15 minute target:
->  • Gate 1 (data model) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
->  • Gate 2 (native capabilities) — ~10s (quick)
->  • Gate 3 (connectors) — ~30–60s
->  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
+> "Brief locked in. Planning drafts the data model, native capabilities, connectors, and screens before one textual approval authorizes real external work. Data-model readiness is quality-first, with a 10–15 minute target:
+>  • Data model — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
+>  • Native capabilities + connectors — inferred into the draft without provisioning
+>  • Screens + design contract — **3–8 minutes** for graph/spec drafts and contract artifacts
 >
 > For Dataverse-required apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
-> seconds. Connector-only apps skip those metadata milestones. While the
-> architect runs, new milestone IDs from
-> `.tmp/data-model-planning-status.json` are rendered without inventing
-> percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
-> applicable milestone before interrupting."
+> seconds. Connector-only apps skip those metadata milestones. The foreground
+> renders planner-returned milestones without inventing percentages. If
+> data-model drafting has not surfaced after 15 minutes, inspect the last
+> applicable foreground milestone before interrupting."
 
 ### Step 2d — Template-only mode
 
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
-### Step 3 — Plan (planner agent + 4 approval gates)
+### Step 3 — Draft plan and request textual approval
 
 First, create the working and planning-artifact directories:
 
@@ -489,6 +493,33 @@ first user outcome, update the brief, and regenerate the contract. Do not use
 an industry picker. A screenshot/design intake is optional; high and
 strict-structural inputs update the contract with a binding reference override
 instead of replacing the brief-only path.
+
+Before planner dispatch, create the foreground execution preflight from the
+confirmed brief and the selected template package surface:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-plan-execution-contract.js" \
+  --project-root "$WORKING_DIR" \
+  --brief ".tmp/experience-brief.md" \
+  --output ".tmp/mobile-plan-execution-preflight.json"
+```
+
+Exit code `3` means a required native capability is unavailable in the
+selected template. Surface the reported alternatives and return
+`NEEDS_CONTEXT` before any plan checkpoint; do not let the planner mark it
+supported. It also reports unresolved connector hints. Resolve each hint from
+read-only connector/OpenAPI/CLI metadata into
+`.tmp/connector-operation-metadata.json` with exact `id`, `connector`,
+`apiName`, `service`, `operation`, `input`, `output`, and `failure`; do not add a
+connection or data source. Then rerun the same preflight with:
+
+```bash
+--connector-metadata ".tmp/connector-operation-metadata.json"
+```
+
+If exact operation metadata cannot be resolved, return `NEEDS_CONTEXT` or
+`BLOCKED` before planner dispatch. The planner may map consumers to a resolved
+operation but may not invent its method or shape.
 
 ### Step 3.0 — Foreground Dataverse planning snapshot and evidence
 
@@ -588,11 +619,10 @@ exact failure and **do not** treat an unreadable response as an empty inventory:
 
 The snapshot script emits factual `DATAVERSE_SNAPSHOT_PROGRESS` lines after
 inventory, candidate selection, and detail loading. Print them immediately;
-never replace them with estimates or percentages. Once the architect starts,
-watch `<working_dir>/.tmp/data-model-planning-status.json` and print each new
-milestone ID once with its counts and elapsed time. The first environment or
-snapshot milestone must be visible within 30 seconds. The foreground
-orchestrator owns this rendering; the architect only owns the status artifact.
+never replace them with estimates or percentages. Nested planners return their
+derived warnings and milestones in their result; they never create a planning
+status artifact. The foreground orchestrator owns all progress rendering and
+the first environment or snapshot milestone must be visible within 30 seconds.
 
 For `required`, pass `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim to the planner
 prompt and every direct `data-model-architect` fallback/revision. A supplied
@@ -604,22 +634,29 @@ provide placeholder file paths.
 Benchmark method and acceptance criteria:
 [`references/dataverse-planning-benchmark.md`](references/dataverse-planning-benchmark.md).
 
-**Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
-
-- `<working_dir>/native-app-plan.md`
-- `<working_dir>/_screens_section.md`
-- `<working_dir>/.tmp/*`
-
-All other paths in `<working_dir>/` (notably `app/`, `src/`, `package.json`, `power.config.json`, `tamagui.config.ts`, `tsconfig.json`, `node_modules/`, `memory-bank.md`) are owned by the foreground setup phases. Do not mutate them during planning.
+**Hard rule — nested planning is return-only during Step 3.** The planner and
+every planning leaf return structured content to the foreground and never write
+`native-app-plan.md`, `.tmp/*`, scratch sections, previews, application code,
+package/configuration files, or `memory-bank.md`. The foreground workflow is
+the sole owner of filesystem persistence, plan checkpoint state, and approval
+authorization.
 
 If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-model architect, screen-planner), add it to an in-memory queue `DEFERRED_CONCERNS[]` during Step 3. Do not write `memory-bank.md` yet. Step 6.7 must always flush `DEFERRED_CONCERNS[]` into `memory-bank.md` `## Concerns` immediately after the file is created.
 
-**Resume-from-draft check.** Before spawning, check if `<working_dir>/native-app-plan.md` already exists with content. If yes, a previous planner run (possibly in a degraded context with no `Task`/gate tools) already drafted sections. Read it. If it has populated `## Data Model` / `## Native Capabilities` / `## Connectors` but the gates were never run (no `## Approvals` block, or the file was authored by an agent that returned `BLOCKED: tool surface missing`), pass `resume_from_draft: true` and the existing path to the planner so it loads the draft as baseline instead of regenerating from scratch.
+**Resume-from-draft check.** Before spawning, the foreground may read an
+existing `native-app-plan.md` as a draft baseline. If its artifact revision has
+no matching textual approval receipt, pass the baseline content to the planner
+as read-only context. A revised bundle still returns to the foreground for
+validation and fixed-target persistence.
 
-**Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
+**Planner availability.** Do not probe named host tools. Dispatch the
+host-neutral planner directly. If agent delegation itself is unavailable, derive
+the same bounded bundle inline from the Experience Contract and continue through
+the foreground validation/persistence protocol; do not invoke a host-specific
+approval UI.
 
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
-- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 1/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
+- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Draft quality is data-model-first with a 10–15 minute target. I will print each factual foreground milestone and elapsed count as it lands."
 - `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
@@ -634,6 +671,7 @@ Prompt:
   <requirements_brief — bullet points from Step 2b>
 
   Product experience contract: <absolute `<working_dir>/.tmp/experience-contract.json`>
+  Mobile plan execution preflight: <absolute `<working_dir>/.tmp/mobile-plan-execution-preflight.json`>
   Experience direction: contract-first; optional brand refinement follows at Step 6.75.
   Visual companion: <visual_companion — "yes" or "no">
   Visual reference:
@@ -652,89 +690,105 @@ Prompt:
   Dataverse planning failure reason: none
   Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
   Dataverse planning evidence: <absolute EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
-  Structured schema contract: <absolute
-  `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
-  NOT SUPPLIED>
-  Experience foundation contract: <absolute `<working_dir>/.tmp/experience-foundation-contract.json`>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
+  Follow native-app-planner.md. Return one complete
+  `mobile-plan-artifact-bundle` without writing any project path or invoking
+  host approval UI. For a real or connector app, return
+  `NEEDS_USER_APPROVAL: <json>` followed by a blank line and one fenced JSON
+  bundle. The status JSON contains only the concise summary, the four section
+  labels, and `mayAuthorizeExternalMutations: false`; it does not contain paths,
+  approval IDs, commands, or persistence instructions. On terminal return,
+  emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_USER_APPROVAL:` /
+  `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #12.
 ```
 
-The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
-On every successful return, require `.tmp/experience-contract.json`,
+Wait for the planner to return before continuing. On a valid
+`NEEDS_USER_APPROVAL`, the foreground stages the JSON bundle verbatim at
+`<working_dir>/.tmp/planner-artifact-bundle.json`, then validates it before any
+planning artifact changes:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-plan-artifact-bundle.js" \
+  --project-root "$WORKING_DIR" \
+  --bundle "$WORKING_DIR/.tmp/planner-artifact-bundle.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/write-plan-artifact-bundle.js" \
+  --project-root "$WORKING_DIR" \
+  --bundle "$WORKING_DIR/.tmp/planner-artifact-bundle.json"
+```
+
+The writer atomically manages exactly these five paths and no caller-supplied
+target: `native-app-plan.md`, `.tmp/dataverse-schema-contract.json`,
 `.tmp/experience-screen-contract.json`, and
-`.tmp/experience-foundation-contract.json`. In `required` mode additionally
-require `.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`.
-If an expected artifact is missing, STOP as `BLOCKED`; this orchestrator must
-not synthesize it after the planner has returned.
-If the receipt is missing, STOP as `BLOCKED`; this orchestrator must not synthesize it after the planner has returned.
+`.tmp/experience-foundation-contract.json`, and
+`.tmp/mobile-plan-execution-contract.json`. The foreground owns the staged
+bundle and all five persisted artifacts. The approval receipt remains absent
+until the outer textual protocol receives `approve`.
 
-#### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
+#### 3.0a — Textual plan approval protocol
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs the four gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
+When the planner returns `NEEDS_USER_APPROVAL`, do not invoke an
+`EnterPlanMode` adapter and do not re-spawn the planner solely because a richer
+host UI is unavailable. First complete Step 3.9's deterministic prefix and
+schema normalization. Then validate the foreground-owned planning artifact set
+and write the current draft revision state:
 
-> "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" \
+  --project-root "$WORKING_DIR" --phase plan
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
+  "$WORKING_DIR/native-app-plan.md" --project-root "$WORKING_DIR" --phase plan
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" \
+  --project-root "$WORKING_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
+  --project-root "$WORKING_DIR" \
+  --file "$WORKING_DIR/native-app-plan.md" \
+  --file "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --file "$WORKING_DIR/.tmp/experience-screen-contract.json" \
+  --file "$WORKING_DIR/.tmp/experience-foundation-contract.json" \
+  --file "$WORKING_DIR/.tmp/mobile-plan-execution-contract.json"
+```
 
-Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+  --project-root "$WORKING_DIR" \
+  --action draft \
+  --workflow create-mobile-app
+```
 
-1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
-2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
+Present one concise normal-text summary: primary job, planned tables, native
+capabilities, connectors, screen count/navigation, and the plan revision hash.
+Then wait for a normal textual response:
 
-  Before either direct dispatch, read
-  `<working_dir>/.tmp/experience-contract.json`. Pass its absolute path to
-  `data-model-architect` and `screen-planner`; require the graph phase to
-  write `<working_dir>/.tmp/experience-screen-contract.json`. The inline
-  `## Design` section must mirror `### Product Experience Contract` before
-  any screen graph is reviewed. Do not recreate industry inference, a
-  dashboard default, or a CRUD-trio default in the fallback path.
+- `approve` or `approved` - persist a matching receipt with:
 
-   **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+  ```bash
+  node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+    --project-root "$WORKING_DIR" \
+    --action approve \
+    --workflow create-mobile-app \
+    --section all \
+    --response approve
+  ```
 
-  **MUST forward the Dataverse planning mode in the direct architect prompt.**
-  In `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and
-  do not resolve the environment or run Dataverse discovery again. In
-  `connector-only`, state that both paths are not supplied; never invent
-  placeholder artifacts.
+  Only after this command reports `status: approved` may the workflow continue
+  to auth, native, connector, or Dataverse mutation steps.
+- Any requested edit - request a revised return-only bundle, stage it at the
+  same foreground path, validate it, persist the five fixed artifacts, rerun
+  Step 3.9 and plan validators, then run `plan-checkpoints.js --action draft`
+  again for a fresh revision.
+- Any other response - restate the available textual choices without mutating
+  the project.
 
-  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
-
-  In `required`, also require the direct architect to write and normalize
-  `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
-  A draft Markdown section without that sidecar is not an executable Gate 1
-  result.
-
-   **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
-
-3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
-4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
-
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
-  - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it. `## Design` includes the readable Product Experience Contract mirror.
-   - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
-   - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
-   - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
-
-5. **Record the same structured approval receipt as the planner path.** At
-   data-model acceptance, initialize
-   `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
-   contract content/hash. After each later gate is accepted, update only that
-   gate's approval record and the current plan hash; after Gate 4b, record the
-   final structured service dependencies and integrity hash. Follow
-   `agents/native-app-planner.md` Step 6 exactly. Never call the operation
-   manifest builder to create or restamp this receipt. A changed approved
-   section invalidates its record until the existing inline gate approves it
-   again.
-
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
-
-**Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
+Optional richer host approval adapters may display this same summary, but they
+must still wait for and persist the textual approval receipt. A changed plan,
+schema, Experience Contract, screen contract, or foundation contract revision
+is detected by `plan-checkpoints.js --action status` and invalidates the earlier
+approval automatically.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
-Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #12 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_USER_APPROVAL:` enters the textual protocol in Step 3.0a and does not mutate externally; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
 
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
@@ -818,36 +872,12 @@ Write the answer into the confirmed brief, regenerate
 artifact path. Cap this loop at one clarification. A remaining ambiguity is
 `BLOCKED`, not an invitation to select an industry preset.
 
-#### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
+#### Step 3b — No planner preview artifact
 
-The planner emits a line of the form `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html` before each Gate 4 plan-mode entry. The planner itself does NOT open the browser — sub-agent shells often lose GUI context, and silent open-failures leave the user staring at the spinner with no preview. The orchestrator owns this step because it has the user's interactive session.
-
-**When to run this:** every time the planner enters or re-enters Gate 4 (initial pass + each reject loop). Detection: scan the planner's most recent visible output for the `PLAN_PREVIEW_PATH:` token; the value after the colon is the absolute `file://` URL.
-
-**What to do:**
-
-1. Print the link in a dedicated message so the user always has the fallback (clickable in most terminals):
-
-   > "Plan-time visual preview: file://<abs-path>/_plan_preview.html"
-
-2. **If `<visual_companion> = no`, stop here.** Do not attempt to open a browser. The user explicitly opted out; the printed link is their handle. Continue immediately to the planner's Gate 4 prompt.
-
-3. **Else** attempt to open in the user's default browser via the OS-portable chain:
-
-   ```bash
-   open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<abs-path>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<abs-path>\_plan_preview.html'" 2>/dev/null \
-     || echo "Auto-open failed. Use the link above."
-   ```
-
-4. Do NOT block on success. If the chain prints "Auto-open failed", the link from step 1 is the user's fallback. Continue immediately so the planner's plan-mode prompt surfaces without delay.
-
-If the planner returns without emitting a `PLAN_PREVIEW_PATH:` line, that is **expected** — the planner passes `skip_preview: true` to screen-planner since `/design-system` (always installed) renders the single visual preview at Step 6.75 after brand locks. Print:
-
-> "→ Gate 4 reviewed structurally. Visual preview will appear at Step 6.75 after `/design-system` locks your brand tokens (~5 min from now after scaffold)."
-
-…and continue without attempting any browser open. **Do not warn or treat this as an error** — it is the documented behavior.
+Nested planning returns no HTML or temporary plan preview. The human-readable
+`native-app-plan.md` and its textual checkpoints are the review surface.
+`/design-system` may render a later optional gallery after tokens are locked,
+but it is not a planning artifact or approval surface.
 
 #### 3.9 — Post-plan publisher-prefix gate
 
@@ -867,8 +897,8 @@ fi
 If mismatches are reported, sweep `native-app-plan.md` (and any auxiliary files like `.datamodel-manifest.json` if already written) replacing the wrong prefix with `${DETECTED_PUBLISHER_PREFIX}_` before Step 4. Do NOT proceed to Step 5 with a wrong-prefix plan — the sweep cost grows ~500 occurrences once services are generated.
 
 For `required`, apply the same prefix correction to
-`.tmp/dataverse-schema-contract.json`, then normalize it. Before Step 4, require
-both approved artifacts:
+`.tmp/dataverse-schema-contract.json`, then normalize it. Before textual
+approval, require both draft artifacts:
 
 ```bash
 test -f "$WORKING_DIR/native-app-plan.md"
@@ -881,6 +911,26 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
 Do not fall back to parsing the Markdown ER diagram when the sidecar is missing
 or malformed; route through the existing planner/direct-architect revision
 path.
+
+### Step 3.10 — External mutation authorization
+
+Before auth setup, template initialization, native capability changes,
+connector provisioning, or Dataverse work, require a receipt bound to the
+current plan revision:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/plan-checkpoints.js" \
+  --project-root "$WORKING_DIR" \
+  --action status \
+  --workflow create-mobile-app
+```
+
+Exit code `0` with `mayAuthorizeExternalMutations: true` means the current real
+textual approval is valid. Any non-zero result, or an authorization flag other
+than `true`, means the plan is pending, local-only, or has changed since
+approval: return to Step 3.0a, show the latest concise summary, and wait for
+`approve`. Do not run an external or irreversible operation while this check is
+pending.
 
 ### Step 4 — Auth & environment selection
 
@@ -970,9 +1020,10 @@ printf '// Populated by npx power-apps add-data-source. Do not edit.\nexport {};
   > "<working_dir>/src/generated/index.ts"
 ```
 
-**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a minimal RN stub (`View` + `Text` from `react-native`) that compiles cleanly. Our screen-builder replaces it at Step 11. Replacing it with a Tamagui stub before Fix 8 (which threads brand `tamaguiConfig` into `PowerAppsProvider`) would render under the upstream default Tamagui config instead of the project's brand tokens.
+**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a minimal RN stub (`View` + `Text` from `react-native`) that compiles cleanly. The Step 11 foreground artifact writer replaces it with validated builder output. Replacing it with a Tamagui stub before Fix 8 (which threads brand `tamaguiConfig` into `PowerAppsProvider`) would render under the upstream default Tamagui config instead of the project's brand tokens.
 
-Keep `src/hooks/` itself — screen-builders write new hooks into it.
+Keep `src/hooks/` itself — Step 10.8 writes app-specific shared hooks into it
+before return-only screen builders launch.
 
 **Fix 3b — Scan for dangling imports referencing deleted files (back-compat only)**
 
@@ -992,7 +1043,7 @@ grep -rn \
 ```
 
 **If matches found:**
-- For screen files (`app/(app)/*.tsx`): replace the entire file with the same minimal stub used for `home.tsx` (screen-builder will overwrite at Step 11).
+- For screen files (`app/(app)/*.tsx`): replace the entire file with the same minimal stub used for `home.tsx` (the foreground screen-artifact writer will overwrite it at Step 11).
 - For layout files (`_layout.tsx`): remove only the import lines and any code referencing the deleted symbols. Do NOT replace the whole file — layouts have navigation structure that must be preserved.
 - For barrel/index files: remove the re-export lines.
 
@@ -1248,9 +1299,10 @@ Arguments:
 
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 
-Handle the return per the status protocol (AGENTS.md rule #10):
+Handle the return per the status protocol (AGENTS.md rule #12):
 - `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
 - `DONE_WITH_CONCERNS` → surface concerns, ask user, continue.
+- `NEEDS_USER_APPROVAL` → pause and complete the outer textual checkpoint protocol; do not classify it as a design failure or silently continue.
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
 
@@ -1584,7 +1636,11 @@ If the seeding step fails (network drop, permission error, etc.), surface the fa
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
 
-Read the `## Native Capabilities` section from `native-app-plan.md`. For each capability, invoke `/add-native` — it routes to nested helpers for camera/PDF/pen controls when needed, otherwise generates a generic wrapper:
+Read `.tmp/mobile-plan-execution-contract.json`. For each
+`nativeCapabilities[]` row, require `support.status: supported`, recheck its
+`catalogRevision` against the current `package.json`, and invoke `/add-native`
+with that exact capability. The Markdown section is the review rendering, not
+the execution source.
 
 ```
 Invoke skill: /add-native
@@ -1600,7 +1656,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 ### Step 9a — Install approved pure-JavaScript dependencies
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every exact row in `.tmp/mobile-plan-execution-contract.json → javascriptDependencies[]`. An empty array means no install. Do not recover dependency authority from Markdown.
 
 Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
@@ -1658,7 +1714,11 @@ The generated schema has one brand palette, so dark surfaces and text retain the
 **Print before starting:**
 > "→ [Step 10/13] Adding <N> connectors: <list>. Each runs sequentially (parallel writes would race)."
 
-Read the `## Connectors` section from `native-app-plan.md`. If it says "None", skip this step entirely.
+Read `.tmp/mobile-plan-execution-contract.json → connectorOperations[]`. An
+empty array means no connectors. Group rows by `apiName` and `service`, then
+provision each connector once. After generation, verify every declared
+`service.operation` exists with the planned input/output surface; otherwise
+stop before skeleton generation. Do not infer operations from `## Connectors`.
 
 For each row in the table, route to the correct skill based on the API name:
 
@@ -1729,7 +1789,10 @@ Rules:
 - `name` for `[id].tsx` is literally `[id]` (with brackets). When `[id]` owns child routes, create `<folder>/[id]/_layout.tsx` with `<Stack.Screen name="index" />` and child entries; do not register both `[id].tsx` and a `[id]/` folder.
 - Folder name in the function name is PascalCase (e.g. `InspectionsLayout`).
 
-**Why this must run BEFORE Step 11:** screen-builders write their files in parallel, multiple builders may target the same folder, and any of them creating `_layout.tsx` would race. The orchestrator owns these files.
+**Why this must run BEFORE Step 11:** screen-builders return screen artifacts in
+parallel, then the foreground fixed-target writer persists only pack-authorized
+screen files. Layouts remain orchestrator-owned and are never valid artifact
+targets.
 
 #### Step 10b.3 — Write outer `app/(app)/_layout.tsx`
 
@@ -1881,15 +1944,19 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-runtime.js" \
+  --project-root "$PROJECT_DIR" \
+  --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/materialize-experience-view-model.js" \
   --project-root "$PROJECT_DIR"
 ```
 
-Do not launch builders when compilation or validation fails. The compiler binds
-experience, screen, foundation, design, and data-intent hashes; it records the
-Home/key-flow build order and screen dependency graph. Recompile after a
-relevant plan, design, foundation, or data change and use the validator's stale
-targets to limit later rebuild work. The materializer writes the local
+Do not launch builders when compilation or validation fails. Require pack
+screen-contract schema version 3, a complete work order for every Screen Map route, an embedded
+resolved design recipe, and explicit `builderWaves`. The compiler binds
+experience, screen, foundation, design, and data-intent hashes. Recompile after
+a relevant plan, design, foundation, or data change and use the validator's
+stale targets to limit later rebuild work. The materializer writes the local
 illustration manifest at `assets/experience/manifest.json` and the stable-ID
 adapter at `src/generated/experience-view-model.ts`; builders never mutate
 either artifact or this file.
@@ -1899,24 +1966,39 @@ either artifact or this file.
 **Print before starting:**
 > "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
 
-This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders then fill in the JSX rather than starting from zero. This cuts builder output by ~50% and eliminates import-path guessing errors.
+This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders use those skeletons to return complete replacement TSX rather than starting from zero; the foreground validates and persists their artifacts. This cuts builder output by ~50% and eliminates import-path guessing errors.
 
-Read `.tmp/screen-build-pack.json` first. It is the compact execution source
-for screen routes/files, primary first viewport, states, dependencies, fixture
-adapter, foundation components, test IDs, and build order. Use Markdown only
-for detailed lookup/write clauses that are intentionally omitted from the pack.
+Read `.tmp/screen-build-pack.json` first. It is the complete execution source
+for routes/files, presentation, viewport regions, headers/actions, states,
+media, dependencies, fixtures, foundation components, test IDs, design recipe,
+and builder waves. `native-app-plan.md` remains the human approval surface; it
+is not normal per-builder runtime input.
 
 ---
 
 #### 10.8a — Analyze plan for cross-screen patterns
 
-Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
+Read all v2 per-screen work orders in the pack. Identify:
 
 1. **Entity cards/rows** — if 2+ screens render the same entity (same Service) in a card/row format, generate a shared component.
 2. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
 3. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
 4. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
 5. **Experience foundation primitives** — read `.tmp/experience-foundation-contract.json` and create every selected motif component before any builder launches. This is mandatory even when a motif is used only by the primary screen; signature motifs are product-owned foundations, not accidental local card markup.
+
+The copied shared barrel owns `EntityImage`. Never replace
+`src/components/index.tsx`, create a competing `src/components/EntityImage.tsx`,
+or export an app-specific wrapper under that name. Append only the app-specific
+exports needed below. Remote-media foundations pass
+`media={resolveExperienceMedia(record)}` to the canonical component so its
+Expo Image disk cache and bundled `fallbackSource` remain active.
+
+The shared `ScreenShell` must expose `scroll?: boolean`, default to
+non-scrolling content, and never silently place all route children in a
+`ScrollView`. A packed `sticky-bottom` action uses `ScreenShell scroll={false}`,
+one explicit screen-owned `ScrollView`/list, and a sibling `BottomActionBar`
+outside that scroll container. This ownership must be supported before screen
+builders launch.
 
 **Decision rules:**
 
@@ -1973,7 +2055,8 @@ asset policy; do not let a builder invent a generic replacement.
 
 #### 10.8b — Generate screen skeletons
 
-For each screen in the plan's Screen Map that will be built by a screen-builder, write a **typed skeleton** file at its `target_file` path. The skeleton contains:
+For each screen work order in the pack, write a **typed skeleton** file at its
+`file` path. The skeleton contains:
 
 1. All imports (components, hooks, utils, services, types) pre-resolved
 2. The exported component function with typed props/params
@@ -2155,7 +2238,7 @@ export default function <ScreenName>() {
 
 This sub-step previously appended `### Standard Imports` + per-screen `#### Resolved Imports` blocks into the plan. That added ~150 lines on a 14-screen plan and duplicated the imports already pre-resolved into each skeleton file at Step 10.8b.
 
-**The skeleton file IS now the single source of truth** for per-screen imports + hook calls. The screen-builder reads the skeleton at `target_file` and fills the JSX. Do NOT append duplicate import documentation into the plan.
+**The skeleton file IS now the single source of truth** for per-screen imports + hook calls. The screen-builder reads the skeleton at `target_file` and returns complete TSX with its JSX filled; the foreground writer replaces the same file after validation. Do NOT append duplicate import documentation into the plan.
 
 #### 10.8d — Navigation/skeleton TypeScript gate
 
@@ -2175,56 +2258,139 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 #### 11.0 — `Task` preflight (silent)
 
-Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-app:screen-builder`. Spawn ONE no-op builder via `Task` with `screen_name: __preflight__` and `target_file: <working_dir>/.preflight-probe.tsx` (the probe agent should return `DONE` immediately and the orchestrator deletes the file).
+Before the first wave, do a one-shot probe to confirm `Task` can spawn
+`mobile-app:screen-builder`. Spawn ONE no-op builder via `Task` with
+`screen_id: __preflight__` (the return-only probe agent returns `DONE`
+immediately and never reads or writes a target).
 
 - **Probe returns `DONE` (any status code)** → parallel mode. Proceed with normal fan-out below.
 - **Probe errors with `Agent type … not found`, tool unavailable, or any nested-Task failure** → stop with `BLOCKED: mobile-app:screen-builder is unavailable in this host; restore configured agent/model dispatch before generating screens.` Do not write inline substitute screens or launch a partially configured builder.
 
 **Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run, stop with the same structured `BLOCKED` outcome rather than switching implementation modes.
 
-**Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
+**Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn
+further agents. The top-level orchestrator owns fan-out and follows the
+validated pack's `builderWaves` exactly. Do not recompute waves from the Screen
+Map, flat `buildOrder`, or route order.
 
-**Print before spawning** (substitute computed values; `<W>` = total waves = `ceil(N/5)`):
-> "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to 5 concurrent.
-> Wave 1/<W> starting: <comma-separated screen names in this wave>."
+The required v2 sequence is:
 
-Read the `## Screens` section's per-screen specs. For each screen the plan marks as new (skip baseline screens already in template), spawn a `mobile-app:screen-builder` agent via `Task` **in a single message** so they run in parallel. The `mobile-app:` plugin-name prefix is required.
+1. Complete the `foundation` wave sequentially and pass TypeScript.
+2. Dispatch every `vertical-slice` target (primary plus independently buildable
+   critical-flow screens) in **one Task batch**. Navigation between routes is
+   not a source dependency.
+3. Pass TypeScript, start Metro early, and complete that wave's blocking
+   `native-visual-review` gate before any remaining-screen wave.
+4. Dispatch each remaining screen wave as one bounded Task batch, honoring its
+   `maxConcurrency` (never above five), with TypeScript after every wave.
+
+Dataverse creation, connector provisioning, and generated-service writes stay
+sequential. Screen concurrency does not authorize parallel mutation of shared
+generated files or `power.config.json`.
+
+**Print before spawning** (substitute values from `builderWaves`):
+> "→ [Step 11/13] Building <N> screens in <W> contract-defined wave(s).
+> Wave 1/<W> starting: <comma-separated targets>."
+
+For each screen target, compute the SHA-256 of its typed skeleton immediately
+before dispatch with:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-artifact.js" \
+  --project-root "$PROJECT_DIR" \
+  --pack ".tmp/screen-build-pack.json" \
+  --screen-id "<exact builderWaves target>" \
+  --print-input-sha256
+```
+
+Then spawn `mobile-app:screen-builder` via `Task` in one
+message for that wave. The `mobile-app:` prefix is required. Builders are
+read-only and return artifacts; parallel Task execution never means parallel
+workspace writes.
 
 ```
 Spawn N agents (parallel): mobile-app:screen-builder
 
 Each prompt:
   working_dir: <working_dir>
-  screen_name: <name>
-  route: <route>
-  target_file: <working_dir>/<File from Screen Map>
-  plan_path: <working_dir>/native-app-plan.md
+  screen_id: <exact builderWaves target>
+  screen_name: <work-order id>
+  route: <work-order route>
+  target_file: <working_dir>/<work-order file>
   screen_build_pack_path: <working_dir>/.tmp/screen-build-pack.json
+  screen_build_pack_revision: <pack revision>
+  input_file_sha256: <foreground SHA-256 of target_file immediately before dispatch>
+  artifact_protocol: return-only mobile-screen-artifact v1
   skeleton_exists: true
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec,
-  shared conventions, Product Experience Contract, and design primitives —
-  inherited constraints are intentional, and samples are API/import references
-  only, not layouts to copy. Read `.tmp/experience-contract.json`,
-  `.tmp/experience-screen-contract.json`, and
-  `.tmp/experience-foundation-contract.json` plus `.tmp/screen-build-pack.json`;
-  validate the pack and import every required foundation
-  primitive from the latter instead of rebuilding motif UI. The primary screen
-  must materialize its ordered `experience-region-*` anchors, primary-action
-  anchor, motifs, and forbidden defaults. A typed skeleton already exists at your target_file
-  with all imports and hook calls pre-resolved from the Generated Services
-  table + per-screen `**Data**` field — fill in the JSX, do not discard
-  imports. The skeleton file IS the import source of truth; the plan no longer
-  documents per-screen imports separately. Return per AGENTS.md rule #10:
-  literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` /
-  `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Validate the pack and use only the matching
+  screens[screen_id] work order plus design.recipe. Its presentation,
+  regions, firstViewport, header, primaryAction, media, states,
+  qualityCriteria, testIds, data, dependencies, and forbiddenDefaults are
+  binding. Import its required foundation components instead of recreating
+  motif UI. A typed skeleton already exists at target_file; use it to compose
+  the exact complete replacement TSX in memory and preserve resolved imports.
+  Do not write, edit, patch, or redirect output into any workspace file. Do not
+  reread native-app-plan.md, the experience
+  sidecars, brand/design-system.md, or broad plugin references unless the work
+  order explicitly names a targeted guidanceRef. A missing/stale work order is
+  BLOCKED; there is no v2 legacy-plan fallback. Return per AGENTS.md rule #12:
+  on success use literal `DONE` or `DONE_WITH_CONCERNS:`, then one blank line,
+  then exactly one fenced `mobile-screen-artifact` JSON object containing the
+  exact complete TSX source and no prose. Echo the supplied input hash and the
+  pack screen's relative file; never return another target.
 ```
 
-**`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
+**`target_file` resolution (HARD):** prefix the matching work order's `file`
+with `<working_dir>/`. Never synthesize the path from the screen name and never
+fall back to a flat path. A missing/unsafe file is a pack validation failure.
 
-**Cap at 5 concurrent.** If the plan has more than 5 new screens, batch them in waves of 5.
+#### 11.1 — Foreground artifact validation and persistence
 
-**Progress streaming — print one line per builder as the wave returns, then a wave summary.** The `Task` tool returns all parallel results together, but you can still narrate per-builder by iterating the returned results in order before doing the status-switch branching. Format:
+A builder's success status means "artifact produced," not "screen written."
+The foreground must complete this protocol before reporting that screen as
+built:
+
+1. Parse each return. `DONE` and `DONE_WITH_CONCERNS:` require exactly one
+   fenced `mobile-screen-artifact` JSON object and no surrounding prose;
+   `NEEDS_CONTEXT` and `BLOCKED` carry no artifact.
+2. Write each extracted JSON block verbatim to a foreground-owned numeric path:
+   `.tmp/screen-builder-artifacts/wave-<number>/result-<number>.json`. Never use
+   an agent-provided path for staging.
+3. Validate every artifact in the wave before writing any target:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-artifact.js" \
+     --project-root "$PROJECT_DIR" \
+     --pack ".tmp/screen-build-pack.json" \
+     --screen-id "<foreground expected builderWaves target>" \
+     --artifact "<foreground numeric staging path>"
+   ```
+
+4. When the whole wave validates, persist artifacts sequentially through the
+   fixed-target writer:
+
+   ```bash
+   node "${CLAUDE_SKILL_DIR}/../../scripts/write-screen-artifact.js" \
+     --project-root "$PROJECT_DIR" \
+     --pack ".tmp/screen-build-pack.json" \
+     --screen-id "<foreground expected builderWaves target>" \
+     --artifact "<validated foreground staging path>"
+   ```
+
+The writer revalidates the foreground-authorized screen ID, immutable pack
+revision, route, relative file assertion, unchanged skeleton hash, source shape, and
+non-symlink target. It derives the only writable target from
+`screens[screenId].file` and atomically replaces that file. Never copy the
+returned `source` into a path yourself, apply a returned diff, or honor an
+output path in prose. Malformed JSON, unknown fields, target substitution,
+stale input hash, or stale pack is a retryable screen failure (maximum two),
+not permission to bypass the writer.
+
+**Progress streaming — print one line per builder only after its fixed-target
+write succeeds, then a wave summary.** The `Task` tool returns all parallel
+results together; validate the complete wave, persist it, then iterate the
+writer results in order. Format:
 
 ```
   ✓ [3/8] HomeScreen — DONE
@@ -2233,25 +2399,53 @@ Each prompt:
 ─── Wave 1/2 complete (5/8 screens built; 0 blocked, 1 with concerns) ───
 ```
 
-Use `✓` for DONE / DONE_WITH_CONCERNS, `↻` for NEEDS_CONTEXT (will retry), `✗` for BLOCKED. Always print the running counter `[K/N]` so the user sees forward motion. The wave summary line goes on its own line after the per-builder block.
+Use `DONE` / `DONE_WITH_CONCERNS` for completed builders, `[approval]` for NEEDS_USER_APPROVAL (paused for textual approval), `[retry]` for NEEDS_CONTEXT, and `[blocked]` for BLOCKED. Always print the running counter `[K/N]` so the user sees forward motion. The wave summary line goes on its own line after the per-builder block.
 
 After the wave's TypeScript gate passes, and only then, print the next wave start line (if any):
 > "Wave 2/<W> starting: <names>."
 
 **After each wave returns, run the Step 3.0 status switch on every builder's first line.** Branch per builder:
 
-- `DONE` → continue.
-- `DONE_WITH_CONCERNS: <list>` (typical case: a `// TODO(connector-not-yet-added)` stub was emitted because the referenced service is not in the Generated Services table) → batch concerns across all builders, surface the consolidated list to the user once at the end of the wave (not per-builder — that would be noise), and ask whether to fix any pending connectors via `/add-connector` before continuing to Step 12. Record in `memory-bank.md`.
+- `DONE` → require, validate, and persist its screen artifact through Step 11.1,
+  then continue.
+- `DONE_WITH_CONCERNS: <list>` → require a valid artifact whose non-empty
+  `warnings` match the concern, persist it through Step 11.1, then batch
+  concerns across all builders and surface the consolidated list once at the
+  end of the wave. Record it in `memory-bank.md`.
+- `NEEDS_USER_APPROVAL: <summary>` → pause the wave, present the summary through the outer textual approval protocol, and do not classify this as `BLOCKED` or launch later mutation work until a matching approval is recorded.
 - `NEEDS_CONTEXT: <missing>` → re-spawn that one builder with the missing context appended to its prompt (cap 2 retries per screen, then `BLOCKED`). Print `↻ [K/N] <name> — retrying (missing: <missing>)` so the user understands the wave isn't fully clean yet.
-- `BLOCKED: <reason>` → STOP for that screen, print `✗ [K/N] <name> — BLOCKED (<reason>)` and ask the user whether to (1) fix and retry, (2) skip the screen and continue with a placeholder, or (3) abort the whole flow.
+- `BLOCKED: <reason>` → STOP for that screen, print `✗ [K/N] <name> — BLOCKED (<reason>)`, then fix/retry or abort. Do not continue with a placeholder for a contract-required screen.
 
 After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
+  --project-root "$PROJECT_DIR" \
+  --pack ".tmp/screen-build-pack.json"
 npx tsc --noEmit
 ```
 
-If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
+If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts and a newly captured input-file SHA-256. Affected builders can be re-spawned in parallel and their replacement artifacts still pass Step 11.1. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
+
+When the current `builderWaves[]` entry includes `native-visual-review`, start
+Metro immediately using Step 12's background launch/QR contract, then capture
+the primary and every `criticalFlow.screenIds` route at normal and large text.
+Write `.tmp/experience-visual-review.json` and run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-visual-evidence.js" \
+  --project-root "$PROJECT_DIR" \
+  --manifest "$PROJECT_DIR/.tmp/experience-visual-review.json"
+```
+
+Review focal hierarchy, visible primary action, required media, clipping and
+overlap, header/safe-area ownership, long text, loading/error/offline states,
+and the critical navigation handoff. Repair and recapture at most twice.
+Missing capture, unresolved critical findings, placeholder critical media, or a
+failed evidence validator is
+`BLOCKED: vertical-slice native review incomplete`. Static HTML/browser output
+and `DONE_WITH_CONCERNS` do not open later waves or qualify visual completion.
+Keep the early Metro process running and reuse it at Step 12.
 
 Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Generated service/model names: singular vs plural generated names, stale aliases after Dataverse rename.
@@ -2261,7 +2455,11 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
-**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+**After all waves return and the last wave gate is clean**, compare a fingerprint
+of TypeScript-relevant files with the last successful wave check. If files
+changed, run one final `npx tsc --noEmit` and use the consolidated repair flow
+on failure. If unchanged, record that the duplicate final check reused the
+successful wave result. Never skip a check after a relevant change.
 
 Then run the canonical route-contract gate from the app root:
 
@@ -2269,9 +2467,12 @@ Then run the canonical route-contract gate from the app root:
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-runtime.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 ```
 
 This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
@@ -2347,45 +2548,48 @@ Invoke the design skill against the project:
 ```text
 /design-react-native-app
 ```
-Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
+Instruct the skill to review the generated screens against the validated v2
+`.tmp/screen-build-pack.json`. Provide its revision and embedded resolved design
+recipe. The refiner uses the same per-screen work orders as builders; do not
+make it reread broad plan/design/reference Markdown in the normal path. It may
+repair hierarchy, density, focal-point clarity, accessibility, and signature
+motifs, but must not replace presentation, region order, primary action, media
+requirements, or forbidden defaults.
+It must also preserve runtime placement: a `sticky-bottom` action stays in
+`BottomActionBar` outside scroll content under `ScreenShell scroll={false}`.
+For media-bearing first-viewport regions that share the viewport, keep
+responsive aspect-ratio sizing and the pack's viewport-share clamp; do not add
+a fixed height or minimum height that can push the contracted primary action or
+other first-viewport regions below the fold.
 
-Always provide `native-app-plan.md`, `.tmp/experience-contract.json`,
-`.tmp/experience-screen-contract.json`, `.tmp/experience-foundation-contract.json`, `.tmp/screen-build-pack.json`, and `brand/design-system.md`. The
-refiner may repair hierarchy, density, focal point clarity, and signature
-motifs, but must not replace the entry mode, region order, primary action, or
-forbidden defaults with a dashboard or generic CRUD composition.
-
-When design-intake.md declares high or strict-structural fidelity, also provide
-native-app-plan.md, design-intake.md, and brand/design-system.md. The refiner
+When the pack declares high or strict-structural fidelity, also provide the
+targeted reference-intake path named by the pack. The refiner
 may improve spacing, accessibility, states, and responsive behavior, but must
 not change the Reference Contract hierarchy, media prominence, navigation
 silhouette, Required Motifs, Runtime Markers, or Forbidden Drift.
 
-Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
+Wait for the design skill to complete. If it made any changes, rerun the full
+route, screen-contract, experience, pack, shell, media, screen-quality,
+contrast, TypeScript, and affected native-evidence gates. Then run the changed-
+file dispatcher with **every file changed by builders or the refiner**. A
+TypeScript-only recheck is insufficient, and no successful pre-refinement
+fingerprint may be reused after content changed:
 ```bash
 npx tsc --noEmit
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
+  --project-root "$PROJECT_DIR" \
+  --file <every-builder-or-refiner-changed-file>
 ```
 
 Then continue only if TypeScript is clean. Step 11.5 may leave remaining qualitative concerns, but it may not leave the app in a broken TypeScript state.
 
 #### Optional static preview
 
-After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
-
-> "→ N screens built and type-checked. The live app starts next.
->
-> Want a static HTML preview first, or go straight to the live app?
->
-> (a) Preview all screens — HTML phone frames for every screen
-> (b) Preview key screens — List + Form + Detail archetypes only
-> (c) Skip preview
->
-> [default: c]"
-
-- **(a)** → invoke `/preview-screens` (all screens)
-- **(b)** → invoke `/preview-screens` with only List + Form + Detail screen files (skip Login, Splash, Profile, OAuth)
-- **(c)** → proceed directly to Step 12
+Generate a static HTML preview only when the user explicitly requested one.
+Never pause the normal path for a preview choice, and never accept HTML as
+native visual evidence.
 
 ---
 
@@ -2408,7 +2612,11 @@ npm run generate-schemas    # refresh schema map for any data sources added sinc
 npx tsc --noEmit            # final gate — dev server starts only from a clean TypeScript state
 ```
 
-Run the schema regen and final `tsc` synchronously and check both exits. If either fails, do not launch Metro. Capture the full output once, batch-fix by root cause, rerun the final gate, and continue only when clean. Then launch Metro async:
+Run the schema regen and final `tsc` synchronously and check both exits. If
+either fails, do not launch Metro. Capture the full output once, batch-fix by
+root cause, rerun the final gate, and continue only when clean. Launch Metro
+async only when the vertical-slice gate did not already start a healthy
+recorded process; otherwise reuse its terminal ID and URL:
 
 ```bash
 # Async / background — DO NOT block on this. Capture the terminal id.
@@ -2479,9 +2687,9 @@ node "$CLAUDE_SKILL_DIR/../../scripts/validate-experience-visual-evidence.js" --
 ~~~
 
 Static HTML/browser previews do not count as native evidence. When native
-capture is unavailable, report
-`DONE_WITH_CONCERNS: native experience visual capture unavailable`; retain the
-passing static experience gate and do not claim visual completion.
+capture is unavailable, return
+`BLOCKED: native experience visual evidence is required for quality completion`.
+Do not claim completion or proceed to deployment handoff.
 
 For high or strict-structural fidelity, once the user has opened the native
 Expo app, collect iOS Home default text, Android Home default text, and one
@@ -2498,7 +2706,7 @@ node "$CLAUDE_SKILL_DIR/../../scripts/validate-visual-qa-evidence.js" --project-
 ~~~
 
 Static preview screens, React Native Web, and browser screenshots are not
-native evidence. When coverage is unavailable, return DONE_WITH_CONCERNS and
+native evidence. When required coverage is unavailable, return `BLOCKED` and
 do not claim that the supplied reference has been matched.
 
 ### Step 12.5 — Optional debug handoff
@@ -2563,7 +2771,7 @@ Which option? (or "none — I'll keep iterating locally")
 ## Notes
 
 - This skill is the only entry point for new project creation. Do not invoke `/add-*` skills directly during a fresh-project flow — they don't know how to read the plan and would re-prompt the user.
-- The planner agent owns the approval gates. This skill never enters plan mode itself — that would create a duplicate gate.
+- The planner drafts artifacts only. This skill owns the canonical textual approval receipt before any real external mutation; a richer host UI is optional presentation only.
 - For mid-project changes after Step 13, the user should run individual `/add-*` skills, or `/edit-app` for plan-backed app iteration.
 
 ## Reference

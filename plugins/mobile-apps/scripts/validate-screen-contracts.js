@@ -6,7 +6,9 @@ const path = require('node:path');
 const { validate: validateExperienceContract } = require('./validate-experience-contract');
 
 function normalize(value) {
-  return String(value || '').trim();
+  const normalized = String(value || '').trim();
+  const inlineCode = normalized.match(/^`([^`\r\n]+)`$/);
+  return inlineCode ? inlineCode[1].trim() : normalized;
 }
 
 function parseArgs(argv) {

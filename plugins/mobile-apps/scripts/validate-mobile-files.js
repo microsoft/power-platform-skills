@@ -19,7 +19,7 @@ function usage() {
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and non-generated src/.',
-    'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
+    'Generated apps read exact pure-JavaScript approvals from .tmp/mobile-plan-execution-contract.json; explicit flags are for unmanaged/legacy projects.',
   ].join('\n');
 }
 
@@ -94,6 +94,39 @@ function collectSourceFiles(projectRoot) {
   return files.sort();
 }
 
+function executionApprovedJsDependencies(projectRoot) {
+  const contractPath = path.join(projectRoot, '.tmp', 'mobile-plan-execution-contract.json');
+  if (!fs.existsSync(contractPath)) return [];
+  let contract;
+  try {
+    contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`mobile plan execution contract is invalid JSON: ${error.message}`);
+  }
+  if (!Array.isArray(contract.javascriptDependencies)) {
+    throw new Error('mobile plan execution contract javascriptDependencies must be an array');
+  }
+  return contract.javascriptDependencies.map((dependency) => {
+    const parsed = parseApprovedJsDependency(`${dependency?.package || ''}@${dependency?.version || ''}`);
+    if (!parsed || dependency.classification !== 'pure-js') {
+      throw new Error(`invalid approved JavaScript dependency in execution contract: ${dependency?.package || '<missing>'}`);
+    }
+    return parsed;
+  });
+}
+
+function mergeApprovedJsDependencies(explicit, fromContract) {
+  const approved = new Map();
+  for (const dependency of [...fromContract, ...explicit]) {
+    const previous = approved.get(dependency.name);
+    if (previous && previous !== dependency.version) {
+      throw new Error(`conflicting approved versions for ${dependency.name}: ${previous} and ${dependency.version}`);
+    }
+    approved.set(dependency.name, dependency.version);
+  }
+  return [...approved].map(([name, version]) => ({ name, version }));
+}
+
 function isWithinRoot(filePath, projectRoot) {
   const relative = path.relative(projectRoot, filePath);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
@@ -153,6 +186,16 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
+  let effectiveApprovedJsDependencies;
+  try {
+    effectiveApprovedJsDependencies = mergeApprovedJsDependencies(
+      approvedJsDependencies,
+      executionApprovedJsDependencies(projectRoot),
+    );
+  } catch (error) {
+    process.stderr.write(`BLOCKED: ${error.message}\n`);
+    return 2;
+  }
 
   const files = new Set();
   let blocked = false;
@@ -206,7 +249,7 @@ function main(argv) {
         filePath,
         content,
         projectRoot,
-        approvedJsDependencies,
+        effectiveApprovedJsDependencies,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
@@ -235,4 +278,6 @@ module.exports = {
   main,
   parseArgs,
   parseApprovedJsDependency,
+  executionApprovedJsDependencies,
+  mergeApprovedJsDependencies,
 };

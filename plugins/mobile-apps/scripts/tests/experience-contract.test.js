@@ -48,7 +48,7 @@ test('brief-only contracts choose entry mode without a visual reference', () => 
   }
 });
 
-test('passenger shopping briefs resolve to local-first product discovery, not operations', () => {
+test('passenger shopping briefs separate offline connectivity from cached CDN product media', () => {
   const variants = [
     passengerShoppingBrief,
     'Let passengers shop in-flight for travel accessories, beauty products, and watches. Keep the product browse screen clean and accessible.',
@@ -62,8 +62,19 @@ test('passenger shopping briefs resolve to local-first product discovery, not op
     assert.equal(contract.entryMode, 'discovery');
     assert.equal(contract.primarySurface, 'product-led-discovery');
     assert.deepEqual(contract.contentModel, ['products', 'categories', 'media', 'cart']);
-    assert.deepEqual(contract.assetPolicy, { connectivity: 'offline-preferred', media: 'local-first' });
-    assert.equal(contract.navigationModel, 'stack');
+    assert.deepEqual(contract.assetPolicy, { connectivity: 'offline-preferred', media: 'remote-cdn-cached' });
+    assert.deepEqual(contract.mediaIntent, {
+      criticality: 'required',
+      source: 'approved-cdn',
+      delivery: 'device-cached',
+      minimumCoverage: 0.9,
+      fallback: 'code-native-illustration',
+    });
+    assert.equal(contract.presentationIntent.primaryPattern, 'editorial-hero');
+    assert.equal(contract.presentationIntent.collectionPattern, 'image-card-grid');
+    assert.equal(contract.navigationIntent.model, 'tabs-stack');
+    assert.equal(contract.navigationModel, 'tabs-stack');
+    assert.match(contract.navigationIntent.rationale, /Shopping, category browsing, and the bag/);
     assert.equal(contract.signatureMotifs.includes('cart-action'), true);
     assert.equal(contract.forbiddenDefaults.includes('warehouse-operations'), true);
     assert.equal(contract.forbiddenDefaults.includes('airline-operations'), true);
@@ -239,10 +250,10 @@ test('experience validator binds contract, plan, screen sidecar, and built ancho
   assert.equal(rules.has('missing-runtime-marker'), true);
 });
 
-test('local-first product foundations reject remote media URLs', (context) => {
+test('an explicitly local-first product foundation rejects remote media URLs', (context) => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'experience-local-media-'));
   context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
-  const contract = deriveExperienceFromBrief(passengerShoppingBrief);
+  const contract = deriveExperienceFromBrief(passengerShoppingBrief, { mediaPolicy: 'local-first' });
   const composition = primaryComposition(contract);
   const foundation = foundationContract(contract);
   fs.mkdirSync(path.join(projectRoot, '.tmp'), { recursive: true });
@@ -292,7 +303,7 @@ test('experience-aware prototype seeds override legacy inventory keyword copy', 
   }];
   const contract = deriveExperienceFromBrief('Let travelers browse available products and choose an option.');
   const row = generateSeeds(entities, 'inventory warehouse pallet receiving', contract).get('demo_item')[0];
-  assert.match(row.name, /Travel organizer|Hydration essentials kit|Skin care set|Classic travel watch/);
+  assert.match(row.name, /Featured essential|New arrival|Popular choice|Gift-ready pick/);
   assert.doesNotMatch(row.name, /Bin A-14|Pallet scan variance/);
 });
 
@@ -314,10 +325,9 @@ test('shopping and warehouse contracts produce distinct seed content and media p
   const shopRow = generateSeeds(entities, 'inventory warehouse pallet receiving', shop).get('demo_item')[0];
   const warehouseRow = generateSeeds(entities, 'inventory warehouse pallet receiving', warehouse).get('demo_item')[0];
 
-  assert.match(shopRow.name, /Travel organizer|Hydration essentials kit|Skin care set|Classic travel watch/);
+  assert.match(shopRow.name, /Featured (?:accessories|beauty|watches)|Everyday (?:accessories|beauty|watches)|Premium (?:accessories|beauty|watches)/);
   assert.match(shopRow.status, /Available|Featured|Popular|Limited/);
-  assert.match(shopRow.image, /^asset:\/\/experience\//);
-  assert.doesNotMatch(shopRow.image, /^https?:\/\//);
+  assert.match(shopRow.image, /^https?:\/\//);
   assert.match(warehouseRow.name, /Bin A-14|Receiving Dock 3|Aisle 7|Returns hold/);
   assert.match(warehouseRow.status, /Assigned|Scanning|Needs recount|Complete/);
   assert.notEqual(shopRow.name, warehouseRow.name);

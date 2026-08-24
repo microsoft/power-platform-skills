@@ -49,13 +49,20 @@ If no candidate passes, use existing primitives when that still meets the requir
 
 ## Plan Contract
 
-In `## Screens`, emit `### JavaScript Dependencies` before per-screen specs. Use `None.` when no library is needed. Every selected runtime package uses this table:
+Record every selected package in
+`.tmp/mobile-plan-execution-contract.json → javascriptDependencies[]` with an
+exact version, consumers, `classification: pure-js`, and installation
+resolution. Render the same rows in `## Screens → ### JavaScript Dependencies`
+for human review; Markdown is not the execution source. Use `None.` when the
+structured array is empty.
 
 | Package | Exact version | Used by | Why selected | JS-only evidence | Native rebuild |
 |---|---|---|---|---|---|
 | `<package>` | `<x.y.z>` | `<screens/use case>` | `<fit over existing APIs and alternatives>` | `<metadata/file-list evidence>` | `No - pure JavaScript` |
 
-The exact version and rationale are part of the screen-plan approval. Approval authorizes the orchestrator to add that package; it does not authorize different packages or version ranges.
+The exact structured row and its readable rationale are part of screen-plan
+approval. Approval authorizes only that package/version; it does not authorize
+substitutions or ranges.
 
 ### Calendar example
 
@@ -74,7 +81,9 @@ Then verify:
 - `package.json` records the exact version in `dependencies`
 - the lockfile is updated when the project uses one
 - `require.resolve('<package>', { paths: [process.cwd()] })` succeeds
-- the changed-file dependency validator passes with one exact approval argument for every row currently in `### JavaScript Dependencies`:
+- the changed-file dependency validator automatically reads every exact row
+	from `.tmp/mobile-plan-execution-contract.json`. Explicit approval arguments
+	remain available only for unmanaged/legacy projects:
 
 	```bash
 	node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
@@ -91,4 +100,8 @@ If installed contents reveal native code/config or an incompatible runtime depen
 
 ## Builder Contract
 
-Builders may directly import only packages listed in the approved table and present at the exact version in `package.json`. Builders never select packages, edit manifests, or run installs. A missing approved package is an orchestrator block; an unplanned package is a planning-context error.
+Builders may directly import only template-shipped packages or packages listed
+in `pack.execution.javascriptDependencies` and present at the exact version in
+`package.json`. Builders never select packages, edit manifests, or run installs.
+A missing approved package is an orchestrator block; an unplanned package is a
+planning-context error.

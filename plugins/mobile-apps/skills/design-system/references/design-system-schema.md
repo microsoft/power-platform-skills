@@ -1,12 +1,17 @@
 # `brand/design-system.md` — Schema
 
-This file documents the exact shape of `brand/design-system.md` that `/design-system` generates. Downstream agents/references (`screen-builder`, Tamagui integration, `/preview-screens`) read this file as the visual source of truth.
+This file documents the human-readable `brand/design-system.md` companion that
+`/design-system` generates. `brand/design-recipe.json` is the machine-readable
+runtime source for screen hierarchy, media treatment, presentation, action
+placement, and scoped negatives; `design-system.md` explains those choices to
+makers and preserves compatibility with older consumers.
 
 ## Location
 
 ```
 <project_root>/
 ├── brand/
+│   ├── design-recipe.json   ← compact machine-readable runtime contract
 │   ├── design-system.md     ← this schema
 │   ├── tokens.ts            ← importable Tamagui tokens
 │   ├── design-system.html   ← visual gallery (optional)
@@ -256,16 +261,17 @@ A valid `brand/design-system.md` MUST have:
 
 Missing sections → skill surfaces error, asks user to re-run.
 
-## How screen-builder uses this file
+## How screen-builder uses these artifacts
 
-1. **Mandatory read** — builder MUST read `brand/design-system.md` if it exists in `<working_dir>/brand/`
-2. **Token references** — all color/spacing/radius values come from this spec, never hardcoded hex
-3. **Negatives are HARD RULES** — any pattern listed in `## Negatives` is forbidden. Violations are build failures.
-4. **Typography mapping** — `## Typography` role table maps to Tamagui font tokens ($heading, $body, $mono)
-5. **Component shapes** — `## Components` defines the exact shape for buttons, cards, inputs, list rows
-6. **Product composition** — `## Product Experience Primitives` defines the
-  primary-screen hierarchy and the named motifs that must be materialized
-  before generic archetype components.
+1. The build-pack compiler embeds the assigned screen slice from
+   `brand/design-recipe.json`; that compact work order is the builder's normal
+   runtime input.
+2. Token references resolve through `brand/tokens.ts`; builders never invent
+   hardcoded color, spacing, radius, or typography values.
+3. Global and screen-scoped negatives remain distinct. Only rules explicitly
+   scoped to the assigned screen may override its presentation recipe.
+4. `brand/design-system.md` is read only as a compatibility fallback for an
+   older pack or when a maker is reviewing/editing the human specification.
 
 ## How Tamagui Integration Uses tokens.ts
 

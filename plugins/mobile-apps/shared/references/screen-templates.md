@@ -4,7 +4,12 @@ Detailed archetype specifications. The SKILL.md has the summary; this is the ful
 
 ## Catalogue keys (referenced from per-screen specs)
 
-`agents/screen-planner.md` Step 4 emits row style, hero type, and operational pattern by **key only** (e.g. `Row style: status-stripe-card`). The descriptions live here so they're authored once and read by the screen-builder when it materializes the spec into TSX. Builders MUST resolve unknown keys by looking them up in this section before falling back to a generic layout.
+`agents/screen-planner.md` emits row style, hero type, and operational pattern
+by **key only** in its schema-v3 work orders (for example,
+`Row style: status-stripe-card`). The descriptions live here so they are
+authored once and read by the screen-builder when it materializes the spec into
+TSX. Builders MUST resolve unknown keys here before falling back to a generic
+layout.
 
 ### Row style keys (List screens)
 
