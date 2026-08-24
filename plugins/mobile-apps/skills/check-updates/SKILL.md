@@ -1,5 +1,5 @@
 ---
-name: update-dependencies
+name: check-updates
 description: Use when a Power Apps mobile project needs dependency updates or an npm audit review. Checks the mobile-app plugin first, then updates the native host, other Microsoft packages, and all remaining direct npm packages in order with validation and rollback.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, AskUserQuestion
@@ -8,7 +8,7 @@ model: opus
 
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
 
-# Update Dependencies (`/update-dependencies`)
+# Check Updates (`/check-updates`)
 
 Resolve `<working_dir>` from `--working-dir <path>` or use the current directory. Require `package.json` and `node_modules/`, then run on every invocation. If the user explicitly names one package to update, scope package discovery and mutation to that direct dependency; after Step 1, go directly to the step that owns it. Otherwise process eligible updates one package at a time in Step 2-4 order.
 
