@@ -28,6 +28,12 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - The foreground-generated normalized Dataverse planning snapshot path, when available
 - The deterministic Dataverse planning evidence appendix path, when available
 - Dataverse planning mode: `required`, `prototype`, or `connector-only`
+- Visual reference sources, requested fidelity, design-intake path, and
+  preservation intent when a screenshot or design intake was supplied
+- The prompt-derived product experience contract path when the foreground
+  orchestrator already created one; otherwise this planner creates
+  `<working_dir>/.tmp/experience-contract.json` before it dispatches an
+  architect.
 
 ## Hard Rules
 
@@ -58,6 +64,22 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   exists to generate mocks and preserve screen/data intent. It must never be
   passed to the real operation-manifest fast path. `/prototype-to-real-app`
   archives it and runs live environment reconciliation before `/add-dataverse`.
+- **Reference fidelity fails closed.** When the prompt declares a screenshot,
+  high fidelity, or strict-structural fidelity, read the supplied
+  design-intake.md and shared/references/reference-fidelity.md before making a
+  design decision. If the source or a complete intake is missing, return
+  NEEDS_CONTEXT rather than silently downgrading to a generic industry preset.
+  High and strict-structural references are binding for hierarchy, normalized
+  geometry, navigation silhouette, required motifs, and Forbidden Drift.
+- **Experience contract is mandatory and precedes dependent planning.** Derive
+  the product's audience, primary job, interaction and entry modes, primary
+  viewport, signature motifs, and forbidden defaults from the brief before
+  dispatching `data-model-architect` or `screen-planner`. Persist the contract
+  at `<working_dir>/.tmp/experience-contract.json`; it is the one machine
+  contract shared by data planning, screen planning, builders, seed generation,
+  design, and visual QA. Do not use an industry as a composition default. An
+  industry hint may refine vocabulary or compliance concerns only after the
+  product experience has been decided.
 - **Do not duplicate raw evidence.** Assemble the architect's concise decisions,
   rationale, ER diagram, tiers, and risks verbatim. Keep the appendix as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
@@ -99,20 +121,97 @@ From the planner prompt extract:
 - **Target platforms** — iOS + Android by default. If the user picked just one platform, native modules need `Platform.OS` branching notes in the screen plan.
 - **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
 - **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
-- **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
+- **Industry cues** — retain explicit industry, regulatory, and domain terms as
+  secondary context for vocabulary, accessibility, privacy, safety, or
+  connector decisions. They must not choose the initial composition, force a
+  dashboard, or override the experience contract.
 - **Planning mode** — in `prototype`, plan the same rich data/native/connector/
   screen contract but do not resolve an environment or request target metadata.
   Connector rows remain requirements; `/create-mobile-prototype` generates
   throw-stubs and `/prototype-to-real-app` provisions the real connectors.
 
-Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and the confirmed industry into design planning.
+Also extract Visual Reference sources, requested reference fidelity,
+design-intake path, and preservation intent. Read the intake when supplied.
+For high or strict-structural fidelity, it is the source of truth for
+composition; industry inference may fill only unmentioned design details.
+
+Carry each input into its owning planning step: native hints into `## Native Capabilities`, pure-JavaScript dependency hints into the `screen-planner` prompt, and industry cues only into domain vocabulary/compliance notes.
+
+## Step 1b — Extract the Product Experience Contract
+
+**Print before starting:**
+> "→ Extracting the product experience contract from the brief before data and screen planning…"
+
+The brief, not its industry label, owns the first product decision. Create or
+validate `<working_dir>/.tmp/experience-contract.json` with the schema at
+`${PLUGIN_ROOT}/scripts/schema-experience-contract.json` and the deterministic
+brief-first helper:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/experience-patterns.js" \
+  --brief-file "<working_dir>/brief.md" \
+  --output "<working_dir>/.tmp/experience-contract.json"
+```
+
+When the user or approved product input explicitly chooses a media policy,
+append `--media-policy <local-first|remote-cdn-cached|remote-allowed|not-applicable>`.
+For example, an approved cache-backed CDN product catalog uses
+`--media-policy remote-cdn-cached`. Do not infer that override merely from
+flight, travel, offline, or inventory vocabulary.
+
+If `brief.md` is not present, write the confirmed requirements verbatim to a
+temporary local brief file first. This is planning evidence, not a second
+human plan. Read the result and carry these fields verbatim through the rest of
+the workflow:
+
+- `audience`, `primaryJob`, `interactionMode`, `contentModel`, and `entryMode`
+- `navigationModel` and canonical `primaryScreen`
+- `firstViewport.focalPoint`, ordered `regionOrder`, visible `primaryAction`,
+  and `contentDensity`
+- two to five `signatureMotifs` and all `forbiddenDefaults`
+- `visualCharacter`, `confidence`, and stated assumptions
+
+For `confidence: high`, continue silently. For `medium`, write the assumptions
+into the contract and plan, then continue. For `low`, ask exactly one focused
+question: "What should a person accomplish first when they open the app?" Use
+the answer to revise the contract; do not show an industry picker or a long
+style questionnaire.
+
+When design-intake.md exists, read it before finalizing the contract. A
+directional reference refines the contract. High and strict-structural
+references add `referenceOverride` with the requested fidelity and the intake's
+binding preservation intent; hierarchy, geometry, motifs, navigation
+silhouette, and forbidden drift override generated composition where the two
+conflict. A visual reference is optional for every normal brief.
+
+Write this readable mirror under `## Design` when assembling the plan:
+
+~~~markdown
+### Product Experience Contract
+- Audience: <audience>
+- Primary job: <primaryJob>
+- Interaction / entry: <interactionMode> / <entryMode>
+- Primary surface / content: <primarySurface>; <contentModel>
+- Asset policy: <assetPolicy.connectivity> / <assetPolicy.media>
+- Primary screen: <route> (<compositionKind>)
+- First viewport: <ordered regions>; focal point: <focalPoint>
+- Primary action: <primaryAction>
+- Density / visual character: <contentDensity> / <visualCharacter>
+- Signature motifs: <motifs or None>
+- Forbidden defaults: <forbidden defaults>
+- Prompt evidence: <short decision spans for audience, job, entry, content, and assets>
+- Confidence / assumptions: <confidence>; <assumptions or None>
+~~~
+
+Do not add a `Reference Contract` for a brief-only app. When present, keep it
+as a separate higher-priority subsection after this contract.
 
 ## Step 2 — Spawn `data-model-architect` + inline planning in parallel
 
 **Print before spawning** (so the orchestrator user sees progress):
-> "→ [1/4] Spawning data-model-architect. Running native caps + design + connector inference in parallel while it works…"
+> "→ [1/4] Spawning data-model-architect. Running native caps + experience-led design + connector inference in parallel while it works…"
 
-**Spawn `mobile-app:data-model-architect` via `Task` and immediately continue** — do NOT wait for it to return before doing Steps 3, 3b, 3c. Those three steps only need the requirements brief, which you already have. Native caps, design direction, and connectors are independent of the Dataverse schema.
+**Spawn `mobile-app:data-model-architect` via `Task` and immediately continue** — do NOT wait for it to return before doing Steps 3, 3b, 3c. Those three steps only need the requirements brief and Product Experience Contract, which you already have. Native caps, experience translation, and connectors are independent of the Dataverse schema.
 
 While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you finish connector inference, the architect is usually done or nearly done. This cuts ~1–2 min of dead-wait off the plan phase.
 
@@ -122,6 +221,7 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 >
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
+> Product experience contract: [absolute `<working_dir>/.tmp/experience-contract.json`]
 > Target environment: use the foreground-resolved environment URL and tenant in `required` mode; NOT SUPPLIED in `prototype` or `connector-only` mode.
 > When planning-snapshot/evidence paths are supplied, do not read `power.config.json` or
 > call `scripts/resolve-environment.js`.
@@ -252,48 +352,56 @@ For each capability the app needs **AND is in the allowlist**:
 
 If the app needs zero allowlisted native capabilities, include a `## Native Capabilities` section that says "None — this app uses only standard React Native components and Power Platform connectors." Transparency notes for dropped caps still appear under this header — "None proposed" is not the same as "nothing was considered."
 
-## Step 3c — Plan Design Inline
+## Step 3c — Plan Design From the Product Experience Contract
 
 **Print before starting:**
-> "→ Inferring design direction from industry signals (no gate — design is reviewed visually at Gate 4)…"
+> "→ Translating the product experience contract into screen and design constraints…"
 
-Follow [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) exactly. The three steps are:
+Read `<working_dir>/.tmp/experience-contract.json` before writing `## Design`.
+The Product Experience Contract establishes the primary entry composition and
+first viewport. Treat every field as a product requirement, not optional style
+advice:
 
-1. **Detect** — scan requirements and wizard aesthetic answer for design keywords. Detect the industry and build a list of design decisions (even if all of them match the default stack).
-2. **Decide** — map the detected industry to its aesthetic direction, palette, copy tone, and visual language using the tables in `design-planning.md`. Always produce a full `## Design` section — never write just "default (Clean + Professional)".
-3. **Summarise** — do NOT ask a question here. Write the `## Design` section into the plan doc and move on. Design confirmation happens visually at Gate 4 when the user sees `_plan_preview.html` — not via a text question upfront.
+1. The primary screen uses the contract's `entryMode` and `compositionKind`.
+  Discovery, capture, workflow, inbox, and detail-first experiences must not
+  become a dashboard merely because the app has current records.
+2. The first viewport materializes the focal point and exact ordered regions;
+  its primary action must be visible without requiring discovery through a
+  generic card catalog.
+3. Signature motifs are limited to the contract's two intentional motifs.
+  `forbiddenDefaults` are hard negatives for the screen planner, builder,
+  design system, refiner, mock generator, and visual QA.
+4. `visualCharacter`, audience, interaction mode, and density guide palette,
+  typography, surface treatment, copy tone, and navigation emphasis. They
+  produce a neutral automatic direction without an industry preset.
 
-Store the design decision — you will pass it to `screen-planner` in Step 5b so per-screen specs use the right tokens.
+Write the `### Product Experience Contract` mirror specified in Step 1b first.
+Then add a concise `### Design Translation` describing how visual character,
+density, focal point, and motifs become tokens and components. Mention industry
+only where it changes terminology, compliance, or safety requirements.
 
-**Key rule:** Always describe the design with industry rationale, even when every decision matches the default. The user needs to see *why* — e.g. "Refined Minimal — standard for productivity/enterprise apps: neutral palette, dense layout, professional copy tone" — not just a label. Design approval happens at Gate 4 via the preview, not here.
+### Reference-contract mode
 
-### Industry inference confidence
+When a design-intake.md exists, write this additional block after the Product
+Experience Contract:
 
-After detection, classify the inference confidence and emit a signal so the orchestrator can ask the user only when the guess is shaky. **Skip this entirely when `Design vibe opt-in: yes` or `done`** — in those cases the user already drove the direction explicitly.
+~~~markdown
+### Reference Contract
+- Sources: <validated local paths or identifiers>
+- Reference fidelity: <directional|high|strict-structural>
+- Design intake: design-intake.md
+- Preserve: <hierarchy, normalized geometry, media prominence, navigation
+  silhouette, required motifs>
+- Forbidden Drift: <verbatim material patterns from the intake>
+- Runtime Markers: <exact testID list from the intake>
+- Asset policy: <original/local/offline source and fallback>
+~~~
 
-| Confidence | When | Action |
-|---|---|---|
-| `high` | Wizard aesthetic answer was non-default OR user mentioned a hex color / brand / explicit aesthetic word ("warm", "playful", "minimal") OR exactly one industry keyword family matched | No signal. Proceed silently. |
-| `low` | Zero industry keywords matched (defaulted to Productivity) OR two or more industry families matched (ambiguity, e.g. "field inspections at car dealerships" hits Field/Ops + E-commerce) OR the wizard aesthetic conflicts with the inferred industry (e.g. wizard says "Warm+Organic" but keywords say Field/Ops) | Emit `INDUSTRY_CONFIRM_REQUESTED:` signal and STOP — do NOT continue to Step 3b yet |
-
-**When confidence is `low`**, return early with this single line as your final message (no prose, no preamble):
-
-```
-INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternatives-comma-sep>
-```
-
-Where:
-- `<inferred-industry>` — what you would have picked (e.g. `productivity`, `field-ops`)
-- `<reason-code>` — one of `no-keywords` / `ambiguous-match` / `wizard-conflict`
-- `<top-3-alternatives-comma-sep>` — the most plausible 3 other industries from the [`design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md) table, ordered by relevance (e.g. `field-ops,healthcare,e-commerce`)
-
-Example signals:
-```
-INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce
-INDUSTRY_CONFIRM_REQUESTED: field-ops|ambiguous-match|e-commerce,productivity,tech-iot
-```
-
-The orchestrator will surface a one-question picker, write the chosen industry into the working dir as a hint file, and re-spawn this planner with `Industry confirmed: <industry>` added to the prompt. On the re-spawn, treat that as the locked industry — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
+For high and strict-structural fidelity, the Reference Contract overrides
+generated composition, geometry, motifs, and forbidden defaults where they
+conflict. Do not replace its Home composition, tabs, primary-action placement,
+or media prominence with a generic screen. If the intake contradicts the
+brief, stop for user correction rather than averaging the two inputs.
 
 ## Step 3b — Plan Connectors Inline (Gate 3)
 
@@ -340,7 +448,7 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 <your matrix from Step 3>
 
 ## Design
-<your ## Design section from Step 3c — always a full block with all 8 decision fields; never just a label>
+<the Product Experience Contract mirror, Design Translation, and optional higher-priority Reference Contract from Step 3c>
 
 ## Connectors
 <your table from Step 3b — or "None">
@@ -454,6 +562,19 @@ Approved data model:
 Approved design:
 [paste ## Design section verbatim]
 
+Product experience contract:
+- Read `<working_dir>/.tmp/experience-contract.json` before creating the graph.
+- Treat entryMode, primaryScreen, firstViewport region order, primary action,
+  signature motifs, and forbidden defaults as immutable product constraints.
+
+Reference fidelity:
+- Read design-intake.md when the approved Design section contains a Reference
+  Contract.
+- Treat Required Motifs and Runtime Markers as mandatory screen graph nodes or
+  shared components.
+- Preserve Forbidden Drift as hard negatives; do not add generic domain UI
+  that contradicts it.
+
 Approved connectors:
 [paste ## Connectors section verbatim]
 
@@ -497,15 +618,24 @@ The screen graph + shared conventions are already locked in <working_dir>/_scree
 Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
 Approved design: [paste ## Design section verbatim]
+Product experience contract: read `<working_dir>/.tmp/experience-contract.json`
+and the locked `.tmp/experience-screen-contract.json`. Preserve its primary
+composition, runtime markers, and forbidden defaults while expanding specs.
 Approved connectors: [paste ## Connectors section verbatim]
+Reference fidelity: when the approved Design section contains a Reference
+Contract, read design-intake.md and list Reference materialization plus each
+Runtime Marker testID in every affected per-screen spec. Required Motifs and
+Forbidden Drift are hard rules; do not replace them with generic templates.
 Working directory: [absolute path]
 Plugin root: ${PLUGIN_ROOT}
 
-Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Design Direction, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
+Expand each screen in the locked graph into a compact delta spec. Do NOT repeat values already present in Shared Conventions, Product Experience Contract, brand/design-system.md, or universal builder rules. Write Standard Imports ONCE near the top. Per-spec Resolved Imports list only entity-specific additions. Cap Open Questions at 3.
 
 Apply the canonical JavaScript dependency workflow for both explicit package requests and use-case-driven needs. Research read-only, emit exact versions plus JS-only evidence, and do not install anything.
 
-Style-picker + preview rules unchanged — honour the same `skip_preview` policy as the legacy single-pass mode (default `skip_preview: true` when `Design vibe opt-in: deferred`).
+Use `skip_preview: true` during planning. `/design-system` later renders the
+single contract-derived visual preview with brand tokens; do not produce a
+generic default preview here.
 
 Return per AGENTS.md rule #10.
 ```
@@ -518,19 +648,13 @@ Proceed to the existing Gate 4 logic below (preview-path emission, plan-mode ent
 
 ### Gate 4 — Screen Plan (structural review, no HTML preview)
 
-**Step 0 — Design context.** Design vibe selection has moved to `/design-system` (Step 6.75 of the orchestrator), which runs AFTER planning completes. **Gate 3 (screen plan) is a STRUCTURAL review only — no HTML preview.** The visual preview lives at Step 6.75 after brand tokens are locked, so the user only ever sees one render with the right colors instead of a default-tokens render here that gets overwritten in 5 minutes.
-
-Branch on the orchestrator's `Design vibe opt-in:` value:
-
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — spawn `screen-planner` with **`skip_preview: true`**. It writes only `_screens_section.md` (specs + markdown screen-graph) — no `_plan_preview.html`. The orchestrator's Step 6.75 will spawn screen-planner again WITHOUT `skip_preview` after `/design-system` locks the brand, so the single HTML preview gets rendered with real tokens. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
-
-- **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
-
-- **`Design vibe opt-in: no`** (or absent) — backwards-compat path for installs without `/design-system`. Skip the picker. No `## Design Direction` block exists. Spawn `screen-planner` WITHOUT `skip_preview`. It generates HTML using industry-inferred defaults. Continue to Step A.
-
-- **`Design vibe opt-in: skip`** — the user opted out of design entirely (`--no-design` flag). Spawn `screen-planner` with `skip_preview: true`. No HTML at any stage; no `/design-system` run later. Skip Step A; jump to Step B.
-
-After `screen-planner` returns: if it wrote `_plan_preview.html` (the legacy/no-design-system path), the orchestrator owns the browser open. Sub-agent shells often lose `DISPLAY`/GUI context and the open silently no-ops, so the planner never opens it itself.
+**Step 0 — Experience context.** `/design-system` runs after planning and
+refines the Product Experience Contract into tokens and a single visual
+preview. Gate 4 is always structural: spawn `screen-planner` with
+`skip_preview: true`, write the graph/specs and experience sidecar, and do not
+emit a default-style HTML preview. This ensures one consistent composition from
+brief to built screen rather than a preview that can later be contradicted by
+brand tokens.
 
 **Step A — Emit the preview path** (ONLY when `screen-planner` generated `_plan_preview.html` — i.e. `skip_preview` was NOT set). Before EnterPlanMode, print exactly this line on its own (no surrounding prose, no nested bullets):
 
@@ -627,6 +751,19 @@ Run the mobile changed-file dispatcher against every file this planner wrote or 
 node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<changed-file>" [--file "<changed-file>" ...]
 ```
 
+After the graph/spec phases write `.tmp/experience-screen-contract.json`, run
+the experience gate before marking the plan complete:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-experience-contract.js" \
+  --project-root "<working_dir>" \
+  --phase plan
+```
+
+Do not return `DONE` until this passes. It validates that the human-readable
+Design contract, structured primary-screen composition, and canonical Home
+route agree without requiring a screenshot or native capture.
+
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
 
 In `required` and `prototype` modes, also validate the schema sidecar structurally one final
@@ -718,12 +855,12 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 |---|---|---|
 | `DONE` | All 4 gates passed cleanly, plan written, no caveats | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Plan written and gates approved, but a sub-architect returned `DONE_WITH_CONCERNS` you propagated, or the user approved with explicit reservations | `DONE_WITH_CONCERNS: data-model-architect could not verify contact reuse, screen-planner used Tamagui default tokens` |
-| `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more info from the orchestrator — e.g. industry confidence is `low` (use the existing `INDUSTRY_CONFIRM_REQUESTED:` signal instead, this code is for cases not covered by an existing signal) | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
+| `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more information after the single focused experience-contract clarification has been asked | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
 | `BLOCKED: <reason>` | Hit a hard wall — sub-architect returned `BLOCKED`, plan file cannot be written, user rejected the same gate 3 times in a row, or any pre-condition (working dir, plugin root) is missing. The orchestrator MUST escalate, never silently retry | `BLOCKED: data-model-architect returned BLOCKED: cannot write _dm_section.md` |
 
 **Hard rules:**
 - Status code is the literal first line. Nothing before it.
-- The two existing early-return signals (`INDUSTRY_CONFIRM_REQUESTED:` from Step 3c, `DESIGN_VIBE_REQUESTED:` from Step 3a) are NOT replaced — they are special-cased "ask the user one question and re-spawn me" signals that pre-date this protocol. Continue to use them as-is. The status codes in this section apply only to the **terminal** return after gates run (or fail).
+- A low-confidence experience contract asks one focused user question inside Step 1b before this terminal status protocol applies. The status codes in this section apply only after that clarification and the planning gates run (or fail).
 - If a sub-architect returns `BLOCKED`, you MUST also return `BLOCKED` to the orchestrator. Do NOT downgrade to `DONE_WITH_CONCERNS` to keep the workflow moving.
 - If a sub-architect returns `DONE_WITH_CONCERNS`, propagate the concerns into your own `DONE_WITH_CONCERNS` line so the orchestrator can surface them.
 

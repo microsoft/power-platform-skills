@@ -8,7 +8,7 @@ Internal reference used by `/create-mobile-app` Step 9b after `/design-system` w
 
 Keep generated screens on one stable token contract:
 
-- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
+- Always provide `$surface0`-`$surface3`, `$mediaSurface`, and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
 - Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
 - Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` owns the provider and portal infrastructure. In Tamagui 2, `Toaster` is a sibling component rather than a provider wrapper.
 
@@ -49,6 +49,8 @@ type BrandColors = Partial<{
   surface: string;
   primary: string;
   accent: string;
+  accentSoft: string;
+  mediaSurface: string;
   border: string;
   statusSuccess: string;
   statusWarning: string;
@@ -68,7 +70,10 @@ function withSemanticAliases(
     surface3: brand.border ?? theme.color4,
     accentDeep: brand.primary ?? theme.blue8,
     accentBase: brand.primary ?? theme.blue10,
-    accentSoft: brand.accent ?? theme.blue3,
+    // Soft media/surface treatment must come from the deliberately light tint,
+    // never from the saturated accent used for small emphasis.
+    accentSoft: brand.accentSoft ?? theme.blue3,
+    mediaSurface: brand.mediaSurface ?? theme.color3,
     accentOnAccent: theme.color1,
     statusComplete: brand.statusSuccess ?? theme.green10,
     statusCompleteBg: theme.green3,
@@ -123,6 +128,8 @@ const tokens = createTokens({
 const darkBrandColors = {
   primary: brandTokens.color.primary,
   accent: brandTokens.color.accent,
+  accentSoft: brandTokens.color.accentSoft,
+  mediaSurface: brandTokens.color.mediaSurface,
   statusSuccess: brandTokens.color.statusSuccess,
   statusWarning: brandTokens.color.statusWarning,
   statusDanger: brandTokens.color.statusDanger,

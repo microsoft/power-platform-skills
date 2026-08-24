@@ -13,18 +13,21 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 ## When NOT to use
 
 - The user has already specified a brand reference app or design system (no need for a 3-up picker — go straight to that)
-- The plan declares an industry that maps unambiguously to one direction AND the user said "use the industry default" (one preview is enough)
+- The Product Experience Contract or an explicit brand direction already gives
+  the user a clear visual direction (apply it directly rather than comparing
+  optional expressions)
 - Sub-skill of another skill that's already in plan mode (would create a duplicate gate)
 
 ## Inputs
 
 - `working_dir` — absolute path to the project root (must contain `native-app-plan.md`)
 - Optional: `target_screen` — screen name to render (defaults to the most representative; see Step 2)
-- Optional: `default_direction` — `inspection | saas | product` to highlight as the recommended pick (defaults to keyword-inferred from app name + purpose)
+- Optional: `default_direction` — `inspection | saas | product` to highlight only when explicitly supplied by a user or derived from the Product Experience Contract's `visualCharacter`; never infer it from industry keywords, app name, or entity names.
 - Optional: `sub_step_mode` — `true` when invoked by `/design-system`. Changes behavior:
   - Still renders `_design_vibe.html` and asks the user
   - Returns picked direction + merged dimensions to caller
-  - Does NOT write `## Design Direction` to plan (caller does that)
+  - Does NOT write a design block to `native-app-plan.md`; the caller writes
+    `brand/design-system.md` and `## Product Experience Primitives`.
   - Accepts `brand_notes` and `logo_palette` for tinting the 3-up
 - Optional: `brand_notes` — free-text brand notes to display as recommendation banner
 - Optional: `logo_palette` — extracted hex values from `--logo` to tint vibe options
@@ -36,7 +39,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 3. Render 3-up `_design_vibe.html`
 4. Open in browser (with cross-platform fallback)
 5. Ask the user
-6. Write `## Design Direction` block + return
+6. Return a contract-compatible style expression (never write a plan block)
 
 ---
 
@@ -46,10 +49,9 @@ Before doing anything else, load the direction bundles. These are the source of 
 
 - [`design-directions.md`](./design-directions.md) — overview + reference-app gestalts
 - [`direction-inspection.md`](./direction-inspection.md) — full Inspection bundle (dark slate + safety orange — outdoor-only opt-in)
-- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — MVP default for zero-click flow, NOT shown in 3-up picker)
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
-- [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan
+- [`../../../../shared/references/experience-contract-guide.md`](../../../../shared/references/experience-contract-guide.md) — primary composition and hard-negative contract
 - [`brand-examples.md`](./brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry) + security rules for user inputs
 
 Also read once: [`shared/references/tamagui-html-mapping.md`](../../../../shared/references/tamagui-html-mapping.md) Section 4 (phone frame template) — the HTML scaffolding for each preview.
@@ -136,18 +138,16 @@ If the user passed `target_screen` explicitly, use that instead.
 ## Step 2 — Pick the recommended default direction
 
 **Print before starting:**
-> "→ [design-system:vibe] Inferring recommended direction from app description…"
+> "→ [design-system:vibe] Reading the product experience contract before highlighting an optional expression…"
 
 If `default_direction` was passed in the prompt, use it.
 
-Otherwise scan `## Project` description and `## Design` industry (if present) for keywords:
-
-| Keywords | Recommended direction |
-|---|---|
-| inspection, field, work order, delivery, audit, site visit, route, dispatch, technician, asset | **Inspection** |
-| tracker, request, approval, internal, dashboard, report, employee, helpdesk, expense, time, leave | **SaaS** |
-| consumer, customer, premium, engagement, experience, learning, wellness, onboarding, exec dashboard | **Product** |
-| Anything else | **SaaS** (safest default for a Power Apps audience) |
+Otherwise read `.tmp/experience-contract.json`. Map `visualCharacter` only as
+a non-binding picker highlight: `confident-utility` may highlight SaaS;
+`quiet-editorial`, `warm-friendly`, `playful`, or `minimal-refined` may
+highlight Product; `energetic` may show no recommended card until the user
+expresses a preference. `entryMode`, focal point, motifs, and forbidden
+defaults remain fixed in every rendered option.
 
 The recommendation only **highlights** one card in the picker — the user can still pick any. Do not skip showing all three.
 
@@ -349,19 +349,27 @@ Cap re-renders at **3 iterations** to avoid infinite loops. After 3 the skill mu
 
 **Always log the rejected directions** to `memory-bank.md` under `## Design history` — what the user said no to is the strongest signal for any future re-run. One line per rejection: `- 2026-05-01 — Rejected SaaS: "too templated, looks like every internal tool"`.
 
-## Step 6 — Write the `## Design Direction` block into the plan
-
-**Skip this step entirely if `sub_step_mode` is true** — the caller (`/design-system`) writes the full spec at Sub-step 3 instead.
+## Step 6 — Return a Contract-Compatible Style Expression
 
 **Print before starting:**
-> "→ [design-system:vibe] Writing ## Design Direction into native-app-plan.md…"
+> "→ [design-system:vibe] Returning an optional style expression for token translation…"
 
-Locate `native-app-plan.md`. If a `## Design Direction` block already exists, replace it. If not, insert it **immediately before** `## Design` (or `## Screens` if `## Design` is absent).
+Never write `## Design Direction` or any other visual block to
+`native-app-plan.md`. The plan already contains the Product Experience
+Contract, which owns entry mode, focal point, region order, primary action,
+motifs, and forbidden defaults.
 
-Use the schema from [`design-bundle-schema.md`](./design-bundle-schema.md). For the picked direction, copy the canonical bundle from the matching `direction-<name>.md` and prepend a header line stating the user's choice + reference apps:
+Return a selected expression to `/design-system` as a token/style suggestion
+only. It may influence palette relationships, typography personality, surface
+treatment, motion, and component finish. It must not replace the contract
+primary composition or add a dashboard, List/Detail/Form trio, generic search,
+catalog, or metric grid that the contract forbids.
+
+The legacy block example below is retained only as historical reference; do
+not materialize it in a plan or use it as a downstream default.
 
 ```markdown
-## Design Direction
+## Historical Expression Illustration (never write to native-app-plan.md)
 
 **Picked:** Product
 **Reference apps:** Linear, Notion, Spotify
@@ -382,13 +390,9 @@ heading_font: Fraunces
 body_font: Inter
 ```
 
-For a hybrid pick, the `Picked:` line reads `Hybrid (Product base + Inspection data density)` and the bundle dimensions show the merged values.
-
-Append a one-line note for downstream agents:
-
-```markdown
-> Downstream agents (`screen-planner`, `screen-builder`) MUST use these values as the defaults for their own per-screen Surface / Density / List style / Motion fields unless a per-screen spec explicitly overrides.
-```
+For a hybrid pick, keep the resulting expression contract-compatible: it may
+blend token/typography/surface treatment, but may not replace the entry mode,
+region order, primary action, signature motifs, or forbidden defaults.
 
 ## Step 7 — Update the memory bank
 
@@ -400,54 +404,39 @@ Append one line to `<working_dir>/memory-bank.md` under `## Design history` (cre
 
 ## Step 8 — Return
 
-**If `sub_step_mode` is true:** return the picked direction and all resolved dimensions to the caller (`/design-system`) without writing to the plan:
+**In every invocation mode:** return the picked expression to the caller
+(`/design-system`) without writing to the plan:
 
 ```
-DESIGN_VIBE_RESULT
-direction: <Inspection|SaaS|Product|Hybrid>
-surface: <value>
-palette: <value>
-typography: <value>
-list_style: <value>
-density: <value>
-motion: <value>
-status_saturation: <value>
-empty_state: <value>
-tone: <value>
-primary_action_shape: <value>
-accent_color: <name (#hex)>
-heading_font: <font>
-body_font: <font>
-reference_apps: <comma-separated>
+DESIGN_EXPRESSION_RESULT
+expression: <Inspection|SaaS|Product|Hybrid>
+paletteIntent: <short accessible relationship>
+typographyIntent: <short description>
+surfaceIntent: <short description>
+motionIntent: <short description>
+referenceApps: <comma-separated>
+contractCompatibility: <why the expression preserves the Product Experience Contract>
 ```
 
-The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3.
-
-**If auto mode (not sub-step):** return one line to the caller:
-
-> Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
-
-If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with screen-builder fan-out using the new direction.
+The caller uses these intents to write `brand/design-system.md` and its
+`## Product Experience Primitives`; primary composition remains sourced from
+`.tmp/experience-contract.json`.
 
 ---
 
 ## Plug-in / play-out contract
 
-This skill's only side-effect on shared state is **one block** written into `native-app-plan.md`. Existing agents check for it conditionally:
-
-- `agents/screen-planner.md` — if `## Design Direction` exists, use its values as defaults for per-screen Density / Surface / Restraint fields. Otherwise fall back to today's industry-inferred logic.
-- `agents/screen-builder.md` — if `## Design Direction` exists, read `list_style`, `motion`, `tone`, `primary_action_shape` and apply them when choosing row/component patterns from the user's screen spec. Samples remain code/API references only. Otherwise use today's defaults.
-
-If this skill folder is removed:
-1. The orchestrator's Gate 4 falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
-2. screen-planner and screen-builder's `if (block exists)` conditions evaluate false → behave exactly as today
-3. No other file change required
+This skill's only shared-state side effects are `_design_vibe.html` and an
+optional memory-bank history line. `screen-planner` and `screen-builder` read
+the Product Experience Contract and brand primitives, not this picker's output.
+If this skill folder is unavailable, `/design-system` still derives a neutral,
+accessible direction directly from the contract.
 
 ## Notes
 
-- **Read-only with respect to source code.** This skill writes only `_design_vibe.html`, the `## Design Direction` block in `native-app-plan.md`, and one line in `memory-bank.md`. It never touches TSX, configs, or generated services.
+- **Read-only with respect to source code.** This skill writes only `_design_vibe.html` and one line in `memory-bank.md`. It never touches the plan, TSX, configs, or generated services.
 - **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `native-app-planner` Gate 4. No new dependencies.
-- **Re-runnable.** Each run overwrites `_design_vibe.html` and replaces the `## Design Direction` block. Memory bank entries accumulate so the design history is preserved.
+- **Re-runnable.** Each run overwrites `_design_vibe.html`; memory bank entries accumulate so the design history is preserved.
 
 ## References
 

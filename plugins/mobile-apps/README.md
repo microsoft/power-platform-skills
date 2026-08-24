@@ -110,11 +110,24 @@ connector wiring.
     npm run dev
     ```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+6. Preview the app by scanning Metro's QR code with the Power Apps Developer
+    app or a compatible custom development client that includes the Power Apps
+    native host. Do not use Expo Go: it does not include the required host
+    modules.
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
     - Play store: (coming soon)
     - App center: https://install.appcenter.ms/orgs/appmagic-player-x6ys/apps/rn-dev-player-preview/distribution_groups/public_distribution/releases
+
+### Metro file-watch troubleshooting
+
+If Metro stops with `EMFILE`, `ENOSPC`, or a Watchman watch error, stop the
+server and inspect the local environment before retrying. On macOS/Linux, run
+`ulimit -n` and `watchman --version` to identify the open-file limit and
+whether Watchman is available. Restart Metro from a shell with an appropriate
+file-descriptor limit or after clearing stale watches with your team's normal
+Watchman procedure. The plugin does not install Watchman or change system
+limits automatically.
 
 ## License and notices
 

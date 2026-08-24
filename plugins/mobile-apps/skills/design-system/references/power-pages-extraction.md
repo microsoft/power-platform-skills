@@ -20,7 +20,7 @@ Power Pages sites are detected by:
 6. Call MS Learn MCP for schema mapping (Bootstrap vars → our tokens)
 7. Cross-validate user theme against MS Learn published Power Pages base
 8. Extract component conventions from Power Pages CSS classes
-9. Emit ## Design Direction block
+9. Merge extracted tokens into `brand/design-system.md` and preserve Product Experience Primitives
 ```
 
 ## Pipeline — Stylesheet mode (`--stylesheet --power-pages-mode`)
@@ -33,7 +33,7 @@ Power Pages sites are detected by:
 5. Call MS Learn MCP to interpret class semantics
 6. Map customizations to our Component section
 7. Populate Negatives with Power Pages conventions
-8. Emit ## Design Direction block
+8. Merge extracted tokens into `brand/design-system.md` and preserve Product Experience Primitives
 ```
 
 ## Bootstrap variable mapping

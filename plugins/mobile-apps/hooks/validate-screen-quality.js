@@ -283,14 +283,14 @@ function findEmptyStateAntiPattern(content) {
 
 function findSafeAreaProblems(content) {
   const violations = [];
-  const hasScreenChrome = /<SafeAreaView\b|useSafeAreaInsets\s*\(/.test(content);
+  const hasScreenChrome = /<SafeAreaView\b|<ScreenShell\b|useSafeAreaInsets\s*\(/.test(content);
   const looksLikeScreen = /export\s+default\s+function\s+\w*Screen\b|<FlatList\b|<ScrollView\b|<ScreenHeader\b|<StatusBar\b/.test(content);
 
   if (looksLikeScreen && !hasScreenChrome) {
     violations.push({
       rule: 'missing-safe-area-chrome',
       match: 'screen content without SafeAreaView/useSafeAreaInsets',
-      fix: 'Wrap screen content in SafeAreaView from react-native-safe-area-context or apply pt={insets.top} from useSafeAreaInsets(). Top headers must never render under the iOS/Android status area.',
+      fix: 'Wrap route content in ScreenShell (preferred), SafeAreaView from react-native-safe-area-context, or apply pt={insets.top} from useSafeAreaInsets(). Top headers must never render under the iOS/Android status area.',
     });
   }
 
@@ -318,8 +318,8 @@ function findSafeAreaProblems(content) {
 
   // Branch parity guard: if the populated branch has SafeAreaView but loading/error
   // branches early-return shared states above it, headers can clip under status/notch.
-  const hasSafeAreaView = /<SafeAreaView\b/.test(content);
-  if (hasSafeAreaView) {
+  const hasSafeAreaWrapper = /<SafeAreaView\b|<ScreenShell\b/.test(content);
+  if (hasSafeAreaWrapper) {
     if (/if\s*\(\s*(?:is)?loading[^)]*\)\s*return\s*<LoadingState\b/i.test(content)) {
       violations.push({
         rule: 'loading-branch-missing-safe-area',

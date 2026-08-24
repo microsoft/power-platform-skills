@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Product Experience Contract",
+  "description": "Machine-readable source of truth for prompt-derived product-experience decisions. Visual references may override selected fields but are never required.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "audience",
+    "primaryJob",
+    "interactionMode",
+    "contentModel",
+    "primarySurface",
+    "assetPolicy",
+    "promptEvidence",
+    "entryMode",
+    "navigationModel",
+    "primaryScreen",
+    "firstViewport",
+    "signatureMotifs",
+    "forbiddenDefaults",
+    "visualCharacter",
+    "confidence",
+    "assumptions",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "audience": { "enum": ["consumer", "employee", "mixed"] },
+    "primaryJob": { "type": "string", "minLength": 10, "maxLength": 220 },
+    "interactionMode": { "enum": ["discover", "browse", "operate", "decide", "create", "track", "communicate", "learn"] },
+    "contentModel": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": { "enum": ["products", "categories", "cart", "people", "tasks", "media", "records", "locations", "documents", "messages"] },
+      "uniqueItems": true
+    },
+    "primarySurface": { "enum": ["product-led-discovery", "availability-led-discovery", "task-led-workflow", "learning-journey", "conversation-led-inbox", "decision-led-overview", "capture-led-utility", "content-led-feed", "detail-led-decision", "guided-onboarding", "other"] },
+    "assetPolicy": {
+      "type": "object",
+      "required": ["connectivity", "media"],
+      "properties": {
+        "connectivity": { "enum": ["offline-preferred", "network-optional", "unknown"] },
+        "media": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] }
+      },
+      "additionalProperties": false
+    },
+    "promptEvidence": {
+      "type": "object",
+      "required": ["audience", "primaryJob", "interactionMode", "entryMode", "contentModel", "primarySurface", "assetPolicy"],
+      "properties": {
+        "audience": { "$ref": "#/definitions/evidenceSpans" },
+        "primaryJob": { "$ref": "#/definitions/evidenceSpans" },
+        "interactionMode": { "$ref": "#/definitions/evidenceSpans" },
+        "entryMode": { "$ref": "#/definitions/evidenceSpans" },
+        "contentModel": { "$ref": "#/definitions/evidenceSpans" },
+        "primarySurface": { "$ref": "#/definitions/evidenceSpans" },
+        "assetPolicy": { "$ref": "#/definitions/evidenceSpans" }
+      },
+      "additionalProperties": false
+    },
+    "entryMode": { "enum": ["discovery", "workflow", "overview", "inbox", "feed", "detail-first", "capture", "onboarding"] },
+    "navigationModel": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
+    "primaryScreen": {
+      "type": "object",
+      "required": ["id", "route", "file", "compositionKind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "route": { "type": "string", "pattern": "^/" },
+        "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
+        "compositionKind": { "enum": ["discovery", "workflow", "overview", "inbox", "feed", "detail-first", "capture", "onboarding"] }
+      },
+      "additionalProperties": false
+    },
+    "firstViewport": {
+      "type": "object",
+      "required": ["focalPoint", "regionOrder", "primaryAction", "contentDensity"],
+      "properties": {
+        "focalPoint": { "type": "string", "minLength": 5, "maxLength": 120 },
+        "regionOrder": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 5,
+          "items": { "enum": ["context", "feature", "primary-action", "supporting-content", "navigation"] },
+          "uniqueItems": true
+        },
+        "primaryAction": { "type": "string", "minLength": 3, "maxLength": 100 },
+        "contentDensity": { "enum": ["sparse", "balanced", "dense"] }
+      },
+      "additionalProperties": false
+    },
+    "signatureMotifs": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 3, "maxLength": 80 }, "uniqueItems": true },
+    "forbiddenDefaults": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 3, "maxLength": 80 }, "uniqueItems": true },
+    "visualCharacter": { "enum": ["quiet-editorial", "confident-utility", "warm-friendly", "energetic", "playful", "minimal-refined", "other"] },
+    "confidence": { "enum": ["high", "medium", "low"] },
+    "assumptions": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 5, "maxLength": 200 } },
+    "source": { "enum": ["brief", "reference-override", "brief-plus-reference"] },
+    "referenceOverride": {
+      "type": "object",
+      "required": ["fidelity", "preservationIntent"],
+      "properties": {
+        "fidelity": { "enum": ["directional", "high", "strict-structural"] },
+        "preservationIntent": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "evidenceSpans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["signal", "text", "start", "end"],
+        "properties": {
+          "signal": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "start": { "type": "integer", "minimum": 0 },
+          "end": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -20,9 +20,9 @@ Imports a pre-structured design specification file and converts it to our `brand
 1. Read file (200 KB cap; .md / .mdx / .json accepted)
 2. Auto-detect format via markers (table above)
 3. Route to format-specific parser
-4. Emit ## Design Direction block with provenance line
-5. SKIP Sub-step 3 (style picker) AND Sub-step 4 (write spec)
-6. Jump to Sub-step 5 (gallery render)
+4. Merge extracted palette, typography, component, motion, and negative rules into `brand/design-system.md` with provenance
+5. Preserve the existing Product Experience Contract and write its required `## Product Experience Primitives`
+6. SKIP the optional style picker, then render the gallery from the merged brand spec
 ```
 
 ## Format-specific parsing
@@ -90,11 +90,11 @@ Parser: Deterministic table regex extraction. Sonnet assist ONLY if tables are a
 
 ## Output
 
-Emits a complete `## Design Direction` block:
+Emits a complete imported-design section inside `brand/design-system.md` while preserving the contract-owned composition:
 
 ```markdown
-## Design Direction
-source: <file> (<detected format>)
+## Imported Design Evidence
+- Source: <file> (<detected format>)
 
 ## Palette
 | Token | Hex | Usage |
@@ -109,6 +109,9 @@ source: <file> (<detected format>)
 
 ## Negatives
 (if source includes constraints / forbidden patterns)
+
+## Product Experience Primitives
+- Preserve entry mode, focal point, region order, primary action, motifs, and forbidden defaults from `.tmp/experience-contract.json`.
 ```
 
 ## Failure modes

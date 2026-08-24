@@ -126,6 +126,144 @@ _None - this app uses local data only._
   assert.equal(fs.existsSync(path.join(root, 'src/generated/services/Cr_taskService.ts')), true);
 });
 
+test('materializes local illustration recipes and preserves a product identity through cart data', (t) => {
+  const root = makeProject(t, {
+    'brief.md': 'Help passengers browse products and add them to a cart while traveling.',
+    'native-app-plan.md': '## Data Model\n\nApproved in the contract.\n\n## Connectors\n\n_None._\n',
+    '.tmp/experience-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      audience: 'consumer',
+      primaryJob: 'Browse and add useful products.',
+      interactionMode: 'browse',
+      entryMode: 'discovery',
+      primarySurface: 'product-led-discovery',
+      contentModel: ['products', 'categories', 'media', 'cart'],
+      assetPolicy: { connectivity: 'offline-preferred', media: 'local-first' },
+      promptEvidence: {},
+    }),
+    '.tmp/dataverse-schema-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      planningMode: 'prototype',
+      tables: [
+        {
+          logicalName: 'cr_product',
+          displayName: 'Product',
+          plannedDecision: 'create',
+          serviceRequired: true,
+          columns: [
+            { logicalName: 'cr_name', type: 'string', primaryName: true, requiredLevel: 'ApplicationRequired' },
+            { logicalName: 'cr_price', type: 'money' },
+            { logicalName: 'cr_category', type: 'string' },
+            { logicalName: 'cr_availability', type: 'string' },
+            { logicalName: 'cr_image', type: 'image' },
+          ],
+        },
+        {
+          logicalName: 'cr_cartitem',
+          displayName: 'Cart item',
+          plannedDecision: 'create',
+          serviceRequired: true,
+          dependencyTier: 1,
+          columns: [
+            { logicalName: 'cr_cartitemid', type: 'uniqueidentifier' },
+            { logicalName: 'cr_productid', type: 'lookup', lookupTarget: 'cr_product', requiredLevel: 'ApplicationRequired' },
+            { logicalName: 'cr_quantity', type: 'integer' },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+
+  const products = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_product.seed.json'), 'utf8'));
+  const cartItems = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_cartitem.seed.json'), 'utf8'));
+  const assets = JSON.parse(fs.readFileSync(path.join(root, 'assets/experience/manifest.json'), 'utf8'));
+  const viewModel = fs.readFileSync(path.join(root, 'src/generated/experience-view-model.ts'), 'utf8');
+  const selectedProduct = products[0];
+  const cartItem = cartItems.find((item) => item.cr_productid === selectedProduct.cr_productid);
+
+  assert.ok(cartItem, 'a cart row must preserve the selected product primary key');
+  assert.match(selectedProduct.cr_image, /^asset:\/\/experience\/cr_product-1\.png$/);
+  assert.deepEqual(assets.assets[selectedProduct.cr_image], {
+    key: selectedProduct.cr_image,
+    kind: 'local-illustration',
+    family: 'travel',
+    label: selectedProduct.cr_name,
+    category: selectedProduct.cr_category,
+  });
+  assert.match(viewModel, /export function toExperienceRecord/);
+  assert.match(viewModel, /assetKeys/);
+  assert.match(viewModel, /stable record ID mapping/);
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/.prototype-manifest.json'), 'utf8'));
+  assert.equal(manifest.assetManifest, 'assets/experience/manifest.json');
+  assert.equal(manifest.viewModel, 'src/generated/experience-view-model.ts');
+});
+
+test('generates approved CDN media fields with stable cache and fallback identities', (t) => {
+  const root = makeProject(t, {
+    'brief.md': 'Help passengers browse products and add them to a cart while traveling.',
+    'native-app-plan.md': '## Data Model\n\nApproved in the contract.\n\n## Connectors\n\n_None._\n',
+    '.tmp/experience-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      audience: 'consumer',
+      primaryJob: 'Browse and add useful products.',
+      interactionMode: 'browse',
+      entryMode: 'discovery',
+      primarySurface: 'product-led-discovery',
+      contentModel: ['products', 'categories', 'media', 'cart'],
+      assetPolicy: { connectivity: 'offline-preferred', media: 'remote-cdn-cached' },
+      promptEvidence: {},
+    }),
+    '.tmp/dataverse-schema-contract.json': JSON.stringify({
+      schemaVersion: 1,
+      planningMode: 'prototype',
+      tables: [{
+        logicalName: 'cr_product',
+        displayName: 'Product',
+        plannedDecision: 'create',
+        serviceRequired: true,
+        columns: [
+          { logicalName: 'cr_name', type: 'string', primaryName: true, requiredLevel: 'ApplicationRequired' },
+          { logicalName: 'cr_price', type: 'money' },
+          { logicalName: 'cr_category', type: 'string' },
+          { logicalName: 'cr_availability', type: 'string' },
+          { logicalName: 'cr_imageurl', type: 'string' },
+          { logicalName: 'cr_imagealttext', type: 'string' },
+          { logicalName: 'cr_imagecachekey', type: 'string' },
+          { logicalName: 'cr_imageassetkey', type: 'string' },
+        ],
+      }],
+    }),
+  });
+
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+
+  const [product] = JSON.parse(fs.readFileSync(path.join(root, 'src/generated/services/Cr_product.seed.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'assets/experience/manifest.json'), 'utf8'));
+  const viewModel = fs.readFileSync(path.join(root, 'src/generated/experience-view-model.ts'), 'utf8');
+  const media = manifest.media.records[`cr_product:${product.cr_productid}`];
+
+  assert.match(product.cr_imageurl, /^https:\/\/images\.unsplash\.com\//);
+  assert.match(product.cr_imagealttext, /Travel organizer|Hydration essentials kit|Skin care set|Classic travel watch/);
+  assert.equal(product.cr_imagecachekey, 'experience:cr_product:1:v1');
+  assert.equal(product.cr_imageassetkey, 'asset://experience/cr_product-1.png');
+  assert.deepEqual(media, {
+    imageUrl: product.cr_imageurl,
+    imageAltText: product.cr_imagealttext,
+    imageCacheKey: product.cr_imagecachekey,
+    imageAssetKey: product.cr_imageassetkey,
+  });
+  assert.equal(manifest.assetPolicy, 'remote-cdn-cached');
+  assert.match(viewModel, /imageUrl: string \| null/);
+  assert.match(viewModel, /imageAltText: string/);
+  assert.match(viewModel, /imageCacheKey: string/);
+  assert.match(viewModel, /imageAssetKey: string/);
+});
+
 test('preserves compatible seed rows across schema edits and archives removed tables', (t) => {
   const contract = {
     schemaVersion: 1,

@@ -11,10 +11,12 @@
 
 import React from 'react';
 import { ScrollView, Image as RNImage } from 'react-native';
+import { useRouter } from 'expo-router';
 import { YStack, XStack, ZStack, Text, Button, useTheme } from 'tamagui';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { gradients, shadows, type GradientName } from '@/tokens';
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -359,7 +361,7 @@ export function EmptyState({
       <Text color="$color10" text="center" fontSize="$4">{message}</Text>
       {actionLabel && onAction && (
         <Button bg="$blue10" onPress={onAction}>
-          <Button.Text color="$color1">{actionLabel}</Button.Text>
+          <Button.Text color="$accentOnAccent">{actionLabel}</Button.Text>
         </Button>
       )}
     </YStack>
@@ -416,7 +418,7 @@ export function FloatingActionButton({
       icon={<Ionicons name={iconName} size={22} color="white" />}
       pressStyle={{ scale: 0.96 }}
     >
-      {extended ? <Button.Text color="$color1">{label}</Button.Text> : null}
+      {extended ? <Button.Text color="$accentOnAccent">{label}</Button.Text> : null}
     </Button>
   );
 }
@@ -473,6 +475,55 @@ export function FilterChipRow({
 
 // ─── ScreenHeader ────────────────────────────────────────────────────────────
 
+export type HeaderMode = 'root' | 'back' | 'close' | 'none';
+
+export function ScreenShell({
+  headerMode = 'root',
+  title,
+  subtitle,
+  rightAction,
+  onBack,
+  onClose,
+  fallbackHref = '/(app)/home',
+  children,
+}: {
+  headerMode?: HeaderMode;
+  title?: string;
+  subtitle?: string;
+  rightAction?: React.ReactNode;
+  onBack?: () => void;
+  onClose?: () => void;
+  fallbackHref?: string;
+  children: React.ReactNode;
+}) {
+  const router = useRouter();
+  const handleBack = () => {
+    if (onBack) return onBack();
+    if (router.canGoBack()) return router.back();
+    router.replace(fallbackHref as never);
+  };
+  const handleClose = () => {
+    if (onClose) return onClose();
+    handleBack();
+  };
+
+  return (
+    <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
+      {headerMode !== 'none' && title ? (
+        <ScreenHeader
+          title={title}
+          subtitle={subtitle}
+          headerMode={headerMode}
+          onBack={handleBack}
+          onClose={handleClose}
+          rightAction={rightAction}
+        />
+      ) : null}
+      <YStack flex={1}>{children}</YStack>
+    </SafeAreaView>
+  );
+}
+
 export function ScreenHeader({
   title,
   subtitle,
@@ -480,6 +531,9 @@ export function ScreenHeader({
   meta,
   rightAction,
   children,
+  headerMode = 'root',
+  onBack,
+  onClose,
 }: {
   title: string;
   subtitle?: string;
@@ -487,10 +541,23 @@ export function ScreenHeader({
   meta?: React.ReactNode;
   rightAction?: React.ReactNode;
   children?: React.ReactNode;
+  headerMode?: HeaderMode;
+  onBack?: () => void;
+  onClose?: () => void;
 }) {
+  const leading = headerMode === 'back' ? (
+    <Button chromeless width={48} height={48} minWidth={48} minHeight={48} onPress={onBack} aria-label="Back">
+      <Ionicons name="chevron-back" size={24} />
+    </Button>
+  ) : headerMode === 'close' ? (
+    <Button chromeless width={48} height={48} minWidth={48} minHeight={48} onPress={onClose} aria-label="Close">
+      <Ionicons name="close" size={24} />
+    </Button>
+  ) : null;
   return (
     <YStack px="$5" pb="$3" gap="$2" borderBottomWidth={1} borderBottomColor="$borderColor">
       <XStack items="center" justify="space-between" gap="$3">
+        {leading}
         <YStack flex={1} gap="$1">
           <XStack items="center" gap="$2" flexWrap="wrap">
             <Text fontSize={28} fontWeight="700" letterSpacing={0}>{title}</Text>
@@ -592,24 +659,106 @@ export function RowPick({
   );
 }
 
+export type LocalIllustrationRecipe = {
+  key: string;
+  kind: 'local-illustration';
+  family: string;
+  label: string;
+  category: string | null;
+};
+
+export type ExperienceMedia = {
+  imageUrl?: string | null;
+  imageAltText?: string | null;
+  imageCacheKey?: string | null;
+  imageAssetKey?: string | null;
+};
+
 /**
- * Renders an image safely from either a Dataverse base64 string or a CDN URL
- * (used frequently in mock-backed prototypes for realistic visual data).
+ * Renders a local illustration recipe, Dataverse base64 string, or trusted URL.
+ * CDN-backed apps pass media from the canonical experience view model so Expo
+ * Image can cache the URL while the local recipe remains an offline fallback.
  */
 export function EntityImage({
   source,
+  assetKey,
+  assetRecipe,
+  media,
+  title,
+  category,
+  accessibilityLabel,
   width,
   height,
   borderRadius = 0,
   fallbackIcon = 'image-outline',
 }: {
   source?: string | null;
+  assetKey?: string | null;
+  assetRecipe?: LocalIllustrationRecipe | null;
+  media?: ExperienceMedia | null;
+  title?: string;
+  category?: string;
+  accessibilityLabel?: string;
   width: number | string;
   height: number | string;
   borderRadius?: number;
   fallbackIcon?: IoniconName;
 }) {
   const theme = useTheme();
+  const imageUrl = media?.imageUrl || (source?.startsWith('http') || source?.startsWith('data:') ? source : null);
+  const [remoteFailed, setRemoteFailed] = React.useState(false);
+  React.useEffect(() => setRemoteFailed(false), [imageUrl]);
+  const localKey = assetKey || media?.imageAssetKey || assetRecipe?.key || (source?.startsWith('asset://') ? source : null);
+  const semantic = `${assetRecipe?.family || ''} ${assetRecipe?.category || ''} ${assetRecipe?.label || ''} ${category || ''} ${title || ''} ${localKey || ''}`.toLowerCase();
+  const illustration = /beauty|skin|care/.test(semantic)
+    ? { icon: 'sparkles' as IoniconName, label: 'Beauty collection' }
+    : /watch|time/.test(semantic)
+      ? { icon: 'watch-outline' as IoniconName, label: 'Watch collection' }
+      : /travel|bag|accessor|journey/.test(semantic)
+        ? { icon: 'briefcase-outline' as IoniconName, label: 'Travel collection' }
+        : { icon: 'cube-outline' as IoniconName, label: 'Product collection' };
+  const localIllustration = localKey || (!source && (title || category));
+
+  if (imageUrl && !remoteFailed) {
+    return (
+      <YStack width={width} height={height} overflow="hidden" borderRadius={borderRadius} bg="$mediaSurface">
+        <ExpoImage
+          source={{ uri: imageUrl }}
+          cachePolicy="memory-disk"
+          recyclingKey={media?.imageCacheKey || imageUrl}
+          contentFit="cover"
+          style={{ width: '100%', height: '100%' }}
+          accessible={true}
+          accessibilityLabel={media?.imageAltText || accessibilityLabel || title}
+          onError={() => setRemoteFailed(true)}
+        />
+      </YStack>
+    );
+  }
+
+  if (localIllustration) {
+    return (
+      <YStack
+        width={width}
+        height={height}
+        borderRadius={borderRadius}
+        bg="$mediaSurface"
+        overflow="hidden"
+        p="$3"
+        justify="space-between"
+        accessibilityRole="image"
+        aria-label={media?.imageAltText || accessibilityLabel || `${title || assetRecipe?.label || illustration.label} illustration`}
+      >
+        <YStack width={56} height={56} rounded="$10" bg="$accentSoft" items="center" justify="center">
+          <Ionicons name={illustration.icon} size={28} color={theme.accentBase.val} />
+        </YStack>
+        <YStack gap="$1">
+          {category ? <Text fontSize="$2" color="$text1" numberOfLines={1}>{category}</Text> : null}
+          <Text fontSize="$4" fontWeight="700" color="$text0" numberOfLines={2}>{title || assetRecipe?.label || illustration.label}</Text>
+        </YStack>
+      </YStack>
+    );
+  }
   
   if (!source) {
     return (
@@ -629,6 +778,7 @@ export function EntityImage({
         style={{ width: '100%', height: '100%', resizeMode: 'cover' }}
         accessible={true}
         accessibilityRole="image"
+        accessibilityLabel={media?.imageAltText || accessibilityLabel || title}
       />
     </YStack>
   );

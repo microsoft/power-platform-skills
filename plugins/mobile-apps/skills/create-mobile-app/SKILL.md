@@ -12,6 +12,20 @@ model: opus
 
 Top-level orchestrator. Owns the user-visible flow; delegates planning to the `native-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
 
+## Visual reference input
+
+For a user-supplied visual reference, accept --from-screenshot
+<path[,path...]> or --design-intake <path>. The legacy
+--from-design-intake spelling remains a compatibility alias. A request such as
+match this screen defaults to strict-structural fidelity; a request such as
+use this as inspiration defaults to directional or high fidelity according to
+the user's stated intent.
+
+Read skills/design-system/references/reference-intake.md and
+shared/references/reference-fidelity.md before planning. The screenshot must
+be materialized into PROJECT_DIR/design-intake.md and passed to the planner;
+do not reduce it to adjectives such as clean, premium, or modern.
+
 ## Workflow
 
 0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
@@ -332,14 +346,36 @@ Now execute the deferred Step 1.7 publisher-prefix detection only when
 `↷ Publisher-prefix discovery skipped — connector-only planning.`, and do not
 call `detect-publisher-prefix.js`.
 
-**Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
+### Screenshot/reference capture
+
+When --from-screenshot or --design-intake was supplied, materialize and
+validate PROJECT_DIR/design-intake.md before Step 2c. Record stable sources,
+fidelity, ordered hierarchy, normalized geometry, typography relationships,
+navigation silhouette, Required Motifs, Forbidden Drift, originality/asset
+policy, and Runtime Markers. Add a Visual Reference block to the confirmed
+requirements brief:
+
+~~~text
+Visual Reference:
+- Sources: <validated local paths or identifiers>
+- Fidelity: <directional|high|strict-structural>
+- Design intake: <PROJECT_DIR/design-intake.md>
+- Intent: preserve hierarchy, normalized geometry, navigation silhouette,
+  Required Motifs, and Forbidden Drift with original copy and assets.
+~~~
+
+For high or strict-structural fidelity, do not proceed with an incomplete
+intake. Ask for correction rather than allowing an automatic preset, generic
+retail catalog, or static HTML preview to become the de facto design.
+
+**Product experience is captured before planning; brand decisions are deferred to Step 6.75.** The shared Product Experience Contract establishes audience, primary job, interaction/entry mode, first viewport, motifs, forbidden defaults, and visual character before data/screen planning. `/design-system` later handles optional brand inputs and token refinement. Do NOT ask for an industry choice or a screenshot for a normal brief.
 
 Set tentative defaults (used by Step 3b before `/design-system` runs):
 
 - `<visual_companion> = yes` — open `_plan_preview.html` in browser at Gate 4 by default. `/design-system` at Step 6.75 may downgrade this to `no` (path (d) in its cost picker), persisted to memory-bank for future runs.
-- `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
+- `<experience_direction> = contract-first` — the planner and screen builders use the contract now; `/design-system` may refine token expression later without changing entry composition.
 
-**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
+**`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no` and skips optional brand interaction only. The Product Experience Contract and semantic token aliases remain mandatory; screen builders never fall back to industry-inferred defaults.
 
 ### Step 2c — Plan preview (rough, always shown)
 
@@ -357,7 +393,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
-| Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
+| Extra prompts | `<experience_contract.confidence>` | `+1 only when the first user outcome is genuinely ambiguous` | high |
 
 Print the block once, exactly in this format (substitute computed values; ranges as `low-high`):
 
@@ -381,8 +417,8 @@ Token tier: Opus everywhere in v0 (model routing not yet shipped).
 ⚠ These are proxies, not measurements:
   • Table count is "noun count in brief" — architect may collapse or split
   • Time excludes your approval latency at the 4 gates
-  • If industry inference is low-confidence, +1 picker prompt
-  • If you opted into the design vibe picker, +1 prompt + planner re-spawn
+  • If the first user outcome is low-confidence, +1 focused clarification
+  • Optional brand input may add a design-system prompt after scaffolding
   • If any gate is rejected, that section regenerates (~2-3 min each)
 
 Proceed, edit brief, or abort? [proceed/edit/abort]
@@ -429,6 +465,30 @@ First, create the working and planning-artifact directories:
 ```bash
 mkdir -p <working_dir> <working_dir>/.tmp
 ```
+
+Before any planner or architect dispatch, materialize the confirmed brief and
+derive the shared experience contract:
+
+```bash
+cat > "<working_dir>/.tmp/experience-brief.md" <<'EOF'
+<requirements_brief verbatim>
+EOF
+node "${CLAUDE_SKILL_DIR}/../../scripts/experience-patterns.js" \
+  --brief-file "<working_dir>/.tmp/experience-brief.md" \
+  --output "<working_dir>/.tmp/experience-contract.json"
+```
+
+If the confirmed product brief explicitly selects a media policy, append
+`--media-policy <value>` to that command. `remote-cdn-cached` is an explicit
+product decision that overrides inferred local-first media while retaining a
+fallback asset identity; it is never inferred solely from in-flight/travel
+language.
+
+Read the result. For `confidence: low`, ask exactly one question about the
+first user outcome, update the brief, and regenerate the contract. Do not use
+an industry picker. A screenshot/design intake is optional; high and
+strict-structural inputs update the contract with a binding reference override
+instead of replacing the brief-only path.
 
 ### Step 3.0 — Foreground Dataverse planning snapshot and evidence
 
@@ -573,8 +633,16 @@ Prompt:
   Requirements brief (confirmed with user):
   <requirements_brief — bullet points from Step 2b>
 
-  Design vibe opt-in: <design_vibe_opt_in — always "deferred" unless `--no-design` is in $ARGUMENTS, in which case use "skip". Never invent yes/no/other values.>
+  Product experience contract: <absolute `<working_dir>/.tmp/experience-contract.json`>
+  Experience direction: contract-first; optional brand refinement follows at Step 6.75.
   Visual companion: <visual_companion — "yes" or "no">
+  Visual reference:
+  - Sources: <validated local screenshot paths or NOT SUPPLIED>
+  - Requested reference fidelity: <directional|high|strict-structural|none>
+  - Design intake: <PROJECT_DIR/design-intake.md or NOT SUPPLIED>
+  - Reference intent: preserve hierarchy, normalized geometry, media
+    prominence, navigation silhouette, Required Motifs, and Forbidden Drift
+    using original copy and licensed local assets.
 
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
@@ -587,16 +655,20 @@ Prompt:
   Structured schema contract: <absolute
   `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
   NOT SUPPLIED>
+  Experience foundation contract: <absolute `<working_dir>/.tmp/experience-foundation-contract.json`>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
   Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
 ```
 
 The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
-On a successful `required` return, require both
-`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
-before continuing. If the receipt is missing, STOP as `BLOCKED`; this
-orchestrator must not synthesize it after the planner has returned.
+On every successful return, require `.tmp/experience-contract.json`,
+`.tmp/experience-screen-contract.json`, and
+`.tmp/experience-foundation-contract.json`. In `required` mode additionally
+require `.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`.
+If an expected artifact is missing, STOP as `BLOCKED`; this orchestrator must
+not synthesize it after the planner has returned.
+If the receipt is missing, STOP as `BLOCKED`; this orchestrator must not synthesize it after the planner has returned.
 
 #### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
 
@@ -608,6 +680,14 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
 1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
 2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
+
+  Before either direct dispatch, read
+  `<working_dir>/.tmp/experience-contract.json`. Pass its absolute path to
+  `data-model-architect` and `screen-planner`; require the graph phase to
+  write `<working_dir>/.tmp/experience-screen-contract.json`. The inline
+  `## Design` section must mirror `### Product Experience Contract` before
+  any screen graph is reviewed. Do not recreate industry inference, a
+  dashboard default, or a CRUD-trio default in the fallback path.
 
    **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
    - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
@@ -632,7 +712,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
-   - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
+  - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it. `## Design` includes the readable Product Experience Contract mirror.
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
@@ -720,78 +800,23 @@ proposed-name signal is `BLOCKED`. If a collision is found and the architect
 needs compatibility facts, it may then use the separate one-time
 `detailed-dataverse-metadata` expansion for that existing table.
 
-Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
+The planner derives the Product Experience Contract before any architecture
+dispatch. It should not emit industry or style-picker early-return signals. If
+the contract returns `confidence: low`, ask exactly one focused question about
+what a person should accomplish first, update the contract, and re-spawn the
+planner. Do not offer an industry picker or a generic visual-direction menu.
 
-#### Step 3.0a — Industry confirmation handoff (orchestrator-owned)
+#### Step 3a — Experience-contract clarification (orchestrator-owned)
 
-When the planner is uncertain about which industry the app belongs to (no keyword match, ambiguous match, or wizard-aesthetic conflict), it returns early with this single line as its message:
+When a planner or contract extractor returns `NEEDS_CONTEXT` because the first
+user outcome is genuinely ambiguous, ask:
 
-```
-INDUSTRY_CONFIRM_REQUESTED: <inferred-industry>|<reason-code>|<top-3-alternatives-comma-sep>
-```
+> "What should a person accomplish first when they open the app?"
 
-Example: `INDUSTRY_CONFIRM_REQUESTED: productivity|no-keywords|field-ops,healthcare,e-commerce`
-
-This fires before Gate 1 — it's not a gate, just a confidence check so the wrong industry doesn't silently lock in the design language for the entire app.
-
-**Skip this section if `<design_vibe_opt_in>` is `yes` or `skip`** — in those cases the user is either driving design explicitly (`yes`) or has opted out of design entirely (`skip`), so industry inference doesn't matter.
-
-**When you see `INDUSTRY_CONFIRM_REQUESTED:` and `<design_vibe_opt_in>` is `no`:**
-
-1. Parse the three pipe-delimited fields. Map reason codes to a short user-facing explanation:
-   - `no-keywords` → "no clear industry signal in your description"
-   - `ambiguous-match` → "your description matches multiple industries"
-   - `wizard-conflict` → "your aesthetic answer doesn't match the inferred industry"
-
-2. Map each industry slug to a one-line description for the picker (use these exactly):
-
-   | Slug | Description |
-   |---|---|
-   | `field-ops` | Field/Ops — high contrast, large targets, camera-forward (Uber Driver, ServiceTitan) |
-   | `finance` | Finance — blue palette, conservative type, generous whitespace (banking apps) |
-   | `healthcare` | Healthcare — warm palette, friendly type, compassionate copy (patient apps) |
-   | `education` | Education — bright playful, gamification, streak/progress (Duolingo) |
-   | `productivity` | Productivity — near-monochrome, dense layout, monospace data (Linear, Notion) |
-   | `e-commerce` | E-commerce — brand-forward color, product imagery, frictionless CTAs (retail apps) |
-   | `tech-iot` | Tech/IoT — dark + accent gradients, data-dense cards, real-time indicators (monitoring dashboards) |
-
-3. Ask one `AskUserQuestion`:
-
-   > "Quick sanity check before I build the design: I inferred this is a **<inferred-industry-description>** app, but <reason-explanation>. Confirm or pick another:
-   >
-   > **(a) <inferred-industry-description>** — recommended
-   > **(b) <alt-1-description>**
-   > **(c) <alt-2-description>**
-   > **(d) <alt-3-description>**
-   > **(e) Other / let me describe** — free text
-   >
-   > Which? (a / b / c / d / e — default: a)"
-
-4. Persist the answer:
-
-   ```bash
-   echo "<chosen-industry-slug>" > "<working_dir>/.industry-confirmed"
-   ```
-
-   For option (e), let the user free-text a description; map it to the closest slug (or `productivity` as final fallback) and store that.
-
-5. **Re-spawn the planner.** Use the same prompt as Step 3, plus an extra line:
-
-   ```
-   Industry confirmed: <chosen-industry-slug>
-   ```
-
-   The planner will see this on re-spawn, skip its detection + confidence check, and lock the industry to your value. After the re-spawn, re-check the planner's return value — it may now return normally, or it may still return `DESIGN_VIBE_REQUESTED:` (handled in Step 3a) if the user opted into the vibe picker.
-
-#### Step 3a — Style-picker handoff (no-op in current plugin layout)
-
-`/design-system` ships with this plugin and always runs at Step 6.75, so the style-picker handoff at Gate 4 is a no-op. Behavior:
-
-- The planner writes a placeholder `## Design Direction: <deferred — set by /design-system>` block into `native-app-plan.md` at Gate 4 and proceeds without asking the user. Step 6.75 rewrites the placeholder with the real direction.
-- If a legacy planner output emits `DESIGN_VIBE_REQUESTED:` as its first line, write the placeholder block yourself (insert before `## Design`, or before `## Screens` if `## Design` is absent), then re-spawn the planner with `Design vibe opt-in: done`. Do NOT run a vibe picker here — Step 6.75 owns that.
-- If `--no-design` is in `$ARGUMENTS`, write the placeholder block, mark `<design_vibe_opt_in> = skip`, and Step 6.75 also no-ops. Screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
-
-If the planner's first return is anything other than `DESIGN_VIBE_REQUESTED:` — i.e. it ran all gates including Gate 4 normally — skip directly to Step 3b.
+Write the answer into the confirmed brief, regenerate
+`.tmp/experience-contract.json`, and re-spawn the planner with the same
+artifact path. Cap this loop at one clarification. A remaining ambiguity is
+`BLOCKED`, not an invitation to select an industry preset.
 
 #### Step 3b — Open the plan preview in the user's browser (orchestrator-owned)
 
@@ -1014,7 +1039,7 @@ Write `app/_layout.tsx` (run AFTER `npm install`):
 import { Slot } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host';
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
@@ -1043,9 +1068,7 @@ export default function RootLayout() {
         darkTheme={darkTheme}
       >
         <StatusBar style="auto" />
-        <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
-          <Slot />
-        </SafeAreaView>
+        <Slot />
       </PowerAppsProvider>
     </SafeAreaProvider>
   );
@@ -1055,7 +1078,7 @@ export default function RootLayout() {
 Key points:
 - **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
-- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
+- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. The root must not wrap `<Slot />` in `SafeAreaView`: each route's `ScreenShell` owns its content edges exactly once.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
@@ -1130,8 +1153,8 @@ If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in t
 ```bash
 cd <working_dir>
 
-if [ -f app/_layout.tsx ] && ! grep -q 'SafeAreaProvider' app/_layout.tsx; then
-  echo "→ [6.5b] Patching app/_layout.tsx to add SafeAreaProvider + SafeAreaView"
+if [ -f app/_layout.tsx ]; then
+  echo "→ [6.5b] Patching app/_layout.tsx to use SafeAreaProvider without root edge ownership"
   node -e '
     const fs = require("fs");
     const FILE = "app/_layout.tsx";
@@ -1139,27 +1162,25 @@ if [ -f app/_layout.tsx ] && ! grep -q 'SafeAreaProvider' app/_layout.tsx; then
     // 1. Add the import if missing — splice in right after the react-native
     //    import; fallback is prepend after the first import line.
     if (!/from\s*["\047]react-native-safe-area-context["\047]/.test(src)) {
-      const importLine = "import { SafeAreaProvider, SafeAreaView } from \"react-native-safe-area-context\";\n";
+      const importLine = "import { SafeAreaProvider } from \"react-native-safe-area-context\";\n";
       if (/^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?/m.test(src)) {
         src = src.replace(/(^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?\n)/m, "$1" + importLine);
       } else {
         src = src.replace(/(^import[^\n]*\n)/m, "$1" + importLine);
       }
     }
-    // 2. Wrap the outermost <PowerAppsProvider> ... </PowerAppsProvider> with
-    //    <SafeAreaProvider> AND wrap the inner <Slot /> with <SafeAreaView>.
-    src = src.replace(
-      /<PowerAppsProvider([\s\S]*?)>([\s\S]*?)<\/PowerAppsProvider>/,
-      "<SafeAreaProvider>\n      <PowerAppsProvider$1>$2</PowerAppsProvider>\n    </SafeAreaProvider>"
-    );
-    if (!/<SafeAreaView/.test(src)) {
+    // 2. Root owns safe-area context only. Each route ScreenShell owns top and
+    //    bottom edges; a root SafeAreaView around Slot creates duplicate gaps.
+    src = src.replace(/\{\s*SafeAreaProvider\s*,\s*SafeAreaView\s*\}/, "{ SafeAreaProvider }");
+    src = src.replace(/<SafeAreaView\b[^>]*>\s*<Slot\s*\/>\s*<\/SafeAreaView>/g, "<Slot />");
+    if (!/<SafeAreaProvider\b/.test(src)) {
       src = src.replace(
-        /<Slot\s*\/>/,
-        "<SafeAreaView edges={[\"top\", \"bottom\"]} style={{ flex: 1 }}>\n          <Slot />\n        </SafeAreaView>"
+        /<PowerAppsProvider([\s\S]*?)>([\s\S]*?)<\/PowerAppsProvider>/,
+        "<SafeAreaProvider>\n      <PowerAppsProvider$1>$2</PowerAppsProvider>\n    </SafeAreaProvider>"
       );
     }
     fs.writeFileSync(FILE, src);
-    console.log("  ✓ app/_layout.tsx wrapped with SafeAreaProvider + SafeAreaView");
+    console.log("  ✓ app/_layout.tsx uses SafeAreaProvider; route shells own content edges");
   ' || { echo "SafeArea patch of app/_layout.tsx failed — see error above"; exit 19; }
 elif [ ! -f app/_layout.tsx ]; then
   echo "  ↷ app/_layout.tsx does not exist yet, skipping patch"
@@ -1170,7 +1191,7 @@ fi
 echo "✓ [Step 6.5b] SafeAreaProvider verified"
 ```
 
-**If the patch fails:** the node script exits with an error. The most common cause is an unusual `_layout.tsx` shape (custom rewrite). Fix manually by importing `SafeAreaProvider` + `SafeAreaView` from `react-native-safe-area-context`, wrapping the outermost provider with `<SafeAreaProvider>`, and wrapping the inner `<Slot />` with `<SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>`.
+**If the patch fails:** the node script exits with an error. The most common cause is an unusual `_layout.tsx` shape (custom rewrite). Fix manually by importing `SafeAreaProvider` from `react-native-safe-area-context`, wrapping the outermost provider with `<SafeAreaProvider>`, and leaving the inner `<Slot />` unwrapped so route-level `ScreenShell` owns the edges.
 
 ### Step 6.6 — Scaffold TypeScript gate
 
@@ -1210,7 +1231,11 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+**When `--no-design` is in `$ARGUMENTS`**, skip optional brand questions and
+gallery interaction only. Still run `/design-system` in contract-baseline mode
+so `brand/design-system.md`, `brand/tokens.ts`, semantic aliases, and
+`## Product Experience Primitives` exist before builders run. Screen builders
+never fall back to industry-inferred defaults.
 
 **Otherwise**, invoke `/design-system` (ships with this plugin):
 
@@ -1229,36 +1254,20 @@ Handle the return per the status protocol (AGENTS.md rule #10):
 - `NEEDS_CONTEXT` → surface question, re-invoke with answer.
 - `BLOCKED` → surface error, STOP.
 
-If the user picked path (c) Skip in the cost picker, the skill returns immediately with `DONE` and no `brand/` files. Screen-builders fall back to `## Design Direction` — same as today's behavior. **But the user still needs a visual preview before code is written** — fall through to the "Skip path preview" block below.
+Every current `/design-system` path writes `brand/design-system.md` and
+`brand/tokens.ts` from the Product Experience Contract. If optional brand input
+is skipped, the contract baseline remains the source of truth; do not create a
+fallback design direction.
 
 **After `/design-system` returns `DONE` — two branches:**
 
-#### Branch A — `brand/` files exist (user picked path a, b, or d)
+#### Branch A — `brand/` files exist (all contract-baseline paths)
 
 This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
 
-#### Branch B — Skip path preview (user picked path c — no `brand/` files)
-
-The user skipped the design system but still deserves to see their screens before code is written. Render a preview with Field/Ops defaults:
-
-1. **Print:**
-   > "→ Design system skipped — rendering screen preview with Field/Ops defaults so you can validate the layout before code is written."
-
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
-
-3. **Open in browser** (if `<visual_companion> = yes`):
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
-
-4. **Auto-continue — no prompt.** The user already approved Gates 1–3 via plan-mode and just looked at the preview. A fourth confirmation here adds friction without adding decision power. Print one line and proceed:
-
-  > `→ Preview rendered with default styling. Continuing to Step 7. (Interrupt and re-run /design-system or /edit-app to revise.)`
-
-This ensures **every path through the flow gets at least one visual preview** before screen-builders write code.
+There is no generic skip-path preview. The design-system preview renders the
+contract primary composition first, plus up to two supporting screens, with
+the contract-derived tokens. It is a design review only, not native visual QA.
 
 **Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
 
@@ -1608,7 +1617,7 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 | `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
 | Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No skip path.** Screen-builders require `$surface0`–`$surface3`, `$mediaSurface`, and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 
 **Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
 
@@ -1621,7 +1630,8 @@ const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
   accentDeep: brandTokens.color.primary,
   accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
+  accentSoft: brandTokens.color.accentSoft,
+  mediaSurface: brandTokens.color.mediaSurface,
   surface0: brandTokens.color.bg,
   surface1: brandTokens.color.surface,
   surface2: brandTokens.color.surface,
@@ -1633,7 +1643,8 @@ const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
   accentDeep: brandTokens.color.primary,
   accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
+  accentSoft: brandTokens.color.accentSoft,
+  mediaSurface: brandTokens.color.mediaSurface,
 };
 
 // In RootLayout:
@@ -1858,12 +1869,42 @@ Write the result into `native-app-plan.md` as a new section **immediately after 
 
 If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
 
+### Step 10.7b — Compile the screen build pack
+
+After the generated-service snapshot and before skeleton generation, compile
+the approved contracts into the single builder assembly sheet:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR" \
+  --output ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR" \
+  --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/materialize-experience-view-model.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Do not launch builders when compilation or validation fails. The compiler binds
+experience, screen, foundation, design, and data-intent hashes; it records the
+Home/key-flow build order and screen dependency graph. Recompile after a
+relevant plan, design, foundation, or data change and use the validator's stale
+targets to limit later rebuild work. The materializer writes the local
+illustration manifest at `assets/experience/manifest.json` and the stable-ID
+adapter at `src/generated/experience-view-model.ts`; builders never mutate
+either artifact or this file.
+
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 
 **Print before starting:**
 > "→ [Step 10.8/13] Generating app-specific components, hooks, utils, and screen skeletons from the plan…"
 
 This step analyzes the per-screen specs and generates **shared code that multiple screens will use** plus **typed skeleton files** for each screen. Builders then fill in the JSX rather than starting from zero. This cuts builder output by ~50% and eliminates import-path guessing errors.
+
+Read `.tmp/screen-build-pack.json` first. It is the compact execution source
+for screen routes/files, primary first viewport, states, dependencies, fixture
+adapter, foundation components, test IDs, and build order. Use Markdown only
+for detailed lookup/write clauses that are intentionally omitted from the pack.
 
 ---
 
@@ -1875,6 +1916,7 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 2. **Choice column maps** — if 2+ screens reference the same choice column (e.g. `status: 1=Pending, 2=Active`), generate a constants file.
 3. **Custom hooks** — if 2+ screens call the same service with similar params (e.g. both list + detail call `InspectionsService`), generate a domain hook.
 4. **Shared formatters** — if screens need entity-specific formatting (e.g. "inspection title" = `${name} · ${equipment}`), generate a formatter.
+5. **Experience foundation primitives** — read `.tmp/experience-foundation-contract.json` and create every selected motif component before any builder launches. This is mandatory even when a motif is used only by the primary screen; signature motifs are product-owned foundations, not accidental local card markup.
 
 **Decision rules:**
 
@@ -1885,6 +1927,7 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 | Same bounded service + similar `.getAll()` params on 2+ screens | `use<Entity>List.ts` wrapping `useListData` | `src/hooks/` |
 | Same cursor-paginated service on 1+ unbounded screens | `use<Entity>CursorList.ts` wrapping `useCursorListData` | `src/hooks/` |
 | Entity detail + edit screens for same entity | `use<Entity>.ts` with get + save + delete | `src/hooks/` |
+| Signature motif from experience foundation contract | `<ExperienceMotif>.tsx` with the exact runtime testID | `src/components/experience/` |
 
 **Write the files directly into the project** (not into samples — these are app-specific):
 
@@ -1895,7 +1938,36 @@ cat > "<working_dir>/src/components/InspectionRow.tsx" << 'EOF'
 EOF
 ```
 
-If no cross-screen patterns are found (e.g. only 2 screens total with no overlap), skip this sub-step — the shared scaffold is sufficient.
+If no cross-screen entity/hook patterns are found (e.g. only 2 screens total
+with no overlap), skip only those optional generators. Never skip the required
+experience foundation primitives below.
+
+#### 10.8a.1 — Materialize experience foundation primitives
+
+Require `<working_dir>/.tmp/experience-foundation-contract.json`. It must be
+hash-bound to `.tmp/experience-contract.json` and list 2-5 primitives. Create
+`src/components/experience/` and one file per manifest primitive. Each file:
+
+- exports the manifest's exact `component` name;
+- owns the exact `testID` for its signature motif;
+- accepts only the semantic props the motif needs;
+- uses `brand/design-system.md → ## Product Experience Primitives` and semantic
+  Tamagui tokens; and
+- provides a local/bundled asset fallback when the contract says
+  `assetPolicy.media: local-first`.
+
+For example, a `featured-product-media` primitive owns product image fallback,
+price/context, and `testID="experience-motif-featured-product-media"`; a
+`category-browse` primitive owns the category affordance; a `cart-action`
+primitive owns the visible cart/add affordance. Do not create a universal card
+library. Create only the manifest-selected files and export them from the
+shared components barrel.
+
+Every primary-screen skeleton must import the exact foundation components named
+by its `Foundation primitives` spec field from `@/components/experience/<component>`.
+If a component cannot be generated because a required product field or local
+asset is absent, stop before builder fan-out and repair the approved plan or
+asset policy; do not let a builder invent a generic replacement.
 
 ---
 
@@ -1915,10 +1987,10 @@ import { FlatList, RefreshControl } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Input, Spinner } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LoadingState, ErrorState, EmptyState, ScreenHeader } from '@/components';
+import { LoadingState, ErrorState, EmptyState, ScreenShell, EntityImage } from '@/components';
 import { useCursorListData } from '@/hooks';
 import { containsFilter, formatDate, choiceLabel } from '@/utils';
+import { toExperienceRecord, getExperienceAsset, resolveExperienceMedia } from '@/generated/experience-view-model';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 // App-specific imports (if generated at 10.8a):
@@ -1954,11 +2026,11 @@ import { FlatList } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Input } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LoadingState, ErrorState, EmptyState, ScreenHeader } from '@/components';
+import { LoadingState, ErrorState, EmptyState, ScreenShell, EntityImage } from '@/components';
 import { RefreshControl } from 'react-native';
 import { useListData, useSearchFilter } from '@/hooks';
 import { formatDate, choiceLabel } from '@/utils';
+import { toExperienceRecord, getExperienceAsset, resolveExperienceMedia } from '@/generated/experience-view-model';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 // App-specific imports (if generated at 10.8a):
@@ -1986,9 +2058,9 @@ import { ScrollView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LoadingState, ErrorState, BottomActionBar, InfoRow } from '@/components';
+import { LoadingState, ErrorState, BottomActionBar, InfoRow, ScreenShell, EntityImage } from '@/components';
 import { formatDate, choiceLabel } from '@/utils';
+import { toExperienceRecord, getExperienceAsset, resolveExperienceMedia } from '@/generated/experience-view-model';
 import { <Service> } from '@/generated/services/<Service>';
 import type { <Entity> } from '@/generated/models/<Entity>Model';
 
@@ -2014,7 +2086,7 @@ import React, { useState } from 'react';
 import { Alert, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { YStack, Text, Button, Input } from 'tamagui';
-import { ModalHeader, FormField, RowPick } from '@/components';
+import { ScreenShell, ModalHeader, FormField, RowPick } from '@/components';
 import { <Service> } from '@/generated/services/<Service>';
 
 export default function <ScreenName>() {
@@ -2038,7 +2110,7 @@ import React from 'react';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { YStack, XStack, Text, Button } from 'tamagui';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ScreenShell } from '@/components';
 import { useAuth } from '@microsoft/power-apps-native-host';
 
 export default function <ScreenName>() {
@@ -2099,18 +2171,16 @@ If this fails, do not launch Step 11. Capture the full error list once, batch-fi
 
 **Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
 
-**Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
+**Dispatch rule — screen-builder uses the configured host model.** Do not set a model override such as `sonnet` in the screen-builder agent or Task prompt. The host/orchestrator supplies the configured model. If that dispatch cannot start, return a structured `BLOCKED` outcome; do not generate a partial inline substitute under an unavailable model.
 
 #### 11.0 — `Task` preflight (silent)
 
 Before the first wave, do a one-shot probe to confirm `Task` can spawn `mobile-app:screen-builder`. Spawn ONE no-op builder via `Task` with `screen_name: __preflight__` and `target_file: <working_dir>/.preflight-probe.tsx` (the probe agent should return `DONE` immediately and the orchestrator deletes the file).
 
-- **Probe returns `DONE` (any status code)** → parallel mode. Proceed with normal fan-out below. Do not downgrade later because there are many screens or because inline writing seems faster.
-- **Probe errors with `Agent type … not found`, tool unavailable, or any nested-Task failure** → silent inline fallback. Print **once**:
-  > "→ Parallel screen-builders unavailable in this host — building screens inline. (No action needed; this is automatic.)"
-  Then iterate the screen list and apply the full screen-builder workflow inline (the orchestrator becomes the builder, reading the same per-screen specs and writing TSX directly). Inline does NOT mean "concise but functional" — it must still satisfy `screen-builder.md` quality gates, operational pattern requirements, safe-area/contrast/a11y rules, resolved imports, and the final checklist for every screen. Do NOT prompt the user.
+- **Probe returns `DONE` (any status code)** → parallel mode. Proceed with normal fan-out below.
+- **Probe errors with `Agent type … not found`, tool unavailable, or any nested-Task failure** → stop with `BLOCKED: mobile-app:screen-builder is unavailable in this host; restore configured agent/model dispatch before generating screens.` Do not write inline substitute screens or launch a partially configured builder.
 
-**Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run (rare), treat the next failure the same way: silently downgrade to inline and continue.
+**Hard rule — never ask the user about build mode.** The probe is the only decision input. If the host changes mid-run, stop with the same structured `BLOCKED` outcome rather than switching implementation modes.
 
 **Hard rule — no nested agent spawning.** Screen-builder agents MUST NOT spawn further agents (no nested `Task` calls). The top-level orchestrator owns the entire screen-builder fan-out: one `Task` batch per wave of up to 5 screens. If a builder needs help that previously would have been a nested spawn, it returns `NEEDS_CONTEXT:` and the orchestrator handles the follow-up at the wave boundary.
 
@@ -2129,9 +2199,25 @@ Each prompt:
   route: <route>
   target_file: <working_dir>/<File from Screen Map>
   plan_path: <working_dir>/native-app-plan.md
+  screen_build_pack_path: <working_dir>/.tmp/screen-build-pack.json
   skeleton_exists: true
 
-  Follow screen-builder.md. Build from the user's compact per-screen spec, shared conventions, and design direction — inherited defaults are intentional, and samples are API/import references only, not layouts to copy. A typed skeleton already exists at your target_file with all imports and hook calls pre-resolved from the Generated Services table + per-screen `**Data**` field — fill in the JSX, do not discard imports. The skeleton file IS the import source of truth; the plan no longer documents per-screen imports separately. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then the one-line summary.
+  Follow screen-builder.md. Build from the user's compact per-screen spec,
+  shared conventions, Product Experience Contract, and design primitives —
+  inherited constraints are intentional, and samples are API/import references
+  only, not layouts to copy. Read `.tmp/experience-contract.json`,
+  `.tmp/experience-screen-contract.json`, and
+  `.tmp/experience-foundation-contract.json` plus `.tmp/screen-build-pack.json`;
+  validate the pack and import every required foundation
+  primitive from the latter instead of rebuilding motif UI. The primary screen
+  must materialize its ordered `experience-region-*` anchors, primary-action
+  anchor, motifs, and forbidden defaults. A typed skeleton already exists at your target_file
+  with all imports and hook calls pre-resolved from the Generated Services
+  table + per-screen `**Data**` field — fill in the JSX, do not discard
+  imports. The skeleton file IS the import source of truth; the plan no longer
+  documents per-screen imports separately. Return per AGENTS.md rule #10:
+  literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` /
+  `BLOCKED:`, then a blank line, then the one-line summary.
 ```
 
 **`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
@@ -2181,9 +2267,19 @@ Then run the canonical route-contract gate from the app root:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md" --project-root "$PROJECT_DIR" --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 ```
 
 This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
+
+The experience gates are equally blocking: they verify that the plan's Product
+Experience Contract, screen sidecar, primary route, literal region/action/motif
+anchors, and forbidden defaults still agree after builders have run. Do not
+weaken or skip them because a static preview looks acceptable.
 
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 
@@ -2253,9 +2349,22 @@ Invoke the design skill against the project:
 ```
 Instruct the skill to review the generated screens in `<working_dir>/app/(app)/` against the brand design system at `<working_dir>/brand/tokens.ts`. The skill will autonomously apply visual polish, ensure WCAG 2.2 AA contrast, prep RTL mirrors, and improve layout hierarchies. 
 
+Always provide `native-app-plan.md`, `.tmp/experience-contract.json`,
+`.tmp/experience-screen-contract.json`, `.tmp/experience-foundation-contract.json`, `.tmp/screen-build-pack.json`, and `brand/design-system.md`. The
+refiner may repair hierarchy, density, focal point clarity, and signature
+motifs, but must not replace the entry mode, region order, primary action, or
+forbidden defaults with a dashboard or generic CRUD composition.
+
+When design-intake.md declares high or strict-structural fidelity, also provide
+native-app-plan.md, design-intake.md, and brand/design-system.md. The refiner
+may improve spacing, accessibility, states, and responsive behavior, but must
+not change the Reference Contract hierarchy, media prominence, navigation
+silhouette, Required Motifs, Runtime Markers, or Forbidden Drift.
+
 Wait for the design skill to complete. If it made any changes, you MUST run a final TypeScript gate to ensure the changes did not break the build:
 ```bash
 npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
 ```
 
 Then continue only if TypeScript is clean. Step 11.5 may leave remaining qualitative concerns, but it may not leave the app in a broken TypeScript state.
@@ -2287,7 +2396,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 This skill **launches** Metro in an async/background terminal so:
 
-1. The QR code prints in the terminal — the user can scan with their dev client immediately.
+1. The QR code prints in the terminal — the user can scan it with the Power Apps Developer app or a compatible custom development client that includes the native host. Expo Go is not a supported client for this app.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
 3. **The agent owns the terminal** — when the user says "the screen is blank" / "data isn't showing" / "it crashed", the agent can read Metro's `console.log`, BUNDLE errors, and red-box stack traces directly via `BashOutput` (or its equivalent terminal-output tool) without asking the user to copy-paste.
 
@@ -2307,6 +2416,12 @@ npx expo start
 ```
 
 Use `npx expo start` here instead of `npm run dev` because the orchestrator has already run `npm run generate-schemas` for the final gate. The template keeps `predev: npm run generate-schemas` as a safety net for humans running `npm run dev` manually, but the orchestrated path should not regenerate schemas twice.
+
+**File-watch diagnostics:** if Metro reports `EMFILE`, `ENOSPC`, or a Watchman
+watch error, stop the server and report the failure instead of installing tools
+or changing system limits. Recommend that the developer inspect `ulimit -n`
+and `watchman --version`, then restart Metro from an appropriately configured
+shell or clear stale watches through their normal Watchman procedure.
 
 When invoking the Bash tool: set `run_in_background: true` (or the equivalent async flag in your tool surface). Capture the returned terminal/shell id as `$METRO_TERMINAL_ID`.
 
@@ -2329,7 +2444,7 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 5. Follow with:
 
    > "✓ Metro is running in background terminal `<id>`.
-  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
+  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with the Power Apps Developer app or compatible custom development client to load the app. Metro URL: `<metro-url>`
   > 🔄 Edits hot-reload automatically."
 
 **Persist the terminal id to memory bank** so resumed sessions and downstream skills (`/preview-screens`, `/edit-app`, `/add-*`) can find it:
@@ -2342,6 +2457,49 @@ When invoking the Bash tool: set `run_in_background: true` (or the equivalent as
 ```
 
 This skill stops after Step 12 so the user can iterate locally. Production build + tenant push is a separate, explicit user action via the `/deploy` skill.
+
+### Step 12.4 — Native reference evidence
+
+### Step 12.4a — Native experience evidence
+
+For every generated app, once a real Expo native client is available, capture
+both the primary screen and the sidecar-declared `keyFlow` at normal and large
+text. Record a generic experience review at
+`$PROJECT_DIR/.tmp/experience-visual-review.json`. It must contain the primary
+route, `keyFlowRoute`, native screenshot paths or non-testID capture IDs,
+iOS/Android platform/device metadata, and evidence-backed checks for focal point, region order, primary-action visibility,
+task fit, content realism, signature motifs, forbidden drift, contrast, touch
+targets, safe areas, keyboard behavior (or a reasoned N/A), offline state,
+screen-reader order, responsive/compact layout, and realistic localized/long
+content. Each check scopes both `primary` and `key-flow`, names the reviewed
+capture IDs, and links to native observation evidence. Validate:
+
+~~~bash
+node "$CLAUDE_SKILL_DIR/../../scripts/validate-experience-visual-evidence.js" --project-root "$PROJECT_DIR" --manifest "$PROJECT_DIR/.tmp/experience-visual-review.json"
+~~~
+
+Static HTML/browser previews do not count as native evidence. When native
+capture is unavailable, report
+`DONE_WITH_CONCERNS: native experience visual capture unavailable`; retain the
+passing static experience gate and do not claim visual completion.
+
+For high or strict-structural fidelity, once the user has opened the native
+Expo app, collect iOS Home default text, Android Home default text, and one
+large-text Home native capture. Store the screenshots and a manifest under
+PROJECT_DIR/.tmp/visual-qa/<session>/.
+
+The manifest must use schemaVersion 1, match the requested referenceFidelity,
+provide screenshot paths or capture IDs for each capture, report passing
+hierarchy/motif/forbidden-drift checks, and list no unresolved findings or
+missing coverage. Validate it:
+
+~~~bash
+node "$CLAUDE_SKILL_DIR/../../scripts/validate-visual-qa-evidence.js" --project-root "$PROJECT_DIR" --manifest "$PROJECT_DIR/.tmp/visual-qa/<session>/manifest.json" --fidelity "<reference-fidelity>"
+~~~
+
+Static preview screens, React Native Web, and browser screenshots are not
+native evidence. When coverage is unavailable, return DONE_WITH_CONCERNS and
+do not claim that the supplied reference has been matched.
 
 ### Step 12.5 — Optional debug handoff
 
@@ -2373,6 +2531,7 @@ Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
 Screens       : <N total — M from template, K built in parallel>
+Visual ref    : <not requested | native evidence passed | pending/concerns>
 Dev server    : npx expo start — running in background terminal <id>
                 (scan QR there when you want to run locally)
 ─────────────────────────────────────────────

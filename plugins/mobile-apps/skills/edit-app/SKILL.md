@@ -580,7 +580,7 @@ If it fails, batch-fix layouts, route names, skeleton imports, generated-service
 
 #### Step 6.1 — Screen-builder preflight + waves
 
-Before the first wave, run a silent `Task` preflight for `mobile-app:screen-builder` using a no-op screen name. If unavailable, print once and build inline using `agents/screen-builder.md`; inline mode must satisfy the same quality rules.
+Before the first wave, run a silent `Task` preflight for `mobile-app:screen-builder` using a no-op screen name. Do not override its model: it inherits the configured host/orchestrator model. If unavailable, stop with `BLOCKED: mobile-app:screen-builder is unavailable in this host; restore configured agent/model dispatch before editing screens.` Do not build inline or launch a partially configured substitute.
 
 Batch affected screens in waves of up to 5. For each wave:
 

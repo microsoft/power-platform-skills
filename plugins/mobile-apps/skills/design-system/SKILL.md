@@ -36,6 +36,9 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 - `working_dir` — absolute path to project root (auto-detected or passed by orchestrator)
 - Optional flags: `--brand-doc`, `--logo`, `--from-url`, `--design-spec`, `--from-canvas-app`, `--from-code-app`, `--from-figma`, `--stylesheet`, `--power-pages-mode`
+- Optional reference flags: `--from-screenshot <path[,path...]>` and
+  `--design-intake <path>`; `--from-design-intake` remains a compatibility
+  alias when invoked by an older orchestrator.
 - Optional: `--refresh <dimension>` — palette | typography | components | density | negatives | motion
 - Optional: `--reskin` — full theme swap
 - Optional: `--add-dark-mode` — derive + wire dark theme
@@ -48,10 +51,84 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 - [`references/preview-template.md`](./references/preview-template.md) — HTML template for gallery render
 - [`references/refresh-flow.md`](./references/refresh-flow.md) — single-dimension refresh logic
 - [`references/input-modes.md`](./references/input-modes.md) — how each input flag is processed
+- [`references/reference-intake.md`](./references/reference-intake.md) —
+  screenshot and design-intake processing
 - [`references/vibe/brand-examples.md`](./references/vibe/brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry)
 - [`references/vibe/style-picker.md`](./references/vibe/style-picker.md) — internal folded style picker
 
 ---
+
+## Reference-contract mode
+
+When --from-screenshot or --design-intake is supplied, read
+references/reference-intake.md and
+shared/references/reference-fidelity.md before normal brand input handling.
+
+1. Materialize or validate PROJECT_DIR/design-intake.md.
+2. Read native-app-plan.md when it exists. Its Reference Contract and the
+   intake are structural constraints, not an optional mood board.
+3. For high or strict-structural fidelity, skip automatic experience defaults and
+   the free composition style picker. Choose palette, typography, density, and
+   component tokens only for values that the intake leaves unspecified.
+4. Produce a Reference Constraints subsection in brand/design-system.md that
+   repeats hierarchy, required motifs, Forbidden Drift, Runtime Markers, and
+   local/offline asset policy.
+5. Define signature component primitives required by the intake before generic
+   List, Form, or Detail preview components.
+
+Never substitute a generic retail grid, search bar, dashboard, ratings,
+discounts, checkout, sign-in, or remote placeholder media when the approved
+intake forbids it. Do not claim a static HTML gallery proves native fidelity.
+
+## Experience-contract mode
+
+Before brand-input handling, read and validate
+`<working_dir>/.tmp/experience-contract.json` against
+`${CLAUDE_SKILL_DIR}/../../scripts/schema-experience-contract.json`. This is
+required for orchestrated create/prototype runs. The contract is the normal
+source of automatic visual decisions; a screenshot, HTML page, or image is
+never required for a one-line or few-line brief.
+
+Use these fields together, rather than an industry label, to select a neutral
+automatic direction:
+
+- `audience` and `primaryJob` determine copy tone and trust/clarity needs.
+- `interactionMode` and `entryMode` determine primary-action prominence,
+  navigation emphasis, and component hierarchy.
+- `firstViewport` determines focal-point weight, ordered regions, and density.
+- `signatureMotifs` become named product primitives before generic component
+  examples.
+- `forbiddenDefaults` become hard negatives in the design system.
+- `visualCharacter` selects the overall expression: `quiet-editorial`,
+  `confident-utility`, `warm-friendly`, `energetic`, `playful`, or
+  `minimal-refined`.
+
+Produce an accessible palette, typography scale, spacing, surfaces, and motion
+policy that support that combined contract. Do not map an industry word to a
+palette, dashboard, card anatomy, or preset. Industry may only refine domain
+terminology, safety/compliance needs, and status semantics.
+
+Precedence is fixed:
+
+1. Binding high/strict Reference Contract
+2. Supplied brand guide, logo, tokens, design specification, Figma, sibling
+  app, or other approved brand reference
+3. Explicit free-text instruction to use a named organization's branding
+4. Clearly inferred `app-brand`, recorded as inferred rather than verified
+5. Product Experience Contract visual recipe
+6. Neutral semantic fallback for standalone work after one focused purpose
+   question
+
+Named organizations must be classified as `app-brand`, `product-brand`,
+`integration`, or `unknown` before palette selection. A product brand sold in
+the app or a connected integration remains data context and cannot recolor the
+host app. An inferred app palette is helpful default guidance only; it never
+claims verified official guidelines, logo permission, or protected-mark use.
+
+For a standalone invocation without a project contract, ask one focused
+question about the first user outcome, then create the same sidecar with
+`scripts/experience-patterns.js` before selecting defaults. Do not fall back
+to an industry preset.
 
 ## Sub-step 0 — Mode detection + setup
 
@@ -89,19 +166,29 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+**Mode A automatic path:** When `CODE_APPS_NATIVE_ORCHESTRATING=1` and no
+explicit brand flag or user brand note was supplied, do **not** stop or ask this
+question. Resolve named organization context first; when no app brand is
+clearly inferred, record `brand_input: none` and select the Product Experience
+Contract baseline. This is the normal prompt-only path; no screenshot, HTML,
+brand input, cost picker, or style picker is required.
+
+**Mode B/C or explicit override path:** Ask the optional brand-input question
+below. Users who explicitly supplied brand input, requested a reskin, or asked
+to compare directions can choose the cost/style options.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
 ```
-You're building {{app_name}} — a {{industry}} app.
+You're building {{app_name}} — an app for {{primary_job}}.
 {{screen_count}} screens, {{entity_count}} entities.
 
 Do you have any brand input? (skip with Enter):
 
-(1) Skip — use Field/Ops industry defaults
-    No brand assets. I'll pick a direction from 3 visual styles (or you can skip style-picking entirely). High
-    contrast, large tap targets, safety-first colors.
+(1) Skip — use the Product Experience Contract
+  No brand assets. I'll derive an accessible direction from the audience,
+  first user outcome, interaction mode, focal point, motifs, and density.
+  No image, HTML, screenshot, or industry preset is required.
 
 (2) Free-text notes
     > "Slate-blue accent, no orange. Must look at home next to ServiceTitan."
@@ -119,7 +206,7 @@ Do you have any brand input? (skip with Enter):
     > --from-code-app ~/projects/sibling-web   (extract from code app)
     > --from-figma <file-key>                  (extract from Figma)
 
-Skip? [Enter to skip — same as option 1]
+Skip? [Enter to use the Product Experience Contract]
 ```
 
 If flag was passed on invocation, skip asking — process directly.
@@ -141,6 +228,35 @@ If flag was passed on invocation, skip asking — process directly.
 
 ---
 
+## Sub-step 1a — Brand role resolution
+
+Before selecting a palette, find the current brief (`brief.md` or
+`.tmp/experience-brief.md`) and write one compact resolver artifact:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-brand-context.js" \
+  --brief-file "<brief-path>" \
+  --output "<working_dir>/.tmp/brand-context.json"
+```
+
+When supplied brand material exists, append `--supplied-brand`. When the user
+explicitly says `use <brand> branding`, append `--explicit-brand <brand>`. Read
+the resulting `organizations[]`, effective `brandRole`, `brandSource`,
+evidence, confidence, and optional `inferredPalette` before Sub-step 4.
+
+- `app-brand`: an inferred palette may guide tokens only after higher-priority
+  supplied/explicit input is absent. Record it as inferred and preserve the
+  resolver's disclaimer.
+- `product-brand`: keep it in product data/media/copy. Do not recolor the app.
+- `integration`: keep it in connector/data context. Do not recolor the app.
+- `unknown`: continue with the Experience Contract visual recipe.
+
+Never generate, copy, or imply permission to use a logo, emblem, or protected
+mark merely because the palette was inferred. Exact brand fidelity requires a
+supplied or approved reference.
+
+---
+
 ## Sub-step 2 — Cost picker
 
 **Print:**
@@ -148,26 +264,30 @@ If flag was passed on invocation, skip asking — process directly.
 
 Show the cost picker, adapting the intro and option set to brand input.
 
+**Mode A automatic path:** Skip this picker unless the caller supplied an
+explicit brand input, `--reskin`, or a direct request to compare visual
+directions. Use option `(c) Apply experience baseline` automatically and
+continue to Sub-step 4. Do not wait for confirmation; the plan approval gate
+already established the product experience.
+
 **If brand input was provided, print:** `Brand input applied ✓ — {{primary color}}, {{font family}} extracted.` Default: **c**.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; brand tints all options. | ~3 min, ~25k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~8k tokens |
-| c | Brand preview | Apply brand to List + Form + Detail mockups; skip style picker and component sheets. | ~30 sec, ~2k tokens |
-| d | Skip everything | Use palette with industry defaults; no previews. | <5 sec, ~0 tokens |
+| c | Brand preview | Apply brand to the contract primary screen plus supporting screens; skip style picker and component sheets. | ~30 sec, ~2k tokens |
+| d | Minimal contract baseline | Write semantic tokens + product primitives from the experience contract; no optional gallery. | <30 sec, ~2k tokens |
 
-**If NO brand input, print:** `No brand input — defaulting to polished-inspection (white surface + Power-Platform green accent + status-stripe cards + soft-tinted pills; source: references/vibe/direction-polished-inspection.md).` Default: **c**.
+**If NO brand input, print:** `No brand input — deriving an accessible product direction from the Product Experience Contract (audience, job, entry mode, focal point, motifs, density, and visual character).` Default: **c**.
 
 | Option | Label | Behavior | Cost |
 |---|---|---|---|
 | a | Full design | See 3 browser styles, pick one, then get component reference; biggest visual quality gain. | ~3 min, ~30k tokens |
 | b | Spec + reference | Pick a style in chat, write full design spec, see component reference sheet. | ~1 min, ~12k tokens |
-| c | Apply defaults | Apply polished-inspection tokens and open a 3-screen preview. MVP-friendly zero-click default. | ~30 sec, ~3k tokens |
+| c | Apply experience baseline | Write contract-derived tokens, product primitives, and a primary-screen preview. | ~30 sec, ~3k tokens |
 
-**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app comes out styled with the **polished-inspection** direction (which fits ~70% of mobile-app traffic — inspection / field-ops / asset-tracking apps that demo to enterprise stakeholders). Users who want to compare 3 styles side-by-side opt INTO `(a)` explicitly. This trades "highest possible design quality on first run" (path a) for "zero clicks to a styled MVP" (path c) — the right tradeoff at MVP because the user can always re-run `/design-system` to upgrade later.
-
-**Outdoor-only opt-in:** for true field-utility apps (full sun, full shift, gloves), pass `--direction inspection` to use the dark slate + safety-orange preset instead. The MVP default is light + green because that demos better and remains usable; the outdoor-dark preset is a deliberate opt-in.
+**Default rationale:** `(c)` is the MVP-first-run default — Enter through every prompt and the app receives a coherent, accessible direction from its actual product experience instead of a visual preset. Users who want to compare directions can opt into `(a)`, but normal briefs need no screenshot or HTML input.
 
 **Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
 
@@ -176,20 +296,13 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
 **Branches:**
 - **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
 - **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render key screen mockups (List + Form + Detail) with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — always shows 3 key screens.
-- **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
-  1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
-     **Source-of-truth lookup order for the preset bundle:**
-    1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${CLAUDE_SKILL_DIR}/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
-    3. **Else (true "all defaults" path) → load [`${CLAUDE_SKILL_DIR}/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (sourced from `pa-wrap-tools-1/templates/equipment-inspector`), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
-     4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
-
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
+- **(c) Brand preview** → skip Sub-steps 3–6, render the contract primary screen plus up to two supporting screens with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — preserve the primary composition first.
+- **(c) Apply experience baseline / (d) Minimal contract baseline** → skip the free composition picker. Run these in order:
+  1. **Contract-derived Sub-step 4** — always write both `brand/design-system.md` and `brand/tokens.ts` from the Product Experience Contract. Select accessible palette relationships, typography, surfaces, density, motion, and action treatment from `visualCharacter`, audience, interaction/entry mode, focal point, motifs, and forbidden defaults. Do not load an industry direction file. Record the chosen rationale in `memory-bank.md` under `## Design`.
+  2. **Product-first preview** — for (c), render the contract primary screen plus up to two supporting screens using the approved primary composition; do not force List + Form + Detail examples. For (d), the gallery is optional but the spec and tokens remain mandatory. Write `<working_dir>/_design_preview.html` when rendered and state that it is a design review, not native visual QA.
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
-  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+  **Never return DONE without writing `brand/design-system.md`, `brand/tokens.ts`, and `## Product Experience Primitives`.** A product baseline must be inspectable and must preserve the primary experience even when the user supplies no brand asset.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -200,7 +313,7 @@ That input didn't work. You can try another:
 (2) --logo <path>      — extract palette from logo image
 (3) --brand-doc <path> — point to existing brand markdown
 (4) --from-url <url>   — extract from a live website
-(5) Skip               — continue with industry defaults
+(5) Skip               — continue with the Product Experience Contract
 
 Or fix the issue and retry the same input.
 ```
@@ -232,9 +345,11 @@ Before processing any external content, apply the sanitization rules from [`refe
 > "→ [design-system] Rendering style picker…"
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
-- Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
+- Pass `working_dir`, `target_screen` (the contract primary screen), `default_direction` (from the Product Experience Contract)
 - The style picker renders `_design_vibe.html`, opens browser, asks user
-- Returns: picked direction name + merged bundle dimensions
+- Returns: `DESIGN_EXPRESSION_RESULT` with optional palette, typography,
+  surface, and motion intent plus an explicit contract-compatibility note; it
+  never writes `native-app-plan.md`
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
 
@@ -243,7 +358,9 @@ If brand_notes or --logo palette exist, prepend banner showing inferred recommen
 - Re-render with 4th column "Your hybrid"
 - Retry cap: max 2 regenerates
 
-Store result as `picked_direction` with all resolved dimensions.
+Store result as `picked_expression`. Apply it only to token expression and
+component finish; preserve the Product Experience Contract's entry mode, first
+viewport order, primary action, motifs, and forbidden defaults.
 
 ---
 
@@ -252,7 +369,16 @@ Store result as `picked_direction` with all resolved dimensions.
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
 
-Generate the full spec deterministically from the locked direction. Follow the schema in [`references/design-system-schema.md`](./references/design-system-schema.md).
+Generate the full spec deterministically from the Product Experience Contract,
+optional explicit brand input, and optional `picked_expression`. Follow the
+schema in [`references/design-system-schema.md`](./references/design-system-schema.md).
+
+Before writing, read `.tmp/experience-foundation-contract.json`. If it is
+missing, materialize it with `scripts/plan-experience-foundation.js` from the
+same experience contract. The design system owns the visual recipe for every
+manifest primitive; the Step 10.8 scaffold owns its TSX file. Do not invent
+extra generic cards or omit a selected motif because a List/Form/Detail preview
+would be easier to render.
 
 **Sections (required):**
 
@@ -265,10 +391,19 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 - Voice: {{tone description}}
 - References: {{reference apps from direction bundle}}
 - Brand notes: {{user's notes if any}}
+- Brand role: {{brand-context.brandRole}}
+- Brand source: {{brand-context.brandSource}}
+- Brand evidence: {{brand-context.evidence or "none"}}
+- Brand confidence: {{brand-context.confidence}}
+- Inferred palette: {{brand-context.inferredPalette + disclaimer or "none"}}
 
 ## Palette
 | Token | Hex | Usage |
 ...7+ tokens: bg, surface, primary, accent, text, text-muted, border
+
+`accentSoft` is a separately generated low-saturation/lightness-adjusted tint
+for small selected states and local illustration layers. `mediaSurface` is a
+neutral large-content fallback. Neither may reuse a saturated `accent` value.
 
 ## Status palette
 | Token | Hex |
@@ -289,6 +424,18 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 ### Badge / Status pill — size, bg, text treatment
 ### Iconography — icon set, style (outlined/filled)
 
+## Product Experience Primitives
+- Primary composition: {{entryMode + primaryJob + focal point}}
+- First viewport regions: {{ordered region list}}
+- Visible primary action: {{primary action}}
+- Signature motifs: {{2-5 named motifs and their component treatment}}
+- Forbidden defaults: {{contract hard negatives}}
+- Runtime anchors: {{experience-* markers from the screen contract}}
+
+| Motif | Foundation component | File | Runtime marker | Visual recipe |
+|---|---|---|---|---|
+| {{manifest motif}} | {{manifest component}} | {{manifest file}} | {{manifest testID}} | {{tokens, content hierarchy, local/offline fallback, interaction feedback}} |
+
 ## Motion
 - Default duration + easing
 - List enter behavior
@@ -299,7 +446,8 @@ Generated: {{ISO timestamp}} | Direction: {{direction name}}
 - These are enforced downstream — violations = build failure
 
 ## Provenance
-- Direction, industry, brand notes, generator version, source
+- Direction rationale, experience-contract summary, optional domain context,
+  brand notes, brand role/source/evidence/confidence, generator version, source
 ```
 
 **Write `brand/tokens.ts`:**
@@ -314,6 +462,8 @@ export const tokens = {
     surface: '{{hex}}',
     primary: '{{hex}}',
     accent: '{{hex}}',
+    accentSoft: '{{derived accessible soft tint of accent}}',
+    mediaSurface: '{{neutral media fallback surface}}',
     text: '{{hex}}',
     textMuted: '{{hex}}',
     border: '{{hex}}',
@@ -458,21 +608,21 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 **Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace default token values with the locked `brand/tokens.ts` values (palette, typography, spacing, radius).
 
-**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open browser. Proceed to Sub-step 7.
+**Path (c) "Brand preview":** Skip this question — automatically render the contract primary screen plus up to two supporting screens with brand tokens applied. Preserve its entry composition and first-viewport order. Open browser. Proceed to Sub-step 7.
 
 **Paths (a) and (b):** Ask:
 ```
 Re-render screen preview with your brand tokens?
 
 (a) All screens     — every screen with your design applied
-(b) Key screens     — List + Form + Detail only
+(b) Key screens     — primary composition + up to two supporting screens
 (c) Skip preview    — I'll see them when the app builds
 
 [default: b]
 ```
 
 - **(a)** → re-render all screens from plan with brand tokens applied
-- **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
+- **(b)** → re-render the primary screen first, then up to two supporting screens that exercise the selected motifs
 - **(c)** → skip, proceed to Sub-step 7
 
 Overwrites `_plan_preview.html` with branded versions. Opens browser.
@@ -610,7 +760,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | Scenario | Behavior |
 |---|---|
 | New project via `/create-mobile-app` | Step 6.5 runs, brand/ exists |
-| Project scaffolded before this feature | No brand/ → screen-builder falls back to `## Design Direction` only |
+| Project scaffolded before this feature | No brand/ → screen-builder reads `.tmp/experience-contract.json` and semantic token aliases; regenerate the contract if it is missing |
 | `/design-system` standalone in existing project | Generates brand/, future runs pick it up |
 | `/design-system --reskin` | Re-runs style picking and updates brand/ artifacts |
 

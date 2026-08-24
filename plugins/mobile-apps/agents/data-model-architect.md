@@ -22,6 +22,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
+- **Product experience contract path** — normally `<working_dir>/.tmp/experience-contract.json`; read its audience, primary job, interaction/entry mode, content model, and primary action before inferring entities. It is the product-scope source of truth, not an industry mapping table.
 - **Normalized Dataverse foreground planning snapshot path (preferred)** — an absolute path to
   `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
@@ -57,6 +58,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
 - **No questions.** Do not ask the user anything — infer from the requirements provided. The planner runs the approval gate, not you.
+- **Experience-led entity scope.** Use the Product Experience Contract to distinguish app-owned business entities from supporting lookups, joins, history, and back-office data. Do not create a table merely because an industry keyword implies one, and do not force every persistent entity to be a primary-screen surface later. The primary job and content model determine the minimum schema needed for the experience.
 - **MANDATORY progress reporting.** For every step that is actually executed,
   emit its exact `**Print before starting:**` line. In snapshot-only mode,
   skipped live-discovery steps emit no legacy discovery line; their visibility
@@ -245,11 +247,46 @@ Cap relevance scoring at the top 10 candidates to keep token usage bounded.
 **Print before starting:**
 > "→ Inferring required entities from requirements brief…"
 
-From the user's requirements, list the entities the app needs. For each entity, list:
+Read `.tmp/experience-contract.json` first. From the user's requirements and
+contract, list only the entities the primary job needs. Use `contentModel` to
+identify user-facing nouns, `interactionMode` to identify durable actions, and
+`entryMode` to avoid adding dashboard/CRUD support data that the experience
+does not require. For each entity, list:
 
 - **Purpose** — one line
 - **Fields needed** — name, type, required?
 - **Relationships** — to other entities in this list or to standard tables
+
+### Content-model rules
+
+When `primarySurface: product-led-discovery`, model the user journey rather
+than the word `inventory`: propose Product, Category/Collection, product
+media/asset metadata, and Cart/CartItem only when the contract's primary action
+or signature motifs require add/review behavior. Products expose user-facing
+name, price, description, availability, category, and media reference fields;
+they do not default to warehouse bins, pallet variance, operational assignment,
+or KPI tables.
+
+When `assetPolicy.media: local-first`, record local/bundled asset handling in
+the plan's Notes and foundation contract. Do not require remote placeholder
+URLs or persist media in Dataverse merely because a UI-only discovery brief
+mentions products. For a UI-only brief, model only the read/data shapes the
+planned screen needs and keep durable cart/order writes out unless the contract
+explicitly names a purchase, save, or cart action.
+
+When `assetPolicy.media: remote-cdn-cached`, Product/media records must expose
+the canonical typed fields `imageUrl` (approved HTTPS CDN URL), `imageAltText`
+(accessible description), `imageCacheKey` (stable invalidation identity), and
+`imageAssetKey` (local fallback identity). Use the target's logical naming
+convention when writing schema names, but record the four semantic mappings in
+the structured schema contract. Do not store a CDN URL in a Dataverse Image or
+File column; URL/alt/cache/fallback metadata are normal text fields, while a
+real Image/File column remains a separate persistence concern. The selected CDN
+host is fixture/service configuration, never a literal screen value.
+
+Conversely, warehouse-oriented entities (bin, scan, receiving, cycle count,
+assignment) require employee/workflow evidence in the contract. `inventory` by
+itself is insufficient to select them.
 
 Standard table mappings to bias toward:
 

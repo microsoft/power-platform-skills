@@ -10,6 +10,112 @@ model: opus
 
 Create a cohesive, accessible, and production-ready design for a React Native application. Implement the design in the user's project when one is available.
 
+## Reference-contract mode
+
+Before choosing a new visual direction, look for native-app-plan.md,
+design-intake.md, and brand/design-system.md in the project. If the plan
+contains a Reference Contract or the intake declares high or
+strict-structural fidelity:
+
+1. Read those artifacts before editing a screen.
+2. Treat hierarchy, normalized geometry, media prominence, navigation
+   silhouette, Required Motifs, Runtime Markers, and Forbidden Drift as
+   binding.
+3. Preserve the approved Home composition. Polish spacing, typography,
+   accessibility, state feedback, and responsive behavior only; do not invent
+   a new composition.
+4. Keep every required Runtime Marker as the exact testID on its owning
+   screen or shared component.
+5. Use original local/bundled media and a local fallback when the intake
+   requires offline or in-flight use. Do not replace it with remote Unsplash
+   imagery.
+
+For a reference-led travel-retail Home, do not introduce a generic search
+field, product grid, ratings, discount badges, payment UI, sign-in, airline
+operations dashboard, or extra metrics unless the Reference Contract explicitly
+allows it. If the brief and the contract conflict, stop and ask for direction;
+do not silently average them.
+
+## Experience-contract mode
+
+Before changing a planned mobile app, read `native-app-plan.md`,
+`.tmp/experience-contract.json`, `.tmp/experience-screen-contract.json`,
+`.tmp/experience-foundation-contract.json`, `.tmp/screen-build-pack.json`, and
+`brand/design-system.md` when they exist. Validate the pack first with
+`validate-screen-build-pack.js`; use its revision, primary/key-flow entries,
+states, dependencies, primitives, `shell`, `headerMode`, canonical stable-ID
+view model, local asset manifest, and forbidden defaults as the compact
+execution source. The experience contract is required
+for generated create/prototype projects even when there is no screenshot or
+design intake.
+
+For the primary screen, preserve all of these as hard requirements:
+
+- `entryMode` and `primaryScreen.compositionKind`
+- the primary user outcome and first-viewport focal point
+- exact first-viewport region order and visible primary action
+- signature motifs, forbidden defaults, and `experience-*` testID anchors
+- foundation primitive imports/files selected for each signature motif
+
+You may repair hierarchy, spacing, density, typography, contrast, state
+feedback, tap targets, and the clarity of the focal point. You must not replace the entry mode, turn discovery/capture/workflow/inbox/detail-first into a dashboard or generic List, reorder the contract regions, or replace a named
+motif with an unrelated generic component. A binding Reference Contract remains
+the higher-priority override where it explicitly conflicts with generated
+experience details.
+
+Route shell and data integrity remain binding during refinement:
+
+- Keep the root layout as `SafeAreaProvider` context only. Each packed route
+   uses exactly one `ScreenShell` with its literal packed `headerMode`; do not
+   add a nested `SafeAreaView` or automatic scroll-content insets.
+- Preserve `toExperienceRecord` as the presentation boundary. Lists, details,
+   saves, and carts use its stable `id`, never index-based copy or a title as an
+   identifier.
+- When `assetPolicy.media` is `local-first`, preserve the generated local
+   illustration recipe via `getExperienceAsset` and `EntityImage`. Do not add a
+   remote URL, Unsplash source, or generic icon-only media replacement.
+- When `assetPolicy.media` is `remote-cdn-cached`, preserve
+   `resolveExperienceMedia(record)` → `EntityImage` with its cache key and local
+   fallback identity. Do not replace it with a screen-local URL, a generic icon
+   block, or a strong accent-color media rectangle.
+
+After edits, run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" \
+   --project-root "<working_dir>" \
+   --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
+   --project-root "<working_dir>" \
+   --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+   --project-root "<working_dir>" \
+   --pack ".tmp/screen-build-pack.json"
+```
+
+### Native visual-review receipt
+
+When a real iOS/Android capture environment is available, create or update
+`.tmp/experience-visual-review.json` with `schemaVersion: 1`, the primary route,
+the sidecar-declared `keyFlowRoute`, normal- and large-text native captures for
+both routes, iOS/Android platform/device metadata, and evidence-backed checks for `focalPoint`, `regionOrder`,
+`primaryAction`, `taskFit`, `contentRealism`, `signatureMotifs`,
+`forbiddenDefaults`, `contrast`, `touchTargets`, `safeAreas`, `keyboard`,
+`offlineState`, `screenReaderOrder`, `responsiveLayout`, and
+`localizedContent`. Every check scopes `primary` and `key-flow`, names its
+reviewed capture IDs, and links to a native observation; a not-applicable check
+requires a reason and observation evidence. Validate it:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-visual-evidence.js" \
+   --project-root "<working_dir>" \
+   --manifest ".tmp/experience-visual-review.json"
+```
+
+Static HTML and browser previews are not native capture evidence. When native
+capture is unavailable, return `DONE_WITH_CONCERNS: native experience visual capture unavailable; hierarchy and anchors were statically validated.` Do not
+claim the visual review is complete.
+
 ## Understand the request
 
 Use requirements already supplied by the user. Determine:
@@ -24,7 +130,7 @@ If essential product direction is missing and multiple substantially different d
 
 ## Confirm the design direction
 
-Before generating or implementing the design, confirm the user's preferred visual direction unless they already provided one. Ask one question at a time and present these choices:
+Before generating or implementing the design, confirm the user's preferred visual direction unless a Product Experience Contract, binding Reference Contract, or explicit brand direction already provides it. With an experience contract, use its `visualCharacter`, audience, interaction mode, density, focal point, and motifs as the direction; do not ask a generic style picker that could conflict with the approved composition. Ask one question at a time only when a real contradiction remains.
 
 - **Minimal & Clean** — restrained color, generous whitespace, simple surfaces, and quiet typography.
 - **Bold & Vibrant** — saturated color, strong contrast, expressive type, and energetic visual accents.
@@ -167,7 +273,7 @@ When photography would improve the design and the user has not supplied suitable
 
 For a production experience that searches or changes images dynamically, use the official Unsplash API. Keep credentials out of source control, use the image URLs returned by the API directly, preserve required attribution, and follow the Unsplash API guidelines. Never expose an Unsplash secret key in the application.
 
-Use bundled or user-provided assets when imagery must work fully offline, is brand-critical, or cannot be licensed appropriately. Clearly identify any temporary Unsplash image the user should replace before release.
+Use bundled or user-provided assets when imagery must work fully offline, is brand-critical, or cannot be licensed appropriately. When an Experience Contract says `assetPolicy.media: local-first`, this is mandatory: preserve local recipes/assets and do not introduce Unsplash imagery. Clearly identify any temporary Unsplash image the user should replace before release.
 
 ## Handle responsive layouts
 

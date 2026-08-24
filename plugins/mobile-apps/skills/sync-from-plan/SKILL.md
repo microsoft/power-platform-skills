@@ -197,6 +197,14 @@ navigation algorithm:
 Run:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR" \
+  --output ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR" \
+  --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/materialize-experience-view-model.js" \
+  --project-root "$PROJECT_DIR"
 npm --prefix "$PROJECT_DIR" run type-check
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 ```
@@ -213,6 +221,9 @@ Reuse `/create-mobile-app` Step 10.8:
 - write typed skeletons only for new/missing screens;
 - patch imports/hooks surgically for existing screens;
 - preserve route params and generated service contracts.
+- preserve the pack-selected `ScreenShell` header mode and the generated
+  `toExperienceRecord` / `getExperienceAsset` boundary; do not restore direct
+  `SafeAreaView` wrappers or per-screen presentation arrays.
 - rebind every shared data helper identified in Step 2 using exact manifest and
   generated-model names; lookup reads use `_<lookup>_value`, never the lookup
   navigation property in `select`;
@@ -249,8 +260,9 @@ Select targets in this order:
 
 Spawn `mobile-app:screen-builder` in waves of at most five. Prompts include the
 existing file, approved per-screen spec, current generated-service snapshot,
-data mode, and exact target path. In Dataverse mode include the manifest facts
-for that screen.
+data mode, exact target path, matching build-pack entry, literal header mode,
+and stable-ID view model. In Dataverse mode include the manifest facts for that
+screen.
 
 Parse each first-line status using the plugin protocol. Retry
 `NEEDS_CONTEXT` once with concrete service/manifest context. Stop on
@@ -266,6 +278,12 @@ cd "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" \
   "$PROJECT_DIR/native-app-plan.md"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
+  --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" \
+  --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
 ```

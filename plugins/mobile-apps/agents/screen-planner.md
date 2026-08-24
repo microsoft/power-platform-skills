@@ -25,7 +25,19 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **No questions.** The planner runs the approval gate. Make confident decisions from the inputs provided. If a detail is genuinely ambiguous, list it under "Open Questions" in your output for the planner to surface.
 - **Return a section, not a doc.** Output is a markdown `## Screens` section the planner embeds verbatim.
-- **Screens only.** Do not design shared components, hooks, or services. The `screen-builder` writes shared UI inline first; refactoring happens later.
+- **Screen-owned foundation selection.** Do not write TSX, hooks, or services,
+  but select the 2-5 reusable primitives required by the experience contract's
+  signature motifs. Write their ownership manifest to
+  `.tmp/experience-foundation-contract.json`; the scaffold owner creates these
+  components before builders fan out. Do not promise a signature motif without
+  a foundation owner.
+- **Experience contract is the entry-flow source of truth.** Read
+  `<working_dir>/.tmp/experience-contract.json` before selecting navigation,
+  listing screens, or choosing a visual arrangement. Its `entryMode`, primary
+  screen, ordered first-viewport regions, primary action, signature motifs,
+  and forbidden defaults are hard product constraints. Industry terms can add
+  vocabulary or domain states, but cannot turn a discovery, capture, workflow,
+  inbox, or detail-first flow into a dashboard or mandatory CRUD flow.
 - **MANDATORY progress reporting.** Every step in the workflow below has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
 
 ## Inputs You Can Rely On
@@ -36,6 +48,8 @@ The planner gives you:
 - Target platforms (iOS / Android)
 - Aesthetic direction
 - Features the user listed
+- `<working_dir>/.tmp/experience-contract.json` — mandatory product experience
+  contract created by `native-app-planner`
 - **`phase`** — one of `graph` | `specs` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
 
 ## Two-phase mode (Gate 4 split — PREFERRED)
@@ -44,8 +58,8 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 | `phase` | What you do | What you write | What you skip | Gate that follows |
 |---|---|---|---|---|
-| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
-| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 4a. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
+| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Product Experience Composition + Experience Foundation + Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions**, plus `.tmp/experience-screen-contract.json` and `.tmp/experience-foundation-contract.json` | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
+| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Read and preserve both experience sidecars; do NOT touch `_screens_section.md`. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
 **`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
@@ -72,6 +86,13 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 
 ## Workflow
 
+**Example boundary:** Inspection, work-order, audit, and dispatch examples in
+this reference are mode-specific implementation examples. Use them only when
+the Product Experience Contract has employee/workflow evidence and selects a
+matching primary surface. They are never defaults for discovery, booking,
+content, finance, healthcare, consumer, or UI-only briefs; substitute the
+contract's nouns, journey, content model, and foundation primitives instead.
+
 1. Decide navigation pattern
 2. List screens with concise purposes
 3. Pick layout strategy per screen
@@ -86,7 +107,7 @@ Specifically — `memory-bank.md` is OFF-LIMITS during `phase: graph` and `phase
 
 | When | Emit |
 |---|---|
-| After Step 0 + 0b loaded | `echo "→ [screen-planner] loaded patterns + design direction"` |
+| After Step 0 + 0b loaded | `echo "→ [screen-planner] loaded experience contract + design constraints"` |
 | Before Step 2 (graph) or before Step 4 (specs) | `echo "→ [screen-planner] phase=<phase>, N=<screen_count> screens, est ~$((N * 60))s"` |
 | Per screen during Step 4 (specs phase only) | `echo "→ [screen-planner] spec <i>/<N>: <screen_name>"` |
 | Before Step 5 write | `echo "→ [screen-planner] writing ${phase == 'graph' ? '_screens_section.md' : 'plan.md ## Screens append'}"` |
@@ -96,26 +117,66 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ---
 
-### Step 0 — Load Industry Patterns
+### Step 0 — Load the Product Experience Contract
 
-If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
+Read `<working_dir>/.tmp/experience-contract.json` and validate it against
+`${PLUGIN_ROOT}/scripts/schema-experience-contract.json`. If it is missing,
+invalid, or its primary screen is not `/(app)/home` backed by
+`app/(app)/home.tsx`, return `BLOCKED`; do not infer an industry fallback.
 
-### Step 0b — Load Design Direction (if present)
+Derive the primary-screen composition directly from the contract:
 
-Read `<working_dir>/native-app-plan.md`. **If a `## Design Direction` section exists**, parse its bundle (the YAML-style key/value lines after the header). Use these values as **defaults** for the per-screen design fields you produce in Step 4:
+- **User outcome** — `primaryJob`
+- **Composition kind** — `entryMode` / `primaryScreen.compositionKind`
+- **First viewport** — focal point, exact `regionOrder`, visible primary
+  action, and density
+- **Signature motifs** — two to five named, intentional foundation components
+- **Hard negatives** — every `forbiddenDefaults` value
+- **Runtime anchors** — one `experience-region-<normalized-region>` for each
+  ordered region, `experience-primary-action`, and one
+  `experience-motif-<normalized-id>` for each signature motif
 
-- `density` → defaults `Density mode`
-- `surface` → defaults `Surface style`
-- `motion` → defaults `Animations` policy (none / subtle / liberal-tasteful)
-- `list_style` → defaults the row pattern in any List screen's spec
-- `tone` → defaults the copy register for button labels and empty-state text
-- `primary_action_shape` + `primary_action_position` → defaults primary action treatment
+Write this data into `.tmp/experience-screen-contract.json` in graph mode,
+including `schemaVersion: 1`, a SHA-256 of the exact serialized experience
+contract as `experienceContractSha256`, the canonical primary route/file, the
+full primary composition, runtime anchors, each planned screen's route and
+archetype, and a `keyFlow` object. `keyFlow` must name one non-primary route,
+file, and outcome that exercises the contract's main task after Home. In specs
+mode, read the existing sidecar and return `BLOCKED` if it does not match the
+current contract.
 
-Per-screen specs may still override (a celebration screen can be expressive in a restrained direction) — overrides MUST be explicit annotations, not silent contradictions.
+In graph mode, create the companion foundation manifest before listing screens:
 
-**Also check for `<working_dir>/brand/design-system.md`** — if it exists, it takes priority over `## Design Direction` for palette, typography, components, and negatives. Read its `## Palette`, `## Typography`, `## Components`, and `## Negatives` sections and use them as the authoritative design defaults for all per-screen specs. The `## Negatives` section contains HARD RULES — no per-screen spec may violate them.
+```bash
+node "${PLUGIN_ROOT}/scripts/plan-experience-foundation.js" \
+  --project-root "<working_dir>"
+```
 
-**If neither `## Design Direction` nor `brand/design-system.md` exists**, fall back to today's industry-inferred logic from `universal-patterns.md` and `mobile-design-philosophy.md`. Do not block on their absence.
+The manifest selects one component file per signature motif, capped at five.
+The graph must include an `### Experience Foundation` table listing motif,
+component, file, primary-screen owner, and runtime marker. In specs mode, read
+the existing manifest and return `BLOCKED` when a spec references a motif that
+is absent from it.
+
+### Step 0b — Load Design Constraints (if present)
+
+Read `<working_dir>/native-app-plan.md` and its `## Design` section. Use the
+`### Product Experience Contract` and `### Design Translation` as the default
+design constraints. `visualCharacter`, audience, interaction mode, density,
+focal point, motifs, and forbidden defaults are inherited unless a spec names
+an explicit, contract-compatible exception.
+
+**Also check for `<working_dir>/brand/design-system.md`** — if it exists, it
+takes priority for palette, typography, components, and negatives. Read its
+`## Palette`, `## Typography`, `## Components`, `## Product Experience Primitives`, and `## Negatives` sections. Brand tokens can refine appearance;
+they cannot replace the contract entry mode, region order, primary action, or
+forbidden defaults.
+
+If a Reference Contract exists, preserve its binding hierarchy, geometry,
+motifs, navigation silhouette, runtime markers, and forbidden drift before any
+automatic design choice. Do not load `universal-patterns.md` merely because an
+industry is named; consult a narrowly relevant pattern only when it supports a
+specific contract requirement without contradicting it.
 
 ---
 
@@ -124,23 +185,32 @@ Per-screen specs may still override (a celebration screen can be expressive in a
 **Print before starting:**
 > "→ Picking navigation pattern (stack / tabs / drawer)…"
 
-Pick exactly one based on screen count + user role:
+Start with `experience-contract.json → navigationModel` and `entryMode`; screen
+count is a constraint, not the decision source. Pick exactly one navigation
+pattern that makes the first user outcome immediate:
 
 | Pattern | When to use |
 |---|---|
-| **Stack** (Expo Router default) | 1–3 screens, linear flow, or single workflow (e.g., wizard) |
-| **Tabs** | 3–5 top-level destinations all roughly equal in importance |
+| **Stack** (Expo Router default) | `capture`, `workflow`, `onboarding`, or `detail-first` entry; 1–3 focused destinations; linear progress |
+| **Tabs** | `overview`, `inbox`, or `feed` with 3–5 genuinely equal destinations |
 | **Drawer** | 5+ destinations, or admin-style apps with deep navigation. See `shared/samples/_layout-drawer.tsx` for file pattern. |
-| **Tabs + Stack** | Tabs at top level, push detail screens onto each tab's stack — most common for CRUD apps |
+| **Tabs + Stack** | The contract explicitly calls for several peer roots with nested context, not merely because entities exist |
+| **Modal flow** | Short decision or capture flow where the contract calls for a contained step sequence |
 
-Default for a typical CRUD app: **Tabs + Stack**.
+Never select Tabs + Stack simply because the data model has multiple entities.
+Never add a tab just to expose a List screen. The contract's `navigationModel`
+is the default; document any deliberate implementation mapping only when Expo
+Router requires it.
 
 ## Step 2 — List Screens
 
 **Print before starting:**
-> "→ Listing screens by archetype (List / Detail / Form / Auth / Tab-root / Modal-Sheet / Onboarding)…"
+> "→ Listing screens from the product outcome and entry composition…"
 
-Every user-facing screen must map to one of seven **screen archetypes** defined in `${PLUGIN_ROOT}/shared/references/screen-templates.md`:
+Every user-facing screen declares an implementation shell from
+`${PLUGIN_ROOT}/shared/references/screen-templates.md`. These shells solve
+native interaction details; they do **not** define the product flow or create a
+mandatory List/Detail/Form sequence:
 
 | Archetype | When to use | Required elements |
 |---|---|---|
@@ -148,21 +218,63 @@ Every user-facing screen must map to one of seven **screen archetypes** defined 
 | **Detail** | View one item with actions | Back button, hero, body sections, edit/delete actions (destructive needs `<AlertDialog>`) |
 | **Form** (create/edit) | Capture or update data | `react-hook-form` + `zod`, labels above inputs, blur-validation, correct keyboard/input hints, KeyboardAvoidingView, dirty-cancel confirm, draft/resume for long or multi-step forms |
 | **Auth** | Sign-in/up/reset | Minimal branding, one primary CTA, inline errors |
-| **Tab-root** | Top-level tab destination | Usually wraps a List or Home |
+| **Tab-root** | Top-level destination when the chosen navigation model needs one | Wraps the contract's primary composition or one supporting destination |
 
-**Home is a dashboard by default.** The template home at `app/(app)/home.tsx` MUST be replaced with the user's real first screen. For most mobile apps, Home is not a generic welcome page and not just the first entity list. It should answer: "What matters now, what changed recently, and what should I do next?"
+### Primary screen composition contract
 
-Use `Operational pattern: home-dashboard` for the Home screen whenever the app has any meaningful current state: tasks, inspections, work orders, approvals, dispatch, schedules, assignments, learning progress, requests, alerts, goals, balances, projects, bookings, recommendations, or saved activity. The Home layout delta should include:
-- A compact greeting/context header using the user's domain cue (role, date, route, team, account, goal, course, trip, project, etc.)
-- One primary current/next item card, tailored to the domain, with a clear object label and why it matters now
-- A progress, status, priority, SLA, or freshness strip when the domain has workflow, steps, goals, risk, due times, countdowns, or approvals
-- 2–4 KPI/stat/summary tiles that matter today
-- Recent, upcoming, or recommended rows limited to 3–5 items
-- One bottom primary CTA for the most common next action, plus disabled-state reason copy if prerequisites can block it
+The template Home at `app/(app)/home.tsx` MUST become the contract's real
+first screen. Home is a canonical route, not an instruction to make a
+dashboard. Its graph row and per-screen spec MUST include:
 
-Make the dashboard generic in structure but domain-specific in content: an inspection app shows assignment/progress/defects; a learning app shows next lesson/streak/progress; a finance app shows balance/due items/recent activity; a healthcare app shows next appointment/tasks; a CRM app shows pipeline/follow-ups. Only use a simple feed/list Home when the user explicitly asks for feed-first navigation or the app has no meaningful current state, progress, or next action.
+- **User outcome / focal point** from `primaryJob` and `firstViewport`
+- **Composition kind** equal to `entryMode`
+- **Ordered first viewport** equal to `regionOrder`, with no extra region
+  placed ahead of the focal point
+- **Visible primary action** equal to `firstViewport.primaryAction`
+- **Signature motifs** and all contract hard negatives
+- **Runtime anchors:** `experience-region-<normalized-region>` for every
+  region in order, `experience-primary-action`, and
+  `experience-motif-<normalized-id>` for every signature motif
+- **Key flow:** one non-primary route/file/outcome selected for native task
+  review at normal and large text sizes
 
-**Home quality contract:** For the Home screen, the per-screen spec MUST include these concrete fields in `Layout delta`: context header cue, current/next item title, current/next item secondary context, status/progress/priority/countdown signal if applicable, 2-4 summary tile labels, 3-5 recent/upcoming row labels, visible bottom CTA label, and disabled CTA reason if the CTA can be blocked. Home must never be only a welcome screen, a sign-out screen, a generic full list, or an icon-only `+` create button when current work exists.
+Use the entry mode to select composition, not a dashboard template:
+
+| Entry mode | Primary composition expectation |
+|---|---|
+| `discovery` | A featured choice or collection followed by a guided path into relevant options |
+| `workflow` | The next meaningful task/step, its state, and a clear continuation action |
+| `overview` | A prioritized signal and supporting decision context; dashboard anatomy is allowed only when the contract does not forbid it |
+| `inbox` | The attention-worthy conversation or queue with its unread/urgent state |
+| `feed` | Content sequence with contextual follow-up, not a KPI grid |
+| `detail-first` | A directly relevant object/decision with the relevant action exposed |
+| `capture` | The capture action/surface before supporting instructions or history |
+| `onboarding` | A focused value preview and a start action before persistent navigation |
+
+`home-dashboard` is allowed only for `entryMode: overview` and only when it is
+not a forbidden default. It is prohibited for discovery or capture. Home must
+never be only a welcome screen or sign-out screen; beyond that, avoid imposing
+an entity list, card catalog, metrics strip, bottom CTA, or specific number of
+tiles/rows unless the contract requires it.
+
+### Product-led discovery acceptance
+
+When `primarySurface: product-led-discovery`, the primary screen must use the
+contract-selected foundation primitives to materialize contextual header,
+featured product/media, category/browse affordance, realistic product content,
+and a visible cart/add action. Its key flow should be product detail, category
+browse, or cart review, with stack navigation unless the contract explicitly
+requires another model. This is a generic commerce acceptance shape, not an
+airline preset: use the brief's product vocabulary and local/offline media
+policy. Never substitute warehouse bins, airline operations, KPI tiles, or a
+mandatory CRUD triad.
+
+When the primary composition exposes category browsing, emit a catalog route
+and Navigation Contract query parameter named `categoryId` or `categorySlug`.
+The Home/category affordance sends the canonical category value; Catalog reads
+that exact parameter on first render and initializes its visible filter from
+it. Do not replace the category with a row index, display label guess, or an
+unscoped catalog route.
 
 **iOS large-title + search-bar rule (Tab-root Lists):** Every Tab-root screen that wraps a List MUST use native iOS navigation chrome instead of a custom header. In the per-screen spec, write:
 
@@ -207,12 +319,19 @@ Always include these baseline screens (already in template — keep them):
 
 **Hard constraint — home screen route is always `/(app)/home`:** `app/index.tsx` in the template redirects signed-in users to `/(app)/home`. This is fixed and never changes. The home screen MUST be at file `app/(app)/home.tsx` with route `/(app)/home`. Never use `/(app)` (index route) for the home screen — that would cause an "Unmatched route" error on launch. If you are tempted to name the home screen `index.tsx`, name it `home.tsx` instead.
 
-Then design the user's screens. For a typical CRUD app:
+Then design only the screens needed for the contract's primary job and its
+supporting outcomes. List, Detail, and Form are implementation shells, not a
+default product flow:
 
-- **List screen** per primary entity (e.g., `accounts/index.tsx`)
-- **Detail screen** per primary entity (e.g., `accounts/[id].tsx` when it has no children, or `accounts/[id]/index.tsx` when it owns child workflows)
-- **Create/edit form screen** per primary entity (e.g., `accounts/new.tsx`, `accounts/[id]/edit.tsx`)
-- Plus any workflow-specific screens (e.g., `capture-receipt.tsx`)
+- Add a **List** when users genuinely need to compare or browse a collection.
+- Add a **Detail** when a selected object needs a focused decision or action.
+- Add a **Form** when the job requires structured capture or editing.
+- Use a focused workflow, capture surface, inbox, feed, onboarding step, or
+  detail-first screen when that better matches the entry mode.
+- A data-model entity can remain support data with no direct screen. Do not generate a CRUD trio merely because the entity is persistent.
+
+The primary route remains `/(app)/home`, but its first screen implements the
+experience composition contract before any optional collection or record shell.
 
 **Folder rule (HARD — prevents phantom tabs):** any entity that has children (`[id]`, `new`, `edit`, sub-screens) becomes a **folder** with `<entity>/index.tsx` for the list/root view and the children inside. Never use a flat `accounts.tsx` AND a sibling `accounts/[id].tsx` — expo-router auto-registers every top-level `.tsx` under `app/(app)/` as a tab/drawer entry, so a flat `accounts.tsx` next to an `accounts/` folder produces both a phantom "accounts" tab AND the real "accounts" tab. Folders collapse the whole stack into one navigable entry.
 
@@ -249,7 +368,7 @@ Every generated signed-in app MUST include a Profile screen and place sign-out t
 ## Step 3.5 — Shared Conventions (graph phase output)
 
 **Print before starting:**
-> "→ Locking shared conventions (row style, field order, hero treatments) before specs…"
+> "→ Locking experience composition and shared conventions before specs…"
 
 Before any per-screen spec is written, decide and lock the cross-screen conventions. These travel with the graph through Gate 4a so the user reviews them ONCE — every spec then expands within these locked rails.
 
@@ -257,6 +376,17 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 
 ```markdown
 ### Shared Conventions
+
+**Product Experience Composition**
+- User outcome: `<primaryJob>`
+- Primary screen: `/(app)/home` (`<entryMode>` composition)
+- Focal point: `<firstViewport.focalPoint>`
+- First viewport region order: `<region → region → region>`
+- Visible primary action: `<firstViewport.primaryAction>`
+- Key flow: `<non-primary route>` — `<outcome exercised after Home>`
+- Signature motifs: `<motif, motif or None>`
+- Forbidden defaults: `<forbidden defaults>`
+- Runtime anchors: `<experience-region-* in order>, experience-primary-action, <experience-motif-*>`
 
 **List rows**
 - Default row style: `<status-stripe-card | avatar-row | stat-card | media-tile | sentence-row | timeline-row | checklist-row>`
@@ -286,11 +416,11 @@ Write a **Shared Conventions** subsection into `_screens_section.md` (immediatel
 
 **Action placement**
 - Primary actions: `<bottom CTA | extended FAB | icon-only FAB | native header | inline row action>`
-- Home/dashboard primary actions must use a visible text label. List icon-only FABs are allowed only for a single obvious create action and must still specify the accessible label.
+- The primary screen action is the experience contract's visible text action; do not substitute an icon-only action, a generic bottom CTA, or a FAB when it changes the contract's hierarchy. Supporting List icon-only FABs are allowed only for a single obvious create action and must still specify the accessible label.
 - Destructive actions: `<swipe + confirm | overflow + confirm | detail confirm>`
 
 **Density / motion / surface**
-- Inherits from `## Design Direction` block. Per-screen specs may NOT silently deviate.
+- Inherits from `## Design → Product Experience Contract`, `### Design Translation`, and brand primitives. Per-screen specs may NOT silently deviate.
 ```
 
 The screen-builders read this block alongside their own per-screen spec. If two builders write a List for different entities, they emit the same row style unless this block explicitly overrides one. This is what makes the per-screen spec generation safe to parallelize later, and — more importantly — keeps the app feeling like one app instead of N stitched-together screens.
@@ -333,7 +463,7 @@ Calendar management is one example, not a special ownership path. Full month/wee
 **Print before starting** (this is the longest step — N screens × compact delta specs):
 > "→ Writing compact per-screen specs (deltas only; shared defaults live once) for <N> screens. This is the longest step — ~10–20 seconds per screen."
 
-**Token budget rule:** per-screen specs are deltas, not full design briefs. Anything already locked in `### Shared Conventions`, `## Design Direction`, `brand/design-system.md`, or universal builder rules MUST be omitted from the screen spec. Repeating inherited values is a bug: it bloats the plan, increases builder context, and creates contradictions when the user edits the shared default later.
+**Token budget rule:** per-screen specs are deltas, not full design briefs. Anything already locked in `### Shared Conventions`, `## Design → Product Experience Contract`, `brand/design-system.md`, or universal builder rules MUST be omitted from the screen spec. Repeating inherited values is a bug: it bloats the plan, increases builder context, and creates contradictions when the user edits the shared default later.
 
 **Before writing any spec, answer these three questions per screen** (domain differentiation — the answers drive the layout fields below). **Hard cap: ≤ 1 sentence per question, ≤ 3 sentences total** in the Domain layout decisions block. Examples below show the brevity bar — match it.
 
@@ -368,9 +498,12 @@ The full descriptions for row styles, hero types, and operational patterns live 
 For each screen the user adds, provide this compact shape:
 
 - **Domain layout decisions:** (answer the 3 questions above — required)
+- **Experience composition** (REQUIRED on the contract primary screen only) — user outcome, composition kind, focal point, exact ordered first-viewport regions, visible primary action, signature motifs, forbidden defaults, and the required `experience-*` runtime anchors. Other screens omit this field unless they materialize a required signature motif.
+- **Foundation primitives** (REQUIRED on the contract primary screen and any screen that materializes a signature motif) — exact component/import names from `.tmp/experience-foundation-contract.json`; components are created by Step 10.8 before builders run. Do not replace them with local cards, rows, or duplicated markup.
+- **Key-flow ownership** (REQUIRED on the primary screen and selected key-flow screen) — identify the sidecar `keyFlow` route/outcome, the primary action that reaches it, and any required state handoff. Native QA reviews both routes at normal and large text.
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
-- **Operational pattern** (Home or workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Omit only for normal CRUD/business screens without a dashboard or workflow shape. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
+- **Operational pattern** (workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Use `home-dashboard` only when the experience contract has `entryMode: overview` and does not forbid it. Omit an operational pattern when the contract's composition itself is sufficient. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.
 - **Calendar pattern** (Calendar/schedule/appointment screens only) — REQUIRED when the screen manages appointments, schedules, visits, availability, personal/team/POS calendars, or date-grouped work. Choose one: `month-agenda` (`Calendar` + agenda rows), `expandable-calendar-agenda` (`CalendarProvider` + `ExpandableCalendar` + `AgendaList`), `calendar-list-range` (`CalendarList` for date-range browsing), or `timeline-day-list` (date chip strip + `FlatList` when the app intentionally wants a lightweight schedule without another dependency). For TWEED-like calendar management views, default personal/team/POS calendar screens to `expandable-calendar-agenda` and appointment list screens to `month-agenda`.
 - **Control patterns** (emit only for specialized controls) — use `checkbox-field` for boolean or checklist-like toggles, `numeric-stepper` for bounded plus/minus fields, `line-item-stepper-row` for product/order/cart/inventory rows with inline quantity/count adjustment, `searchable-lookup-sheet` for Dataverse lookup/ComboBox fields with many records, `segmented-control` for 2-5 bounded mutually-exclusive options, and `recurrence-rule-editor` for repeating schedules. Include the control-specific contract: checkbox boolean vs multi-select mapping; stepper min/max/step and commit behavior (`local draft until Save/Next` by default); lookup service/search/display fields/pagination and `@odata.bind`; segmented option source, selected state, optional counts, and generated option const mapping; recurrence pattern/start/end/date-time/weekday-mask fields, summary text, and validation rules.
 - **Archetype** — one of List / Detail / Form / Auth / Tab-root / Modal-Sheet / Empty-onboarding (see Step 2)
@@ -451,15 +584,15 @@ For each screen the user adds, provide this compact shape:
 - **Input ergonomics override** (Form screens only, omit if Shared Conventions field controls cover it) — list only fields that differ from the entity default or require special native input behavior.
 - **Key user actions** — buttons / forms / gestures
 - **Idempotency guards** — primary navigation action uses `isNavigating`; async submit uses `isSubmitting`/`isPending`; failed submits stay on-screen with values preserved
-- **Animations** — specify per-interaction using the vocabulary below ONLY if the screen needs animations beyond the app-level motion policy in `## Design Direction`. **Otherwise omit entirely** — builder reads the policy and applies the default vocabulary. Never write "spring" or "fade" without context.
+- **Animations** — specify per-interaction using the vocabulary below ONLY if the screen needs animations beyond the app-level motion policy in `## Design → Design Translation`. **Otherwise omit entirely** — builder reads the policy and applies the default vocabulary. Never write "spring" or "fade" without context.
 
 **Hard omissions:** Do NOT repeat `SafeAreaView`, `StatusBar`, `KeyboardAvoidingView`, 44pt touch targets, contrast rules, accessibility labels, skeleton wrapper matching, default `useFocusEffect`, default button hierarchy, default empty/error/loading structure, or inherited density/surface/motion. Those are builder rules and shared conventions, not per-screen spec content.
 
-**Optional override fields — emit ONLY when the screen breaks from the inherited app-level default. Omit otherwise.** All fields below inherit from `## Design Direction`, `brand/design-system.md`, and `### Shared Conventions` when absent. The screen-builder applies the inherited value automatically; emitting these fields with the same value as the app default is pure noise and wastes ~80–120 tokens per screen.
+**Optional override fields — emit ONLY when the screen breaks from the inherited app-level default. Omit otherwise.** All fields below inherit from `## Design → Product Experience Contract`, `brand/design-system.md`, and `### Shared Conventions` when absent. The screen-builder applies the inherited value automatically; emitting these fields with the same value as the app default is pure noise and wastes ~80–120 tokens per screen.
 
 - **A11y notes** (override only) — ONLY if the screen has a non-standard a11y requirement beyond the universal `accessibility-checklist.md` (e.g., a custom gesture that needs a screen-reader hint, an icon-only button without an obvious label). For standard screens, the universal checklist already covers everything — omit.
 - **Visual emphasis** (override only) — the answer to Question 2 in the Domain layout decisions block already pins this. Re-emit ONLY if the per-screen visual emphasis intentionally differs from what the domain block stated (rare).
-- **Density mode** (override only) — `sparse` / `comfortable` / `dense`. Emit ONLY if the screen breaks from `## Design Direction → density`. Example valid override: a celebration screen using `sparse` in an otherwise `dense` app.
+- **Density mode** (override only) — `sparse` / `balanced` / `dense`. Emit ONLY if the screen breaks from the contract's first-viewport density. Example valid override: a celebration screen using `sparse` in an otherwise `dense` app.
 - **Surface style** (override only) — `flat` / `subtle-depth` / `strong-cards` / `editorial`. Emit ONLY if the screen intentionally contrasts the app-level surface treatment.
 - **Restrained or expressive** (override only) — omit unless the screen is one of the 1–2 designated expressive screens (completion states, empty onboarding). Default is `restrained` for everything else; do not emit it.
 - **Refresh trigger** (override only) — List screens default to `useFocusEffect` (hard rule in screen-builder). Omit unless the screen needs a different refresh strategy (timer, websocket, manual-only).
@@ -468,9 +601,12 @@ For each screen the user adds, provide this compact shape:
 
 ---
 
-### Worked example — what a compact spec looks like (the brevity bar)
+### Mode-specific example — inspection workflow only (the brevity bar)
 
-This is the target shape for every spec. ~120 words, ~450 tokens. No inlined catalogue descriptions, no override fields that match app defaults, Domain block is exactly 3 sentences. The screen-builder still produces the polished `Walkaround` UI from your screenshots from this much.
+This demonstrates compactness for an explicitly approved inspection workflow;
+it is not the target content or layout for every spec. Keep specs near ~120
+words and ~450 tokens, but derive nouns, components, and actions from the
+Product Experience Contract instead of copying `Walkaround` content.
 
 ```markdown
 ### Screen 4 — Walkaround (`/(app)/inspections/[id]/walkaround`)
@@ -495,9 +631,9 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 - **Key user actions:** capture photo, add defect, navigate prev/next, save zone.
 ```
 
-**Note what's NOT in the example:** No `**Header block**` wrapper (Route + File + Presentation + Native are flat bullets, NOT grouped under a sub-heading); no `**Role**` (Walkaround is open to all signed-in inspectors — only emit Role when the screen is gated to a specific persona); A11y notes (universal checklist covers it), Visual emphasis (already in Domain block), Density mode (matches `## Design Direction`), Surface style (matches), Restrained/expressive (matches), Refresh trigger (default `useFocusEffect`), Animations (default motion policy applies). Each one would have added 30-80 tokens for zero builder benefit.
+**Note what's NOT in the example:** No `**Header block**` wrapper (Route + File + Presentation + Native are flat bullets, NOT grouped under a sub-heading); no `**Role**` (Walkaround is open to all signed-in inspectors — only emit Role when the screen is gated to a specific persona); A11y notes (universal checklist covers it), Visual emphasis (already in Domain block), Density mode (matches the Product Experience Contract), Surface style (matches), Restrained/expressive (matches), Refresh trigger (default `useFocusEffect`), Animations (default motion policy applies). Each one would have added 30-80 tokens for zero builder benefit.
 
-**If a screen omits ALL override fields**, that's the correct outcome — not a missing spec. The screen-builder already knows the app defaults from `## Design Direction` + `### Shared Conventions`.
+**If a screen omits ALL override fields**, that's the correct outcome — not a missing spec. The screen-builder already knows the app defaults from `## Design → Product Experience Contract` + `### Shared Conventions`.
 
 ---
 
@@ -527,14 +663,29 @@ Reference data-model entities by name as the data architect proposed them — do
 > "→ Assembling the ## Screens markdown section…"
 
 **Write target by phase:**
-- `phase: specs` — read `plan_path`, locate the existing `## Screens` section (the locked graph from Gate 4a), and append the **Per-Screen Specs** + **Open Questions** subsections immediately before `## Approvals`. **Do NOT also write `_screens_section.md`** — single-write rule (see phase table above). Use one `Edit` (insert before `## Approvals`) or one `Write` of the full updated `plan_path`. Pick whichever is one operation.
-- `phase: graph` — write to `<working_dir>/_screens_section.md` as scratch for Gate 4a; orchestrator merges the approved graph into `plan_path` after Gate 4a passes.
+- `phase: specs` — read `plan_path`, locate the existing `## Screens` section (the locked graph from Gate 4a), and append the **Per-Screen Specs** + **Open Questions** subsections immediately before `## Approvals`. Read `.tmp/experience-screen-contract.json` first and preserve every primary-composition field. **Do NOT also write `_screens_section.md`** — single-write rule (see phase table above). Use one `Edit` (insert before `## Approvals`) or one `Write` of the full updated `plan_path`. Pick whichever is one operation.
+- `phase: graph` — write to `<working_dir>/_screens_section.md` as scratch for Gate 4a; orchestrator merges the approved graph into `plan_path` after Gate 4a passes. In the same phase, write `<working_dir>/.tmp/experience-screen-contract.json` with the exact primary composition described in Step 0.
 - legacy / unset — write to `<working_dir>/_screens_section.md` as before.
 
 Section format (same in all phases):
 
+> The inspection map/spec below is a **mode-specific workflow reference only**.
+> Do not copy its dashboard, list/detail/form route set, status language, or
+> field-operations content into a contract that selects another entry mode.
+
 ```markdown
 ## Screens
+
+### Product Experience Composition
+- **User outcome:** <primaryJob>
+- **Primary screen:** `/(app)/home` — <entryMode> composition
+- **Key flow:** `<non-primary route>` — <outcome exercised after Home>
+- **Focal point:** <firstViewport.focalPoint>
+- **First viewport regions:** <region → region → region in exact order>
+- **Visible primary action:** <firstViewport.primaryAction>
+- **Signature motifs:** <motif, motif or None>
+- **Forbidden defaults:** <forbidden defaults>
+- **Runtime anchors:** <experience-region-* in exact order>, `experience-primary-action`, <experience-motif-*>
 
 ### Navigation Pattern
 **Tabs + Stack** — three top-level tabs (Home, Inspections, Profile), each pushes detail screens onto its own stack.
@@ -546,7 +697,7 @@ Section format (same in all phases):
 | Splash | `/` | `app/index.tsx` | default | Auth-aware redirect | — | — | template (keep) |
 | Login | `/login` | `app/login.tsx` | default | MSAL sign-in | — | — | template (keep) |
 | OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Connector consent return | — | — | template (keep) |
-| Home | `/(app)/home` | `app/(app)/home.tsx` | default | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | replace template |
+| Home | `/(app)/home` | `app/(app)/home.tsx` | default | Contract primary composition: <entryMode + user outcome> | contract-specific source | — | replace template |
 | Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | new |
 | Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | new |
 | New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | new |
@@ -614,7 +765,7 @@ Section format (same in all phases):
 - Destructive actions: overflow + confirm
 
 **Density / motion / surface**
-- Inherits from `## Design Direction`; per-screen specs emit overrides only.
+- Inherits from `## Design → Product Experience Contract` and brand primitives; per-screen specs emit overrides only.
 
 ### JavaScript Dependencies
 
@@ -623,16 +774,13 @@ None.
 ### Per-Screen Specs
 
 #### Home (`/(app)/home`)
-- **Domain layout decisions:**
-  1. Key fields: open inspection count, overdue count, upcoming scheduled date
-  2. Visual emphasis: the two stat tiles — open + overdue counts — are the first thing a field tech checks each morning
-  3. Different from generic: domain-specific stat tiles with color (overdue = red), not a generic list of recent items
+- **Domain layout decisions:** The current assignment and its readiness status matter most. Visual emphasis is the assignment that enables a safe next action. Unlike generic CRUD, the layout follows the approved first-viewport order rather than a fixed dashboard/card grid.
+- **Experience composition:** user outcome = complete the next inspection action; composition = workflow; focal point = current assignment readiness; regions = `context → feature → primary-action → supporting-content`; primary action = `Start inspection`; motifs = `next-step-progress`, `action-state`; forbidden defaults = `dashboard-first-home`, `card-catalog`; anchors = `experience-region-context`, `experience-region-feature`, `experience-region-primary-action`, `experience-region-supporting-content`, `experience-primary-action`, `experience-motif-next-step-progress`, `experience-motif-action-state`.
 - **Archetype:** Tab-root
-- **Operational pattern:** `home-dashboard`
-- **Purpose:** Today dashboard showing current inspection work, progress, open/overdue counts, and quick "new inspection" CTA
-- **Layout delta:** current assignment card at top, progress/status strip, `StatTile` pair for Open/Overdue, "Upcoming today" rows capped at 3, recent inspections rows capped at 3, bottom CTA "New inspection"
-- **Data:** open/overdue counts must come from a real count/aggregate/rollup source if available, not from counting a capped first page; upcoming rows use `cr123_inspectionService.getAll({ filter: "today", top: 3, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status'] })`
-- **State delta:** empty `calendar-outline`, "No inspections scheduled today", CTA "Schedule one"
+- **Purpose:** Continue the user's current inspection workflow.
+- **Layout delta:** context cue → current assignment/readiness feature → visible `Start inspection` action → supporting recent context, in the stated order.
+- **Data:** `cr123_inspectionService.getAll({ top: 1, orderBy: ['scheduledDate asc', 'cr123_inspectionid asc'], select: ['cr123_name', 'scheduledDate', 'status'] })`
+- **State delta:** empty `calendar-outline`, "No inspection is ready to start", recovery "Browse scheduled inspections"
 
 #### Inspections list (`/(app)/inspections`)
 - **Domain layout decisions:**
@@ -677,7 +825,7 @@ What you DO emit per screen: the `**Data**` field listing service+method calls (
 Before writing the section (to `plan_path` in `phase: specs`, or to `_screens_section.md` in `phase: graph` / legacy) and returning to the planner, verify the screen graph is complete. Build a coverage matrix in your head (or scratch buffer):
 
 1. **Features** — every feature listed in the requirements brief MUST map to at least one screen (or to a documented exception under "Open Questions"). Walk the brief feature-by-feature and confirm.
-2. **Primary entities** — every entity from the data-model architect's `## Data Model` section MUST have at least a List + Detail pair (or a documented exception, e.g. lookup-only entities like `User`, `Status`, `Category`).
+2. **Primary entities** — every entity needed for the primary job MUST map to an intentional surface, action, or documented support-only role. Do not infer a List + Detail pair merely because an entity exists; lookup, support, join, and back-office entities often need no direct screen.
 3. **User actions** — every verb in the brief (create, edit, assign, approve, capture, export, …) MUST have a target screen or a Form/Sheet that hosts it. A verb with no host = a missing screen.
 
 If the matrix has gaps, add the missing screens NOW — do not return a partial plan and let Gate 4 catch it (the iteration loop after Gate 4 rejection is the most expensive in the whole flow). Only after the matrix is fully covered (or every gap is justified under Open Questions) may you proceed to Step 6.

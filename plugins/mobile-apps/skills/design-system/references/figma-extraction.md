@@ -21,7 +21,7 @@ Extracts palette, typography, spacing, and component tokens from a Figma file vi
 8. Extract variable collections → semantic tokens (color/primary/default)
 9. Handle variable modes (light/dark/density) — ask user which is canonical
 10. Optional: call /v1/images for logo node if --figma-logo-node flag provided
-11. Emit ## Design Direction block with provenance
+11. Merge extracted tokens into `brand/design-system.md` with provenance and preserve the Product Experience Contract primitives
 ```
 
 ## API calls
@@ -92,8 +92,8 @@ Non-sRGB color spaces (Display P3, Lab): convert to sRGB hex with notice.
 ## Output
 
 ```markdown
-## Design Direction
-source: Figma file <key> (fetched <ISO date>)
+## Imported Design Evidence
+- Source: Figma file <key> (fetched <ISO date>)
 
 ## Palette
 | Token | Hex | Usage |
@@ -105,6 +105,9 @@ source: Figma file <key> (fetched <ISO date>)
 | Role | Family | Size | Weight | Line | Tracking |
 | Heading | Inter | 24 | 600 | 32 | -0.5 |
 ...
+
+## Product Experience Primitives
+- Preserve the primary composition from `.tmp/experience-contract.json`; Figma tokens refine visual expression only.
 ```
 
 ## Rate limiting

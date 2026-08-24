@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Screen Build Pack",
+  "type": "object",
+  "required": ["schemaVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "fixtures", "screens", "buildOrder", "invalidation"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sources": {
+      "type": "object",
+      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "dataIntent"],
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    },
+    "sourcePaths": { "type": "object" },
+    "experience": { "type": "object", "required": ["audience", "primaryJob", "entryMode", "primarySurface", "forbiddenDefaults"] },
+    "design": { "type": "object", "required": ["tokensPath", "primitives"] },
+    "shell": {
+      "type": "object",
+      "required": ["safeAreaOwner", "rootSafeAreaProviderOnly", "headerModes"],
+      "properties": {
+        "safeAreaOwner": { "const": "screen" },
+        "rootSafeAreaProviderOnly": { "const": true },
+        "headerModes": { "type": "object" }
+      }
+    },
+    "navigation": { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes"] },
+    "fixtures": {
+      "type": "object",
+      "required": ["adapter", "entities", "assetPolicy", "assetManifest", "viewModel", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
+      "properties": {
+        "entities": { "type": "array" },
+        "assetManifest": { "const": "assets/experience/manifest.json" },
+        "viewModel": { "const": "src/generated/experience-view-model.ts" },
+        "recordIdentity": { "const": "stable-primary-key" },
+        "mediaPolicy": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
+        "mediaManifest": { "const": "assets/experience/manifest.json" },
+        "mediaFields": { "const": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }
+      }
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "route", "file", "role", "headerMode", "data"],
+        "properties": {
+          "headerMode": { "enum": ["root", "back", "close", "none"] },
+          "data": {
+            "type": "object",
+            "required": ["adapter", "entities", "viewModel", "recordIdentity", "mediaPolicy", "mediaFields"],
+            "properties": {
+              "entities": { "type": "array" },
+              "viewModel": { "const": "src/generated/experience-view-model.ts" },
+              "recordIdentity": { "const": "stable-primary-key" },
+              "mediaPolicy": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
+              "mediaFields": { "const": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }
+            }
+          }
+        }
+      }
+    },
+    "buildOrder": { "type": "array", "minItems": 3 },
+    "invalidation": { "type": "object", "required": ["screenDependencies", "fixtureDependencies", "validatorDependencies"] }
+  },
+  "additionalProperties": false
+}

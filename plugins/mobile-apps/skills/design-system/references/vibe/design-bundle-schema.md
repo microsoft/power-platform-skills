@@ -1,8 +1,17 @@
-# `## Design Direction` block schema
+# Legacy Design Bundle Schema (inactive)
 
-This file documents the exact shape of the `## Design Direction` markdown block that the internal `/design-system` style picker can write into `native-app-plan.md`. Downstream agents (`screen-planner`, `screen-builder`) read this block conditionally — if present, its values become defaults for per-screen design fields.
+This file is retained only to explain historical exports. The current
+contract-first mobile pipeline must not write or parse a `## Design Direction`
+block in `native-app-plan.md`. Downstream agents read
+`.tmp/experience-contract.json`, `.tmp/experience-screen-contract.json`,
+`## Design → Product Experience Contract`, and
+`brand/design-system.md → ## Product Experience Primitives` instead.
 
-## Location in the plan
+The historical examples below are non-executable compatibility context. They
+must not select a primary composition, override entry mode, or become an
+industry-derived fallback.
+
+## Historical Location (do not create)
 
 Inserted between `## Native Capabilities` (or `## Connectors`) and `## Design`. If `## Design` is absent, inserted before `## Screens`.
 
