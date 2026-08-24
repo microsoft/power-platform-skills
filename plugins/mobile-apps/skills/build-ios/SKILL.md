@@ -21,17 +21,20 @@ distribution, or App Store export.
 
 ## Signing boundary
 
-Apple signing assets remain in the user's existing Wrap/Xcode/Apple account.
-Never request, read, list, copy, move, print, encode, upload, commit, or generate:
+Apple signing assets remain in the retained project-specific keychain and the
+standard user provisioning-profile directory created by `/setup-apple-ios`.
+Never request, copy, move, print, encode, upload, commit, or generate:
 
 - certificates or certificate contents
 - private keys, `.p8`, `.p12`, `.pfx`, `.pem`, or `.key` files
-- provisioning profiles or `.mobileprovision` files
+- provisioning profile contents or `.mobileprovision` files
 - Apple passwords, app-specific passwords, keychain data, or signing secrets
 
-Do not accept paths to those assets. Do not add credential fields to
-`wrap.config.json`. The user registers physical device UDIDs and makes the
-matching signing assets available to Xcode/Wrap outside the project.
+Do not accept paths to those assets. Do not add passwords, certificate names,
+profile UUIDs, device UDIDs, keychain paths, or credential fields to
+`wrap.config.json` or logs. The approved helper may inspect the dedicated
+keychain and installed profile in-process, but it emits only safe mode,
+Team/bundle, APNs-environment, and boolean proof.
 
 ## Phase 1 — Read-only preflight
 
@@ -41,14 +44,34 @@ matching signing assets available to Xcode/Wrap outside the project.
 2. Require `package.json` script `build:ios` to equal `wrap ios`. Require a
    physical-device intent and one explicit mode: `development` or `ad-hoc`.
    STOP on any other mode.
-3. Consume the exact `/setup-fcm` and `/setup-apns` handoff from
+3. Consume the exact `/setup-fcm`, `/setup-apple-ios`, and `/setup-apns` handoff from
    `memory-bank.md`: Firebase project ID, immutable iOS Firebase app ID, iOS
    bundle ID, evaluated plist path, APNs manual-upload confirmation, APNs Key
    ID, and Apple Team ID. Missing or conflicting handoff data blocks the build;
    do not reconstruct it or select another Firebase app.
-4. Confirm the device is registered in the selected Apple Developer team.
-   Capture no UDID or device inventory in project files.
-5. Scan the project before any write:
+4. Require the native client integration, sender-auth handoff, and exact
+   producer/sender flow handoff recorded by the prescribed iOS push chain:
+   `/setup-fcm` -> `/setup-apple-ios` -> `/setup-apns` ->
+   `/add-push-notifications` -> sender auth and
+   `/create-push-notification-flow` -> `/build-ios` -> `/verify-ios-push`.
+   Do not recreate or mutate those stages here.
+5. Validate the fresh Apple provisioning handoff for the exact selected mode,
+   Team, and bundle. This replaces manual device/certificate/profile
+   confirmation:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
+     --project-root . --file apple-ios-provisioning.json \
+     --expected-team "<APPLE_TEAM_ID>" \
+     --expected-bundle "<IOS_BUNDLE_ID>" \
+     --expected-mode "<development|ad-hoc>"
+   ```
+
+   Exit 0 and `status: valid` are required. Missing, stale, wrong-Team,
+   wrong-bundle, unsafe-path, unsupported-mode, certificate, profile, device
+   coverage, or APNs proof routes to `/setup-apple-ios` repair. Do not ask the
+   user to confirm a device, certificate, profile, name, UUID, or UDID.
+6. Scan the project before any write:
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-ios-wrap-build.js" \
@@ -146,6 +169,27 @@ inspect that installed Wrap version's local help/package contract and run a
 separate bundle only when it requires one. Any type-check, push validator, or
 required bundle failure blocks the native build.
 
+Immediately before Wrap, prove that the selected mode's current installed
+profile still matches the exact Team/bundle/APNs environment and contains the
+required usable Apple Development or Apple Distribution identity from the
+retained dedicated keychain:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
+  --project-root . --timeout 3600 -- \
+  /usr/bin/env node \
+  "${PLUGIN_ROOT}/scripts/verify-apple-ios-build-signing.js" \
+  --project-root . --file apple-ios-provisioning.json \
+  --mode "<development|ad-hoc>" \
+  --expected-team "<APPLE_TEAM_ID>" \
+  --expected-bundle "<IOS_BUNDLE_ID>"
+```
+
+The secure helper temporarily unlocks and prepends only the retained
+project-specific keychain, then restores the previous search list on success
+or failure. Require `status: ready`. The verifier emits no certificate name,
+profile UUID, device identifier, keychain path, or profile contents.
+
 Print a safe summary: app name, bundle ID, version, mode, Team ID, export
 method, APNs environment, icon path, and output path. Then ask:
 
@@ -159,7 +203,10 @@ mkdir -p .tmp
 touch .tmp/ios-build-start
 set +e
 set -o pipefail
-APNS_ENVIRONMENT="<development|production>" npm run build:ios 2>&1 |
+APNS_ENVIRONMENT="<development|production>" \
+  node "${PLUGIN_ROOT}/scripts/manage-apple-signing-keychain.js" \
+    --project-root . --timeout 3600 -- \
+    /usr/bin/env npm run build:ios 2>&1 |
   node "${PLUGIN_ROOT}/scripts/filter-ios-build-output.js"
 BUILD_STATUS=$?
 set +o pipefail
@@ -168,7 +215,8 @@ test "$BUILD_STATUS" -eq 0
 ```
 
 Never add verbose/debug flags that could expose signing command lines or
-environment details. Do not silently retry or attempt native-signing repairs.
+environment details. The helper restores the previous keychain search list
+even when Wrap fails. Do not silently retry or attempt native-signing repairs.
 The filter retains only the final 80 safe lines. It suppresses signing command
 lines and `security find-identity` output, and redacts token/password/private
 key, certificate/signing identity, provisioning profile, development-team, and

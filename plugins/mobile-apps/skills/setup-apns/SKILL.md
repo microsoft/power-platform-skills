@@ -101,31 +101,91 @@ APNs setup extends the exact Firebase iOS app already configured by
    exact `/setup-fcm` pairing. STOP and direct the user back to `/setup-fcm`;
    never replace the plist or continue to APNs upload.
 
-## Phase 2 — Guided APNs key handoff
+## Phase 2 — Consume the Apple identifier/team handoff
+
+The APNs authentication key must belong to the same Apple Team that owns the
+exact explicit iOS identifier. Prove that identity before asking the user to
+create or upload any credential.
+
+1. Read the approved Apple Team ID recorded by `/setup-apple-ios` in
+   `memory-bank.md`. Require exactly 10 uppercase ASCII letters or digits.
+   STOP if it is absent or conflicts with another recorded Team ID; a newly
+   typed Team ID is not a replacement for the approved handoff.
+2. Validate the project-local identifier/capability proof against that Team ID
+   and the already-validated Firebase/Expo bundle ID:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-apple-identifier-capability.js" \
+     --project-root . --file apple-ios-identifier.json \
+     --expected-team "<APPLE_TEAM_ID>" \
+     --expected-bundle "<IOS_BUNDLE_ID>"
+   ```
+
+   Require exit `0`, `status == "valid"`, the exact expected Team ID and bundle
+   ID, and successful explicit-identifier and Push Notifications read-back.
+   The validator also enforces a current proof, a safe project-local
+   non-symlink file, and no Apple account or credential content.
+3. Validate the completed Apple provisioning handoff as well:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
+     --project-root . --file apple-ios-provisioning.json \
+     --expected-team "<APPLE_TEAM_ID>" \
+     --expected-bundle "<IOS_BUNDLE_ID>"
+   ```
+
+   Require a fresh valid contract proving the retained keychain, modern
+   Development/Distribution identities, registered-device coverage, and
+   installed development/ad-hoc profiles. Do not replace this with manual
+   confirmation and do not print profile UUIDs, certificate names, or device
+   identifiers.
+4. STOP on a missing, stale, invalid, wrong-Team, or wrong-bundle handoff.
+   Preserve the Firebase selection and route the user to `/setup-apple-ios`;
+   never repair the mismatch by changing the Firebase app, Expo bundle ID,
+   Apple Team ID, or identifier inside this workflow.
+
+## Phase 3 — Guided APNs authentication-key handoff
 
 APNs authentication keys are Apple credentials. Their creation and upload stay
 inside the user's Apple Developer and Firebase Console browser sessions; this
 skill must not automate either action.
 
-1. Guide the user to Apple Developer -> Certificates, Identifiers & Profiles ->
-   Keys. Have them select an existing APNs-capable key or explicitly create one
-   with Apple Push Notifications service enabled. Remind them that Apple permits
-   the `.p8` download only once and that account key limits may apply.
-2. Ask the user to keep the downloaded `.p8` outside the project and never paste
-   it into chat or provide its path. Do not use `Read`, `Bash`, Apple APIs,
-   browser automation, Firebase CLI, or any upload API to inspect, copy, move,
-   encode, validate, or upload the key.
-3. Guide the user to Firebase Console -> the exact recorded project -> Project
-   settings -> Cloud Messaging -> the exact matched iOS app -> APNs
-   authentication key. The user manually uploads the `.p8` and enters its Key
-   ID and Apple Team ID.
-4. Capture only the user's confirmation plus Key ID and Team ID for diagnostics.
-   These identifiers are not the key. Never persist the `.p8`, its contents, a
-   derived value, or a local path. If the user asks the agent to automate `.p8`
-   creation or upload, decline that portion and continue with the guided Console
-   steps.
+The only supported Firebase credential route is a manually uploaded Apple APNs
+authentication key (`.p8`). Do not use Fastlane `pem`, generate or upload an
+APNs certificate/`.p12`, automate either website, call undocumented endpoints,
+or substitute certificate-based APNs credentials. There is no supported
+Firebase CLI or Firebase Management API operation for uploading an APNs
+authentication key; Firebase Console is the required handoff.
 
-## Phase 3 — App configuration and verification
+1. Guide the user to Apple Developer -> Certificates, Identifiers & Profiles ->
+   Keys while signed into the **exact validated Apple Team ID** from Phase 2.
+   Have them select an existing APNs-capable authentication key for that Team or
+   explicitly create one with Apple Push Notifications service enabled. Do not
+   create a key on another visible Team. Remind them that Apple permits the
+   `.p8` download only once and that account key limits may apply.
+2. Tell the user to download the `.p8` themselves, once, into a secure
+   user-controlled location outside this and every other repository. They must
+   never paste it into chat, provide its path, or place it in a project. The
+   agent must not request, read, list, copy, move, inspect, encode, validate, or
+   upload the `.p8`, including through `Read`, `Bash`, Fastlane, Apple APIs,
+   browser automation, Firebase CLI, Firebase APIs, or an undocumented
+   endpoint.
+3. Guide the user to Firebase Console -> the exact recorded Firebase project ->
+   Project settings -> Cloud Messaging -> the **exact immutable iOS app ID and
+   bundle ID validated in Phase 1** -> APNs authentication key. The user
+   manually uploads the `.p8` and enters its Key ID and the exact Apple Team ID
+   validated in Phase 2. Do not continue if the Console app or either identifier
+   differs.
+4. Ask only for confirmation that the manual upload succeeded plus the safe Key
+   ID and Team ID. Require the Key ID and Team ID to each be exactly 10 uppercase
+   ASCII letters or digits, and require the Team ID to equal the validated
+   handoff. These identifiers are not the key. Never persist the `.p8`, its
+   contents, a derived value, a local path, or browser/session evidence. If the
+   user asks for Fastlane `pem`, `.p12` generation, browser automation, or
+   automatic upload, decline that unsupported portion and continue only with
+   the manual `.p8` Console steps.
+
+## Phase 4 — App configuration and verification
 
 1. Verify `app.config.js` includes:
    - `expo-notifications`
@@ -136,13 +196,16 @@ skill must not automate either action.
 2. Run `npx expo config --type public`, the push config validator, and changed
    file validation.
 3. Record APNs setup status in `memory-bank.md` using only the verified Firebase
-   project/app/bundle identity, Key ID, Team ID, and manual-upload confirmation.
+   project/app/bundle identity, validated Apple identifier handoff, Key ID,
+   matching Team ID, manual-upload confirmation, and confirmation timestamp.
+   Do not record the key name if it may reveal user or organization data.
 
 End this workflow with the exact status **configured, device verification
 pending** after the manual upload is confirmed and static validation passes.
-Do not mark APNs complete here. Route the user to `/build-ios` for a matching
-registered-device `development` or `ad-hoc` IPA, then to `/verify-ios-push` for
-the physical delivery matrix. Do not duplicate either workflow.
+Do not mark APNs complete here. Return to `/add-push-notifications` to complete
+the native client, then follow sender authentication and
+`/create-push-notification-flow`, `/build-ios`, and `/verify-ios-push`. Do not
+duplicate any owner workflow.
 
 Only `/verify-ios-push` may change the status to physically verified after its
 entire physical-device matrix passes. A simulator, Expo Go, Metro, config

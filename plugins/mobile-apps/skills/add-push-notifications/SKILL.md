@@ -15,7 +15,7 @@ model: opus
 Orchestrate the app-side notification integration. Treat these as independent,
 resumable tracks:
 
-1. **Native client:** Firebase client config, APNs handoff, permission UX,
+1. **Native client:** Firebase client config, Apple provisioning/APNs handoff, permission UX,
    consent-first iOS registration, topic lifecycle, background delivery, and
    deep links.
 2. **Sender authentication:** `/setup-push-wif` (preferred) or
@@ -37,7 +37,8 @@ stages to their owner skills.
 ## Workflow
 
 1. Verify app and runtime -> 2. Verify auth identity -> 3. Resume/establish
-Firebase client setup -> 4. Resume APNs setup when needed -> 5. Write wrapper
+Firebase client setup -> 4. Resume Apple provisioning and APNs setup when
+needed -> 5. Write wrapper
 -> 6. Add permission UX -> 7. Wire auth/topic lifecycle -> 8. Wire deep links
 -> 9. Validate -> 10. Update memory bank and report independent next steps
 
@@ -101,12 +102,15 @@ project or similarly named Firebase app.
 ### 4. Resume APNs setup when needed
 
 When iOS is selected, inspect `memory-bank.md` for a completed APNs/Firebase
-Console handoff for the same Firebase project and iOS app ID. Invoke
+Console handoff for the same Firebase project and iOS app ID. First invoke
+`/setup-apple-ios --working-dir <root>` when its exact Team/bundle provisioning
+contract is missing, stale, or invalid. Only after that succeeds, invoke
 `/setup-apns --working-dir <root>` when iOS client setup is new, the app ID or
 project changed, or APNs completion cannot be proven. Android-only work skips
-this step. Propagate blockers without downgrading them. A successful manual
-handoff means **configured, device verification pending**; it is not physical
-delivery success.
+both steps. Propagate blockers without downgrading them. Preserve the manual
+Firebase `.p8` boundary: neither skill reads or uploads the key. A successful
+manual handoff means **configured, device verification pending**; it is not
+physical delivery success.
 
 ### 5. Write the wrapper
 
@@ -227,10 +231,11 @@ Report these states independently, even when several are pending:
 | Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; never run Wrap/Xcode or inspect signing assets here |
 | Physical iOS delivery | not applicable / pending / partial / failed / verified | `/verify-ios-push`; never substitute config validation, Firebase acceptance, simulator, Expo Go, or Metro evidence |
 
-When iOS is selected and the client plus APNs handoff are configured, route to
-`/build-ios` if no fresh matching registered-device IPA is recorded. Route to
-`/verify-ios-push` only after the build, sender authentication, and exact
-producer/sender flows are ready. These are handoffs, not substeps: do not copy
+For iOS, report and preserve this route in order:
+`/setup-fcm` -> `/setup-apple-ios` -> `/setup-apns` -> client integration in
+this skill -> sender authentication and `/create-push-notification-flow` ->
+`/build-ios` -> `/verify-ios-push`. Route to `/build-ios` only after sender
+authentication and the exact producer/sender flows are ready. These are handoffs, not substeps: do not copy
 their signing, build, FlowAgent read-back, or physical-device procedures into
 this workflow.
 

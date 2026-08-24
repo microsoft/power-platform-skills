@@ -42,6 +42,20 @@
       "prompt": "Create an ad-hoc IPA for registered test devices. All Expo, Entra, Firebase, APNs, Team ID, icon, and version identities agree, and I provide both exact confirmations.",
       "expected_output": "The skill writes only confirmed non-secret wrap fields if needed, runs type-check and strict push-client validation (implemented wrapper, mounted lifecycle, consent/settings surfaces, early real background delegation, exact native identities and one Firebase project), runs the current required iOS bundle step and npm run build:ios; requires a fresh project-local IPA; prints only safe artifact metadata; and records only safe build metadata in memory-bank.md.",
       "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "fresh-apple-provisioning-contract",
+      "prompt": "Build a development IPA. The Apple Team and bundle match, but apple-ios-provisioning.json is missing or its proof expired yesterday. I confirm the device and profile are still fine.",
+      "expected_output": "The skill blocks before Wrap, rejects manual device/certificate/profile confirmation as a substitute, and routes to /setup-apple-ios to create or repair a fresh contract for the exact Team, bundle, and development mode.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "dedicated-keychain-build-proof",
+      "prompt": "The fresh ad-hoc provisioning handoff validates. Before Wrap, the retained keychain has no usable Apple Distribution identity matching the installed production-APNs profile.",
+      "expected_output": "The skill runs the safe build-signing verifier through the retained-keychain helper, blocks before Wrap with only a safe category, emits no certificate name/profile UUID/UDID/keychain path, restores the previous search list, and routes repair to /setup-apple-ios.",
+      "files": []
     }
   ]
 }

@@ -44,13 +44,18 @@ const EXPECTED_COVERAGE = [
   'apns-manual-handoff',
 ].sort();
 const EXPECTED_APNS_COVERAGE = [
+  'apple-handoff-team-bundle-mismatch',
   'exact-selected-app-reuse',
+  'fastlane-pem-p12-forbidden',
   'plist-identity-mismatch',
   'apns-key-manual-only',
   'validated-plist-override',
   'duplicate-safe-selected-app-continuity',
   'stale-or-drifted-selected-app',
   'configured-pending-device-verification',
+  'prescribed-ios-chain',
+  'unsupported-auto-upload',
+  'valid-apple-identifier-handoff',
 ].sort();
 const EXPECTED = {
   projectId: 'field-ops-prod',
@@ -324,6 +329,16 @@ test('fixtures and workflow remain sanitized and require no network or Admin key
   assert.match(apnsSkill, /never fall back[\s\S]*exact-bundle candidate/i);
   assert.match(apnsSkill, /configured, device verification\s+pending/i);
   assert.match(apnsSkill, /Only `\/verify-ios-push` may change the status to physically verified/);
-  assert.match(apnsSkill, /Route the user to `\/build-ios`/);
+  assert.match(apnsSkill, /Return to `\/add-push-notifications`/);
+  assert.match(apnsSkill, /validate-apple-identifier-capability\.js/);
+  assert.match(apnsSkill, /--expected-team "<APPLE_TEAM_ID>"/);
+  assert.match(apnsSkill, /--expected-bundle "<IOS_BUNDLE_ID>"/);
+  assert.match(apnsSkill, /route the user to `\/setup-apple-ios`/i);
+  assert.match(apnsSkill, /only supported Firebase credential route[\s\S]*authentication key \(`\.p8`\)/i);
+  assert.match(apnsSkill, /Do not use Fastlane `pem`/);
+  assert.match(apnsSkill, /There is no supported\s+Firebase CLI or Firebase Management API operation/i);
+  assert.match(apnsSkill, /outside this and every other repository/);
+  assert.match(apnsSkill, /exact immutable iOS app ID and\s+bundle ID validated in Phase 1/i);
+  assert.match(apnsSkill, /confirmation that the manual upload succeeded plus the safe Key\s+ID and Team ID/i);
   assert.doesNotMatch(apnsSkill, /apps:create IOS/);
 });

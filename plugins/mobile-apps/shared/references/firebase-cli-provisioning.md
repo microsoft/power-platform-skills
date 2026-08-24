@@ -131,6 +131,25 @@ package/bundle ID first. Treat generated SDK configuration as environment-bound
 configuration. Download to a non-canonical project-local candidate, validate it,
 and compare it with any existing canonical file before moving or replacing it.
 
+## 5. APNs credentials are a manual Console boundary
+
+The supported Firebase CLI app-management commands stop at project/app
+registration and SDK configuration. There is no supported Firebase CLI or
+Firebase Management API operation for uploading an Apple APNs authentication
+key.
+
+For iOS push, use only an Apple APNs authentication key (`.p8`) created or
+selected manually on the exact validated Apple Team, downloaded once to a
+user-controlled location outside every repository, and manually uploaded with
+its safe Key ID and matching Team ID to the exact selected Firebase iOS app in
+Firebase Console. An agent must never request, read, copy, encode, validate, or
+upload the `.p8`.
+
+Do not use Fastlane `pem`, APNs certificate/`.p12` generation, certificate-based
+Firebase credentials, browser automation, undocumented endpoints, or reverse
+engineered upload calls as substitutes. Those routes do not provide a supported,
+auditable handoff and may expose long-lived Apple credentials.
+
 ## Official references
 
 - [Firebase CLI documentation](https://firebase.google.com/docs/cli)

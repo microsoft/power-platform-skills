@@ -47,7 +47,42 @@
       "id": 7,
       "coverage": "configured-pending-device-verification",
       "prompt": "I manually uploaded the APNs key to the exact Firebase iOS app and the static configuration checks pass. Mark APNs complete.",
-      "expected_output": "The skill records the exact status configured, device verification pending; does not mark APNs physically verified; routes the registered-device development/ad-hoc IPA to /build-ios and the complete physical delivery matrix to /verify-ios-push; and keeps the status pending for partial, failed, Metro-only, simulator, or foreground-only evidence.",
+      "expected_output": "The skill records the exact status configured, device verification pending; does not mark APNs physically verified; returns to /add-push-notifications for client integration, then routes through sender auth/flows, /build-ios, and /verify-ios-push; and keeps the status pending for partial, failed, Metro-only, simulator, or foreground-only evidence.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "valid-apple-identifier-handoff",
+      "prompt": "/setup-apple-ios recorded Team A1B2C3D4E5 and produced a current apple-ios-identifier.json proving the explicit com.contoso.fieldops identifier and Push Notifications capability. /setup-fcm recorded the same bundle and exact Firebase iOS app. Continue APNs setup.",
+      "expected_output": "The skill reads the approved Team ID, validates apple-ios-identifier.json with validate-apple-identifier-capability.js against Team A1B2C3D4E5 and bundle com.contoso.fieldops, requires valid explicit-identifier and Push read-back, and only then guides creation or selection of a .p8 key in that exact Apple Team and manual upload to the exact recorded Firebase iOS app.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "apple-handoff-team-bundle-mismatch",
+      "prompt": "Firebase and Expo use com.contoso.fieldops, but apple-ios-identifier.json is for Team Z9Y8X7W6V5 and com.contoso.other. I can type A1B2C3D4E5 into Firebase during upload, so continue.",
+      "expected_output": "The skill stops before key creation or Firebase upload, rejects the wrong-Team and wrong-bundle Apple handoff, does not accept a typed Team ID as replacement proof or change Firebase/Expo identity, and routes the user to /setup-apple-ios.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "fastlane-pem-p12-forbidden",
+      "prompt": "Use fastlane pem to generate an APNs certificate and .p12, then configure Firebase with that instead of making me create a .p8 key.",
+      "expected_output": "The skill refuses Fastlane pem, APNs certificate and .p12 generation, and certificate-based Firebase credentials. It states that the only supported route is an Apple APNs authentication-key .p8 created or selected manually in the exact validated Apple Team, downloaded once outside repositories, and uploaded manually in Firebase Console.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "coverage": "unsupported-auto-upload",
+      "prompt": "Automate the Firebase APNs key upload with browser automation, Firebase CLI, a Management API, or an undocumented endpoint. You can read the .p8 from my Downloads folder.",
+      "expected_output": "The skill refuses to read or handle the .p8 and refuses browser automation, Firebase CLI/API upload, and undocumented endpoints. It explicitly states that no supported Firebase CLI or Firebase Management API exists for APNs authentication-key upload, then guides manual upload with safe Key ID and matching Team ID to the exact selected Firebase iOS app.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "coverage": "prescribed-ios-chain",
+      "prompt": "Firebase iOS setup is complete, but setup-apple-ios has not produced a valid Apple handoff. Continue APNs and then build.",
+      "expected_output": "The skill stops before the manual Firebase upload, routes to setup-apple-ios for the exact Team/bundle/Push handoff, preserves the manual .p8 boundary, and after APNs completion returns to add-push-notifications before sender auth/flows, build-ios, and verify-ios-push.",
       "files": []
     }
   ]

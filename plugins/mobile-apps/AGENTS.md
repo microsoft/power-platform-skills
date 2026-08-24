@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 33 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 34 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -98,8 +98,12 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
 - ✅ Push notification architecture: `expo-notifications` for consent/presentation/responses, React Native Firebase Messaging for Android+iOS FCM topics, lowercase-canonical Entra OID while signed in, exact `allUsers` while signed out, Expo Router for validated deep links. Client-managed OID topics are explicitly not an authorization boundary.
 - ✅ Firebase provisioning is automated but identity-explicit: `gcloud` verifies the active account and ADC, while on-demand `npx firebase-tools` lists/selects/creates Firebase projects and performs app operations without a global install.
-- ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config; APNs `.p8` upload remains a manual Firebase Console step and the agent never handles the key.
-- ✅ Push setup has three independently resumable tracks: native client integration (`/add-push-notifications`, `/setup-fcm`, `/setup-apns`), sender authentication, and Power Automate flow authoring. Existing active client integrations may proceed directly to `/create-push-notification-flow`; new platforms still use the client setup skills.
+- ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config. `/setup-apns` validates the exact `/setup-apple-ios` Team/identifier/Push handoff first, then permits only manual Firebase Console upload of a one-time-downloaded APNs `.p8`; no supported Firebase CLI/Management API upload exists, and agents never handle the key.
+- ✅ Push setup has independently resumable owners, but the prescribed new iOS
+  chain is `/setup-fcm` → `/setup-apple-ios` → `/setup-apns` → native client
+  integration → sender authentication/flows → `/build-ios` →
+  `/verify-ios-push`. Existing active client integrations may resume at their
+  first unproven stage.
 - ✅ iOS push orchestration adds two independently resumable stages after
   configuration: `/build-ios` creates an exact registered-device
   `development` or `ad-hoc` IPA through `npm run build:ios`, and
@@ -107,12 +111,36 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   reports native client, APNs, sender auth, flows, wrapped build, and delivery
   verification separately without duplicating their owner workflows.
 - ✅ `/setup-apns` ends at **configured, device verification pending** after
-  the manual Firebase Console upload and static checks. Only a complete
+  the exact Apple Team/identifier handoff, manual Firebase Console `.p8` upload,
+  and static checks. Fastlane `pem`, APNs `.p12` generation, browser automation,
+  and undocumented upload endpoints are prohibited. Only a complete
   `/verify-ios-push` physical-device matrix may mark APNs physically verified.
-- ✅ `/build-ios` supports registered-device development/ad-hoc scope only.
-  Apple certificates, private keys, `.p8`/`.p12` files, provisioning profiles,
-  device UDIDs, keychain data, passwords, and signing secrets remain
-  user-owned outside the repository and are never requested or inspected.
+- ✅ `/setup-apple-ios` creates or reuses only the exact approved explicit iOS
+  identifier through Spaceship Developer Portal APIs, enables only Push
+  Notifications after exact mutation confirmation, and proves Team/platform/
+  bundle/capability by read-back. It never creates an App Store Connect listing
+  or renames, deletes, wildcard-registers, or replaces conflicts.
+- ✅ Apple Development and Apple Distribution certificates are reused when
+  usable in the exact project's dedicated keychain and more than 30 days from
+  expiry. Missing/near-expiry identities require exact confirmation. Missing
+  identities use pinned Fastlane `cert` with `force:false`; only confirmed
+  near-expiry renewal uses `force:true` to create a replacement. Private
+  external staging, read-back, quota safeguards, and no revocation remain
+  mandatory.
+- ✅ `/build-ios` supports registered-device development/ad-hoc scope only. It
+  requires a fresh exact-Team/bundle/mode `apple-ios-provisioning.json`, then
+  uses the secure helper to prove the selected mode's dedicated-keychain
+  identity and installed profile/APNs environment immediately before Wrap.
+  The Wrap process runs inside the same retained-keychain boundary; previous
+  search-list state is restored on success/failure. Passwords, certificate
+  names, profile UUIDs, device UDIDs, and raw keychain paths never enter
+  `wrap.config.json` or logs.
+  Apple certificates, private keys, and provisioning profiles remain outside
+  the repository and are accessed only by the scoped secure helper.
+- ✅ Apple provisioning/build commands use a retained project-specific macOS
+  keychain outside repositories. Its generated password stays in login
+  Keychain/Security APIs; the previous search list is restored on all exits,
+  and handoffs expose only a service ID plus path fingerprint.
 - ✅ `/debug-app` retains Metro and editable JS/TS diagnostics, but wrapped iOS
   notification runtime/delivery failures route to `/verify-ios-push`; stale
   build or APNs ownership then routes onward to `/build-ios` or `/setup-apns`.

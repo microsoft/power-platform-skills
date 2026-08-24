@@ -437,11 +437,15 @@ Never request, download, copy, or commit a Firebase Admin service-account
 private-key JSON. The helper explicitly rejects its credential shape. The sender
 flow uses keyless Google Workload Identity Federation.
 
-## Phase 7 — iOS APNs handoff
+## Phase 7 — iOS Apple provisioning and APNs handoff
 
 If iOS is selected, report that Firebase client setup alone does not establish
-APNs delivery and hand off to `/setup-apns`. APNs key creation and upload are
-manual user actions in the Apple Developer and Firebase consoles. Never ask to
-read, copy, encode, commit, or automatically upload a `.p8` key. Android-only
-setup skips this handoff; both-platform setup completes Android configuration
-and then performs the same iOS handoff.
+APNs delivery. Hand off first to `/setup-apple-ios` for the approved exact
+Team/bundle identifier, Push capability, retained-keychain identities,
+registered-device coverage, installed development/ad-hoc profiles, and fresh
+non-secret provisioning contract. Only after that succeeds, hand off to
+`/setup-apns`. APNs key creation and upload remain manual user actions in the
+Apple Developer and Firebase consoles. Never ask to read, copy, encode, commit,
+or automatically upload a `.p8` key. Android-only setup skips this handoff;
+both-platform setup completes Android configuration and then performs the same
+iOS chain.

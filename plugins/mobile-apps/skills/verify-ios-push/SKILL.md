@@ -71,6 +71,12 @@ evidence -> 6. Complete or keep APNs pending
      --project-root . --mode "<development|ad-hoc>" \
      --expected-team-id "<RECORDED_TEAM_ID>"
 
+   node "${PLUGIN_ROOT}/scripts/validate-apple-ios-provisioning.js" \
+     --project-root . --file apple-ios-provisioning.json \
+     --expected-team "<RECORDED_TEAM_ID>" \
+     --expected-bundle "<RECORDED_BUNDLE_ID>" \
+     --expected-mode "<development|ad-hoc>"
+
    APNS_ENVIRONMENT="<development|production>" \
      node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
        --project-root . --strict-client-integration
@@ -80,7 +86,10 @@ evidence -> 6. Complete or keep APNs pending
      --expected-firebase-project "<RECORDED_FIREBASE_PROJECT_ID>"
    ```
 
-   Every command must succeed. An expired sender-auth proof is invalid even if
+   Every command must succeed. If Apple provisioning is stale or drifted,
+   route through `/setup-apple-ios` and then rebuild with `/build-ios`; never
+   replace this with manual certificate/profile/device confirmation. An
+   expired sender-auth proof is invalid even if
    its resources still exist; return to its owner skill for a fresh proof.
 4. Treat the IPA as stale if any bundled app input changed after its recorded
    modification time. Check regular non-symlink files under `app/`, `src/`, and

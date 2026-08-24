@@ -399,3 +399,9 @@ sender-auth mode/verifier/proof timestamp, mode-specific connections used,
 mutation read-back results, and whether delivery was skipped or verified. Never
 print secrets, tokens, raw JWTs, Function response bodies, or confidential
 payload data.
+
+For the prescribed iOS push chain, published-and-read-back flows hand off to
+`/build-ios`, which consumes the fresh `/setup-apple-ios` provisioning
+contract and secure retained-keychain proof. After the exact IPA is installed,
+hand off to `/verify-ios-push`; do not treat flow smoke-test acceptance as
+physical delivery.

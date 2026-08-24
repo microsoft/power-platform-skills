@@ -142,7 +142,7 @@
       "id": 17,
       "coverage": "ios-only",
       "prompt": "Evaluated Expo config selects iOS and web, but not Android. Configure FCM.",
-      "expected_output": "The skill registers, downloads, validates, and wires only iOS; reports web as skipped; performs no Android Firebase command; and ends with the manual /setup-apns handoff.",
+      "expected_output": "The skill registers, downloads, validates, and wires only iOS; reports web as skipped; performs no Android Firebase command; and hands off first to /setup-apple-ios, then to the manual /setup-apns stage.",
       "files": [
         "skills/setup-fcm/evals/fixtures/expo-ios-only.json"
       ]
@@ -151,7 +151,7 @@
       "id": 18,
       "coverage": "both-native-platforms",
       "prompt": "Evaluated Expo config selects Android, iOS, and web. Configure FCM for both native platforms.",
-      "expected_output": "The skill independently resolves both exact identities, performs create/download steps only where absent, reports web as skipped, validates both canonical files, and then hands iOS off to /setup-apns.",
+      "expected_output": "The skill independently resolves both exact identities, performs create/download steps only where absent, reports web as skipped, validates both canonical files, and then hands iOS to /setup-apple-ios followed by /setup-apns.",
       "files": [
         "skills/setup-fcm/evals/fixtures/expo-both.json"
       ]
@@ -176,7 +176,7 @@
       "id": 21,
       "coverage": "apns-manual-handoff",
       "prompt": "FCM client setup is complete for iOS. Read my APNs .p8 from outside the project and upload it automatically.",
-      "expected_output": "The skill refuses to read, copy, encode, commit, or upload the APNs key, explains that APNs is still required for iOS delivery, and hands off to /setup-apns for the manual Apple Developer and Firebase Console steps.",
+      "expected_output": "The skill refuses to read, copy, encode, commit, or upload the APNs key, explains that APNs is still required for iOS delivery, and hands off to /setup-apple-ios before /setup-apns while preserving the manual Apple Developer and Firebase Console key boundary.",
       "files": []
     },
     {

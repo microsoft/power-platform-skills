@@ -1,6 +1,7 @@
 # Push notification contract
 
-Use this reference from `/add-push-notifications`, `/setup-fcm`, `/setup-apns`,
+Use this reference from `/add-push-notifications`, `/setup-fcm`,
+`/setup-apple-ios`, `/setup-apns`,
 the planner, and screen builders.
 
 ## Native ownership

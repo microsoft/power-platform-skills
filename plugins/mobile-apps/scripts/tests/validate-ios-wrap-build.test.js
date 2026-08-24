@@ -80,6 +80,8 @@ test('build-ios evals cover every planned branch exactly once', () => {
       'apple-team-drift',
       'bounded-build-failure',
       'bundle-identity-drift',
+      'dedicated-keychain-build-proof',
+      'fresh-apple-provisioning-contract',
       'secret-signing-material',
       'successful-ad-hoc-artifact',
     ],
