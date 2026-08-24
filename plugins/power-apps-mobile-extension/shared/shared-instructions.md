@@ -79,7 +79,7 @@ Per-skill check matrix:
 | `/generate-pcf-companion` | Node, `pac` CLI | `pac pcf init` + `npm install`/`build` under `pcf/`. No .NET / `pac auth` at scaffold. |
 | `/test-native-extension` | none (Layers 0–3); Node + npm for Layer 4 | Layers 0–3 are pure read/grep; Layer 4 (PCF compile) needs Node + npm, skipped if no `pcf/`. |
 | `/debug-extension` | none | Edits files; smoke check catches breakage. |
-| `/publish-pcf-companion` | `pac` CLI, .NET SDK, active `pac auth` | Runs `pac pcf push` against a target env. |
+| `/publish-pcf-companion` | Node.js 20+ + npm, `pac` CLI, .NET SDK, active `pac auth` | Runs `npm install`/`npm run build`, then `pac pcf push` against a target env. |
 | `/generate-ppmplugin` | none (orchestrator — each sub-stage runs its own checks) | Drives the stages below in order; defers prereq checks to them. |
 | `/generate-ppmplugin-manifest` | none (read + validate + write) | Validates `./manifest.json` + stages it via the Read/Grep tools. No native build, no Node. |
 | `/build-android-binary` | JDK 17+, Android SDK (compileSdk 35 platform + Build-Tools 35.0.0) | Runs a Gradle `assembleRelease` + `d8` on a throwaway staging copy. |

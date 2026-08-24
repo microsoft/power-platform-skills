@@ -1,6 +1,8 @@
 ---
 name: generate-pcf-companion
 description: Generate the dispatcher PCF for a third-party `.ppmplugin` (wrap-runtime) control. Runs `pac pcf init` in the pcf/ subfolder, rewrites ControlManifest.Input.xml from ARCHITECTURE §6, and writes index.ts derived from ARCHITECTURE §4 (message contract), §8 (PCF surface), §9 (error UX) — no placeholders. The bridge dispatches the composite key `<name>/<receiver>` to `NativeModules.<nativeModule>.<method>` via the host-injected `window.PowerApps.NativeExtension.sendAsync` global (never `cordova.exec` — not in the PCF sandbox); also emits a `PowerAppsNativeExtension.d.ts` ambient declaration. Responses are peeled with `extractResponse`. Emits structured JSON debug/error logs. Validated by `npm run build`. **Local only** — does not deploy. Needs only `pac` CLI. Run after the native module exists. Uses npm (not pnpm).
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: opus
 ---
 
 # /generate-pcf-companion

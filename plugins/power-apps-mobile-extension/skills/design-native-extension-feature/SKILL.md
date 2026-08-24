@@ -1,6 +1,8 @@
 ---
 name: design-native-extension-feature
 description: Capture a 2-3 line pitch from the user, draft a product overview (PRD.md) and a technical design (ARCHITECTURE.md) for a third-party `.ppmplugin` native control, then walk through every operation's iOS + Android implementation strategy with opinionated recommendations (library choice, hosting, key APIs, edge cases) and capture the agreed spec in ARCHITECTURE.md §3.<n>. The depth of ARCHITECTURE.md is what lets the scaffold skill generate complete working code instead of TODO placeholders. Iterates with the user until they approve both docs. Optionally seeds from a design doc / FRD URL. PRD.md + ARCHITECTURE.md are the source of truth for every downstream skill (generate, build, assemble). Run this BEFORE any code is generated.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, WebFetch, AskUserQuestion, Skill
+model: opus
 ---
 
 # /design-native-extension-feature

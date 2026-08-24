@@ -1,6 +1,8 @@
 ---
 name: build-android-binary
 description: "Compile a PAM control's Android Kotlin module into the runtime-loadable DEX for a `.ppmplugin`. Creates a staged Gradle build with the pinned wrapper and `react-android` compile dependency, verifies manifest/module/package alignment and runtime-loading constraints, builds the release AAR, then runs `d8 --min-api 24`. Writes `ppmplugin/staging/android/<PascalName>Plugin.dex` and surfaces actionable Gradle or d8 failures. Requires JDK 17+ and Android SDK Build-Tools 35.0.0; `d8` is located from the SDK and system Gradle is optional. Run after /generate-ppmplugin-manifest and before /assemble-ppmplugin."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /build-android-binary

@@ -1,6 +1,8 @@
 ---
 name: generate-ppmplugin-manifest
 description: "Validate, reconcile to the chosen target(s), and stage the `manifest.json` for a `.ppmplugin` bundle. In the normal flow the committed `./manifest.json` already exists (authored by /generate-native-extension), so this stage reads it, runs the plugin's upload-compatibility checks locally as a pre-flight gate (name regex, canonical prefix, known incompatible names, method and identifier shapes), reconciles `entrypoints` down to the platform(s) you ship, and writes the gitignored staged copy `ppmplugin/staging/manifest.json` that /assemble-ppmplugin zips. If no committed manifest exists (a hand-authored module) it falls back to deriving every field from the class name and Android module source, writing both the committed file and the staged copy. No toolchain — pure read, validate, write. Target-aware. Run after the native module exists, before the build skills."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /generate-ppmplugin-manifest

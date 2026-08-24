@@ -1,11 +1,13 @@
 ---
 name: generate-ppmplugin
-description: The single entry point for the third-party-control track — produces a verified `.ppmplugin` binary bundle from an extension repo end-to-end. The user invokes ONLY this skill; every stage runs internally. Detects which native platforms the repo can actually build (`android/build.gradle` → Android; `ios/RCT*Module.{h,m}` → iOS), recommends the right target set (both / Android-only / iOS-only) based on what's present, confirms via `AskUserQuestion`, then drives the stage skills in sequence with gates between — `/generate-ppmplugin-manifest` → `/build-android-binary` and/or `/build-ios-binary` → `/assemble-ppmplugin` → `/audit-ppmplugin` (the final verification gate). The bundle is native binaries only (`manifest.json` + `android/` and/or `ios/`); no TS / JS layer ships. If any stage fails, halts with a clear handoff — never silently continues with a partial or unverified build. Run after the native module exists.
+description: Build and verify a third-party `.ppmplugin` end to end. This recommended entry point detects Android and iOS source, confirms target platforms, then invokes the manifest, platform build, assemble, and audit stages in order. Advanced users can invoke a stage directly for focused reruns or debugging. Produces a native-only bundle (`manifest.json` plus an Android DEX and/or iOS framework) and stops on any failed stage rather than emitting an unverified partial build. Run after the native module exists.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /generate-ppmplugin
 
-**The single entry point** for the third-party-control track. The user invokes only `/generate-ppmplugin`; the five stage skills (`/generate-ppmplugin-manifest`, `/build-android-binary`, `/build-ios-binary`, `/assemble-ppmplugin`, `/audit-ppmplugin`) are **internal stages** this orchestrator drives in order — they are not the user's entry points. Inspect the repo, pick the right target set, run manifest → build skill(s) → assemble → audit in sequence. The user runs **one** skill; they get a *verified* `.ppmplugin` on disk (or a clear stop with the failing stage).
+**The recommended entry point** for the third-party-control build track. In the normal flow, the user invokes `/generate-ppmplugin` and it drives the five stage skills (`/generate-ppmplugin-manifest`, `/build-android-binary`, `/build-ios-binary`, `/assemble-ppmplugin`, `/audit-ppmplugin`) in order. Advanced users may invoke a stage directly to rerun or debug only that stage. Inspect the repo, pick the right target set, run manifest → build skill(s) → assemble → audit in sequence, and produce a *verified* `.ppmplugin` on disk (or a clear stop with the failing stage).
 
 Read [`shared/ppmplugin-format.md`](../../shared/ppmplugin-format.md) §1 — the bundle layout this orchestrator produces.
 
@@ -160,7 +162,10 @@ that failed audit is reported via the failure handoff below, never as success.
 
 ## Failure handoffs
 
-The orchestrator's value is *single entry point on the happy path*. On a failure it should surface, **not absorb**. Each handoff names the failing stage and tells the user to re-run `/generate-ppmplugin` after fixing — they fix upstream, not by invoking a stage directly:
+The orchestrator's value is *one entry point on the happy path*. On a failure it should surface,
+**not absorb**. Each handoff names the failing stage and normally tells the user to re-run
+`/generate-ppmplugin` after fixing; direct stage invocation is reserved for a focused rerun or
+diagnostic:
 
 | Failure | Handoff message |
 |---|---|

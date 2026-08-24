@@ -1,6 +1,8 @@
 ---
 name: build-ios-binary
 description: "Compile a PAM control's iOS Obj-C/Swift module into the FLAT device-slice `.framework` for a `.ppmplugin` bundle (never an `.xcframework` — the wrap CI won't descend into one). Mac-only (Xcode). Builds from a throwaway staged copy so canonical `ios/` and the podspec stay untouched, references React-Core headers only (React is weak-linked and provided by the wrap host at runtime, no CocoaPods), generates the required umbrella header, module map and Info.plist, sets the critical build settings, asserts manifest conformance, then runs a device-only `xcodebuild archive` and copies out the flat framework to `ppmplugin/staging/ios/`. Known limitation — the React weak-link flags aren't yet validated against a live wrap host and the RN pin must match the host's. Run after /generate-ppmplugin-manifest for an iOS or Both target, before /assemble-ppmplugin."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /build-ios-binary

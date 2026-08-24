@@ -77,14 +77,34 @@ Layers 0–3 are pure read/grep (no toolchain — see shared-instructions §5 "r
 echo "✅ test prereqs OK (Layers 0–3 need no toolchain)"
 ```
 
-### `/publish-pcf-companion` — `pac` CLI + .NET SDK + active `pac auth`
+### `/publish-pcf-companion` — Node.js + npm + `pac` CLI + .NET SDK + active `pac auth`
 
-Deploys the dispatcher PCF via `pac pcf push` (the solution build inside it needs the .NET SDK; the push needs an active auth profile for the target env).
+Builds the dispatcher PCF with npm, then deploys it via `pac pcf push` (the solution build inside it needs the .NET SDK; the push needs an active auth profile for the target env).
 ```bash
+node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 20) process.exit(1)" \
+  || { echo "❌ Node 20+ required for the PCF build"; exit 1; }
+npm -v >/dev/null 2>&1 || { echo "❌ npm required for the PCF build"; exit 1; }
 pac --version >/dev/null 2>&1 || { echo "⚠️  AUTO_FIX_PAC: pac CLI missing — offer: dotnet tool install -g Microsoft.PowerApps.CLI.Tool"; exit 2; }
 dotnet --version >/dev/null 2>&1 || { echo "❌ .NET SDK 10+ required — install per dotnet.microsoft.com"; exit 1; }
 pac auth list 2>/dev/null | grep -q '\*' || { echo "❌ no active pac auth — run: pac auth create --environment <url>"; exit 1; }
 echo "✅ pcf publish prereqs OK"
+```
+
+PowerShell:
+```powershell
+node -e "const major=Number(process.versions.node.split('.')[0]); if (major < 20) process.exit(1)"
+if ($LASTEXITCODE -ne 0) { throw "Node 20+ required for the PCF build" }
+npm -v
+if ($LASTEXITCODE -ne 0) { throw "npm required for the PCF build" }
+pac --version
+if ($LASTEXITCODE -ne 0) { throw "pac CLI missing — offer: dotnet tool install -g Microsoft.PowerApps.CLI.Tool" }
+dotnet --version
+if ($LASTEXITCODE -ne 0) { throw ".NET SDK 10+ required — install from dotnet.microsoft.com" }
+$auth = pac auth list
+if ($LASTEXITCODE -ne 0 -or -not ($auth -match '\*')) {
+  throw "No active pac auth — run: pac auth create --environment <url>"
+}
+Write-Host "pcf publish prereqs OK"
 ```
 
 #### `pac auth create` — variant ladder when auth fails

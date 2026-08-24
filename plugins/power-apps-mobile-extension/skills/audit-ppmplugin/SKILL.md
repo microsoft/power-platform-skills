@@ -1,6 +1,8 @@
 ---
 name: audit-ppmplugin
 description: "Statically audit a built `.ppmplugin` before wrap testing. Checks archive layout, manifest compatibility, bundle consistency, Android DEX integrity and SDK leakage, iOS framework structure, native source-to-receiver alignment, and the PCF composite-key/sendAsync transport contract. Reports CRITICAL, WARNING, and INFO findings with fixes routed to the owning stage; never modifies the archive. Requires `jar`; `dexdump` or `strings` improves DEX inspection. Run after /assemble-ppmplugin or standalone on an existing bundle."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /audit-ppmplugin

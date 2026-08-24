@@ -1,6 +1,8 @@
 ---
 name: debug-extension
 description: "Diagnose and fix failures in a built third-party `.ppmplugin` control: crashes, silent no-ops, PCF error outputs, or incorrect behavior. Uses the reported symptom, `shared/error-codes.md`, and file-level evidence to trace the manifest, Android/iOS modules, PCF dispatch, and build configuration. Produces a ranked diagnosis, asks for approval, then applies a surgical fix while keeping the committed manifest and affected contracts synchronized. Re-validates manifest changes through /generate-ppmplugin-manifest."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: opus
 ---
 
 # /debug-extension
@@ -57,7 +59,7 @@ if any **required** signal is missing.
 | `package.json` exists at repo root | **Yes** | Confirms this is a generated extension repo, not a random directory. |
 | `ARCHITECTURE.md` exists at repo root | No | Strongly preferred — holds the dispatch contract + per-op impl the trace follows. Note its absence as a concern. |
 | `.extension-state.md` exists at repo root | No | Informational — prior edits / drift entries are debugging leads. Created at Step 9 if absent. |
-| `pcf/` folder with a `ControlManifest.Input.xml` inside | No | Drives PCF detection. Capture as `has_pcf: true|false` via `find pcf -name ControlManifest.Input.xml 2>/dev/null`. |
+| `pcf/` folder with a `ControlManifest.Input.xml` inside | No | Drives PCF detection. Use Glob under `pcf/` to locate the manifest and capture `has_pcf: true|false`. |
 | `ppmplugin/` build output / a `.ppmplugin` artifact | No | Informational — confirms a binary was built (this skill debugs *built* controls). Absence → the failure may be pre-build; note it. |
 
 If PRD or `package.json` is missing, suggest `/generate-native-extension` and stop.

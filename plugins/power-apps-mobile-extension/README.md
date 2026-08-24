@@ -103,6 +103,11 @@ with `/generate-ppmplugin`.
 | 6 | **`/publish-pcf-companion`** | Publish the dispatcher PCF to a Power Platform environment. |
 | 7 | **`/debug-extension`** | Diagnose and fix issues found while testing the wrapped app on a device. |
 
+**Advanced stage skills:** `/generate-ppmplugin` normally runs
+`/generate-ppmplugin-manifest`, `/build-android-binary`, `/build-ios-binary`,
+`/assemble-ppmplugin`, and `/audit-ppmplugin` for you. Invoke a stage directly only when you need to
+rerun or debug that stage.
+
 ## Integrate the control into an existing Canvas app
 
 ### 1. How it fits together

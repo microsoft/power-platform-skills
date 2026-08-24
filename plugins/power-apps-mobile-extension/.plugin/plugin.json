@@ -1,7 +1,7 @@
 {
     "name": "power-apps-mobile-extension",
     "version": "0.1.0",
-    "description": "Build third-party Power Apps Mobile (PAM) controls into a prebuilt .ppmplugin binary (Android DEX + flat iOS .framework + manifest.json) for the wrap runtime. Public tooling only; single entry point /generate-ppmplugin.",
+    "description": "Build third-party Power Apps Mobile (PAM) controls into a prebuilt .ppmplugin binary (Android DEX + flat iOS .framework + manifest.json) for the wrap runtime. Public tooling only; recommended build entry point /generate-ppmplugin.",
     "author": {
         "name": "Microsoft",
         "url": "https://www.microsoft.com"

@@ -1,6 +1,8 @@
 ---
 name: assemble-ppmplugin
 description: "Assemble the final `.ppmplugin` binary bundle for a PAM native extension and verify its contents. First **reconciles** the manifest's declared `entrypoints` against the binaries actually staged — if the manifest declares a platform with no built binary it gates (build it / ship without it / stop) rather than shipping a broken bundle. Then re-runs the plugin's upload-compatibility checks on the reconciled manifest, zips the manifest plus whichever of `android/<PascalName>Plugin.dex` and `ios/<PascalName>Plugin.framework/` are present into `ppmplugin/<name>.ppmplugin`, and verifies the archive layout with `jar tf` (exactly the manifest + the shipped binaries — nothing missing, nothing extra). Output: a statically verified `.ppmplugin` file on disk. Prereqs: `jar` (JDK). Run after /generate-ppmplugin-manifest and the build skill(s)."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /assemble-ppmplugin

@@ -1,6 +1,8 @@
 ---
 name: test-native-extension
 description: "Validate a third-party control repo across four automated layers plus one printed manual recipe. Layer 1 asserts native-source structure (Android getName() and iOS +moduleName to manifest nativeModule; @ReactMethod / RCT_EXPORT_METHOD to methods; no @ReactModule) plus load/init readiness (ReactPackage public no-arg constructor, iOS [cls new] no-arg init, requiresMainQueueSetup NO, non-throwing eager construction), so launch-time crashes surface before any build. Layer 2 validates the committed `./manifest.json` against the ppmplugin-format rules. Layer 3 asserts request/response/error-code agreement across native and PCF. Layer 4 compiles the PCF (auto-skipped if absent). Layer 5 prints a device end-to-end recipe. Native compile belongs to /build-android-binary and /build-ios-binary — this is the cheap structural pre-flight before those slow builds. Reports pass/fail per layer with a fix hint and updates .extension-state.md."
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: opus
 ---
 
 # /test-native-extension

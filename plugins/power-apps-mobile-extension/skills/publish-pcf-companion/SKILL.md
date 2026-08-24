@@ -1,6 +1,8 @@
 ---
 name: publish-pcf-companion
-description: Deploy the dispatcher PCF for a third-party `.ppmplugin` control to a Power Platform environment via `pac pcf push`. The dispatcher PCF is the Studio-side control that dispatches the composite key `<name>/<receiver>` over the wrap shell's `SendMessagePlugin` bridge to the control's native module. Verifies deploy prereqs (.NET SDK + active `pac auth`), then three confirmation gates — publisher prefix (2–8 chars; defaults to `pamext` or the last-used value from `.extension-state.md`), version bump (patch / minor / major / no-bump), target environment URL (from `pac org who`). Builds the PCF if needed, then pushes. Decoupled from /generate-pcf-companion so the engineer can scaffold and customize locally, then deploy when ready. Updates `.extension-state.md` with deployment history (timestamp, env URL, version, prefix used).
+description: Deploy the dispatcher PCF for a third-party `.ppmplugin` control to a Power Platform environment via `pac pcf push`. The dispatcher PCF is the Studio-side control that dispatches the composite key `<name>/<receiver>` over the wrap shell's `SendMessagePlugin` bridge to the control's native module. Verifies deploy prereqs (Node.js 20+ with npm, .NET SDK, and active `pac auth`), then three confirmation gates — publisher prefix (2–8 chars; defaults to `pamext` or the last-used value from `.extension-state.md`), version bump (patch / minor / major / no-bump), target environment URL (from `pac org who`). Builds the PCF if needed, then pushes. Decoupled from /generate-pcf-companion so the engineer can scaffold and customize locally, then deploy when ready. Updates `.extension-state.md` with deployment history (timestamp, env URL, version, prefix used).
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Skill
+model: sonnet
 ---
 
 # /publish-pcf-companion
@@ -12,7 +14,7 @@ On-demand deployment of the **dispatcher PCF** for a third-party `.ppmplugin` co
 ## Step 1 — Read shared docs and verify prereqs
 
 1. Read [`shared/shared-instructions.md`](../../shared/shared-instructions.md), [`shared/naming-conventions.md`](../../shared/naming-conventions.md).
-2. Apply the **per-skill minimal prereq policy** ([`shared-instructions.md §1.5`](../../shared/shared-instructions.md)). This skill needs `pac` CLI + .NET SDK + active `pac auth` profile — and nothing else. It does NOT need Node or pnpm.
+2. Apply the **per-skill minimal prereq policy** ([`shared-instructions.md §1.5`](../../shared/shared-instructions.md)). This skill needs Node.js 20+ with npm, `pac` CLI, .NET SDK, and an active `pac auth` profile. It does not need pnpm.
 
    **Print the prereq status as a visible block per `shared-instructions.md §9.2`** before continuing:
 
@@ -21,17 +23,19 @@ On-demand deployment of the **dispatcher PCF** for a third-party `.ppmplugin` co
     Prereq check — /publish-pcf-companion
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+    🟢 ✓ Node.js 20+ and npm installed       (for npm install / npm run build)
     🟢 ✓ pac CLI installed                   (for pac pcf push)
     🟢 ✓ .NET SDK installed                  (solution build runs inside pac pcf push)
     🟢 ✓ pac auth profile active             (target env: <env URL from pac org who>)
 
-    🟢 3 checks passed. Ready to proceed.
+    🟢 4 checks passed. Ready to proceed.
    ```
 
    Fix table for failures:
 
    | Missing | `→ Fix:` line in the failure block |
    |---|---|
+   | Node.js / npm | Install Node.js 20 LTS from `https://nodejs.org`, then verify with `node -v` and `npm -v` |
    | `pac` CLI | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` (chains on .NET SDK first if also missing) |
    | .NET SDK | `brew install dotnet` (mac) / `winget install Microsoft.DotNet.SDK.10` (win) / package manager (linux) |
    | No active `pac auth` | `pac auth create --environment <your-env-url>` (interactive browser flow; use an identity with access to the target Power Platform environment). **Do not reach for `--deviceCode` first** — it's a headless-shell fallback that commonly fails under Conditional Access. |
@@ -46,50 +50,18 @@ On-demand deployment of the **dispatcher PCF** for a third-party `.ppmplugin` co
 
 Build a status dashboard so the user sees what was detected before any action.
 
-**Discover the PCF folder robustly** — don't assume the exact nesting depth. `pac pcf init` produces `pcf/<Pascal>PCF/<Pascal>PCF/ControlManifest.Input.xml`, but variations (case, custom layouts, manual restructuring) shouldn't trip the skill. Use `find`:
+**Discover the PCF folder robustly** — don't assume the exact nesting depth. Use Glob to find
+`pcf/**/ControlManifest.Input.xml` and select the first match. `pac pcf init` normally produces
+`pcf/<Pascal>PCF/<Pascal>PCF/ControlManifest.Input.xml`, but case differences and manual
+restructuring should not break discovery. If `pcf/` is absent, stop with
+`BLOCKED: no pcf/ directory — PCF has not been scaffolded. Run /generate-pcf-companion first.` If
+`pcf/` exists but the manifest is absent, list the relevant files with Glob and stop with
+`BLOCKED: pcf/ exists but no ControlManifest.Input.xml was found.`
 
-```bash
-# Find ANY ControlManifest.Input.xml under pcf/. Stop at the first hit.
-MANIFEST=$(find pcf -type f -name "ControlManifest.Input.xml" 2>/dev/null | head -1)
-```
-
-Then derive the PCF project root from the manifest's path — it's `dirname $(dirname $MANIFEST)` (the manifest is two levels deep inside the project root).
-
-```bash
-if [ -z "$MANIFEST" ]; then
-  # Distinguish "no pcf/ at all" from "pcf/ exists but no manifest"
-  if [ ! -d pcf ]; then
-    echo "BLOCKED: no pcf/ directory — PCF has not been scaffolded. Run /generate-pcf-companion first."
-    exit 1
-  else
-    echo "BLOCKED: pcf/ exists but no ControlManifest.Input.xml found anywhere under it."
-    echo "Contents of pcf/:"
-    find pcf -maxdepth 3 -type f 2>/dev/null | head -20
-    echo "Either the scaffold was incomplete, or the folder layout is unexpected. Re-run /generate-pcf-companion."
-    exit 1
-  fi
-fi
-
-PCF_PROJECT_ROOT=$(dirname $(dirname "$MANIFEST"))   # e.g. pcf/<Pascal>PCF
-echo "Found PCF project root: $PCF_PROJECT_ROOT"
-echo "Manifest: $MANIFEST"
-```
-
-Other detection:
-
-```bash
-# Built?
-[ -d "$PCF_PROJECT_ROOT/out" ] && BUILT="yes" || BUILT="no — will build before push"
-
-# Current PCF version (from <control version="X.Y.Z"> in the manifest)
-CURRENT_VERSION=$(grep -oE 'version="[0-9]+\.[0-9]+\.[0-9]+"' "$MANIFEST" | head -1 | sed 's/version=//; s/"//g')
-
-# Last deployed version from .extension-state.md (if any prior deploys)
-LAST_DEPLOYED=$(grep -oE 'Version: [0-9]+\.[0-9]+\.[0-9]+' .extension-state.md 2>/dev/null | tail -1 | awk '{print $2}')
-
-# Active environment
-pac org who 2>&1   # shows env URL + user
-```
+Derive the PCF project root from the manifest path by moving up two directory levels. Use Glob to
+check whether `<PCF_PROJECT_ROOT>/out/` exists. Use Read to extract the `<control version="X.Y.Z">`
+value from the manifest and the latest deployment version from `.extension-state.md`. Run
+`pac org who` to retrieve the active environment because that is a real toolchain command.
 
 Print:
 
@@ -113,7 +85,9 @@ Plan: pick publisher prefix → bump version if chosen → build if needed → p
 
 If `pac org who` returns "No active connection": STOP — this means `pac auth list` showed a profile but it's not currently selected. Run `pac auth select --index <n>` and re-run this skill. (Step 1 catches missing auth; this catches the rarer "auth exists but not active" case.)
 
-> **Why `find` instead of an exact path:** the standard `pac pcf init` layout is `pcf/<Pascal>PCF/<Pascal>PCF/ControlManifest.Input.xml` (the project root is named after the class, and the control source lives one level deeper, also named after the class). But variations happen: case differences from the original `pac pcf init` invocation, manual restructuring by the engineer, or non-standard scaffolders. The skill cares about *whether a manifest exists* and *where its containing project is*, not the exact nesting. `find` answers both robustly.
+> **Why Glob instead of an exact path:** the standard layout is nested two levels below the project
+> root, but case differences, manual restructuring, and non-standard scaffolders occur. Glob provides
+> OS-neutral discovery without assuming a fixed path.
 
 ---
 
@@ -125,11 +99,8 @@ This step has THREE gates: publisher prefix → version-bump → deploy confirma
 
 The publisher prefix becomes part of the solution name in Power Platform (e.g. `pamext_<Pascal>PCF`). It must be **2–8 characters** — `pac pcf push` rejects anything outside that range with `Argument --publisher-prefix has incorrect length`.
 
-Detect the last-used prefix from `.extension-state.md`:
-
-```bash
-LAST_PREFIX=$(grep -oE 'Publisher prefix: [a-z0-9]+' .extension-state.md 2>/dev/null | tail -1 | awk '{print $3}')
-```
+Use Read on `.extension-state.md` and extract the most recent `Publisher prefix: <value>` entry. If
+the file or entry is absent, use `pamext` as the default.
 
 Then ask via `AskUserQuestion`:
 
@@ -171,15 +142,9 @@ Use `AskUserQuestion`. Compute the bump-target options from `CURRENT_VERSION` (t
 > - **Major bump → <(CURRENT major+1).0.0>** (for breaking changes to the bound input, output names, or trigger semantics)
 > - **No bump — push as-is at <CURRENT_VERSION>** (only if you're iterating during initial dev and accept the cache risk; the skill will print a warning)
 
-Apply the chosen bump by editing the `<control version="...">` attribute in the manifest:
-
-```bash
-NEW_VERSION="<X.Y.Z from user choice>"
-cp "$MANIFEST" "$MANIFEST.bak.$(date +%s)"
-sed -i.tmpedit -E "s/(<control[^>]*\bversion=)\"[^\"]*\"/\1\"$NEW_VERSION\"/" "$MANIFEST"
-rm -f "$MANIFEST.tmpedit"
-echo "Updated manifest version: $CURRENT_VERSION → $NEW_VERSION"
-```
+Apply the chosen bump with the Edit tool by replacing only the `<control version="...">` attribute
+in the manifest. Show the exact version change (`<CURRENT_VERSION> → <NEW_VERSION>`) before writing
+and preserve every other manifest field.
 
 After bumping, **re-build** is required (the manifest changed, so `out/` is stale). The build runs as part of Step 4 regardless of the user's choice in 3.2 below, so this is fine.
 
