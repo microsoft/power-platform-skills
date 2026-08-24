@@ -123,14 +123,19 @@ remains the only supported flow inspection path in this workflow.
    Require environment ID, Dataverse URL, and tenant continuity with the
    recorded flow handoff.
 2. Require the exact recorded producer and sender flow IDs. Do not choose flows
-   by a similar display name. Call `get_flow` for each and require:
+   by a similar display name. For a plugin-managed sender, require the fresh
+   matching `sender-auth.json`. For a manual/customer-owned sender, require the
+   recorded `customer-owned / not plugin-validated` status and do not infer its
+   authentication design. Call `get_flow` for each and require:
    - live state `Started`;
    - the producer's read-back Dataverse trigger, recipient resolution,
      lowercase OID handling, generic payload, and outbox create action;
    - the sender's read-back queued guard, idempotency, audience/topic rules,
-     secure settings, one sender-auth mode matching `sender-auth.json`, FCM
-     delivery, and `Sent`/`Failed` outbox updates;
-   - no mixed WIF/Function fallback tree.
+     secure settings, FCM delivery, and `Sent`/`Failed` outbox updates;
+   - for managed auth, one sender-auth mode matching `sender-auth.json` and no
+     mixed WIF/Function fallback tree;
+   - for manual auth, no claim that FlowAgent inspection proves the customer's
+     credential security, rotation, or least-privilege design.
 3. Read connection references, use `list_connections` and `test_connection`,
    and require each connection used by the live definitions to be Connected.
 4. Run `smoke_test` only as a FlowAgent connectivity check. It does not prove

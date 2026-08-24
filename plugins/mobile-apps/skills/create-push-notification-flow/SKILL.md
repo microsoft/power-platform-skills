@@ -1,6 +1,6 @@
 ---
 name: create-push-notification-flow
-description: Use when creating, repairing, or extending the Power Automate producer and sender flows for Power Apps mobile push notifications, including Dataverse row-created triggers, outbox queuing, lowercase Entra OID topics, validated WIF or Entra-protected Function sender authentication, FCM HTTP v1, FlowAgent setup, or push-flow smoke tests.
+description: Use when creating, repairing, or extending the Power Automate producer and sender flows for Power Apps mobile push notifications, including choosing between recommended WIF, managed Azure Function compatibility, or customer-owned manual sender authentication; Dataverse row-created triggers; outbox queuing; lowercase Entra OID topics; FCM HTTP v1; FlowAgent setup; or push-flow smoke tests.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__preview_update, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_expression_help, mcp__flowagent__invoke_operation, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__list_backups, mcp__flowagent__get_backup, mcp__flowagent__restore_backup
 model: opus
@@ -14,11 +14,13 @@ model: opus
 
 **Sender-auth handoff: [sender-auth-contract.md](${PLUGIN_ROOT}/shared/references/sender-auth-contract.md)**.
 
+**Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)**.
+
 **Function sender protocol: [function-endpoint.md](${PLUGIN_ROOT}/skills/setup-push-service-account/references/function-endpoint.md)**.
 
 # Create Push Notification Flow
 
-Create two separate cloud flows through FlowAgent:
+For a plugin-managed sender, create two separate cloud flows through FlowAgent:
 
 1. A **producer** that reacts to the app event, resolves the recipient, and
    writes a privacy-safe `Queued` row to the push outbox.
@@ -26,13 +28,18 @@ Create two separate cloud flows through FlowAgent:
    v1, and the outbox transition to `Sent` or `Failed`; or invokes one validated
    Entra-protected Function that owns Google authentication and FCM.
 
+For manual/customer-owned authentication, the plugin may create only the
+producer/outbox portion. The customer authors and operates the sender.
+
 Do not put FCM authorization in each business-event flow. Do not hand-author
 connector schemas or use shell commands for flow operations when FlowAgent MCP
 tools are available.
 
-Select exactly one sender-auth mode from a fresh validated project-local
-`sender-auth.json`. Never add a second mode as a fallback, migration branch, or
-failure handler.
+For plugin-managed sender authoring, select exactly one sender-auth mode from a
+fresh validated project-local `sender-auth.json`. Never add a second mode as a
+fallback, migration branch, or failure handler. A customer may instead choose
+manual/customer-owned sender authentication; that route has no plugin-managed
+handoff and must not be represented as a validated sender mode.
 
 This skill consumes the validated Firebase/client and sender-auth handoffs
 produced by the official MCP-first owner skills. `/setup-fcm` owns Firebase
@@ -129,8 +136,8 @@ Determine the expected Firebase project from the already-integrated client:
 4. If no selected native platform has valid active Firebase client
    configuration, route to `/setup-fcm` and return only after it completes.
 
-Next require a project-local regular `sender-auth.json` and validate it against
-that exact client project:
+Next inspect whether a project-local regular `sender-auth.json` exists. When it
+does, validate it against that exact client project:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js" \
@@ -139,28 +146,46 @@ node "${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js" \
   --expected-firebase-project "<client-firebase-project-id>"
 ```
 
-Exit `0` is required before any sender discovery or authoring. Treat an expired
+Exit `0` is required before any **plugin-managed** sender discovery or
+authoring. Treat an expired
 proof, project mismatch, mode conflict, symlink, path escape, or forbidden
 credential field as invalid; do not salvage safe-looking IDs from an invalid
 handoff.
 
-If the handoff is absent or invalid, present these routes without silently
-choosing or falling through:
+If the handoff is absent or invalid, read the sender-auth choices reference,
+show its three-option comparison, and ask the customer to choose. WIF is marked
+**Recommended**, but selection must stay explicit because the options have
+different infrastructure, licensing, credential, and operating costs.
 
-1. **Preferred keyless WIF provision/reuse/repair:** invoke `/setup-push-wif`.
-2. **Existing Entra-protected sender endpoint:** invoke
-   `/setup-push-service-account` and select its validate/reuse path.
-3. **Service-account/Azure Function compatibility setup:** invoke
-   `/setup-push-service-account` scaffold/deploy only when the customer already
-   possesses the required Firebase service-account JSON. That skill must never
-   create or download the key.
+1. **Workload Identity Federation (Recommended):** invoke `/setup-push-wif`
+   for provision/reuse/repair.
+2. **Managed Azure Function compatibility:** invoke
+   `/setup-push-service-account`. Use its validate/reuse path for an existing
+   supported endpoint, or scaffold/deploy only when the customer already
+   possesses the Firebase service-account JSON. That skill must never create
+   or download the key.
+3. **Manual/customer-owned sender authentication:** do not invoke or create a
+   setup skill, do not ask for credentials, and do not create a manual
+   `sender-auth.json`. Explain the completion contract and allow the customer
+   to configure the Power Automate sender authentication/actions or their own
+   endpoint independently.
 
 After the owner skill returns, rerun the validator with the same expected
-Firebase project. Do not translate one mode into another, construct a handoff
-inside this skill, or author until validation succeeds. Record the validated
-mode, Firebase project, safe connection/resource identifiers, verifier, and
-proof timestamp; never record credentials or proof response bodies. Do not fall
-back to `firebase-tools`, `gcloud`, or Azure provisioning from this skill.
+Firebase project. Do not translate one managed mode into another, construct a
+managed handoff inside this skill, or author a managed sender until validation
+succeeds. Record the validated mode, Firebase project, safe
+connection/resource identifiers, verifier, and proof timestamp; never record
+credentials or proof response bodies. Do not fall back to `firebase-tools`,
+`gcloud`, or Azure provisioning from this skill.
+
+For the manual route, offer to continue with the producer and outbox only. The
+customer owns sender authentication, delivery actions, technical validation,
+publication, monitoring, and support. Record only
+`customer-owned / not plugin-validated` in `memory-bank.md`; do not record
+credentials, arbitrary endpoint details, or a success-shaped proof. Stop before
+plugin sender discovery/authoring and give the completion checklist from the
+sender-auth choices reference. A checkbox or verbal confirmation cannot promote
+this route to plugin-validated or publish-ready.
 
 ## 4. Ensure and resolve the outbox
 
@@ -191,7 +216,10 @@ Ask one grouped question covering:
 - recipient rule;
 - generic notification title/body;
 - internal deep-link route;
-- whether both flows may be created now and whether they should remain stopped.
+- for a managed mode, whether both flows may be created now and whether they
+  should remain stopped;
+- for the manual route, whether the plugin should create only the producer and
+  outbox while the customer implements the sender independently.
 
 Default to **Dataverse row created** when the user does not specify a trigger.
 For a user/team-owned source row, default recipient resolution is:
@@ -219,6 +247,10 @@ by `get_operation_details`. Discover at minimum:
 - for `function-endpoint`: the exact Entra-authenticated HTTP
   operation/connector compatible with `functionEndpoint.endpointUrl` and
   `functionEndpoint.entra.resourceAudience`.
+
+Manual/customer-owned sender authentication is outside this discovery step.
+Do not discover, infer, or author the customer's authentication connector,
+generic HTTP action, endpoint schema, or credentials.
 
 Use `resolve_params`, `resolve_refs`, and `invoke_operation` for dynamic values.
 Never infer an operation ID, parameter name, enum, action type, API ID,
@@ -260,6 +292,11 @@ Every definition declares `$authentication` (`SecureObject`) and `$connections`
 from action inputs.
 
 ## 7. Author the sender flow
+
+Skip this section for the manual/customer-owned route. The plugin may author the
+producer/outbox independently, but it must not create a placeholder,
+unauthenticated HTTP action, guessed custom-connector action, mixed-mode
+fallback, or publish-ready sender shell for the customer to fill with secrets.
 
 Build a stopped, idempotent sender:
 
@@ -350,6 +387,9 @@ Mode-specific read-back is a hard gate:
 - `function-endpoint` must contain the exact discovered secure Function
   operation/connection and no Key Vault, Google token, impersonation, direct
   FCM, generic HTTP, or WIF fallback actions/connections.
+- `customer-owned` is not a plugin-managed mode and has no sender read-back
+  claim. Only independently authored producer/outbox work may be reported; the
+  sender remains `customer-owned / not plugin-validated`.
 
 A valid action from one mode does not compensate for a missing or insecure
 action in the other. Reject mixed trees even when the fallback is reachable
@@ -390,9 +430,19 @@ the sender first, read it back as `Started`, then publish the producer and read
 it back. If `publish_flow` says enabled but `get_flow` remains `Stopped`, stop;
 do not work around it with an unreviewed replacement.
 
+For the manual/customer-owned route, present only plugin-authored
+producer/outbox artifacts. The plugin must not publish, enable, edit, or claim
+read-back ownership of the customer's sender. Publish the producer only after
+the customer confirms their independently implemented sender is ready under
+their own process and explicitly approves producer publication; retain the
+sender status as `customer-owned / not plugin-validated`.
+
 ## 11. Gate smoke tests
 
 First run `smoke_test`/connection checks that do not deliver a notification.
+For the manual route, these checks cover only plugin-authored producer/outbox
+components. The customer owns non-delivery testing of their sender, and the
+plugin must not convert customer attestation into a plugin validation result.
 Do not create a live outbox row until the user confirms:
 
 1. a matching physical-device build is installed;
@@ -408,10 +458,11 @@ and do not resubmit repeatedly. User-targeted smoke tests require separate
 explicit confirmation from the consenting target user.
 
 Finish with flow IDs/states, environment ID/URL, Firebase project, validated
-sender-auth mode/verifier/proof timestamp, mode-specific connections used,
-mutation read-back results, and whether delivery was skipped or verified. Never
-print secrets, tokens, raw JWTs, Function response bodies, or confidential
-payload data.
+managed sender-auth mode/verifier/proof timestamp or the exact
+`customer-owned / not plugin-validated` status, mode-specific connections used
+only for managed modes, mutation read-back results, and whether delivery was
+skipped or verified. Never print secrets, tokens, raw JWTs, Function response
+bodies, or confidential payload data.
 
 For the prescribed iOS push chain, published-and-read-back flows hand off to
 `/build-ios`, which consumes the fresh `/setup-apple-ios` provisioning

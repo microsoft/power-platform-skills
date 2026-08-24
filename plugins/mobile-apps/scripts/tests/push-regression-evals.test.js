@@ -23,7 +23,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 39 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 45 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -90,6 +90,56 @@ test('shared push docs record verified Firebase, gcloud, and Azure MCP boundarie
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
   assert.doesNotMatch(addPush, /Firebase MCP[\s\S]*plus gcloud MCP/);
   assert.match(createFlow, /vendor-official Firebase MCP only/);
+});
+
+test('push flow presents informed managed and customer-owned sender auth choices', () => {
+  const fs = require('node:fs');
+  const flow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const orchestration = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/add-push-notifications/SKILL.md'),
+    'utf8',
+  );
+  const options = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-sender-auth-options.md'),
+    'utf8',
+  );
+  const contract = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/sender-auth-contract.md'),
+    'utf8',
+  );
+  const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
+  const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
+
+  assert.match(flow, /Workload Identity Federation \(Recommended\)/);
+  assert.match(flow, /Managed Azure Function compatibility/);
+  assert.match(flow, /Manual\/customer-owned sender authentication/);
+  assert.match(flow, /show its three-option comparison/);
+  assert.match(flow, /do not invoke or create a\s+setup skill/i);
+  assert.match(flow, /customer-owned \/ not plugin-validated/);
+  assert.match(flow, /offer to continue with the producer and outbox only/i);
+  assert.match(flow, /must not create a placeholder[\s\S]*unauthenticated HTTP action/i);
+  assert.match(flow, /checkbox or verbal confirmation cannot promote/i);
+
+  assert.match(options, /Workload Identity Federation \(Recommended\)/);
+  assert.match(options, /Dedicated Entra app\/service principal and credential/);
+  assert.match(options, /Azure Key Vault secret plus data-plane RBAC/);
+  assert.match(options, /Google Workload Identity Pool and Provider/);
+  assert.match(options, /existing Firebase service-account JSON/i);
+  assert.match(options, /managed-identity-enabled Azure Function/);
+  assert.match(options, /customer-selected design requires/i);
+  assert.match(options, /No setup skill, provisioning, credential handling/);
+  assert.match(options, /FCM `validateOnly`/);
+  assert.match(options, /customer-owned \/ not plugin-validated/);
+
+  assert.match(contract, /covers only the plugin-managed `wif` and\s+`function-endpoint` modes/i);
+  assert.match(contract, /Do not create a manual mode/i);
+  assert.match(orchestration, /customer-owned and not plugin-validated/i);
+  assert.match(readme, /three choices—\*\*WIF \(Recommended\)\*\*/);
+  assert.match(readme, /Manual\/customer-owned/);
+  assert.match(agents, /three informed sender-auth choices/);
 });
 
 test('push sender auth skills pin GA MCP versions and namespace semantics', () => {
@@ -234,7 +284,7 @@ test('iOS push orchestration reports stage ownership without duplicating build o
     assert.match(skill, new RegExp(`\\| ${state.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')} \\|`));
   }
   assert.match(skill, /configured, device verification pending/i);
-  assert.match(skill, /These are handoffs, not substeps/);
+  assert.match(skill, /These\s+are handoffs, not substeps/);
   assert.match(apns, /configured, device verification\s+pending/i);
   assert.match(apns, /Only `\/verify-ios-push`/);
   assert.match(deploy, /Power Platform \*\*web bundle deployment\*\*/);
@@ -315,7 +365,7 @@ test('push docs require official MCP-first orchestration boundaries', () => {
   assert.match(addPush, /vendor-official Firebase MCP\s+only/);
   assert.match(
     createFlow,
-    /Do not fall\s+back to `firebase-tools`, `gcloud`, or Azure provisioning from this skill/,
+    /Do not fall\s+back to `firebase-tools`,\s*`gcloud`, or Azure provisioning from this skill/,
   );
   assert.match(verify, /consumes only previously validated MCP-first handoffs/i);
   assert.match(apple, /does not provide a vendor-official MCP/);

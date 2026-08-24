@@ -128,6 +128,15 @@ test('rejects unknown versions, modes, and mode-specific field conflicts', () =>
   const conflict = wifContract();
   conflict.functionEndpoint = functionContract().functionEndpoint;
   assert.ok(codes(conflict).includes('mode-field-conflict'));
+
+  const manual = wifContract();
+  manual.mode = 'manual';
+  delete manual.wif;
+  manual.manualEndpoint = {
+    url: 'https://customer.example/send',
+  };
+  assert.ok(codes(manual).includes('unsupported-mode'));
+  assert.ok(codes(manual).includes('unknown-field'));
 });
 
 test('rejects secret fields, private keys, bearer tokens, raw JWTs, and embedded URL credentials', () => {

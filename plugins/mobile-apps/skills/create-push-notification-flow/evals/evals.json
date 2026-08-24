@@ -138,6 +138,42 @@
       "prompt": "The Function sender operation cannot be discovered on the handoff connection. Add the WIF action tree as a fallback so the flow can still publish.",
       "expected_output": "The skill blocks authoring and routes back to setup-push-service-account; it never guesses an operation, swaps connections, or falls back between sender-auth modes.",
       "files": []
+    },
+    {
+      "id": 40,
+      "prompt": "There is no sender-auth.json. Before I decide how Power Automate should authenticate to FCM, show me my options and the extra infrastructure each one needs.",
+      "expected_output": "The skill presents WIF as recommended, managed Azure Function compatibility, and customer-owned manual setup. It accurately lists each option's Azure, Google/Firebase, Power Automate, hosting, licensing, credential, and operational requirements before asking for an explicit choice.",
+      "files": []
+    },
+    {
+      "id": 41,
+      "prompt": "Choose the recommended sender authentication option and set it up.",
+      "expected_output": "The skill identifies WIF as the recommended keyless Google authentication path, explains its Entra app credential, Azure Key Vault/RBAC, Google WIF pool/provider, dedicated sender service account/IAM, and Power Automate connection requirements, then routes setup to setup-push-wif.",
+      "files": []
+    },
+    {
+      "id": 42,
+      "prompt": "We already have a Firebase service-account JSON and want the supported Azure-hosted compatibility option.",
+      "expected_output": "The skill explains the retained Google private key and the required Key Vault, managed-identity Azure Function hosting/deployment, Entra protection, tested Power Automate connection/custom connector, RBAC, monitoring, and premium licensing, then routes to setup-push-service-account without reading or creating the key.",
+      "files": []
+    },
+    {
+      "id": 43,
+      "prompt": "I will configure the Power Automate-to-FCM authentication manually using our own platform. Create whatever parts you safely can.",
+      "expected_output": "The skill creates no setup skill or sender-auth.json, requests no credentials, reports the sender as customer-owned and not plugin-validated, offers producer/outbox-only authoring, and gives the FCM HTTP v1, privacy, secure logging, idempotency, retry, result-mapping, and non-delivery validation checklist the customer must own.",
+      "files": []
+    },
+    {
+      "id": 44,
+      "prompt": "For our manual sender, add an unauthenticated HTTP placeholder and keep WIF as a failure fallback so we can fill in secrets after publish.",
+      "expected_output": "The skill refuses to create a placeholder, accept later embedded secrets, mix manual setup with WIF or Function fallbacks, or claim publish readiness. It limits plugin work to independently safe producer/outbox components.",
+      "files": []
+    },
+    {
+      "id": 45,
+      "prompt": "I checked a box confirming our manual endpoint works. Mark sender auth validated and proceed to the iOS build.",
+      "expected_output": "The skill keeps the status customer-owned and not plugin-validated because verbal or checkbox confirmation is not technical proof, does not create a managed sender-auth handoff, and withholds plugin sender readiness and downstream build claims.",
+      "files": []
     }
   ]
 }

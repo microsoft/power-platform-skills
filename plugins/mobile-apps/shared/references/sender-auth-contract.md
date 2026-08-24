@@ -16,6 +16,14 @@ short-lived authorization proof, not credentials. Record only its project-local
 path, mode, Firebase project ID, and safe resource identifiers in
 `memory-bank.md`.
 
+This strict contract covers only the plugin-managed `wif` and
+`function-endpoint` modes. A customer who chooses manual/customer-owned sender
+authentication configures and validates that Power Automate authentication
+path independently. Do not create a manual mode, arbitrary endpoint schema, or
+credential-bearing escape hatch in `sender-auth.json`; report it as
+`customer-owned / not plugin-validated` instead. See
+[push-sender-auth-options.md](./push-sender-auth-options.md).
+
 ## Common envelope (version 1)
 
 ```json

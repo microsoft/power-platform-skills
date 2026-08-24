@@ -18,9 +18,9 @@ resumable tracks:
 1. **Native client:** Firebase client config, Apple provisioning/APNs handoff, permission UX,
    consent-first iOS registration, topic lifecycle, background delivery, and
    deep links.
-2. **Sender authentication:** `/setup-push-wif` (preferred) or
-   `/setup-push-service-account` for a compatible existing service-account
-   integration.
+2. **Sender authentication:** recommended `/setup-push-wif`, managed
+   `/setup-push-service-account` compatibility, or customer-owned manual setup
+   selected through `/create-push-notification-flow`.
 3. **Power Automate flows:** `/create-push-notification-flow`.
 4. **Wrapped iOS build:** `/build-ios` creates a registered-device
    `development` or `ad-hoc` IPA.
@@ -40,6 +40,10 @@ only; do not substitute `firebase-tools`, `gcloud`, or browser automation from
 here. `/setup-push-wif` separately owns Google-side WIF provisioning through
 gcloud MCP, `/setup-push-service-account` owns the Azure compatibility path,
 and FlowAgent remains the only Power Automate mutation path.
+
+**Sender-auth choices: [push-sender-auth-options.md](${PLUGIN_ROOT}/shared/references/push-sender-auth-options.md)** —
+use this comparison when reporting sender-auth next steps. Manual setup is
+customer-owned; this plugin does not provision or validate it.
 
 ## Workflow
 
@@ -235,7 +239,7 @@ Report these states independently, even when several are pending:
 |---|---|---|
 | Native client | integrated / incomplete / blocked, selected Android/iOS Firebase app IDs, and static validation | This skill; `/setup-fcm` for missing or drifted client identity |
 | APNs | not applicable / incomplete / **configured, device verification pending** / physically verified | `/setup-apns` configures; only `/verify-ios-push` can mark physical verification complete |
-| Sender authentication | missing / valid handoff present / stale or blocked, based only on existing `sender-auth.json` and memory metadata | `/setup-push-wif` preferred, or `/setup-push-service-account` for the supported compatibility path |
+| Sender authentication | missing / valid managed handoff present / stale or blocked / customer-owned and not plugin-validated | `/create-push-notification-flow` presents the resource comparison; `/setup-push-wif` is recommended, `/setup-push-service-account` is the managed compatibility path, or the customer configures a manual sender independently |
 | Power Automate flows | missing / recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow` |
 | Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; never run Wrap/Xcode or inspect signing assets here |
 | Physical iOS delivery | not applicable / pending / partial / failed / verified | `/verify-ios-push`; never substitute config validation, Firebase acceptance, simulator, Expo Go, or Metro evidence |
@@ -244,7 +248,11 @@ For iOS, report and preserve this route in order:
 `/setup-fcm` -> `/setup-apple-ios` -> `/setup-apns` -> client integration in
 this skill -> sender authentication and `/create-push-notification-flow` ->
 `/build-ios` -> `/verify-ios-push`. Route to `/build-ios` only after sender
-authentication and the exact producer/sender flows are ready. These are handoffs, not substeps: do not copy
+authentication and the exact producer/sender flows are ready. A manual sender
+must be completed under the customer's own process and have exact recorded live
+flow IDs; a bare `customer-owned / not plugin-validated` choice without that
+operational completion is not sufficient for this build/readiness gate. These
+are handoffs, not substeps: do not copy
 their signing, build, FlowAgent read-back, or physical-device procedures into
 this workflow.
 
@@ -253,6 +261,8 @@ For an already integrated native client, the user may run
 client project and resumes sender authentication as needed: WIF is preferred;
 an existing service-account integration is supported only through the secure
 Key Vault + managed identity + Entra-protected Azure Function compatibility
-path owned by `/setup-push-service-account`. For Microsoft-stack uncertainty,
+path owned by `/setup-push-service-account`; or the customer may choose the
+manual route and own the Power Automate authentication and sender
+implementation without a plugin-managed handoff. For Microsoft-stack uncertainty,
 use the Microsoft Learn guidance in `shared/shared-instructions.md` instead of
 guessing connector, Entra, or Power Platform behavior.
