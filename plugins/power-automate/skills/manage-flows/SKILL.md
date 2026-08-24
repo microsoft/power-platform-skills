@@ -1,10 +1,10 @@
 ---
 name: manage-flows
-description: Manage flow lifecycle - publish, test, batch operations, inventory reports. Use when the user asks to publish, test, batch manage, or get an inventory of flows.
+description: Manage flow lifecycle - publish, test, batch operations, inventory reports.
 user-invocable: true
 argument-hint: "<operation> [flow-ids...]"
 context: fork
-allowed-tools: Bash, Read, Write, Glob, Grep, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators, mcp__flowagent__resolve_entity, mcp__flowagent__list_datasets, mcp__flowagent__list_tables
+allowed-tools: Bash, Read, Write, Glob, Grep, mcp__flowagent__*
 model: opus
 ---
 
@@ -16,7 +16,7 @@ Autonomous agent for flow lifecycle operations: publish-and-test, batch operatio
 
 This skill uses the **FlowAgent MCP tools**, referred to by bare name (clients
 surface them as `mcp__flowagent__<tool>` in Claude Code or `flowagent-<tool>` in
-Copilot CLI). Use CLI shell commands (local engine build only) for CLI-only
+Copilot CLI). Fall back to `@microsoft/power-automate-mcp` shell commands only for CLI-only
 operations (connection lifecycle, sharing, solutions/admin) or when no MCP tools
 are present.
 

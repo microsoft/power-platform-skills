@@ -1,6 +1,4 @@
-# Power Automate CLI Reference
-
-> **Note:** These shell commands require a local engine build. If you installed this as a plugin, use the MCP tools instead — they cover the same operations.
+# PowerAutomate CLI Reference
 
 All commands use `node dist/cli.js <command> [options]` from the project root.
 

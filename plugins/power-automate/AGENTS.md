@@ -1,8 +1,8 @@
 # AGENTS.md — power-automate plugin
 
 Guidance for AI agents (Copilot CLI, Claude Code, Cursor) operating inside this
-plugin. The authoritative reference is this plugin's `CLAUDE.md` and the
-`references/` docs; this file is the plugin-local routing rule.
+plugin. The authoritative reference is the FlowAgent engine repo's `CLAUDE.md`;
+this file is the plugin-local routing rule.
 
 ## Tool routing (read first)
 
@@ -17,10 +17,7 @@ it handles auth (Azure CLI + MSAL), session-scoped current env/flow, structured
 errors, and stays in-process. Shelling out re-pays auth cost and breaks session
 state.
 
-Shell (`node dist/cli.js …`) is reserved for users running the engine from a
-local build, only for CLI-only commands the MCP does not wrap (connection
-lifecycle, sharing, solutions/admin), and not for plugin users when MCP tools
-are available.
+Shell (`node dist/cli.js …`) is reserved for users who have the FlowAgent engine repo cloned and built, only for CLI-only commands the MCP does not wrap (connection lifecycle, sharing, solutions/admin), and not for plugin users when MCP tools are available.
 
 If the `flowagent-*` tools are missing, the MCP isn't wired — point the user at
 this plugin's `.mcp.json` / the install steps in `README.md`.
@@ -35,8 +32,7 @@ this plugin's `.mcp.json` / the install steps in `README.md`.
 - `.mcp.json` — MCP server wiring (FlowAgent + Microsoft Learn)
 
 The flow-definition rules, auth model, error reference, and known issues live in
-this plugin's `CLAUDE.md` and `references/` docs, and apply whether you call via
-MCP or shell.
+the FlowAgent engine repo's `CLAUDE.md` and apply whether you call via MCP or shell.
 
 ## Documentation lookup (hybrid pattern)
 

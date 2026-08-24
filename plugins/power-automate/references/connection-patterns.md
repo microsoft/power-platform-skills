@@ -1,7 +1,5 @@
 # Connection Resolution Patterns
 
-> **Note:** These shell commands require a local engine build. If you installed this as a plugin, use the MCP tools instead — they cover the same operations.
-
 ## Discovering Connections
 
 ```bash

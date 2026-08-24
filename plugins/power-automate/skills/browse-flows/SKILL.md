@@ -1,9 +1,9 @@
 ---
 name: browse-flows
-description: Browse Power Automate environments and flows interactively. Use when the user wants to browse, list, or explore their flows and environments.
+description: Browse Power Automate environments and flows interactively.
 user-invocable: true
 argument-hint: "[environment-id]"
-allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow
+allowed-tools: Bash, Read, Glob, Grep, AskUserQuestion, mcp__flowagent__*
 model: opus
 ---
 
@@ -15,7 +15,7 @@ Interactive skill for discovering Power Automate environments and flows.
 
 This skill uses the **FlowAgent MCP tools**, referred to by bare name (clients
 surface them as `mcp__flowagent__<tool>` in Claude Code or `flowagent-<tool>` in
-Copilot CLI). If no MCP tools are present, the plugin is not wired up — run the `setup` skill.
+Copilot CLI). Fall back to `@microsoft/power-automate-mcp` only when no MCP tools are present.
 
 ## Steps
 
