@@ -1081,7 +1081,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
     }
     requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
-    reportPartialPush(await provision.publishArtifact('form', formId), `form ${formId}`, opts.warn);
+    reportPartialPush(await provision.publishArtifact('form', formId), `form ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
     return formId;
   };
@@ -1102,7 +1102,7 @@ async function runSdkBuild(spec, opts = {}) {
     }
     provision.updateElement('view', viewId, '/columns', merged);
     requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
-    reportPartialPush(await provision.publishArtifact('view', viewId), `view ${viewId}`, opts.warn);
+    reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
     return viewId;
   };
@@ -1302,7 +1302,7 @@ async function runSdkBuild(spec, opts = {}) {
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
           if (wireFormEvents(id, wantedEvents)) {
             requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
-            reportPartialPush(await provision.publishArtifact('form', id), `form ${id}`, opts.warn);
+            reportPartialPush(await provision.publishArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
           }
         });
       }
@@ -1342,7 +1342,7 @@ async function runSdkBuild(spec, opts = {}) {
         }
         if (changed) {
           requireSuccessfulPush(await provision.pushArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
-          reportPartialPush(await provision.publishArtifact('form', hostId), `form ${hostId}`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
         }
       });
     }
@@ -1463,7 +1463,7 @@ async function runSdkBuild(spec, opts = {}) {
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
           provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`, opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', existingId), `app ${existingId}`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
@@ -1721,7 +1721,7 @@ async function runSdkBuild(spec, opts = {}) {
           const full = appDef(spec, result.created);
           provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize', opts.warn);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${result.created.app}`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           return result.created.app;
         });
       }
@@ -1914,7 +1914,7 @@ async function runSdkBuild(spec, opts = {}) {
       for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
       for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
       await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
-      if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${result.created.app}`, opts.warn);
+      if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
     });
   }
 
@@ -1943,7 +1943,7 @@ async function runSdkBuild(spec, opts = {}) {
       if (Object.keys(retryFlags).length) {
         try {
           await provision.fetchArtifact('app', result.created.app);
-          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${result.created.app}`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           const retry = await provision.setAppAiFeatures(appUnique, retryFlags, {
             solutionUniqueName: spec.solution && spec.solution.uniqueName,
             appModuleId: result.created.app,
