@@ -51,12 +51,6 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
     trackedSkills,
     telemetryDir,
     sessionId, // primed from Claude Code's hook payload (parsed.session_id)
-    // Optional plugin-supplied dynamic payload merged into `eventInfo` below.
-    // Accepts a plain object, or a thunk returning one. Prefer the thunk: it is
-    // invoked only after the slash-command / `disabled` / `isProvisioned` gates
-    // below, so a plugin whose payload costs real work (filesystem probing, etc.)
-    // pays nothing on untracked prompts or a disabled plugin.
-    eventInfo,
     _emit, // test seam; defaults to fireAndForget
     _readPacAuth, // test seam; defaults to lib/pac-auth
     _readAgentInfo, // test seam; defaults to lib/agent-info
@@ -128,29 +122,7 @@ function emitSkillStartedFromPrompt(promptText, opts = {}) {
   };
   if (pacAuth && pacAuth.orgId) fields.orgId = pacAuth.orgId;
   if (pacAuth && pacAuth.tenantId) fields.tenantId = pacAuth.tenantId;
-  // `eventInfo` is assembled from two INDEPENDENT sources and assigned only when
-  // non-empty. Building it inside the objectId guard instead would drop the
-  // caller's payload on every unauthenticated run (`pac auth who` surfaces no
-  // object id), and any later `fields.eventInfo.x = ...` would throw on the
-  // undefined — a throw the fail-closed wrapper swallows, silently degrading the
-  // run to no event at all. The caller owns not putting PII in its payload;
-  // `aadObjectId` is written last so the library's own field always wins.
-  const mergedEventInfo = {};
-  let callerEventInfo = eventInfo;
-  if (typeof callerEventInfo === "function") {
-    try {
-      callerEventInfo = callerEventInfo();
-    } catch {
-      // A caller thunk threw — drop its contribution rather than lose the whole
-      // event. The library's own fields below are unaffected.
-      callerEventInfo = null;
-    }
-  }
-  if (callerEventInfo && typeof callerEventInfo === "object" && !Array.isArray(callerEventInfo)) {
-    Object.assign(mergedEventInfo, callerEventInfo);
-  }
-  if (pacAuth && pacAuth.objectId) mergedEventInfo.aadObjectId = pacAuth.objectId;
-  if (Object.keys(mergedEventInfo).length > 0) fields.eventInfo = mergedEventInfo;
+  if (pacAuth && pacAuth.objectId) fields.eventInfo = { aadObjectId: pacAuth.objectId };
   if (agentInfo.aiAgentName) fields.aiAgentName = agentInfo.aiAgentName;
   if (agentInfo.aiAgentVersion) fields.aiAgentVersion = agentInfo.aiAgentVersion;
   if (agentInfo.pacCliVersion) fields.pacCliVersion = agentInfo.pacCliVersion;

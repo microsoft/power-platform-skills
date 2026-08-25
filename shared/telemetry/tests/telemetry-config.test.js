@@ -91,8 +91,7 @@ test("status discloses Model Apps identifiers without claiming an Entra user obj
   const { status, stdout } = run(["--action", "status", "--plugin", "model-apps"], dir);
   assert.equal(status, 0);
   assert.match(stdout, /Dataverse organization and Entra tenant IDs/);
-  assert.match(stdout, /Model Apps excludes the signed-in user's Entra object ID and Power Pages/);
-  assert.match(stdout, /code-site framework fields/);
+  assert.match(stdout, /Model Apps excludes the signed-in user's Entra object ID/);
   assert.doesNotMatch(stdout, /anonymous/i);
 });
 

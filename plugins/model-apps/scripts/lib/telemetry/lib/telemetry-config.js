@@ -11,13 +11,9 @@ function dataDisclosure(plugin) {
   const pluginSpecific =
     plugin === "power-pages"
       ? "   Power Pages can also record the signed-in user's Entra object ID as\n" +
-        "   eventInfo.aadObjectId when PAC exposes it, and the SPA framework of the\n" +
-        "   Power Pages code site being worked in as eventInfo.framework when detected.\n" +
-        "   The framework is one of react, vue, angular, or astro and describes the\n" +
-        "   scaffold only — it is never a site name or path.\n"
+        "   eventInfo.aadObjectId when PAC exposes it.\n"
       : plugin === "model-apps"
-        ? "   Model Apps excludes the signed-in user's Entra object ID and Power Pages\n" +
-          "   code-site framework fields.\n"
+        ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
         : "";
   return (
     "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +

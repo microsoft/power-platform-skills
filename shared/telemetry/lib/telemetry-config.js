@@ -16,8 +16,7 @@ function dataDisclosure(plugin) {
         "   The framework is one of react, vue, angular, or astro and describes the\n" +
         "   scaffold only — it is never a site name or path.\n"
       : plugin === "model-apps"
-        ? "   Model Apps excludes the signed-in user's Entra object ID and Power Pages\n" +
-          "   code-site framework fields.\n"
+        ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
         : "";
   return (
     "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +
