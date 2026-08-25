@@ -1,9 +1,9 @@
 ---
 name: route-environments
-description: Configure Power Platform environment routing — check status, enable routing, and manage default environment resolution. Use when the user asks about environment routing, developer environments, or new maker landing. NOT for listing flows or managing connections.
+description: Check Power Platform environment routing status and understand default environment resolution. Use when the user asks about environment routing, developer environments, or new maker landing. Routing is configured in the admin center, not here. NOT for listing flows or managing connections.
 user-invocable: true
-argument-hint: "[check|enable]"
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__*
+argument-hint: "[check|explain]"
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment
 model: opus
 ---
 
@@ -26,10 +26,9 @@ Call `resolve_environment` to see how the user's default environment resolves
 Explain that environment routing redirects new makers from the default environment to a designated developer environment.
 
 Key facts:
-- GA shipped December 2025
-- 730 tenants enabled, 3,359 viewed config page (as of Feb 2026)
-- 99.6% use `specificGroups` scoping
-- Top uses: dev environments, Copilot Studio isolation
+- Generally available since December 2025
+- Most tenants scope routing with `specificGroups` rather than tenant-wide
+- Common uses: steering new makers to developer environments, Copilot Studio isolation
 
 ### List Environments
 Call `list_environments` (use the `query` param to filter by name).

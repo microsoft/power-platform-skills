@@ -1,5 +1,7 @@
 # Common API Errors & Fixes
 
+> **Note:** These shell commands require a local engine build. If you installed this as a plugin, use the MCP tools instead — they cover the same operations.
+
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `500 NullReferenceException` | Missing `$authentication` parameter | Add `parameters` block with `$authentication` and `$connections` |

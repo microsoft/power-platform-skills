@@ -2,7 +2,7 @@
 name: setup
 description: Set up Power Automate CLI prerequisites. Use when the user is new, something isn't working, or they need help getting started.
 user-invocable: true
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__*
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators
 model: opus
 ---
 
@@ -87,22 +87,49 @@ detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 ## Step 4: Check the FlowAgent tools are wired
 
 The plugin talks to Power Automate through the **FlowAgent MCP server**, which is
-launched automatically from the plugin's `.mcp.json` (via `npx @microsoft/power-automate-mcp`).
+registered as `flowagent` in the plugin's `.mcp.json` and started automatically.
+`.mcp.json` loads the bundled `server/mcp.mjs` through a small Node bootstrap
+that resolves the plugin's installation directory (`PLUGIN_ROOT`, else
+`CLAUDE_PLUGIN_ROOT`, else the current directory) and prints an actionable error
+if the bundle can't be found.
 
 - **If `flowagent-*` / `mcp__flowagent__*` tools appear in your tool list**: tell
   them "The Power Automate tools are connected" and move on.
-- **If they're missing**: the MCP server isn't wired up yet. Tell them to make
-  sure the plugin is installed (`/plugin install power-automate@power-platform-skills`) and
-  restart the agent. If they're running from a local clone instead of the
-  published package, point their client's `.mcp.json` at
-  `node <repo>/packages/cli/dist/bin/mcp-stdio.js` (after `npm install && npm run build`).
+- **If they're missing**: the MCP server isn't registered. Fix it automatically:
+
+  1. **Locate the installed plugin's MCP bundle.** This only matches a bundle
+     inside a `power-automate` plugin directory, so it can't pick up another
+     plugin's MCP server:
+     ```bash
+     node -e "const fs=require('fs'),p=require('path'),d=p.join(process.env.HOME||process.env.USERPROFILE,'.copilot','installed-plugins');const find=(dir)=>{let out=[];for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory()){try{out=out.concat(find(f))}catch{}}else if(e.name==='mcp.mjs'&&p.basename(p.dirname(dir))==='power-automate'){out.push(dir)}}return out};try{const hits=find(d);if(hits.length===1)console.log(JSON.stringify({found:true,serverDir:hits[0],mcpMjs:p.join(hits[0],'mcp.mjs')}));else if(hits.length>1)console.log(JSON.stringify({found:false,reason:'multiple power-automate bundles',candidates:hits}));else console.log(JSON.stringify({found:false}))}catch(e){console.log(JSON.stringify({found:false,error:e.message}))}"
+     ```
+     If it reports `multiple power-automate bundles`, show the candidates and ask
+     the user which one to register rather than guessing.
+
+  2. **If exactly one was found**, read `~/.copilot/mcp-config.json`, add the
+     `flowagent` MCP entry, and write it back:
+     ```bash
+     node -e "const fs=require('fs'),p=require('path');const home=process.env.HOME||process.env.USERPROFILE;const cfgPath=p.join(home,'.copilot','mcp-config.json');let cfg;try{cfg=JSON.parse(fs.readFileSync(cfgPath,'utf8'))}catch{cfg={mcpServers:{}}};if(!cfg.mcpServers)cfg.mcpServers={};if(cfg.mcpServers.flowagent){console.log('already registered');process.exit(0)}const d=p.join(home,'.copilot','installed-plugins');const find=(dir)=>{let out=[];for(const e of fs.readdirSync(dir,{withFileTypes:true})){const f=p.join(dir,e.name);if(e.isDirectory()){try{out=out.concat(find(f))}catch{}}else if(e.name==='mcp.mjs'&&p.basename(p.dirname(dir))==='power-automate'){out.push(dir)}}return out};const hits=find(d);if(hits.length!==1){console.log(hits.length?'ambiguous: '+JSON.stringify(hits):'mcp.mjs not found');process.exit(1)}const mcpPath=p.join(hits[0],'mcp.mjs');cfg.mcpServers.flowagent={command:'node',args:[mcpPath]};fs.writeFileSync(cfgPath,JSON.stringify(cfg,null,2)+'\n');console.log('registered flowagent MCP at '+mcpPath)"
+     ```
+
+  3. **Tell the user** to restart the agent (Copilot CLI: `/restart`, Claude Code:
+     restart the process). After restart, `flowagent-*` tools should appear.
+
+  4. **If not found** (plugin not installed at all): tell them to install the
+     plugin first:
+     ```
+     /plugin marketplace add microsoft/power-platform-skills
+     ```
+     Then select `power-automate` and run `/setup` again.
 
 ## Step 5: Smoke Test
 
 Verify everything works end-to-end by listing the user's environments:
 
 - **Preferred**: call the `list_environments` tool.
-- **If MCP tools aren't available**: run `npx -y @microsoft/power-automate-mcp@latest list-environments` (or, from a local clone, `node dist/cli.js list-environments`).
+- **If MCP tools aren't available**: run `node <path-to-plugin>/server/mcp.mjs`
+  to confirm the bundled MCP server starts cleanly, then fix the plugin install
+  or `.mcp.json` wiring before retrying.
 
 - **If it returns environments**: Success! Tell them:
   - "Everything is working! Here are your Power Automate environments:"
