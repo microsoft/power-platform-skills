@@ -24,7 +24,10 @@ telemetry for this plugin. Default to `status` when no argument is given.
   and correlation IDs, and Dataverse organization and Entra tenant GUIDs when PAC
   is signed in.
   Power Pages can also include the signed-in user's Entra object ID as
-  `eventInfo.aadObjectId` when PAC exposes it; Model Apps excludes it.
+  `eventInfo.aadObjectId` when PAC exposes it, and the SPA framework of the
+  Power Pages code site being worked in (`react`, `vue`, `angular`, or `astro`)
+  as `eventInfo.framework`; Model Apps includes neither. The framework name
+  describes the scaffold only — it is never a site name or path.
   When plugin telemetry is enabled, the local diagnostic mirror retains the same
   event fields even when transmission is off.
   A plugin whose committed telemetry config has `disabled: true` writes no mirror.
