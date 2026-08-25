@@ -14,7 +14,8 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
 
-function runHook({ input, configDir, ikeyPath, fakeProbe, extraEnv = {} }) {  return spawnSync(process.execPath, [HOOK], {
+function runHook({ input, configDir, ikeyPath, fakeProbe, extraEnv = {} }) {
+  return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     env: {

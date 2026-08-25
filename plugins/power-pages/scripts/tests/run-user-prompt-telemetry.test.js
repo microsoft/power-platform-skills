@@ -238,7 +238,8 @@ test("hook emits and exits 0 when optional detector fails to load", () => {
   assert.ok(!("framework" in eventInfo));
 });
 
-test("hook exits 0 and emits nothing for an unrelated prompt", () => {  const configDir = mkConfigDir();
+test("hook exits 0 and emits nothing for an unrelated prompt", () => {
+  const configDir = mkConfigDir();
   const probePath = path.join(configDir, "probe.json");
   const { status } = runHook({
     prompt: "just some user text",
