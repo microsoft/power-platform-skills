@@ -26,6 +26,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
 - **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
+- **Site content language is independent of Dataverse language**: Generate every user-visible SPA string in the approved content language. Dataverse and Power Pages platform-managed messages remain English (`en-US`, LCID `1033`) in this workflow.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
@@ -94,27 +95,78 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | Who is the target audience? | Audience | Internal (employees, partners), External (public-facing customers) |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-4. Resolve the project location:
+4. Determine the site's single content language independently of whether the
+   purpose was supplied in `$ARGUMENTS`.
+
+   - If the request explicitly names the content language, resolve it without
+     asking again and include it in the confirmation.
+   - Do not infer the desired site language merely from the language used to
+     converse with the maker.
+
+   <!-- not-a-gate: the locale is validated before it can affect scaffolding -->
+
+   When the content language was not explicit, use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | English (`en-US`) (Recommended) |
+
+   The question UI's free-text option lets the maker enter another language or
+   locale, such as `Spanish (es-ES)`, `Japanese (ja-JP)`, or `Arabic (ar-SA)`.
+   Convert a language name to an appropriate BCP-47 tag, preserving an explicit
+   region or script when supplied. Validate and canonicalize it:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<LOCALE>"
+   ```
+
+   Reject invalid input and re-prompt with the reason. Record:
+
+   - `SITE_LANGUAGE` — readable language name, such as `Spanish`
+   - `SITE_LOCALE` — canonical BCP-47 tag, such as `es-ES`
+   - `SITE_DIRECTION` — `ltr` or `rtl` from the resolver
+
+5. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
-   - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
+   - **If "New folder in current directory"**: Create a folder named
+     `__SITE_NAME__` inside the cwd. Project root =
+     `<cwd>/__SITE_NAME__/`. First verify that `__SITE_NAME__` is a valid
+     directory name on the current operating system. Non-Latin characters alone
+     are not a reason to reject it. If the site name contains invalid path
+     characters, is reserved by the operating system, is empty after
+     sanitization, or otherwise cannot be used safely, fall back to
+     `__SITE_SLUG__`. Before creating a fallback folder, tell the maker which
+     name will be used and why the original site name was not filesystem-safe.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
 
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
 
-5. From the user's answers, derive:
-   - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
-   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
-   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
-6. Summarize understanding and confirm with user before proceeding.
+6. From the user's answers, derive:
+   - `__SITE_NAME__` — preserve the maker's site/brand name as entered, e.g.
+     `Contoso Portal`; it does not need to match the content language.
+   - `__SITE_SLUG__` — a lowercase ASCII kebab-case technical identifier used
+     by npm, Angular project configuration, build paths, and the default folder.
+     Derive it from the site name when possible, e.g. `Contoso Portal` →
+     `contoso-portal`. Transliterate when reliable. If a non-Latin name cannot
+     produce a safe, meaningful slug, derive one from the site's purpose or ask
+     for a technical project name rather than emitting an empty or invalid
+     identifier.
+   - `__SITE_DESCRIPTION__` — one-line description written in `SITE_LANGUAGE`
+     based on the name and purpose.
+7. Summarize understanding and confirm with the user before proceeding. Include
+   site name, technical slug, framework, purpose, audience, project location,
+   `SITE_LANGUAGE` (`SITE_LOCALE`, `SITE_DIRECTION`), and the explicit statement
+   that Dataverse and Power Pages system messages remain English.
 
 **Audience influences site generation:**
 
 - **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
 - **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
 
-**Output**: Clear statement of site purpose, framework, audience, derived naming values, and project location
+**Output**: Clear statement of site purpose, framework, audience, content
+language, derived naming values, and project location
 
 ---
 
@@ -160,6 +212,8 @@ See [Live Preview Status Protocol](#live-preview-status-protocol) for the full c
 After copying, replace all `__PLACEHOLDER__` tokens in every file. Use `Edit` with `replace_all: true` on each file.
 
 - **Name/slug/description placeholders**: Use the actual values from Phase 1 (`__SITE_NAME__`, `__SITE_SLUG__`, `__SITE_DESCRIPTION__`).
+- **Document-language placeholders**: Replace `__SITE_LOCALE__` with
+  `SITE_LOCALE` and `__SITE_DIRECTION__` with `SITE_DIRECTION`.
 
 > **Note:** The scaffold loading screen uses hardcoded Power Pages branding colors — there are no color placeholders (`__PRIMARY_COLOR__`, etc.) to replace. The user's chosen color palette is applied fresh during Phase 5 when the scaffold is completely replaced.
 
@@ -297,6 +351,10 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 5. Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
 6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
+   Font choices must support the complete writing system used by `SITE_LOCALE`.
+   Verify glyph coverage and shaping rather than selecting a Latin-only font
+   solely because it matches the aesthetic. Use a compatible script-aware
+   fallback stack.
 7. Analyze requirements and determine needed components. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
 
    ```
@@ -341,9 +399,12 @@ Assemble a single JSON object with the following keys. The plan template rejects
 
 | Key | Type | Content |
 |-----|------|---------|
-| `SITE_NAME` | string | Title-case site name from Phase 1 |
+| `SITE_NAME` | string | Site/brand name from Phase 1, preserved as entered |
 | `PLAN_TITLE` | string | Always `"Implementation Plan"` |
 | `FRAMEWORK` | string | `React` / `Vue` / `Angular` / `Astro` |
+| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1 |
+| `SITE_LOCALE` | string | Canonical BCP-47 content locale |
+| `SITE_DIRECTION` | string | `ltr` or `rtl` |
 | `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
 | `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
 | `SUMMARY` | string | One paragraph describing what the site is and who it serves |
@@ -380,7 +441,7 @@ Open `<OUTPUT_PATH>` in the default browser using the platform-appropriate file 
 Keep the terminal message short — **the full plan lives in the HTML file now**. Include:
 
 - One sentence confirming the plan was rendered and where (the output path).
-- A 3-5 line bullet summary: framework, page count, component count, palette primary + mood.
+- A 3-5 line bullet summary: framework, content language, page count, component count, palette primary + mood.
 - A pointer: "See the open browser tab for pages, color swatches, typography samples, and deployment options."
 
 Do NOT dump the full plan contents into the terminal — that defeats the purpose of the HTML view.
@@ -472,6 +533,24 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
    One marker per placement, exactly as defined in the `marker` field of the `AI_SUMMARY_PLACEMENTS` record. Do NOT add stub components (`<CopilotSummaryCard />`, etc.), CSS classes, or empty `<aside>` elements — the slot is just a comment. The site must ship as if AI is not a consideration; the follow-up skill does the real work.
 
+**Content-language requirements**:
+
+- Write content natively in `SITE_LANGUAGE`; do not author an English site and
+  mechanically translate it afterward.
+- Localize every user-visible SPA string: navigation, headings, body copy,
+  buttons, links, forms, validation, loading/error/empty states, document
+  titles, metadata, image alt text, and ARIA labels.
+- Keep code identifiers, package names, CSS classes, Dataverse logical names,
+  API endpoints, and environment variables technical and untranslated.
+- Keep route paths as stable semantic English ASCII identifiers by default
+  (for example, `/services`), while navigation labels and page titles use
+  `SITE_LANGUAGE`. Do not translate paths during single-language site creation;
+  stable routes avoid breaking bookmarks, analytics, integrations, tests, and
+  a later `/add-localization` setup. Use localized paths only when the maker
+  explicitly requests them for a permanently single-language SEO strategy.
+- For RTL locales, use logical CSS properties, preserve sensible reading order,
+  and mirror only directional controls/icons.
+
 **Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
 
 ### 5.3 Source Real Images
@@ -536,12 +615,12 @@ The user is previewing in their own browser via the dev server URL shared in Pha
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
-### 5.7 Offer and Add Localization
+### 5.7 Offer Additional Languages
 
-Ask whether localization should be added now:
+Ask whether more languages should be added now:
 
-> **Would you like to add localization support to this site now?**
-> This localizes only the SPA user interface; it does not add languages to your Dataverse environment.
+> **Would you like to add more languages now?**
+> The site is currently single-language in `<SITE_LANGUAGE>`. This adds SPA localization only; Dataverse and Power Pages system messages remain English.
 
 <!-- not-a-gate: this selects whether to enter the child workflow, whose Phase 3 gate approves every localization write -->
 
@@ -549,7 +628,7 @@ Use `AskUserQuestion` with this exact wording and these exact options:
 
 | Question | Header | Options |
 |----------|--------|---------|
-| Would you like to add localization support to this site now?<br><br>This localizes only the SPA user interface; it does not add languages to your Dataverse environment. | Localization | Yes — configure localization now, No — keep this site single-language |
+| Would you like to add more languages now?<br><br>The site is currently single-language in `<SITE_LANGUAGE>`. This adds SPA localization only; Dataverse and Power Pages system messages remain English. | Additional languages | Yes — add more languages now, No — keep the site in `<SITE_LANGUAGE>` only |
 
 Record the answer as `LOCALIZATION_REQUESTED=true|false`. Ask at this point even
 when `$ARGUMENTS` mentioned localization, so the maker's answer immediately
@@ -617,7 +696,7 @@ For each violation found, identify the source file and apply the fix:
 | Missing landmark regions | Wrap content in `<main>`, `<nav>`, `<header>`, `<footer>` |
 | Skipped heading levels | Correct heading hierarchy (h1 → h2 → h3, no gaps) |
 | Missing link text | Add descriptive text or `aria-label` to links |
-| Missing `lang` attribute | Add `lang="en"` to the `<html>` tag |
+| Missing or incorrect `lang`/`dir` attributes | Set `lang="<SITE_LOCALE>"` and `dir="<SITE_DIRECTION>"` on the root `<html>` element |
 | Inadequate focus indicators | Add visible `outline` styles to interactive elements |
 
 After fixing each group of related violations, commit:
@@ -677,6 +756,11 @@ Present a summary table to the user:
    | Git Commits         | 7     | scaffold + 6 feature commits |
    ```
 
+   Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`. Ask the maker
+   to review linguistic correctness, terminology, tone, regional wording, and
+   any legal, medical, financial, or regulated text; automated checks cannot
+   validate language quality.
+
 3. Share the dev server URL with the user and list all available routes
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
@@ -714,6 +798,8 @@ Present a summary table to the user:
 4. Mark all todos complete
 5. Present a final summary:
    - Site name and purpose
+   - Site content language and the fact that Dataverse/Power Pages system
+     messages remain English
    - Framework and project location
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
@@ -755,11 +841,11 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 
 | Task subject | activeForm | Description |
 |-------------|------------|-------------|
-| Discover site requirements | Discovering requirements | Collect site name, framework, purpose, audience, and project location |
+| Discover site requirements | Discovering requirements | Collect site name, framework, purpose, audience, content language, and project location |
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
-| Implement pages and components | Building site | Apply design tokens, create pages/components/routing/navigation, then ask whether to configure localization immediately |
+| Implement pages and components | Building site | Apply design tokens, create pages/components/routing/navigation in the approved content language, then ask whether to add more languages |
 | Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
@@ -771,10 +857,12 @@ Mark each task `in_progress` when starting it and `completed` when done via `Tas
 Every site must meet these standards before completion:
 
 - Distinctive typography via Google Fonts (no generic Inter/Roboto/Arial)
+- Complete glyph coverage and correct shaping for `SITE_LOCALE`
 - Cohesive color palette via CSS variables
 - Motion/animations (page transitions, hover states)
 - All requested pages and features implemented (not placeholders)
 - All routes working and navigation complete
+- Root document uses the approved `SITE_LOCALE` and `SITE_DIRECTION`
 - Accessibility verified via axe-core — zero critical/serious violations on all pages
 - Git commits at key milestones
 - Verified via Playwright

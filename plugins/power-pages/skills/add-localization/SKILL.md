@@ -87,6 +87,30 @@ When no localization is detected and this is a direct invocation, display:
 > **Localization scope**
 > This localizes only the SPA user interface; it does not add languages to your Dataverse environment.
 
+When no localization is detected and `siteLanguage.detected=true` in the
+inspection result, display the declared locale, direction, source file, and any
+conflicts. Treat a valid single-site document language as the existing
+source/default locale for a new localization setup. If
+`siteLanguage.valid=false`, show every conflict and include the exact root
+`lang`/`dir` corrections in the approved localization plan.
+
+When no localization is detected and `siteLanguage.detected=false`, display:
+
+> **Source language not detected**
+> The root document does not declare a valid static `lang` attribute, so the
+> language of the existing UI cannot be determined reliably. Select the locale
+> that represents the existing UI content.
+
+Do not infer the source language from visible text, `dir`, browser preferences,
+the operating system, or the development environment. Treat the source locale
+as unknown until the maker selects a validated default locale in Phase 2. The
+approved plan must name the framework's root document and show the exact
+`lang="<DEFAULT_LOCALE>"` and `dir="<RESOLVED_DIRECTION>"` attributes that will
+be added.
+
+When localization already exists, its manifest/configuration remains the source
+of truth instead of the static root-document attributes.
+
 When localization is detected, display package, mode, locales, default locale,
 resource paths, and conflicts.
 
@@ -113,7 +137,10 @@ Ask configuration questions in this exact order.
 <!-- not-a-gate: locale input is validated before it can enter the plan -->
 
 Use `AskUserQuestion` for comma-separated BCP-47 tags. For add-languages mode,
-show existing locales and ask only for additions. Run:
+show existing locales and ask only for additions. For a new setup whose
+inspection found a valid single-site document language, show that source locale
+and ask only for additional locales; combine the source locale with the
+validated additions. Run:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" validate-locales --locales "<COMMA_SEPARATED_TAGS>"
@@ -121,17 +148,18 @@ node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" validate-locales --loca
 
 Reject invalid entries and re-prompt with each reason. Show canonicalization
 changes and duplicates. Confirm canonicalization before continuing. Require at
-least two unique locales for a new setup and at least one genuinely new locale
-for add-languages mode.
+least two unique locales for a new setup, including the detected source locale
+when present, and at least one genuinely new locale for add-languages mode.
 
 ### 2.2 Default locale
 
 <!-- not-a-gate: default-locale selection is validated configuration input -->
 
-For a new setup, use `AskUserQuestion` with only the validated canonical
-locales as options and require exactly one. In add-languages mode, preserve the
-existing default without asking. In repair mode, ask only when missing,
-invalid, conflicting, or explicitly being changed.
+For a new setup with a valid detected single-site language, preserve it as the
+default without asking. Otherwise, use `AskUserQuestion` with only the
+validated canonical locales as options and require exactly one. In
+add-languages mode, preserve the existing default without asking. In repair
+mode, ask only when missing, invalid, conflicting, or explicitly being changed.
 
 ### 2.3 Mode
 
@@ -224,6 +252,8 @@ Present:
 - Canonical locales and additions.
 - Translation method and warning.
 - Exact files/packages to create, update, preserve, replace, or skip.
+- For a missing or invalid root document language, the exact root document file
+  and the approved canonical `lang` plus resolved `dir` attribute repair.
 - Language-selector placement and runtime/static behavior.
 - Build, validator, browser, RTL, and token checks.
 - Known limitations and any approved translation replacements.
@@ -281,6 +311,10 @@ For blank mode, create complete key structures with blank target values.
 Add a language selector to shared navigation/layout. Implement runtime
 persistence or static route navigation exactly as described in the framework
 reference. Configure `lang`, `dir`, fallback behavior, and RTL handling.
+For a new setup whose root document language was missing or invalid, apply the
+approved root-document repair: set static `lang` to the approved canonical
+default locale and `dir` to that locale's resolved direction. Do not infer or
+substitute a different source locale during implementation.
 
 Write `.powerpages-localization.json` using reference schema version 1
 after the approved implementation is complete. Record `packageVerification`

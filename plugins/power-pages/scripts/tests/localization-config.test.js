@@ -9,8 +9,11 @@ const {
   LOCALIZATION_CAPABILITIES,
   detectFramework,
   detectLocalization,
+  detectSiteLanguage,
   discoverLocalizationImplementation,
+  getLocaleDirection,
   protectedTokenSignature,
+  resolveLocale,
   verifyInitializationEvidence,
   validateLocales,
 } = require('../lib/localization-config');
@@ -86,6 +89,48 @@ test('canonicalizes, visibly deduplicates, and validates registry subtags', () =
   assert.deepEqual(result.canonicalization, [{ input: 'en-us', canonical: 'en-US' }]);
   assert.deepEqual(result.duplicates, [{ input: 'en-US', canonical: 'en-US' }]);
   assert.match(result.invalid[0].reason, /unknown language subtag "xx"/);
+});
+
+test('resolves a single locale and its writing direction', () => {
+  const spanish = resolveLocale('es-es');
+  assert.equal(spanish.locale, 'es-ES');
+  assert.equal(spanish.direction, 'ltr');
+  assert.equal(getLocaleDirection('ar-SA'), 'rtl');
+  assert.equal(getLocaleDirection('x-contoso'), 'ltr');
+});
+
+test('detects the persisted single-site language from document attributes', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'index.html', '<html lang="es-ES" dir="ltr"><body></body></html>');
+
+  assert.deepEqual(detectSiteLanguage(projectRoot, 'react'), {
+    detected: true,
+    valid: true,
+    locale: 'es-ES',
+    direction: 'ltr',
+    source: 'index.html',
+    conflicts: [],
+  });
+});
+
+test('reports missing or incorrect document direction', (t) => {
+  const missingRoot = createTempProject(t);
+  writeProjectFile(missingRoot, 'src/index.html', '<html lang="ar-SA"><body></body></html>');
+  assert.match(
+    detectSiteLanguage(missingRoot, 'angular').conflicts.join('\n'),
+    /missing a valid html dir attribute/
+  );
+
+  const mismatchedRoot = createTempProject(t);
+  writeProjectFile(
+    mismatchedRoot,
+    'src/index.html',
+    '<html lang="ar-SA" dir="ltr"><body></body></html>'
+  );
+  assert.match(
+    detectSiteLanguage(mismatchedRoot, 'angular').conflicts.join('\n'),
+    /resolves to "rtl"/
+  );
 });
 
 test('accepts scripts, regions, variants, extensions, and private-use suffixes', () => {

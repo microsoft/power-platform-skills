@@ -441,6 +441,45 @@ function validateLocales(input, options = {}) {
   };
 }
 
+function getLocaleDirection(locale) {
+  let canonical;
+  let parsed;
+  try {
+    [canonical] = Intl.getCanonicalLocales(locale);
+    parsed = new Intl.Locale(canonical);
+  } catch {
+    // Private-use-only tags such as x-contoso are valid BCP-47 identifiers but
+    // do not carry script metadata from which a direction can be derived.
+    return 'ltr';
+  }
+
+  // Node exposes Unicode text direction through Intl.Locale.textInfo. Keep the
+  // language fallback for older Node releases that do not implement it.
+  const intlDirection = parsed.textInfo?.direction;
+  if (intlDirection === 'rtl' || intlDirection === 'ltr') return intlDirection;
+
+  const rtlLanguages = new Set(['ar', 'dv', 'fa', 'he', 'ku', 'ps', 'sd', 'ug', 'ur', 'yi']);
+  return rtlLanguages.has(parsed.language.toLowerCase()) ? 'rtl' : 'ltr';
+}
+
+function resolveLocale(input) {
+  const validation = validateLocales([input]);
+  if (!validation.valid || validation.locales.length !== 1) {
+    return {
+      ...validation,
+      locale: null,
+      direction: null,
+    };
+  }
+
+  const [locale] = validation.locales;
+  return {
+    ...validation,
+    locale,
+    direction: getLocaleDirection(locale),
+  };
+}
+
 function detectLocalization(projectRoot) {
   const manifestPath = path.join(projectRoot, MANIFEST_NAME);
   const manifestExists = fs.existsSync(manifestPath);
@@ -794,11 +833,98 @@ function discoverLocalizationImplementation(
   };
 }
 
+function detectSiteLanguage(projectRoot, framework) {
+  const candidates = [
+    path.join(projectRoot, 'index.html'),
+    path.join(projectRoot, 'src', 'index.html'),
+  ];
+  const astroLayouts = path.join(projectRoot, 'src', 'layouts');
+  if (framework === 'astro' && fs.existsSync(astroLayouts)) {
+    for (const filePath of walkFiles(astroLayouts)) {
+      if (/\.astro$/i.test(filePath)) candidates.push(filePath);
+    }
+  }
+
+  const findings = [];
+  for (const filePath of candidates) {
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) continue;
+    const text = fs.readFileSync(filePath, 'utf8');
+    const htmlTag = text.match(/<html\b[^>]*>/i)?.[0];
+    if (!htmlTag) continue;
+    const lang = htmlTag.match(/\blang\s*=\s*(["'])([^"']+)\1/i)?.[2];
+    if (!lang || /[{}]/.test(lang)) continue;
+    const direction = htmlTag.match(/\bdir\s*=\s*(["'])([^"']+)\1/i)?.[2]?.toLowerCase() || null;
+    findings.push({
+      source: path.relative(projectRoot, filePath).replace(/\\/g, '/'),
+      lang,
+      direction,
+    });
+  }
+
+  if (findings.length === 0) {
+    return {
+      detected: false,
+      valid: false,
+      locale: null,
+      direction: null,
+      source: null,
+      conflicts: [],
+    };
+  }
+
+  const conflicts = [];
+  const resolved = findings.map((finding) => ({
+    ...finding,
+    resolved: resolveLocale(finding.lang),
+  }));
+  for (const finding of resolved) {
+    if (!finding.resolved.valid) {
+      conflicts.push(
+        `${finding.source} has an invalid document language "${finding.lang}".`
+      );
+      continue;
+    }
+    if (!['ltr', 'rtl'].includes(finding.direction)) {
+      conflicts.push(`${finding.source} is missing a valid html dir attribute.`);
+      continue;
+    }
+    if (finding.direction !== finding.resolved.direction) {
+      conflicts.push(
+        `${finding.source} uses dir="${finding.direction}" but ` +
+        `${finding.resolved.locale} resolves to "${finding.resolved.direction}".`
+      );
+    }
+  }
+
+  const distinctLocales = [...new Set(
+    resolved
+      .filter((finding) => finding.resolved.valid)
+      .map((finding) => finding.resolved.locale)
+  )];
+  if (distinctLocales.length > 1) {
+    conflicts.push(
+      `Conflicting document languages were found: ${distinctLocales.join(', ')}.`
+    );
+  }
+
+  const primary = resolved.find((finding) => finding.resolved.valid) || resolved[0];
+  return {
+    detected: true,
+    valid: conflicts.length === 0,
+    locale: primary.resolved.locale,
+    direction: primary.direction,
+    source: primary.source,
+    conflicts,
+  };
+}
+
 function inspectProject(projectRoot) {
   const resolvedRoot = path.resolve(projectRoot);
+  const framework = detectFramework(resolvedRoot);
   return {
     projectRoot: resolvedRoot,
-    framework: detectFramework(resolvedRoot),
+    framework,
+    siteLanguage: detectSiteLanguage(resolvedRoot, framework.framework),
     localization: detectLocalization(resolvedRoot),
   };
 }
@@ -983,9 +1109,16 @@ function runCli() {
     process.exitCode = result.valid ? 0 : 1;
     return;
   }
+  if (args.command === 'resolve-locale' && args.locale !== undefined) {
+    const result = resolveLocale(args.locale);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.valid ? 0 : 1;
+    return;
+  }
   process.stderr.write(
     'Usage: localization-config.js inspect --projectRoot <path> | ' +
-    'validate-locales --locales <comma-separated-tags>\n'
+    'validate-locales --locales <comma-separated-tags> | ' +
+    'resolve-locale --locale <language-tag>\n'
   );
   process.exitCode = 1;
 }
@@ -999,8 +1132,11 @@ module.exports = {
   KNOWN_PACKAGES,
   detectFramework,
   detectLocalization,
+  detectSiteLanguage,
+  getLocaleDirection,
   inspectProject,
   loadRegistry,
+  resolveLocale,
   validateLocalizationManifestShape,
   validateLocales,
   verifyInitializationEvidence,

@@ -10,6 +10,12 @@ const loaderTemplates = [
   'angular/src/app/pages/home.component.ts',
   'astro/src/pages/index.astro',
 ];
+const documentTemplates = [
+  'react/index.html',
+  'vue/index.html',
+  'angular/src/index.html',
+  'astro/src/layouts/Layout.astro',
+];
 
 test('create-site loader keeps awaiting-input banner persistent and dismissible across templates', () => {
   for (const template of loaderTemplates) {
@@ -23,5 +29,16 @@ test('create-site loader keeps awaiting-input banner persistent and dismissible 
     assert.match(content, /if \(banner\) banner\.hidden = !awaiting \|\| dismissedPrompt === prompt/, template);
     assert.match(content, /if \(!awaiting\) dismissedPrompt = null/, template);
     assert.match(content, /if \(!lastAwaiting\)/, template);
+  }
+});
+
+test('create-site templates persist the selected content locale and direction', () => {
+  for (const template of documentTemplates) {
+    const content = fs.readFileSync(path.join(createSiteRoot, template), 'utf8');
+    assert.match(
+      content,
+      /<html lang="__SITE_LOCALE__" dir="__SITE_DIRECTION__">/,
+      template
+    );
   }
 });

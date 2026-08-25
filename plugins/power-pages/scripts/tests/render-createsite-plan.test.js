@@ -11,6 +11,9 @@ const SAMPLE_DATA = {
   SITE_NAME: 'Contoso Portal',
   PLAN_TITLE: 'Implementation Plan',
   FRAMEWORK: 'React',
+  SITE_LANGUAGE: 'Spanish',
+  SITE_LOCALE: 'es-ES',
+  SITE_DIRECTION: 'ltr',
   AESTHETIC: 'Minimal & Clean',
   MOOD: 'Professional & Trustworthy',
   SUMMARY: 'An internal portal for Contoso consultants with directory, announcements, and docs.',
@@ -81,6 +84,7 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Contoso Portal/);
   assert.match(html, /Implementation Plan/);
   assert.match(html, /React/);
+  assert.match(html, /Spanish \(es-ES, ltr\)/);
   assert.match(html, /Minimal &amp; Clean|Minimal & Clean/);
   assert.match(html, /DM Sans/);
   assert.match(html, /#1E3A5F/);
