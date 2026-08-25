@@ -113,11 +113,13 @@ Then set it to `dataverse`. Any other transitioning invocation is blocked and
 must return to `/prototype-to-real-app`.
 
 Capture current SHA-256 hashes for the plan, Context Enrichment Contract,
-neutral Domain Model, canonical Experience `visualCompositionIntent`,
+Workflow Journey Contract, neutral Domain Model, canonical Experience `visualCompositionIntent`,
+Navigation Contract and generated Navigation Shell,
 schema-v3 screen contract, execution contract, and real manifest. Compare them with
 `lastSyncedPlanHash`, `lastSyncedScreenContractHash`,
 `lastSyncedExecutionContractHash`, `lastContextEnrichmentHash`,
-`lastDomainModelHash`, `lastVisualCompositionHash`, and
+`lastWorkflowJourneyHash`, `lastDomainModelHash`, `lastVisualCompositionHash`, and
+`lastNavigationContractHash`, `lastNavigationShellHash`,
 `lastDataverseManifestHash` to determine
 whether the sync is structural, operation/data-binding-only, or already current.
 
@@ -385,6 +387,9 @@ Only after all hard gates pass, update `.mobile-app/state.json`:
 - `lastSyncedScreenContractHash`: current screen contract SHA-256;
 - `lastSyncedExecutionContractHash`: current execution contract SHA-256;
 - `lastContextEnrichmentHash`: current Context Enrichment Contract SHA-256;
+- `lastWorkflowJourneyHash`: current Workflow Journey Contract SHA-256;
+- `lastNavigationContractHash`: current Navigation Contract SHA-256;
+- `lastNavigationShellHash`: current generated Navigation Shell manifest SHA-256;
 - `lastDomainModelHash`: current neutral Domain Model SHA-256;
 - `lastVisualCompositionHash`: canonical Experience `visualCompositionIntent` SHA-256;
 - `lastDataverseManifestHash`: current manifest SHA-256 in Dataverse mode,

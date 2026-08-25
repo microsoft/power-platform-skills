@@ -62,6 +62,8 @@ function writeExperienceArtifacts(root) {
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), '{"schemaVersion":3,"screens":[]}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), '{"schemaVersion":1}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), `${JSON.stringify({
     schemaVersion: 1,
     experienceContractSha256: contractHash(experience),
@@ -131,6 +133,8 @@ test('schema and experience sidecars invalidate an earlier textual approval', (c
   for (const relativePath of [
     '.tmp/dataverse-schema-contract.json',
     '.tmp/context-enrichment-contract.json',
+    '.tmp/workflow-journey-contract.json',
+    '.tmp/navigation-contract.json',
     '.tmp/experience-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/experience-foundation-contract.json',

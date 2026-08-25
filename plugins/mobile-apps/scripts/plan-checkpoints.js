@@ -69,6 +69,8 @@ function requireCompletePlanningArtifacts(revision, workflow) {
   const required = [
     'nativeAppPlanSha256',
     'contextEnrichmentContractSha256',
+    'workflowJourneyContractSha256',
+    'navigationContractSha256',
     'experienceContractSha256',
     'experienceScreenContractSha256',
     'experienceFoundationContractSha256',
@@ -277,6 +279,8 @@ function parseArgs(argv) {
     else if (argv[index] === '--response') args.response = argv[++index];
     else if (argv[index] === '--plan') args.plan = argv[++index];
     else if (argv[index] === '--contract') args.contract = argv[++index];
+    else if (argv[index] === '--workflow-journey') args.workflowJourney = argv[++index];
+    else if (argv[index] === '--navigation-contract') args.navigationContract = argv[++index];
     else if (argv[index] === '--execution-contract') args.executionContract = argv[++index];
     else if (argv[index] === '--execution-preflight') args.executionPreflight = argv[++index];
     else if (argv[index] === '--receipt') args.receipt = argv[++index];

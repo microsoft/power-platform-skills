@@ -91,6 +91,8 @@ function makeProject(context) {
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify(experience)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), '{"schemaVersion":3,"screens":[]}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), '{"schemaVersion":1}\n');
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), '{"schemaVersion":1}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), `${JSON.stringify({
     schemaVersion: 1,
     experienceContractSha256: contractHash(experience),

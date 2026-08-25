@@ -20,6 +20,9 @@ const { prepareExecutionPreflight } = require('../prepare-mobile-plan-execution-
 const { generateDataLayer } = require('../../skills/create-mobile-prototype/scripts/gen-data-layer');
 const { contextEnrichmentRevision, resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { domainModelRevision } = require('../lib/prototype-domain-model');
+const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
+const { resolveNavigationContract } = require('../resolve-navigation-contract');
+const { applyNavigationShell } = require('../apply-navigation-shell');
 
 const passengerBrief = [
   'Create a mobile app for showcasing inventory items to flight passengers.',
@@ -163,8 +166,10 @@ function createProject(context) {
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
   fs.writeFileSync(path.join(root, 'brief.md'), passengerBrief);
-  const packageJson = { name: 'flight-shop', dependencies: {}, devDependencies: {} };
+  const packageJson = { name: 'flight-shop', dependencies: { 'expo-router': '55.0.14', '@expo/vector-icons': '15.1.1' }, devDependencies: {} };
   fs.writeFileSync(path.join(root, 'package.json'), `${JSON.stringify(packageJson)}\n`);
+  fs.mkdirSync(path.join(root, 'app', '(app)'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'app', '(app)', '_layout.tsx'), `import { Redirect } from 'expo-router';\nimport { Stack } from 'expo-router/stack';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function AppLayout() {\n  const { isSignedIn, isLoading } = useAuth();\n  if (!isLoading && !isSignedIn) return <Redirect href="/login" />;\n  return (<Stack screenOptions={{ headerShown: false }} />);\n}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify(contract, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), `${JSON.stringify(foundation, null, 2)}\n`);
   for (const primitive of foundation.primitives) {
@@ -172,16 +177,22 @@ function createProject(context) {
     fs.mkdirSync(path.dirname(primitivePath), { recursive: true });
     fs.writeFileSync(primitivePath, `export function ${primitive.component}() { return null; }\n`);
   }
-  fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify({
+  const screenContract = {
     schemaVersion: 3,
     experienceContractSha256: hash(JSON.stringify(contract)),
     primaryScreen: { route: contract.primaryScreen.route, file: contract.primaryScreen.file, ...composition },
     keyFlow: { route: '/(app)/products/[id]', file: 'app/(app)/products/[id].tsx', outcome: 'Inspect a product before adding it to cart.' },
     criticalFlow: { screenIds: ['Home', 'ProductDetail'], outcome: 'Discover a product and decide whether to add it to the bag.' },
     screens,
-  }, null, 2)}\n`);
+  };
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract, null, 2)}\n`);
   const domain = passengerDomainModel(contract, contextContract);
+  const workflowJourney = resolveWorkflowJourney(passengerBrief, contract, contextContract, { screenContract, domainModel: domain });
+  const navigation = resolveNavigationContract(passengerBrief, contract, workflowJourney, screenContract);
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify(navigation.screenContract, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), `${JSON.stringify(workflowJourney, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), `${JSON.stringify(navigation.contract, null, 2)}\n`);
+  applyNavigationShell(root, navigation.contract, navigation.screenContract);
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(domain, null, 2)}\n`);
   generateDataLayer(root, domain, contract, { screens }, null, contextContract);
   const preflight = prepareExecutionPreflight(passengerBrief, contract, packageJson);
@@ -231,7 +242,13 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
   assert.match(pack.revision, /^[a-f0-9]{64}$/);
   assert.equal(pack.experience.entryMode, 'discovery');
   assert.equal(pack.experience.primarySurface, 'product-led-discovery');
-  assert.deepEqual(pack.fixtures, {
+  assert.equal(pack.journey.journeyKind, 'discovery-with-nested-flow');
+  assert.equal(pack.navigation.model, 'tabs-stack');
+  assert.deepEqual(pack.navigation.destinations.map((destination) => destination.label), ['Shop', 'Categories', 'Bag']);
+  assert.equal(pack.journey.signatureComponents.some((component) => component.kind === 'workflow-stepper'), false);
+  assert.match(pack.uiContractFingerprint, /^[a-f0-9]{64}$/);
+  const { journeyScenarios, ...fixtureIntent } = pack.fixtures;
+  assert.deepEqual(fixtureIntent, {
     adapter: 'mock-repository',
     entities: ['Category', 'Product', 'ProductMedia', 'Cart', 'CartItem'],
     assetPolicy: 'remote-cdn-cached',
@@ -244,6 +261,10 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
     mediaManifest: 'assets/experience/manifest.json',
     mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
   });
+  assert.equal(journeyScenarios.length, 1);
+  assert.equal(journeyScenarios[0].currentStageId, 'discover');
+  assert.equal(journeyScenarios[0].requiredStageCount, 1);
+  assert.equal(journeyScenarios[0].continuityValues.primaryRecordId, journeyScenarios[0].primaryRecordId);
   assert.equal(pack.design.primitives.some((primitive) => primitive.component === 'ExperienceCartAction'), true);
   assert.deepEqual(pack.shell, {
     safeAreaOwner: 'screen',
@@ -263,6 +284,10 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
   assert.equal(home.media.maxViewportShare, 0.55);
   assert.equal(home.presentation.pattern, 'editorial-hero');
   assert.equal(home.primaryAction.label, 'Browse onboard products');
+  assert.equal(home.actionState.primaryActionId, 'browse-products');
+  assert.equal(home.journey.stageId, 'discover');
+  assert.equal(home.semanticColorRoles.length, 6);
+  assert.deepEqual(home.layoutBudgets.requiredFirstViewportRegions, home.firstViewport.regionIds);
   assert.deepEqual(home.context.entries.map((entry) => [entry.id, entry.sampleValue, entry.source]), [
     ['flight-number', 'AI 184', 'inferred-prototype-fixture'],
     ['seat-number', '12A', 'inferred-prototype-fixture'],
@@ -313,6 +338,14 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
     kind: 'pushed',
     intent: 'push',
     parentRoute: '/(app)/home',
+    destinationId: 'home',
+    role: 'nested-detail',
+    presentation: 'nested-stack',
+    tabVisibility: 'visible',
+    backTarget: 'nearest-stack',
+    completionTarget: 'home',
+    cancelTarget: 'home',
+    deepLinkable: true,
   });
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
 });

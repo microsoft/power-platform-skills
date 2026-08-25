@@ -19,6 +19,9 @@ local paths.
   "lastDataverseManifestHash": null,
   "lastDomainModelHash": "<sha256>",
   "lastContextEnrichmentHash": "<sha256>",
+  "lastWorkflowJourneyHash": "<sha256>",
+  "lastNavigationContractHash": "<sha256>",
+  "lastNavigationShellHash": "<sha256>",
   "lastVisualCompositionHash": "<sha256>",
   "lastRepositoryMappingHash": "<sha256>",
   "lastFixtureRevision": "<sha256>",
@@ -100,6 +103,12 @@ mode. It is `null` in prototype mode.
 neutral domain model remains canonical after Dataverse graduation.
 
 `lastContextEnrichmentHash` hashes `.tmp/context-enrichment-contract.json`.
+`lastWorkflowJourneyHash` hashes `.tmp/workflow-journey-contract.json`; stage,
+guard, resume, signature, continuity, or capability-composition drift
+invalidates lifecycle readiness.
+`lastNavigationContractHash` hashes `.tmp/navigation-contract.json` and
+`lastNavigationShellHash` hashes `.mobile-app/navigation-shell.json`. Either
+changing without a new recorded validation blocks preview, debug, and deploy.
 `lastVisualCompositionHash` hashes the canonical
 `visualCompositionIntent` projection from the Experience Contract.
 

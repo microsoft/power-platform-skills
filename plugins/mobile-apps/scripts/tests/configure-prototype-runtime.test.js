@@ -16,7 +16,7 @@ function makeProject(t) {
     'package.json': JSON.stringify({ name: 'field-inspection', scripts: { dev: 'expo start', predev: 'npm run generate-schemas' } }, null, 2),
     'app/_layout.tsx': `import { Slot } from 'expo-router';\nimport { PowerAppsProvider } from '@microsoft/power-apps-native-host';\nexport default function RootLayout() {\n  return <PowerAppsProvider><Slot /></PowerAppsProvider>;\n}\n`,
     'app/index.tsx': `import { Redirect } from 'expo-router';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function Index() {\n  const { isLoading, isSignedIn } = useAuth();\n  if (isLoading) return null;\n  return isSignedIn ? <Redirect href="/(app)/home" /> : <Redirect href="/login" />;\n}\n`,
-    'app/(app)/_layout.tsx': `import { Redirect, Stack } from 'expo-router';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function AppLayout() {\n  const { isSignedIn, isLoading } = useAuth();\n  if (!isLoading && !isSignedIn) {\n    return <Redirect href="/login" />;\n  }\n  return <Stack />;\n}\n`,
+    'app/(app)/_layout.tsx': `import { Redirect } from 'expo-router';\nimport { Stack } from 'expo-router/stack';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function AppLayout() {\n  const { isSignedIn, isLoading } = useAuth();\n  if (!isLoading && !isSignedIn) {\n    return <Redirect href="/login" />;\n  }\n  return <Stack />;\n}\n`,
     'src/data/PrototypeDataProvider.tsx': `export function PrototypeDataProvider({ children }) { return children; }\n`,
   };
   for (const [relativePath, contents] of Object.entries(files)) {

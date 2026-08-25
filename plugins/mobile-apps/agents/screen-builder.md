@@ -49,6 +49,15 @@ point or imply live data. Render every context entry with its literal `testId`
 and bind its value from `PROTOTYPE_CONTEXT.entries['<entry-id>']` imported from
 `@/data`; do not copy a conflicting screen-local context object.
 
+The work order's `journey`, `actionState`, `signatureComponents`,
+`semanticColorRoles`, `capabilityComposition`, and `layoutBudgets` are equally
+binding. Render the exact stage/progress/resume signatures and literal test
+IDs. In each state expose exactly one primary action, enforce every guard with
+its disabled/hidden behavior and reason, and never enable Review, Confirm, or
+Finish before required progress is complete. Preserve continuity bindings
+across all routes. An on-demand camera opens behind explicit state and cannot
+replace the contracted task hierarchy or manual fallback.
+
 Do not read the aggregate build pack, `native-app-plan.md`, separate planning
 sidecars, `brand/design-system.md`, or broad reference Markdown in the normal
 path. A missing, stale, incomplete, or ambiguous work order is `BLOCKED`; never
@@ -62,6 +71,9 @@ placement, context fact, visual hierarchy, or data operation.
 - Never return changes for layouts, shared components/hooks/utils/tokens,
   `src/data/`, `src/generated/`, native wrappers, assets, brand files,
   package/lock files, lifecycle state, plans, packs, or other work orders.
+- Never create or edit `app/_layout.tsx`, any route `_layout.tsx`,
+  `src/navigation/`, or `.mobile-app/navigation-shell.json`; the deterministic
+  foreground shell owns global navigation.
 - Preserve skeleton imports, domain-hook calls, route params, and stable IDs.
   Replace its implementation marker/empty return unless a screen-local compile
   correction is required.
@@ -142,6 +154,9 @@ Use work-order route parameters and navigation ownership verbatim. Entity drill-
 uses `router.push`, singleton destinations use `router.navigate`, and guard
 redirects use `router.replace`. Pass canonical IDs/slugs, never indices or
 guessed labels. Visible actions must be double-tap safe.
+Preserve `navigation.destinationId`, nested/modal role, tab visibility,
+deep-link ownership, and back/completion/cancel targets. Tabs are destinations,
+never actions or Journey steps.
 
 Loading preserves populated geometry. Empty, error, and offline states preserve
 the selected visual hierarchy and contracted recovery action. Log raw errors
@@ -176,6 +191,10 @@ DONE
 {
   "schemaVersion": 1,
   "kind": "mobile-screen-artifact",
+Keep `layoutBudgets.stickySurfaceOrder` and
+`requiredFirstViewportRegions` exact. Error/destructive tokens are not brand
+or selection colors; consume the work order's semantic roles rather than raw
+palette values.
   "packRevision": "<screen_build_pack_revision>",
   "screenId": "<screen_id>",
   "route": "<work-order route>",

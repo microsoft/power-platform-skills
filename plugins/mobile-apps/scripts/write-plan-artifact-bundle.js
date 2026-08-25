@@ -8,6 +8,8 @@ const { validatePlanArtifactBundle } = require('./validate-plan-artifact-bundle'
 const TARGETS = {
   nativeAppPlanMarkdown: 'native-app-plan.md',
   contextEnrichmentContract: '.tmp/context-enrichment-contract.json',
+  workflowJourneyContract: '.tmp/workflow-journey-contract.json',
+  navigationContract: '.tmp/navigation-contract.json',
   prototypeDomainModel: '.tmp/prototype-domain-model.json',
   dataverseSchemaContract: '.tmp/dataverse-schema-contract.json',
   experienceScreenContract: '.tmp/experience-screen-contract.json',

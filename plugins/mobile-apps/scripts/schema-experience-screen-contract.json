@@ -291,7 +291,32 @@
         "kind": { "enum": ["tab-root", "stack-root", "pushed", "modal"] },
         "intent": { "enum": ["navigate", "push", "replace", "present"] },
         "parentRoute": { "type": "string", "pattern": "^/" },
-        "tabLabel": { "type": "string", "minLength": 1 }
+        "tabLabel": { "type": "string", "minLength": 1 },
+        "destinationId": { "type": ["string", "null"] },
+        "role": { "enum": ["destination-root", "nested-detail", "flow-step", "modal-flow"] },
+        "presentation": { "enum": ["root", "nested-stack", "modal", "full-screen-modal"] },
+        "tabVisibility": { "enum": ["visible", "covered-by-modal", "not-applicable"] },
+        "backTarget": { "type": ["string", "null"] },
+        "completionTarget": { "type": ["string", "null"] },
+        "cancelTarget": { "type": ["string", "null"] },
+        "deepLinkable": { "type": "boolean" },
+        "candidate": {
+          "type": "object",
+          "required": ["hasStableRoot", "revisitedIndependently", "preservesOwnState", "crossSessionValue", "peerToOtherDestinations", "isNotAFlowStep", "isNotAnAction", "supportedByBriefOrSafeProductInference"],
+          "properties": {
+            "hasStableRoot": { "type": "boolean" },
+            "revisitedIndependently": { "type": "boolean" },
+            "preservesOwnState": { "type": "boolean" },
+            "crossSessionValue": { "type": "boolean" },
+            "peerToOtherDestinations": { "type": "boolean" },
+            "isNotAFlowStep": { "type": "boolean" },
+            "isNotAnAction": { "type": "boolean" },
+            "supportedByBriefOrSafeProductInference": { "type": "boolean" },
+            "badgeBinding": { "type": ["string", "null"] },
+            "iconIntent": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

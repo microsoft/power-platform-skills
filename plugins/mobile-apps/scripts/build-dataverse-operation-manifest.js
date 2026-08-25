@@ -30,6 +30,8 @@ const PHASE_ORDER = [
 const APPROVAL_ARTIFACT_HASH_KEYS = [
   'nativeAppPlanSha256',
   'contextEnrichmentContractSha256',
+  'workflowJourneyContractSha256',
+  'navigationContractSha256',
   'prototypeDomainModelSha256',
   'dataverseSchemaContractSha256',
   'experienceContractSha256',

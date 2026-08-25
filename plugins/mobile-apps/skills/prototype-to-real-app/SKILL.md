@@ -97,6 +97,14 @@ Require lifecycle schema version 2 and `dataMode: prototype`. Reject a legacy
 Record hashes of `app/`, `src/components/`, non-generated `src/hooks/`, and the
 screen contract. These are the unchanged-screen baseline. Archive the local
 prototype approval as historical context; never pass it to Dataverse mutation.
+Copy the validated `.tmp/screen-build-pack.json` to
+`.tmp/pre-graduation-screen-build-pack.json`; it is the project-local
+UI-neutral migration baseline.
+
+```bash
+cp "$PROJECT_DIR/.tmp/screen-build-pack.json" \
+  "$PROJECT_DIR/.tmp/pre-graduation-screen-build-pack.json"
+```
 
 ### 2. Resolve Environment And Planning Facts
 
@@ -234,6 +242,10 @@ Run:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-ui-neutral-data-migration.js" \
+  --project-root "$PROJECT_DIR" \
+  --before ".tmp/pre-graduation-screen-build-pack.json" \
+  --after ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope all --record
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
@@ -249,6 +261,11 @@ mutation when approved, choice formatting, money, relationships, offline/error
 states, auth redirect, and media fallback. Never replace a failing real adapter
 with mock data to pass validation.
 
+If only Domain/adaptor/execution inputs changed, any UI fingerprint drift is a
+hard blocker. Repository migration never authorizes route, journey, region,
+signature, action, color-role, or layout-budget changes; those require a
+separate approved Experience/Journey/Screen/Design revision.
+
 ### 9. Commit Lifecycle State
 
 Only after all gates pass, atomically set:
@@ -257,7 +274,8 @@ Only after all gates pass, atomically set:
 - the verified environment facts;
 - `transition: null`;
 - current plan/screen/execution/Dataverse manifest hashes;
-- current `lastDomainModelHash`, `lastRepositoryMappingHash`, and
+- current `lastDomainModelHash`, `lastWorkflowJourneyHash`,
+  `lastNavigationContractHash`, `lastNavigationShellHash`, `lastRepositoryMappingHash`, and
   `lastFixtureRevision`;
 - passing `lastValidation` metadata and `lastSyncAt`.
 

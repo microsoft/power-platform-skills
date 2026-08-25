@@ -5,16 +5,31 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   compactExecutionContract,
+  compactWorkflowJourney,
   aggregateProjectFilesHash,
   domainLayerHash,
+  navigationShellHash,
   domainDataSurface,
   revisionForPack,
   sha256,
   stableStringify,
+  uiContractFingerprint,
 } = require('./compile-screen-build-pack');
 const { resolveDesignRecipe } = require('./resolve-design-recipe');
 const { validateScreenComposition } = require('./validate-screen-composition');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
+const { validateWorkflowJourney } = require('./validate-workflow-journey');
+const { navigationContractRevision } = require('./resolve-navigation-contract');
+const { validateNavigationContract } = require('./validate-navigation-contract');
+const { validateNavigationContinuity } = require('./validate-navigation-continuity');
+const {
+  validateActionState,
+  validateCapabilityComposition,
+  validateCrossScreenContinuity,
+  validateSemanticColorUsage,
+  validateSignatureComponents,
+  validateStaticLayoutBudgets,
+} = require('./lib/workflow-regression');
 
 function currentSourceHash(projectRoot, relativePath, source) {
   if (source === 'domainLayer') {
@@ -22,6 +37,9 @@ function currentSourceHash(projectRoot, relativePath, source) {
   }
   if (source === 'foundationRuntime') {
     try { return aggregateProjectFilesHash(projectRoot, relativePath, 'Experience foundation runtime'); } catch { return null; }
+  }
+  if (source === 'navigationShell') {
+    try { return navigationShellHash(projectRoot, relativePath); } catch { return null; }
   }
   if (source === 'designRecipe') {
     if (relativePath) {
@@ -56,10 +74,13 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (!/^[a-f0-9]{64}$/i.test(String(pack.revision || '')) || pack.revision !== revisionForPack(pack)) {
     issues.push({ rule: 'revision-drift', message: 'Screen build pack revision does not match its deterministic content.' });
   }
+  if (!/^[a-f0-9]{64}$/i.test(String(pack.uiContractFingerprint || '')) || pack.uiContractFingerprint !== uiContractFingerprint(pack)) {
+    issues.push({ rule: 'ui-contract-fingerprint-drift', message: 'Screen build pack UI contract fingerprint does not match its approved UI projection.' });
+  }
   if (pack.screenContractVersion !== 3) {
     issues.push({ rule: 'legacy-screen-contract', message: 'Screen build pack requires a schema-version-3 Experience Screen Contract. Re-plan before building.' });
   }
-  const sourceNames = ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract'];
+  const sourceNames = ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract'];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -108,6 +129,36 @@ function validateScreenBuildPack(projectRoot, pack) {
       }
     }
     if (!screen.signatureComponent || typeof screen.signatureComponent.required !== 'boolean') issues.push({ rule: 'missing-signature-component', message: `Screen build pack lacks signature-component intent for ${screen.route || screen.id}.` });
+    if (!screen.journey || screen.journey.journeyId !== pack.journey?.journeyId || !Array.isArray(screen.journey.visibleStages) || !Array.isArray(screen.journey.continuityBindings)) {
+      issues.push({ rule: 'missing-journey-intent', message: `Screen build pack lacks journey and continuity intent for ${screen.route || screen.id}.` });
+    }
+    if (!screen.actionState || !Array.isArray(screen.actionState.stateActions) || !Array.isArray(screen.actionState.guardedActions)) {
+      issues.push({ rule: 'missing-action-state', message: `Screen build pack lacks state-specific actions and guards for ${screen.route || screen.id}.` });
+    }
+    const incompleteState = screen.actionState?.stateActions?.find((state) => state.state === 'incomplete');
+    if (incompleteState && screen.primaryAction?.id && incompleteState.primaryAction !== screen.primaryAction.id) {
+      issues.push({ rule: 'competing-primary-action', message: `Screen ${screen.route || screen.id} journey action does not preserve its approved primary action.` });
+    }
+    for (const signature of screen.signatureComponents || []) {
+      if (!screen.testIds?.includes(signature.testId)) issues.push({ rule: 'missing-journey-signature-marker', message: `Screen ${screen.route || screen.id} lacks journey signature marker ${signature.testId}.` });
+    }
+    const colorRoles = new Set((screen.semanticColorRoles || []).map((item) => item.role));
+    if (!['brand-accent', 'primary-action', 'selection', 'warning', 'error', 'destructive'].every((role) => colorRoles.has(role))) {
+      issues.push({ rule: 'missing-semantic-color-roles', message: `Screen ${screen.route || screen.id} does not separate brand, selection, warning, error, and destructive color intent.` });
+    }
+    const colorRoleMap = new Map((screen.semanticColorRoles || []).map((item) => [item.role, item]));
+    if (!colorRoleMap.get('selection')?.token
+      || ['warning', 'error', 'destructive'].some((role) => colorRoleMap.get(role)?.token === colorRoleMap.get('selection')?.token)) {
+      issues.push({ rule: 'selection-color-role-drift', message: `Screen ${screen.route || screen.id} selection color must remain distinct from warning/error/destructive roles.` });
+    }
+    if (stableStringify(screen.layoutBudgets?.requiredFirstViewportRegions || []) !== stableStringify(screen.firstViewport?.regionIds || [])
+      || screen.layoutBudgets?.maxFocalViewportShare > 0.6
+      || screen.layoutBudgets?.maxReservedFooterShare > 0.2) {
+      issues.push({ rule: 'invalid-layout-budget', message: `Screen ${screen.route || screen.id} exceeds or drops its static first-viewport/footer budget.` });
+    }
+    for (const composition of screen.capabilityComposition || []) {
+      if (composition.mode !== 'primary' && composition.maxViewportShare > 0.32) issues.push({ rule: 'capability-overprominence', message: `Screen ${screen.route || screen.id} over-promotes ${composition.capability}.` });
+    }
     if (screen.data?.mediaPolicy !== pack.fixtures?.mediaPolicy || !Array.isArray(screen.data?.mediaFields) || screen.data.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
       issues.push({ rule: 'screen-media-intent-drift', message: `Screen build pack media intent drift for ${screen.route || screen.id}.` });
     }
@@ -169,6 +220,48 @@ function validateScreenBuildPack(projectRoot, pack) {
       issues.push({ rule: 'invalid-screen-contract', message: `Cannot read the approved screen contract: ${error.message}` });
     }
   }
+  const journeyPath = pack.sourcePaths?.workflowJourney
+    ? path.join(projectRoot, pack.sourcePaths.workflowJourney)
+    : null;
+  if (journeyPath && fs.existsSync(journeyPath)) {
+    try {
+      const workflowJourney = JSON.parse(fs.readFileSync(journeyPath, 'utf8'));
+      if (stableStringify(pack.journey) !== stableStringify(compactWorkflowJourney(workflowJourney))) {
+        issues.push({ rule: 'workflow-journey-drift', message: 'Screen build pack journey facts do not match the approved Workflow Journey Contract.' });
+      }
+      const experienceContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.experienceContract), 'utf8'));
+      const contextContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.contextEnrichment), 'utf8'));
+      const screenContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.screenContract), 'utf8'));
+      const domainModel = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.domainModel), 'utf8'));
+      const briefText = fs.readFileSync(path.join(projectRoot, pack.sourcePaths.confirmedBrief), 'utf8');
+      const journeyValidation = validateWorkflowJourney(workflowJourney, { briefText, experienceContract, contextContract, screenContract, domainModel });
+      for (const error of journeyValidation.errors) issues.push({ rule: 'invalid-workflow-journey', message: error });
+    } catch (error) {
+      issues.push({ rule: 'invalid-workflow-journey', message: `Cannot read the approved Workflow Journey Contract: ${error.message}` });
+    }
+  }
+  const navigationPath = pack.sourcePaths?.navigationContract
+    ? path.join(projectRoot, pack.sourcePaths.navigationContract)
+    : null;
+  if (navigationPath && fs.existsSync(navigationPath)) {
+    try {
+      const navigationContract = JSON.parse(fs.readFileSync(navigationPath, 'utf8'));
+      const experienceContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.experienceContract), 'utf8'));
+      const workflowJourney = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.workflowJourney), 'utf8'));
+      const screenContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.screenContract), 'utf8'));
+      const navigationValidation = validateNavigationContract(navigationContract, { experienceContract, workflowJourney, screenContract });
+      for (const error of navigationValidation.errors) issues.push({ rule: 'invalid-navigation-contract', message: error });
+      if (pack.navigation?.contractRevision !== navigationContractRevision(navigationContract)
+        || !/^[a-f0-9]{64}$/.test(String(pack.navigation?.shellFingerprint || ''))
+        || pack.navigation?.model !== navigationContract.model
+        || stableStringify(pack.navigation?.destinations || []) !== stableStringify(navigationContract.destinations)
+        || stableStringify(pack.navigation?.flows || []) !== stableStringify(navigationContract.flows)) {
+        issues.push({ rule: 'navigation-contract-drift', message: 'Screen build pack navigation facts do not match the approved Navigation Contract.' });
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-navigation-contract', message: `Cannot read the approved Navigation Contract: ${error.message}` });
+    }
+  }
   const dataSurface = domainDataSurface(projectRoot);
   for (const screen of pack.screens || []) {
     for (const operation of screen.data?.operations || []) {
@@ -193,9 +286,18 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (!pack.design?.tokensPath || !pack.design?.recipe || !Array.isArray(pack.design?.primitives) || !pack.design.primitives.length) {
     issues.push({ rule: 'missing-design-primitives', message: 'Screen build pack requires design tokens and foundation primitives.' });
   }
-  if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.domainModelPath !== '.tmp/prototype-domain-model.json' || pack.fixtures?.dataModule !== 'src/data/index.ts' || pack.fixtures?.mediaAdapter !== 'src/data/media.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
+  if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.domainModelPath !== '.tmp/prototype-domain-model.json' || pack.fixtures?.dataModule !== 'src/data/index.ts' || pack.fixtures?.mediaAdapter !== 'src/data/media.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey' || !Array.isArray(pack.fixtures?.journeyScenarios) || !pack.fixtures.journeyScenarios.length) {
     issues.push({ rule: 'missing-fixture-intent', message: 'Screen build pack requires fixture adapter, entities, and asset policy.' });
   }
+  for (const validator of [
+    validateActionState,
+    validateCrossScreenContinuity,
+    validateSignatureComponents,
+    validateCapabilityComposition,
+    validateSemanticColorUsage,
+    validateStaticLayoutBudgets,
+  ]) issues.push(...validator(pack));
+  issues.push(...validateNavigationContinuity(pack));
   issues.push(...validateScreenComposition(pack));
   return { issues, staleTargets: [...staleTargets].sort() };
 }

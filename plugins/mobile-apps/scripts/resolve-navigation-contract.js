@@ -1,0 +1,311 @@
+#!/usr/bin/env node
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { contractHash } = require('./experience-patterns');
+const { stableStringify } = require('./resolve-context-enrichment');
+const { workflowJourneyRevision } = require('./resolve-workflow-journey');
+
+const ACTION_WORDS = /\b(?:scan|add|create|capture|pay|submit|sync|search|edit|delete|confirm|review)\b/i;
+const DURABLE_WORDS = /\b(?:home|today|overview|records?|assignments?|queue|drafts?|inbox|conversations?|favorites?|saved|cart|bag|orders?|activity|history|progress|library|catalog|shop|accounts?|goals?|contacts?|calls?|settings|profile)\b/i;
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function navigationContractRevision(contract) {
+  return sha256(stableStringify(contract));
+}
+
+function screenGraphRevision(screenContract) {
+  return sha256(stableStringify(screenContract));
+}
+
+function slug(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'destination';
+}
+
+function briefSupportsScreen(brief, screen) {
+  const terms = `${screen.id || ''} ${screen.header?.title || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 4);
+  return terms.some((term) => brief.toLowerCase().includes(term));
+}
+
+function candidateEvidence(screen, brief, journey, primaryScreenId) {
+  const explicit = screen.navigation?.candidate || {};
+  const semantic = `${screen.id || ''} ${screen.header?.title || ''} ${screen.purpose || ''} ${screen.route || ''}`;
+  const stage = (journey.stages || []).find((item) => item.screenIds.includes(screen.id));
+  const primary = screen.id === primaryScreenId || screen.role === 'primary';
+  const dynamic = (screen.routeParameters || []).some((parameter) => parameter.source === 'path' && parameter.required);
+  const modal = screen.navigation?.kind === 'modal';
+  const actionLike = explicit.isNotAnAction === false || (!primary && ACTION_WORDS.test(semantic) && !DURABLE_WORDS.test(semantic));
+  const flowStep = explicit.isNotAFlowStep === false || Boolean(stage && !primary && explicit.revisitedIndependently !== true);
+  const durableVocabulary = DURABLE_WORDS.test(semantic);
+  const hasStableRoot = explicit.hasStableRoot ?? (primary || (['tab-root', 'stack-root'].includes(screen.navigation?.kind) && !dynamic && !modal));
+  const revisitedIndependently = explicit.revisitedIndependently ?? (primary || screen.navigation?.kind === 'tab-root' || durableVocabulary);
+  const preservesOwnState = explicit.preservesOwnState ?? (revisitedIndependently && !flowStep);
+  const crossSessionValue = explicit.crossSessionValue ?? (/\b(?:draft|saved|history|inbox|record|assignment|progress|activity)\b/i.test(semantic));
+  const peerToOtherDestinations = explicit.peerToOtherDestinations ?? (primary || screen.navigation?.kind === 'tab-root' || durableVocabulary);
+  const isNotAFlowStep = explicit.isNotAFlowStep ?? !flowStep;
+  const isNotAnAction = explicit.isNotAnAction ?? !actionLike;
+  const supportedByBriefOrSafeProductInference = explicit.supportedByBriefOrSafeProductInference ?? (primary || screen.navigation?.kind === 'tab-root' || briefSupportsScreen(brief, screen));
+  return {
+    hasStableRoot,
+    revisitedIndependently,
+    preservesOwnState,
+    crossSessionValue,
+    peerToOtherDestinations,
+    isNotAFlowStep,
+    isNotAnAction,
+    supportedByBriefOrSafeProductInference,
+  };
+}
+
+function isDurable(evidence) {
+  return evidence.hasStableRoot
+    && evidence.revisitedIndependently
+    && evidence.peerToOtherDestinations
+    && evidence.isNotAFlowStep
+    && evidence.isNotAnAction
+    && evidence.supportedByBriefOrSafeProductInference;
+}
+
+function destinationLabel(screen) {
+  return String(screen.navigation?.tabLabel || screen.header?.title || screen.id).replace(/([a-z])([A-Z])/g, '$1 $2').trim();
+}
+
+function iconIntent(label) {
+  const value = label.toLowerCase();
+  if (/home|today|overview/.test(value)) return 'home';
+  if (/draft|saved/.test(value)) return 'draft';
+  if (/inbox|message|conversation/.test(value)) return 'inbox';
+  if (/history|activity/.test(value)) return 'history';
+  if (/profile|account/.test(value)) return 'person';
+  if (/setting|preference/.test(value)) return 'settings';
+  if (/library|catalog|shop|browse/.test(value)) return 'browse';
+  return 'list';
+}
+
+function ownerForScreen(screen, destinations, screenByRoute) {
+  let parentRoute = screen.navigation?.parentRoute;
+  const visited = new Set();
+  while (parentRoute && !visited.has(parentRoute)) {
+    visited.add(parentRoute);
+    const destination = destinations.find((item) => item.route === parentRoute);
+    if (destination) return destination;
+    const parent = screenByRoute.get(parentRoute);
+    parentRoute = parent?.navigation?.parentRoute;
+  }
+  const prefix = destinations
+    .filter((destination) => screen.route.startsWith(`${destination.route}/`))
+    .sort((left, right) => right.route.length - left.route.length)[0];
+  return prefix || destinations[0];
+}
+
+function applyNavigationContractToScreenGraph(screenContract, contract) {
+  const destinationByScreen = new Map(contract.destinations.map((destination) => [destination.rootScreenId, destination]));
+  const flowByScreen = new Map(contract.flows.flatMap((flow) => flow.screenIds.map((screenId) => [screenId, flow])));
+  return {
+    ...screenContract,
+    screens: screenContract.screens.map((screen) => {
+      const destination = destinationByScreen.get(screen.id);
+      const flow = flowByScreen.get(screen.id);
+      if (destination) {
+        return {
+          ...screen,
+          navigation: {
+            ...screen.navigation,
+            kind: contract.model === 'stack' ? 'stack-root' : 'tab-root',
+            intent: contract.model === 'stack' ? 'replace' : 'navigate',
+            ...(contract.model === 'stack' ? {} : { tabLabel: destination.label }),
+            destinationId: destination.id,
+            role: 'destination-root',
+            presentation: 'root',
+            tabVisibility: contract.model === 'stack' ? 'not-applicable' : 'visible',
+            backTarget: null,
+            completionTarget: null,
+            cancelTarget: null,
+            deepLinkable: true,
+          },
+        };
+      }
+      const owner = contract.destinations.find((item) => item.id === flow?.ownerDestinationId) || contract.destinations[0];
+      const modal = flow?.presentation !== 'nested-stack';
+      return {
+        ...screen,
+        navigation: {
+          ...screen.navigation,
+          kind: modal ? 'modal' : 'pushed',
+          intent: modal ? 'present' : 'push',
+          parentRoute: owner.route,
+          destinationId: owner.id,
+          role: modal ? 'modal-flow' : ((contract.flows.find((item) => item.id === flow?.id)?.id || '').includes('journey') ? 'flow-step' : 'nested-detail'),
+          presentation: flow?.presentation || 'nested-stack',
+          tabVisibility: flow?.tabVisibility || (contract.model === 'stack' ? 'not-applicable' : 'visible'),
+          backTarget: modal ? 'owner-root' : 'nearest-stack',
+          completionTarget: owner.id,
+          cancelTarget: owner.id,
+          deepLinkable: true,
+        },
+      };
+    }),
+  };
+}
+
+function resolveNavigationContract(briefText, experienceContract, workflowJourney, preliminaryScreenContract, options = {}) {
+  const brief = String(briefText || '').trim();
+  if (!brief) throw new Error('confirmed brief must be non-empty');
+  const screens = preliminaryScreenContract?.screens || [];
+  if (!screens.length) throw new Error('preliminary Screen Graph must contain screens');
+  const primary = screens.find((screen) => screen.role === 'primary') || screens[0];
+  const candidates = screens.map((screen) => ({ screen, evidence: candidateEvidence(screen, brief, workflowJourney, primary.id) }));
+  const durable = candidates.filter((candidate) => isDurable(candidate.evidence));
+  if (!durable.some((candidate) => candidate.screen.id === primary.id)) durable.unshift(candidates.find((candidate) => candidate.screen.id === primary.id));
+  const uniqueDurable = [...new Map(durable.filter(Boolean).map((candidate) => [candidate.screen.id, candidate])).values()];
+  const model = uniqueDurable.length > 5 ? 'drawer' : uniqueDurable.length >= 3 ? 'tabs-stack' : 'stack';
+  const destinations = uniqueDurable.map(({ screen, evidence }, index) => {
+    const label = destinationLabel(screen);
+    return {
+      id: slug(screen.id),
+      label,
+      purpose: screen.purpose,
+      order: index + 1,
+      rootScreenId: screen.id,
+      route: screen.route,
+      iconIntent: screen.navigation?.candidate?.iconIntent || iconIntent(label),
+      durabilityEvidence: Object.entries(evidence).filter(([, value]) => value === true).map(([key]) => key),
+      independentJob: true,
+      statePolicy: 'preserve',
+      badgeBinding: screen.navigation?.candidate?.badgeBinding || null,
+      nestedScreenIds: [],
+      testId: `navigation-destination-${slug(screen.id)}`,
+    };
+  });
+  const screenByRoute = new Map(screens.map((screen) => [screen.route, screen]));
+  const nonRoots = screens.filter((screen) => !destinations.some((destination) => destination.rootScreenId === screen.id));
+  const flows = nonRoots.map((screen) => {
+    const owner = ownerForScreen(screen, destinations, screenByRoute);
+    const stage = (workflowJourney.stages || []).find((item) => item.screenIds.includes(screen.id));
+    const immersive = screen.navigation?.kind === 'modal' || /\b(?:camera|capture|signature|payment)\b/i.test(`${screen.id} ${screen.purpose}`);
+    owner.nestedScreenIds.push(screen.id);
+    return {
+      id: `${stage ? 'journey' : 'flow'}-${slug(screen.id)}`,
+      ownerDestinationId: owner.id,
+      presentation: immersive ? 'full-screen-modal' : 'nested-stack',
+      screenIds: [screen.id],
+      tabVisibility: model === 'stack' ? 'not-applicable' : immersive ? 'covered-by-modal' : 'visible',
+      dismissBehavior: immersive ? 'return-to-owner-preserving-state' : 'nearest-stack-back',
+      completionDestinationId: owner.id,
+      cancelDestinationId: owner.id,
+      deepLinkRestoration: 'activate-owner-and-build-back-path',
+    };
+  });
+  const provisionalHint = experienceContract.provisionalNavigationHint || experienceContract.navigationModel || null;
+  let contract = {
+    schemaVersion: 1,
+    experienceContractSha256: contractHash(experienceContract),
+    workflowContractSha256: workflowJourneyRevision(workflowJourney),
+    screenGraphSha256: '',
+    model,
+    initialDestinationId: destinations[0].id,
+    destinationCount: destinations.length,
+    destinations,
+    flows,
+    globalRoutePolicy: {
+      homeReturnRequired: destinations.length > 1 || nonRoots.length > 0,
+      deepLinksRestoreOwningDestination: true,
+      tabReselectBehavior: model === 'tabs-stack' ? 'pop-owner-stack-to-root' : 'not-applicable',
+      backBehavior: 'nearest-stack-then-system',
+      unknownRouteBehavior: 'safe-root',
+      logoutDestination: '/login',
+    },
+    adaptivePresentation: {
+      compact: model === 'tabs-stack' ? 'bottom-tabs' : model,
+      medium: model === 'tabs-stack' ? 'navigation-rail' : model,
+      expanded: model === 'tabs-stack' ? 'sidebar-or-rail' : model,
+      destinationIdentityStableAcrossSizes: true,
+    },
+    accessibility: { labelsRequired: true, selectedStateRequired: true, badgesHaveAccessibleValues: true, minimumTouchTarget: 44 },
+    decision: {
+      selectedBy: 'navigation-resolver',
+      provisionalHint,
+      evidence: [
+        `${destinations.length} durable destination${destinations.length === 1 ? '' : 's'} survived action/flow filtering`,
+        `${nonRoots.length} screen${nonRoots.length === 1 ? '' : 's'} remain nested or temporary flows`,
+      ],
+      rejectedAlternatives: [model === 'stack' ? 'tabs-stack: fewer than three durable peers' : 'stack: durable peer destinations require persistent switching'],
+      stackOnlyReason: model === 'stack' ? 'Fewer than three durable peer destinations remain after action and workflow-step filtering.' : null,
+      stackOnlyEvidence: model === 'stack' ? [
+        `${destinations.length} durable destination${destinations.length === 1 ? '' : 's'}`,
+        `${nonRoots.length} nested or temporary flow screen${nonRoots.length === 1 ? '' : 's'}`,
+      ] : [],
+      returnHomeMechanism: model === 'stack' ? 'root stack back/replace to initial destination' : 'persistent destination shell',
+    },
+  };
+  const screenContract = applyNavigationContractToScreenGraph(preliminaryScreenContract, contract);
+  contract = { ...contract, screenGraphSha256: screenGraphRevision(screenContract) };
+  return { contract, screenContract };
+}
+
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
+function main(argv) {
+  const args = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--project-root') args.projectRoot = argv[++index];
+    else if (argv[index] === '--bundle') args.bundle = argv[++index];
+    else if (argv[index] === '--brief') args.brief = argv[++index];
+    else if (argv[index] === '--experience-contract') args.experienceContract = argv[++index];
+    else if (argv[index] === '--workflow-contract') args.workflowContract = argv[++index];
+    else if (argv[index] === '--screen-contract') args.screenContract = argv[++index];
+    else if (argv[index] === '--output') args.output = argv[++index];
+    else if (argv[index] === '--update-bundle') args.updateBundle = true;
+  }
+  if (!args.projectRoot) {
+    process.stderr.write('Usage: node resolve-navigation-contract.js --project-root <dir> [--bundle .tmp/planner-artifact-bundle.json --update-bundle] [--brief <path>] [--experience-contract <path>] [--workflow-contract <path>] [--screen-contract <path>] [--output .tmp/navigation-contract.json]\n');
+    return 2;
+  }
+  try {
+    const root = path.resolve(args.projectRoot);
+    const bundlePath = args.bundle ? path.resolve(root, args.bundle) : null;
+    const bundle = bundlePath ? JSON.parse(fs.readFileSync(bundlePath, 'utf8')) : null;
+    const readJson = (value, fallback) => JSON.parse(fs.readFileSync(path.resolve(root, value || fallback), 'utf8'));
+    const briefPath = path.resolve(root, args.brief || (fs.existsSync(path.join(root, '.tmp', 'experience-brief.md')) ? '.tmp/experience-brief.md' : 'brief.md'));
+    const experience = readJson(args.experienceContract, '.tmp/experience-contract.json');
+    const workflow = bundle?.artifacts?.workflowJourneyContract || readJson(args.workflowContract, '.tmp/workflow-journey-contract.json');
+    const screens = bundle?.artifacts?.experienceScreenContract || readJson(args.screenContract, '.tmp/experience-screen-contract.json');
+    const result = resolveNavigationContract(fs.readFileSync(briefPath, 'utf8'), experience, workflow, screens);
+    const outputPath = path.resolve(root, args.output || '.tmp/navigation-contract.json');
+    if (bundle && args.updateBundle) {
+      bundle.artifacts.navigationContract = result.contract;
+      bundle.artifacts.experienceScreenContract = result.screenContract;
+      writeJsonAtomic(bundlePath, bundle);
+    } else {
+      writeJsonAtomic(outputPath, result.contract);
+    }
+    process.stdout.write(`${bundle && args.updateBundle ? 'Navigation attached to staged bundle' : `Navigation contract written: ${outputPath}`} (${result.contract.model})\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`resolve-navigation-contract: ${error.message}\n`);
+    return 2;
+  }
+}
+
+if (require.main === module) process.exitCode = main(process.argv.slice(2));
+
+module.exports = {
+  applyNavigationContractToScreenGraph,
+  navigationContractRevision,
+  resolveNavigationContract,
+  screenGraphRevision,
+};

@@ -23,6 +23,7 @@
     "@react-native-async-storage/async-storage": "^2.1.2",
     "@react-native-community/datetimepicker": "8.6.0",
     "@react-native-community/netinfo": "11.5.2",
+    "@react-navigation/drawer": "7.9.4",
     "@tamagui/animations-react-native": "2.4.5",
     "@tamagui/config": "2.4.5",
     "@tamagui/core": "2.4.5",

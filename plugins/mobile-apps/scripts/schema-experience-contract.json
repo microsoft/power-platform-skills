@@ -95,6 +95,7 @@
       "additionalProperties": false
     },
     "entryMode": { "enum": ["discovery", "workflow", "overview", "inbox", "feed", "detail-first", "capture", "onboarding"] },
+    "provisionalNavigationHint": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
     "navigationModel": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
     "primaryScreen": {
       "type": "object",

@@ -1,9 +1,9 @@
+// @ts-nocheck
 /**
  * Drawer layout sample for Expo Router.
  * Use when: 5+ destinations, admin-style apps, or deep navigation.
  *
- * Requires: expo-router (Drawer is re-exported from @react-navigation/drawer).
- * The upstream template already ships @react-navigation/drawer — do NOT add it manually.
+ * Requires: expo-router plus the template-pinned @react-navigation/drawer peer.
  *
  * File placement: app/(app)/_layout.tsx (replaces the default Stack layout).
  */

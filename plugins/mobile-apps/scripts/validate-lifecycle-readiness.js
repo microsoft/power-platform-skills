@@ -28,6 +28,9 @@ function validateLifecycleReadiness(projectRoot, consumer) {
   const state = readJson(path.join(root, '.mobile-app', 'state.json'), 'lifecycle state');
   const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
   const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
+  const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
+  const navigationPath = path.join(root, '.tmp', 'navigation-contract.json');
+  const navigationShellPath = path.join(root, '.mobile-app', 'navigation-shell.json');
   const experiencePath = path.join(root, '.tmp', 'experience-contract.json');
   const pack = readJson(path.join(root, '.tmp', 'screen-build-pack.json'), 'screen build pack');
   const experience = readJson(experiencePath, 'Experience contract');
@@ -37,6 +40,9 @@ function validateLifecycleReadiness(projectRoot, consumer) {
   if (state.lastValidation?.buildPackRevision !== pack.revision) errors.push('recorded validation uses a stale build-pack revision');
   if (!fs.existsSync(domainPath) || state.lastDomainModelHash !== sha256(fs.readFileSync(domainPath))) errors.push('recorded Domain Model hash is stale');
   if (!fs.existsSync(contextPath) || state.lastContextEnrichmentHash !== sha256(fs.readFileSync(contextPath))) errors.push('recorded Context Enrichment hash is stale');
+  if (!fs.existsSync(journeyPath) || state.lastWorkflowJourneyHash !== sha256(fs.readFileSync(journeyPath))) errors.push('recorded Workflow Journey hash is stale');
+  if (!fs.existsSync(navigationPath) || state.lastNavigationContractHash !== sha256(fs.readFileSync(navigationPath))) errors.push('recorded Navigation Contract hash is stale');
+  if (!fs.existsSync(navigationShellPath) || state.lastNavigationShellHash !== sha256(fs.readFileSync(navigationShellPath))) errors.push('recorded Navigation Shell hash is stale');
   if (state.lastVisualCompositionHash !== sha256(stableStringify(experience.visualCompositionIntent))) errors.push('recorded Visual Composition hash is stale');
   if (state.dataMode === 'prototype' && state.lastValidation?.nativeVisualEvidence != null) errors.push('prototype static lifecycle readiness must not contain native visual evidence');
   if (consumer === 'deploy') {

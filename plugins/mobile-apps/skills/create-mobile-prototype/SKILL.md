@@ -138,6 +138,10 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-context-enrichment.js" \
   --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
   --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
 Context entries must retain brief evidence, source
@@ -161,6 +165,9 @@ Invoke `mobile-app:native-app-planner` once in return-only mode with:
 - `workflow: create-mobile-prototype`;
 - `planningMode: prototype`;
 - the confirmed brief, experience contract, and validated Context Enrichment Contract;
+- the validated foreground Workflow Journey Contract as the binding baseline
+  for journey kind, ordered stages, resume behavior, guards, signatures,
+  continuity keys, capability composition, and scenario state;
 - template capability/preflight facts;
 - any approved plan/design/reference inputs;
 - explicit prohibition on environment discovery and mutation.
@@ -170,6 +177,11 @@ must contain:
 
 - `nativeAppPlanMarkdown`;
 - `contextEnrichmentContract` copied from the validated foreground contract;
+- `workflowJourneyContract`, aligned to final screen IDs/actions without
+  changing its evidence-bound journey kind, stage order, guards, or signatures;
+- `navigationContract: null`; the planner supplies destination/flow evidence in
+  the preliminary Screen Graph, and the foreground deterministic resolver
+  replaces this null before bundle validation;
 - `prototypeDomainModel` with `mode: prototype-domain`;
 - `dataverseSchemaContract: null`;
 - schema-v3 `experienceScreenContract` whose operations name
@@ -178,7 +190,9 @@ must contain:
 - `executionContract`.
 
 The Domain and Execution contracts must bind the canonical Experience and
-Context revisions. The Execution Contract also binds the Domain revision.
+Context revisions. Journey, Screen, Foundation, and Visual Composition own UI
+hierarchy and progression; the Domain Model cannot select or flatten them. The
+Execution Contract also binds the Domain revision.
 
 The domain model must include stable opaque IDs, real field types, explicit
 relationships, choice keys/labels, operation contracts, actors/UX permissions,
@@ -189,6 +203,10 @@ CRUD inferred only from nouns.
 The foreground owns all writes:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" \
+  --project-root "$PROJECT_DIR" \
+  --bundle ".tmp/plan-artifact-bundle.json" \
+  --update-bundle
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-plan-artifact-bundle.js" \
   --project-root "$PROJECT_DIR" \
   --bundle "$PROJECT_DIR/.tmp/plan-artifact-bundle.json"
@@ -196,6 +214,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/write-plan-artifact-bundle.js" \
   --project-root "$PROJECT_DIR" \
   --bundle "$PROJECT_DIR/.tmp/plan-artifact-bundle.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
   --project-root "$PROJECT_DIR"
 ```
 
@@ -306,8 +326,21 @@ reference fidelity and materialize required media.
 Install only exact `executionContract.javascriptDependencies` through the
 repository's installation contract, one at a time, then type-check.
 
-Generate navigation from the screen contract. Preserve the prototype auth
-bypass in `app/(app)/_layout.tsx`; do not change data-provider ownership.
+Generate navigation only through the resolved Navigation Contract. Preserve
+the prototype auth bypass in `app/(app)/_layout.tsx`; do not change
+data-provider ownership or let screen builders edit shared layouts:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
+  --project-root "$PROJECT_DIR"
+```
+
 Create only the 2-5 foundation primitives named by the foundation contract and
 export them from `@/components`.
 
@@ -318,9 +351,9 @@ TypeScript failure blocks builder dispatch.
 
 ### 7. Compile The Single Pack And Typed Skeletons
 
-Compile the single pack only after Context, Domain, Execution, Screen v3,
-Foundation, generated domain layer/fixture manifest, design recipe, and tokens
-all exist and validate:
+Compile the single pack only after Context, Journey, Domain, Execution, Screen
+v3, Foundation, generated domain layer/fixture manifest, design recipe, and
+tokens all exist and validate:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
@@ -384,6 +417,22 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope screen --screen "$PRIMARY_SCREEN_ID"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope screen --screen "$KEY_FLOW_SCREEN_ID"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-action-state.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-cross-screen-continuity.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-signature-components.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-capability-composition.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-semantic-color-usage.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-static-layout-budgets.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
   --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" \
@@ -435,7 +484,8 @@ pack change forces validation.
 ### 9. Finish Static Validation
 
 Confirm lifecycle state contains current `lastDomainModelHash`,
-`lastContextEnrichmentHash`, `lastVisualCompositionHash`,
+`lastContextEnrichmentHash`, `lastWorkflowJourneyHash`,
+`lastNavigationContractHash`, `lastNavigationShellHash`, `lastVisualCompositionHash`,
 `lastRepositoryMappingHash`, `lastFixtureRevision`, and passing
 `lastValidation` with `qualityStatus: statically-validated` and
 `nativeVisualEvidence: null`. Report the earlier Metro command/port.

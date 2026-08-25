@@ -14,7 +14,25 @@ function read(relativePath) {
 test('domain-first workflow artifacts and executable gates are present', () => {
   for (const relativePath of [
     'scripts/schema-prototype-domain-model.json',
+    'scripts/schema-workflow-journey-contract.json',
+    'scripts/schema-navigation-contract.json',
     'scripts/lib/prototype-domain-model.js',
+    'scripts/lib/workflow-regression.js',
+    'scripts/resolve-workflow-journey.js',
+    'scripts/resolve-navigation-contract.js',
+    'scripts/validate-navigation-contract.js',
+    'scripts/validate-navigation-destinations.js',
+    'scripts/validate-navigation-continuity.js',
+    'scripts/apply-navigation-shell.js',
+    'scripts/validate-navigation-shell.js',
+    'scripts/validate-workflow-journey.js',
+    'scripts/validate-ui-neutral-data-migration.js',
+    'scripts/validate-action-state.js',
+    'scripts/validate-cross-screen-continuity.js',
+    'scripts/validate-signature-components.js',
+    'scripts/validate-capability-composition.js',
+    'scripts/validate-semantic-color-usage.js',
+    'scripts/validate-static-layout-budgets.js',
     'scripts/validate-prototype-domain-model.js',
     'scripts/schema-dataverse-repository-mapping.json',
     'scripts/reconcile-domain-dataverse.js',
@@ -50,6 +68,18 @@ test('prototype creation plans a neutral domain with consolidated and explicit f
   const skill = read('skills/create-mobile-prototype/SKILL.md');
   assert.match(skill, /prototype-domain-model\.json/);
   assert.match(skill, /prototypeDomainModel/);
+  assert.match(skill, /workflowJourneyContract/);
+  assert.match(skill, /navigationContract/);
+  assert.match(skill, /resolve-navigation-contract\.js/);
+  assert.match(skill, /apply-navigation-shell\.js/);
+  assert.match(skill, /validate-navigation-continuity\.js/);
+  assert.match(skill, /resolve-workflow-journey\.js/);
+  assert.match(skill, /validate-action-state\.js/);
+  assert.match(skill, /validate-cross-screen-continuity\.js/);
+  assert.match(skill, /validate-signature-components\.js/);
+  assert.match(skill, /validate-capability-composition\.js/);
+  assert.match(skill, /validate-semantic-color-usage\.js/);
+  assert.match(skill, /validate-static-layout-budgets\.js/);
   assert.match(skill, /dataverseSchemaContract: null/);
   assert.match(skill, /--section prototype-review/);
   assert.match(skill, /mayAuthorizeExternalMutations: false/);
@@ -75,6 +105,11 @@ test('planning agents keep Dataverse separate from canonical domain operations',
     assert.match(content, /no environment/i);
   }
   assert.match(nativePlanner, /bundle schema version 3/);
+  assert.match(nativePlanner, /workflowJourneyContract/);
+  assert.match(nativePlanner, /navigationContract/);
+  assert.match(nativePlanner, /foreground resolver owns the final instance/i);
+  assert.match(screenPlanner, /Workflow Journey Contract/);
+  assert.match(screenPlanner, /completion\s+guards/);
   assert.match(nativePlanner, /domain operation\/repository\/method\/hook/);
   assert.match(dataArchitect, /stable opaque IDs/);
   assert.match(dataArchitect, /fixtures/);
@@ -86,6 +121,11 @@ test('planning agents keep Dataverse separate from canonical domain operations',
 test('screen builders receive one in-memory work order and cannot cross the domain boundary', () => {
   const builder = read('agents/screen-builder.md');
   assert.match(builder, /screen_work_order/);
+  assert.match(builder, /actionState/);
+  assert.match(builder, /capabilityComposition/);
+  assert.match(builder, /semanticColorRoles/);
+  assert.match(builder, /layoutBudgets/);
+  assert.match(builder, /src\/navigation/);
   assert.match(builder, /screen-build-pack\.json/);
   assert.match(builder, /consume only the supplied work order/i);
   assert.match(builder, /Import app data only from `@\/data`/);
@@ -99,6 +139,7 @@ test('screen builders receive one in-memory work order and cannot cross the doma
 test('graduation reconciles and swaps adapters without rewriting screens', () => {
   const skill = read('skills/prototype-to-real-app/SKILL.md');
   assert.match(skill, /prototype-domain-model\.json.*remains canonical/s);
+  assert.match(skill, /validate-ui-neutral-data-migration\.js/);
   assert.match(skill, /reconcile-domain-dataverse\.js/);
   assert.match(skill, /dataverse-repository-mapping\.json/);
   assert.match(skill, /gen-dataverse-repositories\.js/);
@@ -169,6 +210,9 @@ test('runtime and lifecycle preserve host query ownership and revision identity'
   assert.doesNotMatch(generator, /QueryClientProvider/);
   assert.match(lifecycle, /"schemaVersion": 2/);
   assert.match(lifecycle, /lastDomainModelHash/);
+  assert.match(lifecycle, /lastWorkflowJourneyHash/);
+  assert.match(lifecycle, /lastNavigationContractHash/);
+  assert.match(lifecycle, /lastNavigationShellHash/);
   assert.match(lifecycle, /lastRepositoryMappingHash/);
   assert.match(lifecycle, /lastFixtureRevision/);
   assert.match(lifecycle, /lastValidation/);

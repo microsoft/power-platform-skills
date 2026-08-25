@@ -20,10 +20,16 @@ function project(context, dataMode = 'prototype', nativeVisualEvidence = null) {
   fs.mkdirSync(path.join(root, '.mobile-app'), { recursive: true });
   const domain = Buffer.from('{"mode":"prototype-domain"}\n');
   const enrichment = Buffer.from('{"contextMode":"none"}\n');
+  const journey = Buffer.from('{"journeyId":"primary-job"}\n');
+  const navigation = Buffer.from('{"model":"stack"}\n');
+  const navigationShell = Buffer.from('{"model":"stack","shellFingerprint":"abc"}\n');
   const visualCompositionIntent = { compositionFamily: 'next-action-workflow', maxFeatureViewportShare: 0.38 };
   const pack = { schemaVersion: 2, revision: 'a'.repeat(64) };
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), domain);
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), enrichment);
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), journey);
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), navigation);
+  fs.writeFileSync(path.join(root, '.mobile-app', 'navigation-shell.json'), navigationShell);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), JSON.stringify({ visualCompositionIntent }));
   fs.writeFileSync(path.join(root, '.tmp', 'screen-build-pack.json'), JSON.stringify(pack));
   fs.writeFileSync(path.join(root, '.mobile-app', 'state.json'), JSON.stringify({
@@ -31,6 +37,9 @@ function project(context, dataMode = 'prototype', nativeVisualEvidence = null) {
     dataMode,
     lastDomainModelHash: hash(domain),
     lastContextEnrichmentHash: hash(enrichment),
+    lastWorkflowJourneyHash: hash(journey),
+    lastNavigationContractHash: hash(navigation),
+    lastNavigationShellHash: hash(navigationShell),
     lastVisualCompositionHash: hash(stable(visualCompositionIntent)),
     lastValidation: {
       status: 'passed',
@@ -60,8 +69,20 @@ test('prototype readiness rejects a native-evidence completion claim', (context)
   assert.match(validateLifecycleReadiness(root, 'preview').errors.join('\n'), /must not contain native visual evidence/);
 });
 
-test('stale Context or Visual Composition hashes block consumers', (context) => {
+test('stale Context, Journey, Navigation, or Visual Composition hashes block consumers', (context) => {
   const root = project(context);
   fs.appendFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), '\n');
   assert.match(validateLifecycleReadiness(root, 'preview').errors.join('\n'), /Context Enrichment hash is stale/);
+
+  const journeyRoot = project(context);
+  fs.appendFileSync(path.join(journeyRoot, '.tmp', 'workflow-journey-contract.json'), '\n');
+  assert.match(validateLifecycleReadiness(journeyRoot, 'preview').errors.join('\n'), /Workflow Journey hash is stale/);
+
+  const navigationRoot = project(context);
+  fs.appendFileSync(path.join(navigationRoot, '.tmp', 'navigation-contract.json'), '\n');
+  assert.match(validateLifecycleReadiness(navigationRoot, 'preview').errors.join('\n'), /Navigation Contract hash is stale/);
+
+  const shellRoot = project(context);
+  fs.appendFileSync(path.join(shellRoot, '.mobile-app', 'navigation-shell.json'), '\n');
+  assert.match(validateLifecycleReadiness(shellRoot, 'preview').errors.join('\n'), /Navigation Shell hash is stale/);
 });

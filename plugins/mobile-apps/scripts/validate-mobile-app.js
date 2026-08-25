@@ -8,12 +8,23 @@ const path = require('node:path');
 const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 const { screenInputFingerprint, validateScreenArtifact } = require('./validate-screen-artifact');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const {
+  validateActionState,
+  validateCapabilityComposition,
+  validateCrossScreenContinuity,
+  validateSemanticColorUsage,
+  validateSignatureComponents,
+  validateStaticLayoutBudgets,
+} = require('./lib/workflow-regression');
 
 const SCOPES = new Set(['domain', 'tasks', 'screen', 'screens', 'typecheck', 'all']);
 const FINGERPRINT_DIRECTORIES = ['app', 'assets', 'components', 'src'];
 const FINGERPRINT_ARTIFACTS = [
   '.mobile-app/prototype-domain-manifest.json',
+  '.mobile-app/navigation-shell.json',
   '.tmp/context-enrichment-contract.json',
+  '.tmp/workflow-journey-contract.json',
+  '.tmp/navigation-contract.json',
   '.tmp/design-recipe.json',
   '.tmp/experience-contract.json',
   '.tmp/experience-foundation-contract.json',
@@ -210,7 +221,18 @@ function validateOneScreen(projectRoot, pack, screenId) {
     source,
     warnings: [],
   };
-  return check(`screen:${screenId}`, validateScreenArtifact(projectRoot, pack, artifact, screenId).errors);
+  const errors = validateScreenArtifact(projectRoot, pack, artifact, screenId).errors;
+  for (const validator of [
+    validateActionState,
+    validateCrossScreenContinuity,
+    validateSignatureComponents,
+    validateCapabilityComposition,
+    validateSemanticColorUsage,
+    validateStaticLayoutBudgets,
+  ]) {
+    errors.push(...validator(pack, { projectRoot, screenIds: [screenId] }).map((item) => `[${item.rule}] ${item.message}`));
+  }
+  return check(`screen:${screenId}`, errors);
 }
 
 function validateScreensScope(projectRoot, screenId = null) {
@@ -258,8 +280,11 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
   const domainBytes = fs.readFileSync(domainPath);
   const model = JSON.parse(domainBytes.toString('utf8'));
   const contextPath = path.join(projectRoot, '.tmp', 'context-enrichment-contract.json');
+  const journeyPath = path.join(projectRoot, '.tmp', 'workflow-journey-contract.json');
+  const navigationPath = path.join(projectRoot, '.tmp', 'navigation-contract.json');
+  const navigationShellPath = path.join(projectRoot, '.mobile-app', 'navigation-shell.json');
   const experiencePath = path.join(projectRoot, '.tmp', 'experience-contract.json');
-  if (!fs.existsSync(contextPath) || !fs.existsSync(experiencePath)) throw new Error('cannot record lifecycle validation without Context and Experience contracts');
+  if (!fs.existsSync(contextPath) || !fs.existsSync(journeyPath) || !fs.existsSync(navigationPath) || !fs.existsSync(navigationShellPath) || !fs.existsSync(experiencePath)) throw new Error('cannot record lifecycle validation without Context, Journey, Navigation, Navigation Shell, and Experience contracts');
   const experience = readJson(experiencePath, 'Experience contract');
   const mappingPath = path.join(projectRoot, '.tmp', 'dataverse-repository-mapping.json');
   const prototypeMapping = (model.operations || []).map((operation) => ({
@@ -276,6 +301,9 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
     schemaVersion: 2,
     lastDomainModelHash: sha256(domainBytes),
     lastContextEnrichmentHash: sha256(fs.readFileSync(contextPath)),
+    lastWorkflowJourneyHash: sha256(fs.readFileSync(journeyPath)),
+    lastNavigationContractHash: sha256(fs.readFileSync(navigationPath)),
+    lastNavigationShellHash: sha256(fs.readFileSync(navigationShellPath)),
     lastVisualCompositionHash: sha256(stableStringify(experience.visualCompositionIntent)),
     lastRepositoryMappingHash: fs.existsSync(mappingPath) ? sha256(fs.readFileSync(mappingPath)) : sha256(stableStringify(prototypeMapping)),
     lastFixtureRevision: sha256(stableStringify({ fixtures: model.fixtures || {}, fixtureScenarios: model.fixtureScenarios || [] })),

@@ -16,6 +16,8 @@ const { validateMobilePlanExecutionContract } = require('./lib/mobile-plan-execu
 const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
 const { validateContextEnrichment } = require('./validate-context-enrichment');
+const { validateWorkflowJourney } = require('./validate-workflow-journey');
+const { validateNavigationContract } = require('./validate-navigation-contract');
 
 const TOP_LEVEL_KEYS = BUNDLE_SCHEMA.required;
 const ARTIFACT_KEYS = BUNDLE_SCHEMA.properties.artifacts.required;
@@ -457,11 +459,37 @@ function validatePlanArtifactBundle(projectRoot, bundle) {
     });
     errors.push(...executionValidation.errors);
   }
-  validateScreenContract(experience, bundle.artifacts?.experienceScreenContract, {
+  const screenContract = bundle.artifacts?.experienceScreenContract;
+  const navigationContract = bundle.artifacts?.navigationContract;
+  if (!navigationContract || typeof navigationContract !== 'object' || Array.isArray(navigationContract)) {
+    errors.push('navigationContract must be an object');
+  } else {
+    const navigationValidation = validateNavigationContract(navigationContract, {
+      experienceContract: experience,
+      workflowJourney: bundle.artifacts?.workflowJourneyContract,
+      screenContract,
+    });
+    if (!navigationValidation.valid) errors.push(...navigationValidation.errors.map((error) => `navigationContract: ${error}`));
+  }
+  validateScreenContract(experience, screenContract, {
     dataContract: domainModel,
     executionContract,
     contextContract,
+    navigationContract,
   }, errors);
+  const workflowJourneyContract = bundle.artifacts?.workflowJourneyContract;
+  if (!workflowJourneyContract || typeof workflowJourneyContract !== 'object' || Array.isArray(workflowJourneyContract)) {
+    errors.push('workflowJourneyContract must be an object');
+  } else {
+    const journeyValidation = validateWorkflowJourney(workflowJourneyContract, {
+      briefText: briefPath ? fs.readFileSync(briefPath, 'utf8') : null,
+      experienceContract: experience,
+      contextContract,
+      screenContract,
+      domainModel,
+    });
+    if (!journeyValidation.valid) errors.push(...journeyValidation.errors.map((error) => `workflowJourneyContract: ${error}`));
+  }
   validateFoundation(experience, bundle.artifacts?.experienceFoundationContract, errors);
   return { valid: errors.length === 0, errors };
 }

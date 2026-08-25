@@ -22,6 +22,9 @@ const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/pro
 const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
 const { validateContextEnrichment } = require('./validate-context-enrichment');
 const { resolveDesignRecipe } = require('./resolve-design-recipe');
+const { validateWorkflowJourney } = require('./validate-workflow-journey');
+const { navigationContractRevision } = require('./resolve-navigation-contract');
+const { validateNavigationContract } = require('./validate-navigation-contract');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -84,6 +87,22 @@ function domainLayerHash(projectRoot, manifestRelativePath = '.mobile-app/protot
     mode: manifest.mode,
     domainModelRevision: manifest.domainModelRevision,
     contextEnrichmentRevision: manifest.contextEnrichmentRevision || null,
+    files: [...new Set(manifest.files)].sort(),
+    filesHash,
+  }));
+}
+
+function navigationShellHash(projectRoot, manifestRelativePath = '.mobile-app/navigation-shell.json') {
+  const manifestPath = projectOwnedFile(projectRoot, manifestRelativePath, 'Navigation shell manifest');
+  const manifest = readJson(manifestPath, 'Navigation shell manifest');
+  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.files) || !manifest.files.length || !/^[a-f0-9]{64}$/.test(String(manifest.navigationContractRevision || ''))) {
+    throw new Error('Navigation shell manifest is incomplete.');
+  }
+  const filesHash = aggregateProjectFilesHash(projectRoot, manifest.files, 'Navigation shell');
+  return sha256(stableStringify({
+    schemaVersion: manifest.schemaVersion,
+    navigationContractRevision: manifest.navigationContractRevision,
+    model: manifest.model,
     files: [...new Set(manifest.files)].sort(),
     filesHash,
   }));
@@ -307,7 +326,100 @@ function screenRuntimeBindings(screen, data, entities) {
   };
 }
 
-function screenRecord(screen, data, contract, contextContract) {
+const SEMANTIC_COLOR_ROLES = Object.freeze([
+  { role: 'brand-accent', intent: 'limited-brand-emphasis', token: '$accentDeep' },
+  { role: 'primary-action', intent: 'single-state-primary-action', token: '$accentBase' },
+  { role: 'selection', intent: 'selected-navigation-or-option', token: '$accentSoft' },
+  { role: 'warning', intent: 'blocked-progress-or-risk', token: '$statusPending' },
+  { role: 'error', intent: 'invalid-or-failed-state', token: '$statusOverdue' },
+  { role: 'destructive', intent: 'destructive-action-only', token: '$statusOverdue' },
+]);
+
+function compactWorkflowJourney(contract) {
+  return {
+    journeyId: contract.journeyId,
+    journeyKind: contract.journeyKind,
+    primaryOutcome: contract.primaryOutcome,
+    entryPoints: contract.entryPoints,
+    resume: contract.resume,
+    declaredStateFields: contract.declaredStateFields,
+    stages: contract.stages,
+    completionGuards: contract.completionGuards,
+    actions: contract.actions,
+    stateActions: contract.stateActions,
+    signatureComponents: contract.signatureComponents,
+    continuityKeys: contract.continuityKeys,
+    scenarios: contract.scenarios,
+    capabilityComposition: contract.capabilityComposition,
+  };
+}
+
+function journeyIntentForScreen(screen, workflowJourney) {
+  const stage = workflowJourney.stages.find((candidate) => candidate.screenIds.includes(screen.id)) || null;
+  const stateActions = workflowJourney.stateActions.filter((candidate) => candidate.screenId === screen.id);
+  const actionById = new Map(workflowJourney.actions.map((action) => [action.id, action]));
+  const guardById = new Map(workflowJourney.completionGuards.map((guard) => [guard.id, guard]));
+  const incomplete = stateActions.find((candidate) => candidate.state === 'incomplete') || null;
+  const guardedActionIds = new Set(stateActions.flatMap((candidate) => [...candidate.disabledActions, ...candidate.hiddenActions]));
+  const guardedActions = [...guardedActionIds].map((actionId) => {
+    const action = actionById.get(actionId);
+    const actionStage = workflowJourney.stages.find((candidate) => candidate.id === action?.stageId);
+    const guard = guardById.get(actionStage?.completionRuleId);
+    return {
+      actionId,
+      guardId: guard?.id || null,
+      falseBehavior: incomplete?.disabledActions.includes(actionId) ? 'disabled-with-reason' : 'hidden-with-reason',
+      blockingMessage: guard?.blockingMessage || 'Complete the current required work before continuing.',
+    };
+  });
+  const signatureComponents = workflowJourney.signatureComponents.filter((component) => (
+    component.kind === 'resume-draft-module'
+      ? screen.role === 'primary'
+      : component.requiredOnStageScreens ? Boolean(stage) : screen.role === 'primary'
+  ));
+  const capabilityComposition = workflowJourney.capabilityComposition.filter((composition) => (
+    screen.role === 'primary'
+    || new RegExp(`\\b${composition.capability.replace(/-/g, '[ -]?')}\\b`, 'i').test(`${screen.purpose} ${screen.presentation?.pattern || ''}`)
+  ));
+  const stickySurfaceOrder = [
+    'content',
+    ...(screen.primaryAction?.placement === 'sticky-bottom' ? ['primary-action'] : []),
+    ...(screen.navigation?.kind === 'tab-root' ? ['tabs'] : []),
+    'safe-area',
+  ];
+  return {
+    journey: {
+      journeyId: workflowJourney.journeyId,
+      journeyKind: workflowJourney.journeyKind,
+      stageId: stage?.id || null,
+      stageOrder: stage?.order || null,
+      visibleStages: workflowJourney.stages.map((candidate) => ({ id: candidate.id, label: candidate.label, order: candidate.order })),
+      completionRuleIds: stage ? [stage.completionRuleId] : [],
+      resumeBehavior: workflowJourney.resume.supported ? 'restore-current-stage-and-draft' : 'not-supported',
+      continuityBindings: workflowJourney.continuityKeys.map((key) => ({
+        key,
+        source: key.startsWith('context.') ? 'context-contract' : 'workflow-state',
+      })),
+    },
+    actionState: {
+      primaryActionId: incomplete?.primaryAction || screen.primaryAction?.id || null,
+      stateActions,
+      guardedActions,
+    },
+    signatureComponents,
+    semanticColorRoles: SEMANTIC_COLOR_ROLES,
+    capabilityComposition,
+    layoutBudgets: {
+      maxFocalViewportShare: Math.min(screen.firstViewport.maxFeatureViewportShare, 0.6),
+      requiredFirstViewportRegions: screen.firstViewport.regionIds,
+      requireJourneyContext: Boolean(stage && workflowJourney.stages.length > 1),
+      maxReservedFooterShare: screen.primaryAction?.placement === 'sticky-bottom' ? 0.2 : 0,
+      stickySurfaceOrder,
+    },
+  };
+}
+
+function screenRecord(screen, data, contract, contextContract, workflowJourney) {
   const entities = screen.data.entities.length ? screen.data.entities : data.entities;
   const foundationFiles = screen.dependencies.foundation.map((component) => `foundation:${component}`);
   const fixtureDependencies = screen.dependencies.fixtures.length
@@ -321,6 +433,7 @@ function screenRecord(screen, data, contract, contextContract) {
     .map((id) => contextContract.displayContext.find((entry) => entry.id === id))
     .filter(Boolean)
     .map((entry) => ({ ...entry, testId: `experience-context-${entry.id}` }));
+  const journeyIntent = journeyIntentForScreen(screen, workflowJourney);
   return {
     id: screen.id,
     route: screen.route,
@@ -358,7 +471,11 @@ function screenRecord(screen, data, contract, contextContract) {
       screens: screen.dependencies.screens,
       artifacts: [...foundationFiles, ...fixtureDependencies],
     },
-    testIds: [...new Set([...screen.testIds, ...contextEntries.map((entry) => entry.testId)])],
+    testIds: [...new Set([
+      ...screen.testIds,
+      ...contextEntries.map((entry) => entry.testId),
+      ...journeyIntent.signatureComponents.map((component) => component.testId),
+    ])],
     forbiddenDefaults: screen.forbiddenDefaults,
     data: {
       adapter: data.adapter,
@@ -379,7 +496,45 @@ function screenRecord(screen, data, contract, contextContract) {
       assumptions: screen.context.assumptions,
       forbiddenInferences: contextContract.forbiddenInferences,
     },
+    ...journeyIntent,
   };
+}
+
+function uiContractProjection(pack) {
+  return {
+    journey: pack.journey,
+    shell: pack.shell,
+    navigation: pack.navigation,
+    design: {
+      hierarchy: pack.design?.recipe?.hierarchy,
+      actions: pack.design?.recipe?.actions,
+      navigation: pack.design?.recipe?.navigation,
+      signatureComponent: pack.design?.recipe?.signatureComponent,
+      primitives: pack.design?.primitives,
+    },
+    screens: (pack.screens || []).map((screen) => ({
+      id: screen.id,
+      route: screen.route,
+      role: screen.role,
+      purpose: screen.purpose,
+      navigation: screen.navigation,
+      headerMode: screen.headerMode,
+      regions: screen.regions,
+      firstViewport: screen.firstViewport,
+      signatureComponent: screen.signatureComponent,
+      primaryAction: screen.primaryAction,
+      journey: screen.journey,
+      actionState: screen.actionState,
+      signatureComponents: screen.signatureComponents,
+      semanticColorRoles: screen.semanticColorRoles,
+      capabilityComposition: screen.capabilityComposition,
+      layoutBudgets: screen.layoutBudgets,
+    })),
+  };
+}
+
+function uiContractFingerprint(pack) {
+  return sha256(stableStringify(uiContractProjection(pack)));
 }
 
 function revisionForPack(pack) {
@@ -453,6 +608,8 @@ function compileScreenBuildPack(projectRoot) {
   const experiencePath = requiredFile(root, '.tmp/experience-contract.json', 'Experience contract');
   const screenPath = requiredFile(root, '.tmp/experience-screen-contract.json', 'Experience screen contract');
   const foundationPath = requiredFile(root, '.tmp/experience-foundation-contract.json', 'Experience foundation contract');
+  const workflowJourneyPath = requiredFile(root, '.tmp/workflow-journey-contract.json', 'Workflow Journey Contract');
+  const navigationContractPath = requiredFile(root, '.tmp/navigation-contract.json', 'Navigation Contract');
   const executionPath = requiredFile(root, '.tmp/mobile-plan-execution-contract.json', 'Mobile plan execution contract');
   const contextPath = requiredFile(root, '.tmp/context-enrichment-contract.json', 'Context Enrichment Contract');
   const briefPath = fs.existsSync(path.join(root, '.tmp', 'experience-brief.md'))
@@ -464,6 +621,11 @@ function compileScreenBuildPack(projectRoot) {
   const contract = readJson(experiencePath, 'Experience contract');
   const screenContract = readJson(screenPath, 'Experience screen contract');
   const foundation = readJson(foundationPath, 'Experience foundation contract');
+  const workflowJourney = readJson(workflowJourneyPath, 'Workflow Journey Contract');
+  const navigationContract = readJson(navigationContractPath, 'Navigation Contract');
+  const navigationShellManifestRelativePath = '.mobile-app/navigation-shell.json';
+  const navigationShellManifest = readJson(projectOwnedFile(root, navigationShellManifestRelativePath, 'Navigation shell manifest'), 'Navigation shell manifest');
+  if (navigationShellManifest.navigationContractRevision !== navigationContractRevision(navigationContract)) throw new Error('Navigation shell manifest is stale for the current Navigation Contract.');
   const executionContract = readJson(executionPath, 'Mobile plan execution contract');
   const contextContract = readJson(contextPath, 'Context Enrichment Contract');
   const contextValidation = validateContextEnrichment(contextContract, { experienceContract: contract, briefText: fs.readFileSync(briefPath, 'utf8') });
@@ -476,8 +638,22 @@ function compileScreenBuildPack(projectRoot) {
     throw new Error('Prototype domain manifest is stale for the current Domain or Context contract.');
   }
   const dataSurface = domainDataSurface(root);
-  const context = { dataContract: data.contract, executionContract, contextContract };
+  const context = { dataContract: data.contract, executionContract, contextContract, navigationContract };
   validateInputs(contract, screenContract, foundation, context);
+  const journeyValidation = validateWorkflowJourney(workflowJourney, {
+    briefText: fs.readFileSync(briefPath, 'utf8'),
+    experienceContract: contract,
+    contextContract,
+    screenContract,
+    domainModel: data.contract,
+  });
+  if (!journeyValidation.valid) throw new Error(`Workflow Journey Contract is invalid: ${journeyValidation.errors.join('; ')}`);
+  const navigationValidation = validateNavigationContract(navigationContract, {
+    experienceContract: contract,
+    workflowJourney,
+    screenContract,
+  });
+  if (!navigationValidation.valid) throw new Error(`Navigation Contract is invalid: ${navigationValidation.errors.join('; ')}`);
   for (const operation of screenContract.screens.flatMap((screen) => screen.data?.operations || [])) {
     if (!dataSurface.hooks.has(operation.hook)) throw new Error(`Domain hook ${operation.hook} is missing from src/data/hooks.`);
     if (!dataSurface.repositories.has(operation.repository)) throw new Error(`Repository ${operation.repository} is missing from src/data/contracts.ts.`);
@@ -508,7 +684,7 @@ function compileScreenBuildPack(projectRoot) {
   const foundationRuntimePaths = foundation.primitives.map((primitive) => primitive.file);
   const foundationRuntimeHash = aggregateProjectFilesHash(root, foundationRuntimePaths, 'Experience foundation runtime');
   const normalizedScreens = normalizeScreenContract(screenContract, contract, screenMap, foundationComponents);
-  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract, contextContract));
+  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract, contextContract, workflowJourney));
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
   const designRecipePath = path.join(root, 'brand', 'design-recipe.json');
@@ -527,6 +703,9 @@ function compileScreenBuildPack(projectRoot) {
     experienceContract: '.tmp/experience-contract.json',
     screenContract: '.tmp/experience-screen-contract.json',
     contextEnrichment: '.tmp/context-enrichment-contract.json',
+    workflowJourney: '.tmp/workflow-journey-contract.json',
+    navigationContract: '.tmp/navigation-contract.json',
+    navigationShell: navigationShellManifestRelativePath,
     foundationContract: '.tmp/experience-foundation-contract.json',
     foundationRuntime: foundationRuntimePaths,
     designSystem: 'brand/design-system.md',
@@ -545,6 +724,9 @@ function compileScreenBuildPack(projectRoot) {
       experienceContract: sha256(fs.readFileSync(experiencePath, 'utf8')),
       screenContract: sha256(fs.readFileSync(screenPath, 'utf8')),
       contextEnrichment: sha256(fs.readFileSync(contextPath, 'utf8')),
+      workflowJourney: sha256(fs.readFileSync(workflowJourneyPath, 'utf8')),
+      navigationContract: sha256(fs.readFileSync(navigationContractPath, 'utf8')),
+      navigationShell: navigationShellHash(root, navigationShellManifestRelativePath),
       foundationContract: sha256(fs.readFileSync(foundationPath, 'utf8')),
       foundationRuntime: foundationRuntimeHash,
       designRecipe: hasDesignRecipe ? sha256(fs.readFileSync(designRecipePath, 'utf8')) : sha256(stableStringify(designRecipe)),
@@ -574,6 +756,7 @@ function compileScreenBuildPack(projectRoot) {
       mode: contextContract.contextMode,
       forbiddenInferences: contextContract.forbiddenInferences,
     },
+    journey: compactWorkflowJourney(workflowJourney),
     design: {
       tokensPath: 'brand/tokens.ts',
       designSystemPath: 'brand/design-system.md',
@@ -592,6 +775,15 @@ function compileScreenBuildPack(projectRoot) {
       headerModes: Object.fromEntries(screens.map((screen) => [screen.route, screen.headerMode])),
     },
     navigation: {
+      contractRevision: navigationContractRevision(navigationContract),
+      shellFingerprint: navigationShellManifest.shellFingerprint,
+      model: navigationContract.model,
+      initialDestinationId: navigationContract.initialDestinationId,
+      destinations: navigationContract.destinations,
+      flows: navigationContract.flows,
+      globalRoutePolicy: navigationContract.globalRoutePolicy,
+      adaptivePresentation: navigationContract.adaptivePresentation,
+      accessibility: navigationContract.accessibility,
       initialRoute: primary.route,
       keyFlowRoute: keyFlow.route,
       routes: screens.map((screen) => screen.route),
@@ -610,6 +802,7 @@ function compileScreenBuildPack(projectRoot) {
       mediaPolicy: contract.assetPolicy.media,
       mediaManifest: 'assets/experience/manifest.json',
       mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
+      journeyScenarios: workflowJourney.scenarios,
     },
     screens,
     builderWaves: [
@@ -636,15 +829,18 @@ function compileScreenBuildPack(projectRoot) {
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['confirmedBrief', 'packageManifest', 'screenContract', 'contextEnrichment', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']
-        : ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']])),
-      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['confirmedBrief', 'experienceContract', 'contextEnrichment', 'domainModel', 'domainLayer', 'executionContract']])),
+        ? ['confirmedBrief', 'packageManifest', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']
+        : ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']])),
+      fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['confirmedBrief', 'experienceContract', 'contextEnrichment', 'workflowJourney', 'domainModel', 'domainLayer', 'executionContract']])),
       validatorDependencies: {
-        experience: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'domainLayer', 'executionContract'],
-        staticComposition: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainLayer', 'executionContract'],
+        experience: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'foundationContract', 'foundationRuntime', 'domainLayer', 'executionContract'],
+        workflow: ['confirmedBrief', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'domainModel', 'domainLayer'],
+        navigation: ['confirmedBrief', 'experienceContract', 'screenContract', 'workflowJourney', 'navigationContract', 'navigationShell'],
+        staticComposition: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainLayer', 'executionContract'],
       },
     },
   };
+  pack.uiContractFingerprint = uiContractFingerprint(pack);
   pack.revision = revisionForPack(pack);
   return pack;
 }
@@ -683,13 +879,17 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   compactExecutionContract,
+  compactWorkflowJourney,
   compileScreenBuildPack,
   aggregateProjectFilesHash,
   domainLayerHash,
+  navigationShellHash,
   domainDataSurface,
   parseScreenMap,
   revisionForPack,
   screenWorkOrder,
   sha256,
   stableStringify,
+  uiContractFingerprint,
+  uiContractProjection,
 };

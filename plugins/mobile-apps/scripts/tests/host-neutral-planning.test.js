@@ -96,8 +96,10 @@ test('real workflow uses textual approval and validates it before external mutat
   const planner = read('agents/native-app-planner.md');
   assert.match(planner, /NEEDS_USER_APPROVAL/);
   assert.match(planner, /mobile-plan-artifact-bundle/);
-  assert.match(planner, /seven fixed artifact slots/);
+  assert.match(planner, /nine fixed artifact slots/);
   assert.match(planner, /bundle schema version 3/);
+  assert.match(planner, /workflowJourneyContract/);
+  assert.match(planner, /navigationContract/);
   assert.match(planner, /executionContract/);
   assert.match(real, /Textual plan approval protocol/);
   assert.match(real, /prepare-mobile-plan-execution-contract\.js/);

@@ -9,6 +9,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { validateNavigationShell } = require('./validate-navigation-shell');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -144,7 +145,13 @@ function validateScreenShells(projectRoot, packPath) {
   const resolvedRoot = path.resolve(projectRoot);
   const resolvedPack = path.resolve(resolvedRoot, packPath || '.tmp/screen-build-pack.json');
   const pack = fs.existsSync(resolvedPack) ? readJson(resolvedPack) : null;
-  return screenShellIssues(resolvedRoot, pack);
+  const issues = screenShellIssues(resolvedRoot, pack);
+  const navigationPath = path.join(resolvedRoot, '.tmp', 'navigation-contract.json');
+  const screenPath = path.join(resolvedRoot, '.tmp', 'experience-screen-contract.json');
+  if (fs.existsSync(navigationPath) && fs.existsSync(screenPath)) {
+    issues.push(...validateNavigationShell(resolvedRoot, readJson(navigationPath), readJson(screenPath)).map((item) => ({ ...item, file: item.file || 'app/(app)/_layout.tsx' })));
+  }
+  return issues;
 }
 
 function main(argv) {

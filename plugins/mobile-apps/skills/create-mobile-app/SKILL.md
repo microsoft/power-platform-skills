@@ -494,6 +494,26 @@ an industry picker. A screenshot/design intake is optional; high and
 strict-structural inputs update the contract with a binding reference override
 instead of replacing the brief-only path.
 
+Resolve foreground-owned Context and Workflow Journey contracts before planner
+dispatch. Journey resolution is generic and evidence-bound; it may identify a
+real ordered/resumable job but must not invent a stepper for independent
+destinations or derive UI from industry nouns:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-context-enrichment.js" \
+  --project-root "$WORKING_DIR" \
+  --brief ".tmp/experience-brief.md"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
+  --project-root "$WORKING_DIR" \
+  --brief ".tmp/experience-brief.md"
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-workflow-journey.js" \
+  --project-root "$WORKING_DIR" \
+  --brief ".tmp/experience-brief.md"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+  --project-root "$WORKING_DIR" \
+  --brief ".tmp/experience-brief.md"
+```
+
 Before planner dispatch, create the foreground execution preflight from the
 confirmed brief and the selected template package surface:
 
@@ -671,6 +691,11 @@ Prompt:
   <requirements_brief — bullet points from Step 2b>
 
   Product experience contract: <absolute `<working_dir>/.tmp/experience-contract.json`>
+  Context enrichment contract: <absolute `<working_dir>/.tmp/context-enrichment-contract.json`>
+  Workflow journey contract: <absolute `<working_dir>/.tmp/workflow-journey-contract.json`>
+  Navigation: return durable-destination and temporary-flow evidence in the
+  preliminary Screen Graph; set `navigationContract` to null. The foreground
+  resolver owns the final model.
   Mobile plan execution preflight: <absolute `<working_dir>/.tmp/mobile-plan-execution-preflight.json`>
   Experience direction: contract-first; optional brand refinement follows at Step 6.75.
   Visual companion: <visual_companion — "yes" or "no">
@@ -709,6 +734,10 @@ Wait for the planner to return before continuing. On a valid
 planning artifact changes:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" \
+  --project-root "$WORKING_DIR" \
+  --bundle ".tmp/planner-artifact-bundle.json" \
+  --update-bundle
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-plan-artifact-bundle.js" \
   --project-root "$WORKING_DIR" \
   --bundle "$WORKING_DIR/.tmp/planner-artifact-bundle.json"
@@ -717,12 +746,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/write-plan-artifact-bundle.js" \
   --bundle "$WORKING_DIR/.tmp/planner-artifact-bundle.json"
 ```
 
-The writer atomically manages exactly these five paths and no caller-supplied
-target: `native-app-plan.md`, `.tmp/dataverse-schema-contract.json`,
-`.tmp/experience-screen-contract.json`, and
+The writer atomically manages exactly these nine paths and no caller-supplied
+target: `native-app-plan.md`, `.tmp/context-enrichment-contract.json`,
+`.tmp/workflow-journey-contract.json`, `.tmp/navigation-contract.json`,
+`.tmp/prototype-domain-model.json`,
+`.tmp/dataverse-schema-contract.json`, `.tmp/experience-screen-contract.json`,
 `.tmp/experience-foundation-contract.json`, and
 `.tmp/mobile-plan-execution-contract.json`. The foreground owns the staged
-bundle and all five persisted artifacts. The approval receipt remains absent
+bundle and all nine persisted artifacts. The approval receipt remains absent
 until the outer textual protocol receives `approve`.
 
 #### 3.0a — Textual plan approval protocol
@@ -743,6 +774,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-plan-execution-contract.
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
   --project-root "$WORKING_DIR" \
   --file "$WORKING_DIR/native-app-plan.md" \
+  --file "$WORKING_DIR/.tmp/context-enrichment-contract.json" \
+  --file "$WORKING_DIR/.tmp/workflow-journey-contract.json" \
+  --file "$WORKING_DIR/.tmp/navigation-contract.json" \
   --file "$WORKING_DIR/.tmp/prototype-domain-model.json" \
   --file "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --file "$WORKING_DIR/.tmp/experience-screen-contract.json" \
@@ -775,7 +809,8 @@ Then wait for a normal textual response:
   Only after this command reports `status: approved` may the workflow continue
   to auth, native, connector, or Dataverse mutation steps.
 - Any requested edit - request a revised return-only bundle, stage it at the
-  same foreground path, validate it, persist the seven fixed artifact slots, rerun
+  same foreground path, resolve Navigation again, validate it, persist the nine
+  fixed artifact slots, rerun
   Step 3.9 and plan validators, then run `plan-checkpoints.js --action draft`
   again for a fresh revision.
 - Any other response - restate the available textual choices without mutating
@@ -783,9 +818,9 @@ Then wait for a normal textual response:
 
 Optional richer host approval adapters may display this same summary, but they
 must still wait for and persist the textual approval receipt. A changed plan,
-schema, Experience Contract, screen contract, or foundation contract revision
-is detected by `plan-checkpoints.js --action status` and invalidates the earlier
-approval automatically.
+schema, Experience Contract, Workflow Journey Contract, screen contract, or
+foundation contract revision is detected by `plan-checkpoints.js --action
+status` and invalidates the earlier approval automatically.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
@@ -1734,6 +1769,24 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 
 ### Step 10b — Wire navigation layout
 
+> **AUTHORITATIVE NAVIGATION CONTRACT OVERRIDE:** Do not choose Stack, Tabs, or
+> Drawer from screen count, role, CRUD shape, or the legacy Experience hint.
+> The foreground has already resolved `.tmp/navigation-contract.json`. Run the
+> deterministic shell owner below; the heuristic subsections in this legacy
+> step are reference material for migration only and MUST NOT execute in fresh
+> creation.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" \
+  --project-root "$WORKING_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" \
+  --project-root "$WORKING_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
+  --project-root "$WORKING_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
+  --project-root "$WORKING_DIR"
+```
+
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
 
 - **Stack** — skip. `app/(app)/_layout.tsx` already renders `<Stack>`. Nothing to do.
@@ -1770,7 +1823,7 @@ BLOCKED: duplicate Expo route <route> from <file-a> and <file-b>. Use [id]/index
 For each entry in the Inner stacks list, create the folder if missing and write `app/(app)/<folder>/_layout.tsx` with this template:
 
 ```tsx
-import { Stack } from 'expo-router';
+import { Stack } from 'expo-router/stack';
 
 export default function <FolderName>Layout() {
   return (
@@ -1818,7 +1871,7 @@ For each tab, infer a Ionicons icon name from the screen name:
 
 **The Edit to apply:**
 
-Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
+Add `import { Tabs } from 'expo-router/tabs';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
 
 ```tsx
 return (

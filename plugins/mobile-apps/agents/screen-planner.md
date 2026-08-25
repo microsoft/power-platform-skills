@@ -14,8 +14,9 @@ tools:
 # Screen Planner
 
 Return a complete schema-v3 screen plan from the brief, Product Experience
-Contract, neutral domain operations, and capability/connector facts. Never write
-files, build previews, own approvals, or mutate external systems.
+Contract, Workflow Journey Contract, neutral domain operations, and
+capability/connector facts. Never write files, build previews, own approvals,
+or mutate external systems.
 
 ## Authorities
 
@@ -23,18 +24,19 @@ Read:
 
 1. the Product Experience Contract;
 2. the validated Context Enrichment Contract;
-3. the data architect's neutral domain model and operations;
-4. execution preflight/contract facts;
-5. reference/design intake when supplied;
-6. `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
-7. the supplied `contractHash()`, `contextEnrichmentRevision()`,
+3. the validated Workflow Journey Contract;
+4. the data architect's neutral domain model and operations;
+5. execution preflight/contract facts;
+6. reference/design intake when supplied;
+7. `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
+8. the supplied `contractHash()`, `contextEnrichmentRevision()`,
   `foundationContract()`, and
    `primaryComposition()` results.
 
 Copy binding hashes/composition verbatim. Do not use a file-byte hash or invent
 a second contract shape.
 
-## Screen graph
+## Preliminary screen graph
 
 - Start from the first user outcome, audience, interaction/entry modes, focal
   point, content model, density, media, and forbidden defaults.
@@ -43,8 +45,20 @@ a second contract shape.
 - Declare every route, file, role, route parameter, navigation owner, parent,
   tab label, and intent. Dynamic path parameters are required and must bind to
   an operation.
+- For every root candidate, return all eight navigation-candidate booleans:
+  `hasStableRoot`, `revisitedIndependently`, `preservesOwnState`,
+  `crossSessionValue`, `peerToOtherDestinations`, `isNotAFlowStep`,
+  `isNotAnAction`, and `supportedByBriefOrSafeProductInference`. Include
+  evidence, optional badge binding, and icon intent. Do not choose the final
+  navigator; the foreground resolver decides after this graph exists.
 - Preserve one obvious first-viewport focal point and the contracted action
   placement. Do not default to a dashboard or equal-weight cards.
+- Preserve journey kind, ordered stage ownership, resume behavior, completion
+  guards, state-specific primary actions, continuity keys, and required
+  workflow signatures. Independent destinations remain distinct from ordered
+  stages; a Domain Model cannot replace either with generic record screens.
+- Resolve camera placement as `on-demand`, `supporting`, or `primary` from the
+  primary job. Capability presence alone never makes camera primary.
 - Specify regions, hierarchy, media coverage/aspect/fallback, loading/empty/
   error/offline states, quality criteria, test IDs, foundation dependencies,
   fixture scenarios, and screen dependencies.
@@ -90,9 +104,10 @@ service directly. In prototype mode their adapter remains fail-closed.
   outside scrolling content and declare `clearance.safeArea: true`. Under
   `tabs-stack`, they also declare `clearance.tabBar: above`; stack-only flows
   use `not-applicable`.
-- Use `tabs-stack` for 3-5 durable destinations and stack-only navigation for a
-  linear flow. Nested detail routes stay in their owning tab stack, with sticky
-  actions clear of tab and safe-area space.
+- Mark durable destinations separately from actions, details, filters, states,
+  capabilities, and Journey steps. Put likely nested details under their
+  logical parent route and mark temporary capture/edit/confirm flows as modal
+  candidates. Do not merely copy the Experience provisional hint.
 - Include long copy, Dynamic Type, keyboard, focus, contrast, and minimum touch
   target criteria.
 - Fixture scenarios are observable render requirements, not prose examples.
@@ -110,6 +125,10 @@ Before returning, verify:
 - all fields/relationships/pagination are valid;
 - the critical flow includes the primary and a meaningful outcome;
 - every screen has loading, empty, error, and offline states;
+- every staged screen has one state-correct primary action; later-stage actions
+  remain disabled or hidden with the Journey guard reason;
+- continuity bindings preserve the same identity, display reference, context,
+  progress, draft, and offline state through the critical flow;
 - no service, logical-name, fixture-import, or mapper leakage.
 
 ## Return
@@ -121,6 +140,7 @@ Return exactly one JSON object:
   "screensMarkdown": "## Screens\n...",
   "experienceScreenContract": {},
   "experienceFoundationContract": {},
+  "workflowJourneyContract": {},
   "warnings": []
 }
 ```

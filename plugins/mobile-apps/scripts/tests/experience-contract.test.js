@@ -72,9 +72,10 @@ test('passenger shopping briefs separate offline connectivity from cached CDN pr
     });
     assert.equal(contract.presentationIntent.primaryPattern, 'editorial-hero');
     assert.equal(contract.presentationIntent.collectionPattern, 'image-card-grid');
+    assert.equal(contract.provisionalNavigationHint, 'tabs-stack');
     assert.equal(contract.navigationIntent.model, 'tabs-stack');
     assert.equal(contract.navigationModel, 'tabs-stack');
-    assert.match(contract.navigationIntent.rationale, /Shopping, category browsing, and the bag/);
+    assert.match(contract.navigationIntent.rationale, /Provisional hint only/);
     assert.equal(contract.signatureMotifs.includes('cart-action'), true);
     assert.equal(contract.forbiddenDefaults.includes('warehouse-operations'), true);
     assert.equal(contract.forbiddenDefaults.includes('airline-operations'), true);

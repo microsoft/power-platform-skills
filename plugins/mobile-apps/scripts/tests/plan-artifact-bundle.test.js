@@ -20,6 +20,8 @@ const { sha256 } = require('../lib/mobile-plan-execution-contract');
 const { domainModelRevision, validatePrototypeDomainModel } = require('../lib/prototype-domain-model');
 const { prepareExecutionPreflight } = require('../prepare-mobile-plan-execution-contract');
 const { contextEnrichmentRevision, resolveContextEnrichment } = require('../resolve-context-enrichment');
+const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
+const { resolveNavigationContract } = require('../resolve-navigation-contract');
 
 const checkpointScript = path.resolve(__dirname, '..', 'plan-checkpoints.js');
 const confirmedBrief = 'Help travelers browse products and add them to a cart.';
@@ -174,6 +176,7 @@ function makeProject(context) {
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   const experience = deriveExperienceFromBrief(confirmedBrief);
   experience.navigationModel = 'stack';
+  experience.provisionalNavigationHint = 'stack';
   experience.visualCompositionIntent.navigationSilhouette = 'stack';
   experience.navigationIntent = {
     model: 'stack',
@@ -203,7 +206,7 @@ function bundle(root) {
   const domain = domainModel(experience, context);
   const preflight = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'mobile-plan-execution-preflight.json'), 'utf8'));
   const composition = primaryComposition(experience);
-  return {
+  const value = {
     version: 3,
     kind: 'mobile-plan-artifact-bundle',
     workflow: 'create-mobile-prototype',
@@ -267,6 +270,21 @@ function bundle(root) {
     },
     warnings: [],
   };
+  value.artifacts.workflowJourneyContract = resolveWorkflowJourney(
+    confirmedBrief,
+    experience,
+    context,
+    { screenContract: value.artifacts.experienceScreenContract, domainModel: domain },
+  );
+  const navigation = resolveNavigationContract(
+    confirmedBrief,
+    experience,
+    value.artifacts.workflowJourneyContract,
+    value.artifacts.experienceScreenContract,
+  );
+  value.artifacts.navigationContract = navigation.contract;
+  value.artifacts.experienceScreenContract = navigation.screenContract;
+  return value;
 }
 
 function plannedScreen({ id, route, file, role, purpose, pattern, action, visualComposition = null, contextEntries = [] }) {
@@ -320,7 +338,9 @@ test('foreground validates and writes every active return-only planning artifact
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
+    '.tmp/navigation-contract.json',
     '.tmp/prototype-domain-model.json',
+    '.tmp/workflow-journey-contract.json',
     'native-app-plan.md',
   ]);
   assert.equal(fs.readFileSync(path.join(root, 'package.json'), 'utf8'), '{"name":"protected","dependencies":{},"devDependencies":{}}\n');
@@ -538,6 +558,15 @@ test('connector-only bundle removes stale domain and schema artifacts', (context
     screen.data.entities = [];
     screen.data.operations = [];
   }
+  const experience = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-contract.json'), 'utf8'));
+  const navigation = resolveNavigationContract(
+    confirmedBrief,
+    experience,
+    value.artifacts.workflowJourneyContract,
+    value.artifacts.experienceScreenContract,
+  );
+  value.artifacts.navigationContract = navigation.contract;
+  value.artifacts.experienceScreenContract = navigation.screenContract;
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), '{}\n');
   fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), '{}\n');
   const result = writePlanArtifactBundle(root, value);
@@ -546,6 +575,8 @@ test('connector-only bundle removes stale domain and schema artifacts', (context
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
     '.tmp/mobile-plan-execution-contract.json',
+    '.tmp/navigation-contract.json',
+    '.tmp/workflow-journey-contract.json',
     'native-app-plan.md',
   ]);
   assert.deepEqual(result.removed.sort(), ['.tmp/dataverse-schema-contract.json', '.tmp/prototype-domain-model.json']);
@@ -564,6 +595,8 @@ test('writer restores all previous artifact content after a late replacement fai
     screen: '{"previous":true}\n',
     foundation: '{"previous":true}\n',
     execution: '{"previous":true}\n',
+    journey: '{"previous":true}\n',
+    navigation: '{"previous":true}\n',
   };
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), previous.plan);
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), previous.context);
@@ -572,6 +605,8 @@ test('writer restores all previous artifact content after a late replacement fai
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), previous.screen);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), previous.foundation);
   fs.writeFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), previous.execution);
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), previous.journey);
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), previous.navigation);
 
   const renameSync = fs.renameSync;
   fs.renameSync = (source, target) => {
@@ -593,6 +628,8 @@ test('writer restores all previous artifact content after a late replacement fai
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'), previous.screen);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), 'utf8'), previous.foundation);
   assert.equal(fs.readFileSync(path.join(root, '.tmp', 'mobile-plan-execution-contract.json'), 'utf8'), previous.execution);
+  assert.equal(fs.readFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), 'utf8'), previous.journey);
+  assert.equal(fs.readFileSync(path.join(root, '.tmp', 'navigation-contract.json'), 'utf8'), previous.navigation);
 });
 
 test('writer rejects a symlinked artifact directory that escapes the project root', (context) => {

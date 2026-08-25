@@ -120,6 +120,12 @@ context into a permanent entity, relationship, integration, permission, native
 capability, connector, or operation unless the brief independently requires it.
 If context is absent or ambiguous, keep `contextMode: none`; do not improvise.
 
+The Workflow Journey Contract, not the Domain Model, owns stages, navigation,
+progression, completion guards, resume behavior, action priority, and signature
+components. Supply the neutral fields, relationships, operations, aggregates,
+and coherent fixture graph required by those contracts; never choose a screen
+template or flatten the journey into generic CRUD.
+
 Declare machine-readable fixture requirements before fixture records. Include
 relationship-complete populated data plus loading, empty, error, and offline
 states. Declare media policy and require URL, cache key, and fallback identity

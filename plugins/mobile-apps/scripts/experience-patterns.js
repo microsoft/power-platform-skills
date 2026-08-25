@@ -459,7 +459,7 @@ function visualCompositionIntent(semantic) {
       testId: `experience-signature-${slug(resolved.signatureComponent.kind)}`,
     },
     nextContentVisible: true,
-    navigationSilhouette: semantic.navigationModel,
+    navigationSilhouette: semantic.provisionalNavigationHint || semantic.navigationModel,
   };
 }
 
@@ -472,6 +472,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
   const fallback = semanticIntent ? null : winner.score === 0 ? chooseRule(text) : null;
   const intent = semanticIntent?.id || (fallback?.rule.id === 'browse' ? 'commerce' : fallback?.rule.id);
   const semantic = experienceFromIntent(intent, profile, text);
+  semantic.provisionalNavigationHint = semantic.navigationModel;
   const mediaPolicy = normalizeMediaPolicy(options.mediaPolicy);
   if (mediaPolicy) {
     semantic.assetPolicy.media = mediaPolicy;
@@ -509,15 +510,14 @@ function deriveExperienceFromBrief(brief, options = {}) {
       assetPolicy: evidenceFor(profile, ['cachedCdn', 'offline', ...evidenceSignals], text),
     },
     entryMode: semantic.entryMode,
+    provisionalNavigationHint: semantic.provisionalNavigationHint,
+    // Backward-compatible projection only. The deterministic Navigation
+    // Contract resolver owns the final model after Journey + Screen Graph.
     navigationModel: semantic.navigationModel,
     navigationIntent: {
       model: semantic.navigationModel,
       initialRoute: '/(app)/home',
-      rationale: semantic.navigationModel === 'tabs-stack'
-        ? intent === 'commerce'
-          ? 'Shopping, category browsing, and the bag are durable independent destinations, so persistent tabs reduce return-path friction.'
-          : 'The primary job benefits from persistent access to distinct top-level destinations.'
-        : 'The primary job is a focused progression, so stack navigation avoids premature persistent tabs.',
+      rationale: 'Provisional hint only; final navigation is resolved from durable destinations after Journey and preliminary Screen Graph planning.',
     },
     primaryScreen: {
       id: 'home',
@@ -563,6 +563,8 @@ function validateExperienceContract(contract) {
   for (const [field, values] of Object.entries(enums)) {
     if (!values.includes(contract?.[field])) issues.push(`${field} is invalid`);
   }
+  if (contract?.provisionalNavigationHint !== undefined
+    && !['tabs-stack', 'stack', 'modal-flow', 'drawer', 'other'].includes(contract.provisionalNavigationHint)) issues.push('provisionalNavigationHint is invalid');
   if (typeof contract?.primaryJob !== 'string' || contract.primaryJob.trim().length < 10) issues.push('primaryJob is too short');
   const contentValues = new Set(['products', 'categories', 'cart', 'people', 'tasks', 'media', 'records', 'locations', 'documents', 'messages']);
   if (!Array.isArray(contract?.contentModel) || !contract.contentModel.length || contract.contentModel.length > 5 || contract.contentModel.some((value) => !contentValues.has(value))) issues.push('contentModel must contain 1-5 supported values');
@@ -594,7 +596,7 @@ function validateExperienceContract(contract) {
     || !composition?.signatureComponent?.required || !/^experience-signature-[a-z0-9-]+$/.test(String(composition?.signatureComponent?.testId || ''))
     || !['none', 'low', 'medium', 'high'].includes(composition?.mediaProminence)
     || composition?.nextContentVisible !== true
-    || composition?.navigationSilhouette !== contract?.navigationModel
+    || composition?.navigationSilhouette !== (contract?.provisionalNavigationHint || contract?.navigationModel)
     || typeof composition?.maxFeatureViewportShare !== 'number' || composition.maxFeatureViewportShare <= 0 || composition.maxFeatureViewportShare > 0.6) {
     issues.push('visualCompositionIntent is invalid');
   }

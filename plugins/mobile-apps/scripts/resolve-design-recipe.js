@@ -83,7 +83,10 @@ function resolveDesignRecipe(contract, screenContract, brandContext = null, cont
       maxFeatureViewportShare: composition.maxFeatureViewportShare,
     },
     actions: { primary: 'filled-accent', secondary: 'quiet-outline', destructive: 'explicit-danger' },
-    navigation: { silhouette: composition.navigationSilhouette, tabTreatment: composition.navigationSilhouette === 'tabs-stack' ? 'persistent-labeled' : 'not-applicable' },
+    navigation: {
+      silhouette: context.navigationContract?.model || composition.navigationSilhouette,
+      tabTreatment: (context.navigationContract?.model || composition.navigationSilhouette) === 'tabs-stack' ? 'persistent-labeled' : 'not-applicable',
+    },
     icons: { family: 'Ionicons', strokeTreatment: 'consistent-optical-weight', criticalActionsRequireLabels: true },
     signatureComponent: { ...composition.signatureComponent, construction: `Compose ${composition.signatureComponent.kind} from semantic tokens and task-owned content; do not substitute a generic card.` },
     contextTreatment: {

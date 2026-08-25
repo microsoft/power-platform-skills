@@ -591,7 +591,8 @@ function validateV3Operations(screenContract, contract, context, errors) {
       if (navigation.kind === 'modal' && !['close', 'none'].includes(screen.header?.mode)) errors.push(`screens[${screenIndex}] modal routes require close or none header mode`);
     }
     if (screen.primaryAction?.placement === 'sticky-bottom') {
-      const expectedTabBar = contract?.navigationModel === 'tabs-stack' ? 'above' : 'not-applicable';
+      const navigationModel = context.navigationContract?.model || contract?.navigationModel;
+      const expectedTabBar = ['tabs-stack', 'drawer'].includes(navigationModel) ? 'above' : 'not-applicable';
       if (screen.primaryAction.clearance?.safeArea !== true || screen.primaryAction.clearance?.tabBar !== expectedTabBar) {
         errors.push(`screens[${screenIndex}] sticky-bottom action requires safe-area clearance and tabBar ${expectedTabBar}`);
       }
@@ -632,8 +633,10 @@ function validateV3Operations(screenContract, contract, context, errors) {
   }
   const duplicates = operationIds.filter((id, index) => id && operationIds.indexOf(id) !== index);
   if (duplicates.length) errors.push(`operation ids must be unique: ${[...new Set(duplicates)].join(', ')}`);
-  if (contract?.navigationModel === 'tabs-stack') {
-    if (tabRoots.length < 3 || tabRoots.length > 5) errors.push('tabs-stack navigation requires 3-5 declared tab-root screens');
+  const navigationModel = context.navigationContract?.model || contract?.navigationModel;
+  if (['tabs-stack', 'drawer'].includes(navigationModel)) {
+    if (navigationModel === 'tabs-stack' && (tabRoots.length < 3 || tabRoots.length > 5)) errors.push('tabs-stack navigation requires 3-5 declared tab-root screens');
+    if (navigationModel === 'drawer' && tabRoots.length <= 5) errors.push('drawer navigation requires more than five declared destination roots');
     const primary = screenContract.screens.find((screen) => screen.role === 'primary');
     if (primary?.navigation?.kind !== 'tab-root') errors.push('tabs-stack primary screen must be a tab root');
     const byRoute = new Map(screenContract.screens.map((screen) => [screen.route, screen]));
@@ -655,7 +658,7 @@ function validateV3Operations(screenContract, contract, context, errors) {
       }
     }
   } else if (contract && tabRoots.length) {
-    errors.push(`navigation model ${contract.navigationModel} cannot declare tab-root screens`);
+    errors.push(`navigation model ${navigationModel} cannot declare tab-root screens`);
   }
 }
 

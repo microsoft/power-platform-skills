@@ -62,6 +62,9 @@ test('generates neutral models, repositories, hooks, provider, fixtures, and loc
   fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), `${JSON.stringify(model, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), `${JSON.stringify({ visualCompositionIntent: { compositionFamily: 'product-led-discovery', signatureComponent: { testId: 'signature-product-rail' } } })}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify({ schemaVersion: 1, contextMode: 'none', displayContext: [] })}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), `${JSON.stringify({ schemaVersion: 1, journeyId: 'primary-job' })}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), `${JSON.stringify({ schemaVersion: 1, model: 'stack' })}\n`);
+  fs.writeFileSync(path.join(root, '.mobile-app', 'navigation-shell.json'), `${JSON.stringify({ schemaVersion: 1, model: 'stack' })}\n`);
   const manifest = generateDataLayer(root, model, { assetPolicy: { media: 'local-first' } });
   for (const relativePath of [
     'src/data/model.ts', 'src/data/contracts.ts', 'src/data/fixtures.ts',
@@ -88,6 +91,9 @@ test('generates neutral models, repositories, hooks, provider, fixtures, and loc
   const state = JSON.parse(fs.readFileSync(path.join(root, '.mobile-app', 'state.json'), 'utf8'));
   assert.equal(state.schemaVersion, 2);
   assert.match(state.lastDomainModelHash, /^[a-f0-9]{64}$/);
+  assert.match(state.lastWorkflowJourneyHash, /^[a-f0-9]{64}$/);
+  assert.match(state.lastNavigationContractHash, /^[a-f0-9]{64}$/);
+  assert.match(state.lastNavigationShellHash, /^[a-f0-9]{64}$/);
   assert.match(state.lastRepositoryMappingHash, /^[a-f0-9]{64}$/);
   assert.match(state.lastFixtureRevision, /^[a-f0-9]{64}$/);
   assert.equal(state.lastValidation.status, 'passed');

@@ -1,6 +1,6 @@
 ---
 name: native-app-planner
-description: Use when an outer workflow needs a host-neutral return-only version-3 mobile plan bundle with canonical domain, screen, foundation, and execution contracts.
+description: Use when an outer workflow needs a host-neutral return-only version-3 mobile plan bundle with canonical journey, domain, screen, foundation, and execution contracts.
 user-invocable: false
 color: cyan
 tools:
@@ -22,23 +22,34 @@ external mutation. Never write project files or call Power Platform services.
 
 The caller supplies the confirmed brief, planning mode, Product Experience
 Contract with `visualCompositionIntent`, validated Context Enrichment Contract,
-execution preflight, template facts, and optional reference/live metadata
-evidence.
+validated Workflow Journey Contract, execution preflight, template facts, and
+optional reference/live metadata evidence.
 
 Read:
 
 - `${PLUGIN_ROOT}/scripts/schema-plan-artifact-bundle.json`;
 - `${PLUGIN_ROOT}/scripts/schema-context-enrichment-contract.json`;
+- `${PLUGIN_ROOT}/scripts/schema-workflow-journey-contract.json`;
+- `${PLUGIN_ROOT}/scripts/schema-navigation-contract.json` for shape awareness
+  only; the foreground resolver owns the final instance;
 - `${PLUGIN_ROOT}/scripts/schema-prototype-domain-model.json`;
 - `${PLUGIN_ROOT}/scripts/schema-experience-screen-contract.json`;
 - `${PLUGIN_ROOT}/scripts/schema-mobile-plan-execution-contract.json`;
 - the Dataverse schema contract only in `required` real mode.
 
-Use `contractHash()`, `contextEnrichmentRevision()`, `domainModelRevision()`,
-`foundationContract()`, and `primaryComposition()` on the parsed objects and
+Use `contractHash()`, `contextEnrichmentRevision()`,
+`workflowJourneyRevision()`, `domainModelRevision()`, `foundationContract()`,
+and `primaryComposition()` on the parsed objects and
 forward their exact results. Do not substitute a file-byte hash or abbreviated
 prose. The supplied Context Enrichment Contract is foreground authority: copy
 it exactly and never silently add or remove context.
+The supplied Workflow Journey Contract is foreground authority for journey
+kind, stage order, resume semantics, guards, continuity, and signatures. Align
+its screen/action identities to the final Screen Contract without flattening
+or recomposing it.
+Do not finalize Stack, Tabs, or Drawer. Return durable-destination candidates,
+temporary-flow candidates, revisit/state evidence, and a preliminary Screen
+Graph; set `navigationContract` to null for foreground resolution.
 
 ## Planning modes
 
@@ -83,7 +94,8 @@ Delegate return-only work:
 
 1. `mobile-app:data-model-architect` for the canonical domain and optional
    Dataverse target;
-2. `mobile-app:screen-planner` for schema-v3 screens and foundation contract.
+2. `mobile-app:screen-planner` for the aligned Journey Contract, schema-v3
+  screens, and foundation contract.
 
 Forward all brief requirements and exact binding facts. Specialists never
 write files. Audit the returned operations against the domain; if a field,
@@ -134,6 +146,8 @@ Return one object valid against bundle schema version 3:
   "artifacts": {
     "nativeAppPlanMarkdown": "# ...",
     "contextEnrichmentContract": {},
+    "workflowJourneyContract": {},
+    "navigationContract": null,
     "prototypeDomainModel": {},
     "dataverseSchemaContract": null,
     "experienceScreenContract": {},
@@ -163,7 +177,8 @@ Before returning, verify:
 - bundle/schema version and exact keys;
 - domain semantics, fixtures, references, choices, and operations;
 - context evidence/assumptions/forbidden inferences and revision binding;
-- screen graph, operations, foundation, visual composition, and experience hash bindings;
+- journey stages/guards/resume/signatures, destination/flow evidence, screen graph, operations,
+  foundation, visual composition, and experience hash bindings;
 - execution coverage for every required preflight item;
 - planning-mode rules for domain/Dataverse nullability;
 - no commands, paths, writes, approval state, environment mutation, generated
@@ -179,7 +194,7 @@ NEEDS_USER_APPROVAL: {"workflow":"<workflow>","planningMode":"<mode>","mayAuthor
 ```
 ````
 
-The foreground validates and persists the seven fixed artifact slots. If an
+The foreground resolves Navigation, then validates and persists the nine fixed artifact slots. If an
 essential fact is missing, return one `NEEDS_CONTEXT: <reason>` line and no
 partial bundle. Use `BLOCKED: <reason>` only for a hard contradiction that
 cannot be resolved by supplying context.

@@ -1,0 +1,108 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Navigation Contract",
+  "type": "object",
+  "required": ["schemaVersion", "experienceContractSha256", "workflowContractSha256", "screenGraphSha256", "model", "initialDestinationId", "destinationCount", "destinations", "flows", "globalRoutePolicy", "adaptivePresentation", "accessibility", "decision"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "workflowContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "screenGraphSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "model": { "enum": ["tabs-stack", "stack", "drawer"] },
+    "initialDestinationId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "destinationCount": { "type": "integer", "minimum": 1 },
+    "destinations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "purpose", "order", "rootScreenId", "route", "iconIntent", "durabilityEvidence", "independentJob", "statePolicy", "badgeBinding", "nestedScreenIds", "testId"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "purpose": { "type": "string", "minLength": 5 },
+          "order": { "type": "integer", "minimum": 1 },
+          "rootScreenId": { "type": "string", "minLength": 1 },
+          "route": { "type": "string", "pattern": "^/" },
+          "iconIntent": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "durabilityEvidence": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "independentJob": { "const": true },
+          "statePolicy": { "const": "preserve" },
+          "badgeBinding": { "type": ["string", "null"] },
+          "nestedScreenIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "testId": { "type": "string", "pattern": "^navigation-destination-[a-z][a-z0-9-]*$" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "ownerDestinationId", "presentation", "screenIds", "tabVisibility", "dismissBehavior", "completionDestinationId", "cancelDestinationId", "deepLinkRestoration"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "ownerDestinationId": { "type": "string" },
+          "presentation": { "enum": ["nested-stack", "modal", "full-screen-modal"] },
+          "screenIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "tabVisibility": { "enum": ["visible", "covered-by-modal", "not-applicable"] },
+          "dismissBehavior": { "type": "string", "minLength": 3 },
+          "completionDestinationId": { "type": "string" },
+          "cancelDestinationId": { "type": "string" },
+          "deepLinkRestoration": { "const": "activate-owner-and-build-back-path" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "globalRoutePolicy": {
+      "type": "object",
+      "required": ["homeReturnRequired", "deepLinksRestoreOwningDestination", "tabReselectBehavior", "backBehavior", "unknownRouteBehavior", "logoutDestination"],
+      "properties": {
+        "homeReturnRequired": { "type": "boolean" },
+        "deepLinksRestoreOwningDestination": { "const": true },
+        "tabReselectBehavior": { "enum": ["pop-owner-stack-to-root", "not-applicable"] },
+        "backBehavior": { "const": "nearest-stack-then-system" },
+        "unknownRouteBehavior": { "const": "safe-root" },
+        "logoutDestination": { "const": "/login" }
+      },
+      "additionalProperties": false
+    },
+    "adaptivePresentation": {
+      "type": "object",
+      "required": ["compact", "medium", "expanded", "destinationIdentityStableAcrossSizes"],
+      "properties": {
+        "compact": { "enum": ["bottom-tabs", "stack", "drawer"] },
+        "medium": { "enum": ["navigation-rail", "stack", "drawer"] },
+        "expanded": { "enum": ["sidebar-or-rail", "stack", "drawer"] },
+        "destinationIdentityStableAcrossSizes": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "accessibility": {
+      "type": "object",
+      "required": ["labelsRequired", "selectedStateRequired", "badgesHaveAccessibleValues", "minimumTouchTarget"],
+      "properties": {
+        "labelsRequired": { "const": true },
+        "selectedStateRequired": { "const": true },
+        "badgesHaveAccessibleValues": { "const": true },
+        "minimumTouchTarget": { "type": "integer", "minimum": 44 }
+      },
+      "additionalProperties": false
+    },
+    "decision": {
+      "type": "object",
+      "required": ["selectedBy", "provisionalHint", "evidence", "rejectedAlternatives", "stackOnlyReason", "stackOnlyEvidence", "returnHomeMechanism"],
+      "properties": {
+        "selectedBy": { "const": "navigation-resolver" },
+        "provisionalHint": { "type": ["string", "null"] },
+        "evidence": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "rejectedAlternatives": { "type": "array", "items": { "type": "string" } },
+        "stackOnlyReason": { "type": ["string", "null"] },
+        "stackOnlyEvidence": { "type": "array", "items": { "type": "string" } },
+        "returnHomeMechanism": { "type": "string", "minLength": 3 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -330,6 +330,8 @@ function buildInputs(contract, reconciliation, plan = '# Plan\n') {
   const approvedContract = contractApprovalContent(normalized);
   const artifactHashes = {
     nativeAppPlanSha256: sha256(planBytes),
+    workflowJourneyContractSha256: sha256('workflow-journey-contract'),
+    navigationContractSha256: sha256('navigation-contract'),
     dataverseSchemaContractSha256: sha256(stableJson(approvedContract)),
     experienceContractSha256: sha256('experience-contract'),
     experienceScreenContractSha256: sha256('experience-screen-contract'),
