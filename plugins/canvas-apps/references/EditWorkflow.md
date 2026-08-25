@@ -1,10 +1,10 @@
 # Edit Workflow
 
-Use this workflow only when the working directory already has meaningful content.
+Use this workflow only when `[working directory]` already has meaningful content.
 
 ## 1. Assess Complexity
 
-Read all `.pa.yaml` files in the working directory.
+Read all `[working directory]/*.pa.yaml` files.
 
 Treat the edit as **simple** only when all are true:
 
@@ -17,12 +17,11 @@ Anything else is **complex**.
 
 ## 2. Simple Edit
 
-1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read
-   `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit touches control properties or
-   enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches sizing, scrolling,
-   or colour.
+1. Read `${PLUGIN_ROOT}/references/YamlSyntax.md`. Also read `${PLUGIN_ROOT}/references/ControlGuide.md` when the edit
+   touches control properties or enums, and `${PLUGIN_ROOT}/references/LayoutGuide.md` when it touches
+   sizing, scrolling, or color.
 2. Use `describe_control` before adding a property not already present on that control.
-3. Apply targeted edits directly to the absolute working-directory path.
+3. Apply targeted edits directly to the `[working directory]` folder.
 4. Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
 5. Stop after the final summary; do not invoke planner or builder agents.
 
@@ -32,7 +31,7 @@ Read:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 
@@ -74,9 +73,9 @@ Invoke the `canvas-app-planner` agent with `Task` and:
 
 ```text
 Mode: EDIT
-Working directory: [absolute working directory]
-Plan index: [working directory]/canvas-app-plan.md
-Shared plan: [working directory]/canvas-app-shared.md
+Working directory: `[working directory]`
+Plan index: `[working directory]/canvas-app-plan.md`
+Shared plan: `[working directory]/canvas-app-shared.md`
 Edit requirements: [user requirements]
 Approved plan: [full approved plan]
 Current app state: [palette, variables, layout, screens, controls]

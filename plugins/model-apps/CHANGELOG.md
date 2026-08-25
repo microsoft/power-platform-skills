@@ -4,16 +4,68 @@ All notable changes to the **model-apps** plugin.
 
 ## [Unreleased] — 2.4.4
 
-Adds plugin update notices, fixes four crash paths, and corrects a smoke-eval
-assertion that could never pass live.
+Adds plugin update notices, proves what persona roles actually grant, makes
+jobs-to-be-done surfaces checkable, fixes four crash paths, and corrects a
+smoke-eval assertion that could never pass live.
 
 ### Added
+- **Dataverse labels now use the organization's own language instead of a hardcoded
+  `1033`** ([#447](https://github.com/microsoft/power-platform-skills/issues/447)).
+  In an organization that has not provisioned 1033, `data-model` halted with
+  `The language code 1033 is not a valid language for this organization`. The build
+  resolves `organization.languagecode` once per run and threads it into every
+  label-emitting call (tables, columns, customer columns, global choices, status
+  reasons, alternate keys, relationships), and warns whenever it has to fall back.
+
+  Precedence: `--language-code` / `--languageCode` → App Spec `languageCode` (or
+  `languageCode` in the `provision-entities.js` input JSON) → the organization's
+  base language → 1033. Both CLIs accept the flag.
+
+  Two things worth knowing if you hit this. The failure is **not** all-or-nothing:
+  Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
+  `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table
+  and its Choice columns are created and the build fails a few steps later — which
+  reads like an environment problem rather than a defect. And this covers the
+  **data-model phase only**; form, dashboard and sitemap labels still come from SDK
+  serializers that hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+
+- **`verify` now proves what a persona security role GRANTS, not just that it
+  exists.** The `role` check only asserted a role row carrying the SDK ownership
+  marker, so a role built with the wrong access — or one whose privilege write
+  failed after the row landed — verified clean. The new `role-privileges` check
+  resolves every declared `(entity, access)` to its Dataverse `PrivilegeId` from
+  the same metadata source the SDK writes against, and asserts the role holds it
+  at **at least** the declared depth. A **subset** check by design: extra
+  privileges are never a finding, because `appAccess` injects `appmodule` read,
+  unioned jobs escalate a shared entity+access to the max declared scope, and
+  distinct entities can share one Dataverse privilege. Fails **closed** on an
+  unreadable role or table. Reader-gated, so existence-only callers are unchanged.
+- **`personas[].jobs[].surfaces[]` is checked instead of documentary.** Each entry
+  is now resolved against the spec's own views, forms, pages, dashboards, tables
+  and sitemap titles. `spec-lint` **warns** when a surface matches nothing — a
+  warning, not an error, because a surface may legitimately name an out-of-the-box
+  artifact this spec never authors. `verify` adds a `job-surface` rollup that
+  reports a deployed failure as the job it broke ("persona P can no longer do job
+  J"), rather than only "view X is missing".
 - **Automatic plugin update notice.** Every user-invocable skill now runs the
   non-blocking `scripts/check-version.js` preflight, which compares the installed
   Model Apps version with `origin/main` and shows update commands for the active
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **A sitemap subarea that targets a custom web resource now round-trips**
+  ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
+  The Site Map Designer writes `$webresource:<name>` into a URL subarea; the http(s)
+  guard rejected it, so the downloaded spec failed validation and **no spec file was
+  written at all** — blocking the whole download → edit → rebuild flow for the app over
+  a single unrelated nav entry. The reference now passes validation as-is (the same
+  policy platform icon refs already use), and `download-model-app.js` additionally
+  captures the page's **content** into `webResources[]` when it can safely do so — as
+  `navRefs`, kept separate from icon refs because the icon path is image-only by design
+  and such a page is `html`. A managed or foreign resource stays a bare reference; it
+  exists in the target environment. A `javascript:`/`file:`/malformed url is still
+  rejected and dropped.
 - **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
   and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
   (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona

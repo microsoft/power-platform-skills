@@ -58,7 +58,8 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   "appShell":      { "areas": [ /* sitemap */ ] },
   "sampleData":    { /* optional, keyed by entity schemaName */ },
   "ai":            { /* optional — AI feature flags + row-summary config */ },
-  "personas":      [ /* optional — one security role per persona (see below) */ ]
+  "personas":      [ /* optional — one security role per persona (see below) */ ],
+  "languageCode":  1031 /* optional — LCID for Dataverse labels; defaults to the org's base language */
 }
 ```
 
@@ -72,6 +73,22 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
+- **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
+  stamped on the Dataverse labels the **data-model phase** creates (table, column, choice, status
+  reason, relationship and alternate-key display names). It does **not** reach form, dashboard or
+  sitemap labels — those go through SDK serializers that hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+  **Normally omit it**: the build reads the organization's base language
+  (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
+  Set it only to deliberately author labels in a *different* provisioned language than the org
+  default; `--language-code <lcid>` overrides it for a single run.
+  Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
+  value is rejected by validation, and a caller that bypasses validation gets a warning naming the
+  discarded value rather than a silent fall-through.
+  **Not emitted by `download-model-app.js`**, and that is deliberate: an LCID copied out of the
+  source org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly
+  how a spec starts failing in an org that lacks that language. Leaving it absent lets every target
+  org resolve its own base language. If you pinned one by hand, re-add it after a download.
 
 ## entities[]
 ```jsonc
@@ -403,6 +420,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   { "entity": "new_customer", "title": "Customers" },                              // a table (nav icon = its TABLE icon)
   { "dashboard": "Operations", "title": "Overview", "icon": "new_overview.svg" },  // a built dashboard (by name)
   { "url": "https://…",       "title": "Help" },                                   // an external link
+  { "url": "$webresource:new_home.html", "title": "Home" },                        // a declared web resource
   { "page": "overview",       "title": "Overview" }                                // a genpage — KEY (schemaVersion 2)
 ] } ] } ] }
 ```
@@ -410,6 +428,14 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   of a `dashboards[]` entry — auto-pinned as an app component so the app includes it), `url`, or
   `page` (the **`key`** of a `pages[]` generative page at schemaVersion 2; the **name** for legacy specs
   — surfaced as a `GenPage` sitemap subarea).
+- **`url` is either a real http(s) link or a web-resource reference** — `$webresource:<name>` (the form
+  the Site Map Designer writes for a "custom page backed by an HTML web resource") or the equivalent
+  `/WebResources/<name>` path. A web-resource reference **passes through as-is**, like a platform icon
+  ref: it is a live/OOB value a downloaded app carries, and the resource is frequently managed or owned
+  by another publisher, so requiring it to be declared would break the download→build round-trip.
+  Download captures its content into `webResources[]` when it can safely do so (own prefix, unmanaged).
+  Any other scheme is rejected: a `javascript:` or `file:` nav entry in a shipped app is a
+  script-injection / local-file-exfil vector.
 - Any area or subarea may set **`icon`**. This is either a declared image `webResources[]` NAME
   (png/jpg/gif/svg/ico — validated against `webResources[]`) OR a **platform icon reference** — a path
   (`/WebResources/…`, `/_imgs/…`) or a `$webresource:<name>` — which a **downloaded** app carries verbatim
@@ -605,7 +631,7 @@ privilege removes it — the role converges to the spec).
 **Field reference**
 - `persona` (**required**) — the security role's display name; also its idempotency key. Must be unique across `personas[]`.
 - `jobs[]` (**required**, ≥1) — `{ name, description?, surfaces?, privileges[] }`. `privileges[]` is required and non-empty per job.
-- `jobs[].surfaces[]` (optional) — the view/form/page names (or page `key`s) that let this persona **do** the job. Documentary only: it is never applied to Dataverse. It renders the jobs→surfaces traceability table in `model-app-plan.md`, and a job with no `surfaces[]` is flagged by `spec-lint.js` as a design gap — nothing in the app demonstrably lets that persona do that job.
+- `jobs[].surfaces[]` (optional) — the view/form/page names (or page `key`s) that let this persona **do** the job. Never applied to Dataverse. It renders the jobs→surfaces traceability table in `model-app-plan.md`; a job with no `surfaces[]` is flagged by `spec-lint.js` as a design gap, and a surface that **matches nothing this spec builds** is flagged too (`lib/surface-resolver.js` resolves each entry against `views[]` / `forms[]` / `pages[]` (key **or** name) / `dashboards[]` / `entities[]` / sitemap subarea titles, case-insensitively). Both are **warnings**, never errors — a surface may legitimately name an out-of-the-box artifact this spec does not author. `verify-model-app` additionally rolls a *deployed* failure up to the job that depended on it (`job-surface`), so "view X is missing" also reads as "persona P can no longer do job J".
 - `privileges[].entity` (**required**) — a table **logical name** (e.g. `account`, `msdyn_workorder`). May be a table this spec doesn't author (standard/system tables are common); existence is resolved against live metadata by the build, not at lint time.
 - `privileges[].access` (**required**) — one or more of `read · create · write · delete · append · appendTo · assign · share`.
 - `privileges[].scope` (optional, default `user`) — `user` (Basic) · `businessUnit` (Local) · `parentChild` (Deep) · `organization` (Global), least→most permissive.
@@ -626,6 +652,15 @@ business unit is never touched. Because roles are keyed by (name, BU), two apps 
 of the **same name in the same business unit** share one role by design (the second build reuses the
 first's) — give personas distinct names, or a distinct `businessUnitId`, if you need separate roles. In
 `--changed-only` mode a persona change forces a **full build** (there is no partial security apply yet).
+
+**Verification.** `verify-model-app` proves the role **row** exists carrying the SDK ownership marker
+(`role`) *and* — when the reader supplies role/entity privilege access — that the role actually
+**grants** every declared privilege at **at least** the declared depth (`role-privileges`). The depth
+comparison is a **subset** check by design: extra privileges are never a finding, because `appAccess`
+injects `appmodule` read, unioned jobs escalate a shared entity+access to the max declared scope, and
+distinct entities can share one Dataverse privilege (a role holds one depth per privilege). It fails
+**closed** — an unreadable role, or a table whose privilege metadata cannot be read, is reported
+rather than skipped.
 
 **Validation rules** (`validateAppSpec`): `persona` required + unique; each job needs a `name` and a
 non-empty `privileges[]`; `access` values and `scope` must be valid tokens; `appAccess` must be a

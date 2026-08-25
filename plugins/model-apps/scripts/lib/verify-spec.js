@@ -9,6 +9,8 @@ const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_R
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
+const { resolveSurfaces } = require('./surface-resolver.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -261,6 +263,37 @@ async function verifySpec(spec, read, opts = {}) {
       }
     } catch { row = undefined; }
     add('role', roleName, row, row ? '' : 'persona security role not found (or its business unit could not be resolved)');
+
+    // Privilege depth check — reader-gated (see `entityRelationships` / `commandBar` above for the
+    // same pattern), so an existence-only reader behaves exactly as before. Proving the role ROW
+    // exists says nothing about what it GRANTS: a role created with the wrong access, or one whose
+    // privilege write failed after the row landed, verified clean until this check existed.
+    // SUBSET semantics — see lib/role-privileges.js for why equality would be wrong.
+    if (row && typeof read.rolePrivileges === 'function' && typeof read.entityPrivileges === 'function') {
+      const declared = declaredPrivileges(p);
+      let actual = null;
+      try {
+        actual = await read.rolePrivileges(row.roleid);
+      } catch { actual = null; }
+      if (!Array.isArray(actual)) {
+        // Fail CLOSED: an unreadable role is not a role we can call correct.
+        add('role-privileges', roleName, false, 'could not read the role\'s privileges');
+      } else {
+        const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
+        const entityPrivileges = new Map();
+        for (const entity of new Set(declared.map((d) => d.entity))) {
+          try {
+            const privs = await read.entityPrivileges(entity);
+            if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
+          } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
+        }
+        const cmp = compareRolePrivileges(declared, entityPrivileges, actualByPrivilegeId);
+        const detail = cmp.ok
+          ? `${declared.length} declared privilege(s) held`
+          : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; ');
+        add('role-privileges', roleName, cmp.ok, detail);
+      }
+    }
   }
 
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
@@ -328,6 +361,38 @@ async function verifySpec(spec, read, opts = {}) {
           : !proof.exists
             ? `requested '${want}' but this app has NO app-scope override for '${setting}' (it is in effect as '${inForce}' only by environment fallback, so the app was never configured)`
             : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
+    }
+  }
+
+  // JTBD rollup — translates a technical failure into the business impact it caused. Every other
+  // check answers "is this artifact deployed?"; this one answers "can this persona still do this
+  // job?".
+  //
+  // Deliberately a PURE ROLLUP over checks already computed — no extra reads, so it costs nothing
+  // and cannot fail independently. A job fails when a surface it names resolves to a spec artifact
+  // whose own check failed. An UNRESOLVED surface is NOT failed here: it may name an out-of-the-box
+  // artifact this spec never authors (see lib/surface-resolver.js), and spec-lint already warns at
+  // authoring time — failing it here would turn a plan-time smell into a deploy-time error.
+  const failedNames = new Set(checks.filter((c) => !c.present).map((c) => String(c.name).toLowerCase()));
+  if (failedNames.size) {
+    // Each check kind names itself differently (a view is `<entity>.<name>`, a form/page/subarea is
+    // its bare name, an entity is its schemaName), so a resolved surface is mapped to the candidate
+    // check-name(s) its kind would have produced. Derived here rather than in the resolver because
+    // the naming convention belongs to THIS file — a resolver that guessed it would silently rot
+    // the moment a check kind renamed itself.
+    const candidatesFor = (m) => {
+      const name = String(m.name || '');
+      if (m.kind === 'view') return [`${String(m.entity || '').toLowerCase()}.${name}`];
+      if (m.kind === 'entity') return [String(m.entity || name)];
+      return [name]; // form · page · subarea · dashboard
+    };
+    for (const r of resolveSurfaces(spec).resolved) {
+      const broken = r.matches
+        .flatMap(candidatesFor)
+        .filter((n) => n && failedNames.has(n.toLowerCase()));
+      if (broken.length) {
+        add('job-surface', `${r.persona} → ${r.job}`, false, `surface "${r.surface}" is not deployed (${[...new Set(broken)].join(', ')})`);
+      }
     }
   }
 

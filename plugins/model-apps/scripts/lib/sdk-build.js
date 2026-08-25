@@ -896,7 +896,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -1842,7 +1842,7 @@ async function runSdkBuild(spec, opts = {}) {
         result.created.roles[roleName] = rr;
         // Ensure the role is in the app's solution on EVERY run so an export/import carries it.
         // AddSolutionComponent is idempotent server-side (re-adding an existing component returns 200 —
-        // live-verified on aurora), so this ALSO repairs a role that missed membership on a prior run
+        // live-verified), so this ALSO repairs a role that missed membership on a prior run
         // (created, then the add failed, then reused — a `!reused` gate would skip the repair forever).
         // NOT swallowed: a real failure means the exported solution would omit the role and silently break
         // access in the target env, so it fails the phase fail-closed — same as the app/sitemap adds.

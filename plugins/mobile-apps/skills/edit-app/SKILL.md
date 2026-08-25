@@ -447,6 +447,7 @@ Before spawning builders:
 Navigation/layout algorithm:
 
 - Read the approved `## Screens` Screen Map and Navigation Contracts.
+- Normalize every target file to its Expo route before editing. Reject duplicate normalized routes, especially `<parent>/[id].tsx` together with `<parent>/[id]/<child>.tsx`; move the detail contract to `<parent>/[id]/index.tsx` before builders run.
 - For every new route, create the parent folder and inner `_layout.tsx` when the route is nested.
 - For modal/formSheet/detail routes, add the correct `<Stack.Screen name="..." options={{ presentation: 'modal' | 'formSheet' }} />` in the owning folder layout.
 - For tab/root changes, patch only the route list in `app/(app)/_layout.tsx`; preserve auth/provider logic and imports not related to route registration.

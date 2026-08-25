@@ -13,12 +13,12 @@ PAC CLI Version 2.11.0+g06bb2eb (.NET 10.0.8) — > 2.10.0 confirmed.
 ### Step 2: Authenticate and Select Environment
 
 `pac auth list`
-Three profiles found. Profile [3] (Aurora365-User1@auroratstgeo.onmicrosoft.com, AuroraBAPEnv610b3) is active (*).
+Three profiles found. Profile [3] (Contoso-User001@contosotest1.onmicrosoft.com, ContosoBAPEnv0001) is active (*).
 
 `pac auth select --index 3`
-Confirmed profile 3 active: Aurora365-User1@auroratstgeo.onmicrosoft.com — https://aurorabapenv610b3.crmtest.dynamics.com/
+Confirmed profile 3 active: Contoso-User001@contosotest1.onmicrosoft.com — https://contosobapenv0001.crmtest.dynamics.com/
 
-Working with environment: AuroraBAPEnv610b3 (https://aurorabapenv610b3.crmtest.dynamics.com/)
+Working with environment: ContosoBAPEnv0001 (https://contosobapenv0001.crmtest.dynamics.com/)
 
 ### Step 3: Gather Requirements
 
@@ -66,7 +66,7 @@ App selected: Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc)
 `pac solution list`
 Found 2 non-managed solutions:
 - Crdec34 (Common Data Services Default Solution) — publisher: Cr54cc7
-- Default (Default Solution) — publisher: DefaultPublisheraurorabapenv610b3
+- Default (Default Solution) — publisher: DefaultPublishercontosobapenv0001
 
 Entity creation required (cr_ticket) → solution question presented.
 
@@ -103,7 +103,7 @@ genpage-plan.md written to D:/temp/support-tickets/genpage-plan.md
 
 | Decision | Value |
 |----------|-------|
-| Environment | AuroraBAPEnv610b3 — https://aurorabapenv610b3.crmtest.dynamics.com/ |
+| Environment | ContosoBAPEnv0001 — https://contosobapenv0001.crmtest.dynamics.com/ |
 | Languages | English (1033) only |
 | cr_ticket exists | No — needs creation |
 | App | Genpage Publish Test (3fc905b9-7854-f111-a821-70a8a59ce7bc) |
@@ -122,17 +122,17 @@ genpage-plan.md written to D:/temp/support-tickets/genpage-plan.md
 
 ## Phase 2 — Entity creation pre-flight + builder
 - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/check-auth.js` (first run)
-  - Result: ok=false, blocker=whoami_403, az=akmaloo@microsoft.com, pac=Aurora365-User1
-- User instructed to run `az login --username Aurora365-User1@auroratstgeo.onmicrosoft.com`
+  - Result: ok=false, blocker=whoami_403, az=developer@contoso.com, pac=Contoso-User001
+- User instructed to run `az login --username Contoso-User001@contosotest1.onmicrosoft.com`
 - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/check-auth.js` (second run)
-  - Result: ok=true, identitiesMatch=true, envUrl=https://aurorabapenv610b3.crmtest.dynamics.com
+  - Result: ok=true, identitiesMatch=true, envUrl=https://contosobapenv0001.crmtest.dynamics.com
 - Dispatched genpage-entity-builder agent
   - Reads Solution=Crdec34, Publisher Prefix=cr from plan ## Environment
   - Wrote D:/temp/support-tickets/provision-input.json with:
     - Table: cr_ticket (columns: cr_name/primary, cr_priority/picklist, cr_status/picklist, cr_duedate/datetime)
     - Sample data: 10 cr_ticket records
     - Solution: Crdec34 (embedded in JSON)
-  - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/provision-entities.js --env https://aurorabapenv610b3.crmtest.dynamics.com --input @D:/temp/support-tickets/provision-input.json --apply --sample-data`
+  - `node D:/Projects/power-platform-skills/plugins/model-apps/scripts/provision-entities.js --env https://contosobapenv0001.crmtest.dynamics.com --input @D:/temp/support-tickets/provision-input.json --apply --sample-data`
   - SDK handles metadata propagation
   - Transactional log: entity-creation-log.md
 

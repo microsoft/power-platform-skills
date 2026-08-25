@@ -43,7 +43,7 @@ are not part of the identifier.
 - Check 19 — `QACHK-NO-REFLOW` — horizontal row with no narrow-width strategy
 - Check 20 — `QACHK-ROOT-NOT-SCROLLABLE` — screen content taller than the viewport cannot
   be reached
-- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text colour not set against a coloured background
+- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text color not set against a colored background
 - Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` — light foreground on a variant-supplied
   surface
 - Check 23 — `QACHK-CARD-PLACEHOLDER` — `ModernCard` slot left unset
@@ -780,18 +780,18 @@ viewport.
 
 ---
 
-## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text colour not set against a coloured background)
+## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text color not set against a colored background)
 
-**Problem:** Text controls do not inherit a contrasting colour from their container. A
+**Problem:** Text controls do not inherit a contrasting color from their container. A
 container with a dark `Fill` whose child text controls omit `Color` renders near-black on
 near-black. `compile_canvas` passes it.
 
 **Detect:** For every container that sets a non-default `Fill`, check every descendant
 text control (`ModernText`, `Badge`, and any control with a `Text` or `Content` property)
-for an explicit colour — `Color` on the modern React controls, `FontColor` on `Badge`,
+for an explicit color — `Color` on the modern React controls, `FontColor` on `Badge`,
 `TitleColor`/`SubtitleColor`/`DescriptionColor` on `ModernCard`.
 
-**Fix:** Set the colour explicitly wherever the background was set:
+**Fix:** Set the color explicitly wherever the background was set:
 
 ```yaml
 Color: =RGBA(239, 246, 250, 1)

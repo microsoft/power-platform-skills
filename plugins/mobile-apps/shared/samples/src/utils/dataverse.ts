@@ -70,6 +70,19 @@ export function containsFilter(columnLogicalName: string, searchText: string): s
 }
 
 /**
+ * Normalizes Dataverse record IDs without enforcing RFC UUID version bits.
+ * Dataverse sequential GUIDs can contain values such as `f111` in the third
+ * group and remain valid record identifiers.
+ */
+export function normalizeDataverseGuid(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.replace(/[{}]/g, '').toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+/**
  * Pre-generate a Dataverse primary-key GUID for create-then-navigate flows.
  * The Power Apps SDK's `*Service.create()` returns 204 No Content on success
  * with no record ID in the response — so any code that needs the new ID

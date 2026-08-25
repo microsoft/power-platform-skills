@@ -13,7 +13,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateAppSpec, migrateAppSpec, normalizePageSource } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -55,7 +55,11 @@ function makeSdk(env, spec, workspaceDir) {
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
-  return { sdk, provisionSdk, cleanup };
+  // `httpClient` is returned so the caller can wire verify's role-privilege reader, which needs the
+  // raw client (and the org URL) to compose an absolute `EntityDefinitions(...)?$select=Privileges`
+  // request — the SDK's entity metadata projects `Privileges` away. Returning the SAME instance
+  // rather than constructing a second one keeps token acquisition and retry state shared.
+  return { sdk, provisionSdk, httpClient, cleanup };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -260,6 +264,8 @@ async function buildModelApp(spec, opts, deps) {
         phases: opts.phases,
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
+        languageCode: opts.languageCode,
+        warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
         allowDestructive: opts.allowDestructive, // pages phase gates destructive page removals (Imp6)
@@ -382,6 +388,17 @@ function list(v) {
   return typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
 }
 
+function parseLanguageCode(value) {
+  if (value === undefined) return undefined;
+  // Shares app-spec's normalizer so the CLI flag, the App Spec field and the resolver can never
+  // disagree about which LCIDs are valid.
+  const lc = normalizeLanguageCode(value);
+  if (lc === null) {
+    throw new Error(`--language-code / --languageCode must be digits only, a positive integer LCID up to 65535 (got '${value}')`);
+  }
+  return lc;
+}
+
 async function main() {
   const { positional, flags } = parseArgs(process.argv.slice(2));
   // parseArgs sets a value-less flag to boolean `true`. Coerce required-VALUE flags to missing so a
@@ -393,14 +410,14 @@ async function main() {
   const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
   if (!env || !specArg) {
     process.stderr.write(
-      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
+      'Usage: node scripts/build-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--apply] [--sample-data] [--publish] [--verify] [--changed-only] [--stage <data|ui|app|publish>] [--only|--skip <phases>] [--from|--to <phase>] [--language-code|--languageCode <lcid>] [--non-interactive] [--allow-destructive] [--workspace <dir>]\n'
     );
     process.exit(1);
   }
   // A value-less phase selector (or --workspace) is a USAGE ERROR — never a silent all-phases select
   // or default workspace. `--only`/`--skip`/`--from`/`--to`/`--stage` with no value would otherwise be
   // dropped by list()/stagePhasesOrResolve and resolve to the full phase set.
-  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace'].find((k) => flags[k] === true);
+  const valuelessFlag = ['stage', 'only', 'skip', 'from', 'to', 'workspace', 'language-code', 'languageCode'].find((k) => flags[k] === true);
   if (valuelessFlag) {
     process.stderr.write(`✗ --${valuelessFlag} requires a value.\n`);
     process.exit(1);
@@ -416,6 +433,7 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  const languageCode = parseLanguageCode(flags['language-code'] ?? flags.languageCode);
   const opts = {
     apply: flags.apply === true,
     sampleData: flags['sample-data'] === true,
@@ -425,13 +443,14 @@ async function main() {
     profile: (flags.apply === true && flags.stage !== 'data') ? 'deploy' : 'plan',
     allowDestructive: flags['allow-destructive'] === true,
     nonInteractive: flags['non-interactive'] === true || envTruthy(process.env.POWER_PLATFORM_SKILLS_NONINTERACTIVE),
+    languageCode,
     appDir: path.dirname(specPath),
     env,
     workspaceDir,
   };
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup } = makeSdk(env, spec, workspaceDir);
+  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply
@@ -483,8 +502,15 @@ async function main() {
     // core stays free of SDK-reader wiring and fully injectable for tests.
     const deps = {
       log: (m) => process.stderr.write(m + '\n'),
+      warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk, provisionSdk, journal,
-      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir })),
+      // `httpClient` + `envUrl` are threaded through so the role-privileges check actually RUNS
+      // here. verify-spec skips it unless BOTH `rolePrivileges` and `entityPrivileges` readers are
+      // present, and `entityPrivileges` needs the raw client and the org URL to compose an absolute
+      // EntityDefinitions request. Omitting them degraded silently: `--apply --verify` reported a
+      // clean PASS having never checked what any persona's role actually grants. Caught live —
+      // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
+      verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env })),
     };
     if (changedOnly && opts.apply) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the
@@ -545,4 +571,4 @@ async function main() {
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
-module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy };
+module.exports = { buildModelApp, planFor, isTransientHalt, checkCollisions, discoverOpDiffState, envTruthy, parseLanguageCode };

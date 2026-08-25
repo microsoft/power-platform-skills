@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 33 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and Bootstrap 3→5 migration. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -387,6 +387,18 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Auto-discovers routes from your framework's router
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
+
+### Migration
+
+#### `/migrate-bootstrap`
+
+> "Upgrade my Power Pages site from Bootstrap 3 to Bootstrap 5"
+
+Migrates a traditional Power Pages site (Liquid web templates, not code sites) from Bootstrap 3 to Bootstrap 5. Runs the `pac pages bootstrap-migrate` engine for the bulk class renames, then assists with the residual hierarchy/CSS fixes the engine can only flag.
+
+- Non-destructive: the engine writes a new `<folder>V5` copy and never edits the source
+- AI-assisted per-category fixes for grid, navbar, panel/card, and page-header changes
+- Uploads (auto-enabling the Bootstrap 5 runtime flag) and verifies the flip via `pac-log.txt`
 
 ### Support
 

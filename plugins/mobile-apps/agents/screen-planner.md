@@ -210,11 +210,13 @@ Always include these baseline screens (already in template — keep them):
 Then design the user's screens. For a typical CRUD app:
 
 - **List screen** per primary entity (e.g., `accounts/index.tsx`)
-- **Detail screen** per primary entity (e.g., `accounts/[id].tsx`)
+- **Detail screen** per primary entity (e.g., `accounts/[id].tsx` when it has no children, or `accounts/[id]/index.tsx` when it owns child workflows)
 - **Create/edit form screen** per primary entity (e.g., `accounts/new.tsx`, `accounts/[id]/edit.tsx`)
 - Plus any workflow-specific screens (e.g., `capture-receipt.tsx`)
 
 **Folder rule (HARD — prevents phantom tabs):** any entity that has children (`[id]`, `new`, `edit`, sub-screens) becomes a **folder** with `<entity>/index.tsx` for the list/root view and the children inside. Never use a flat `accounts.tsx` AND a sibling `accounts/[id].tsx` — expo-router auto-registers every top-level `.tsx` under `app/(app)/` as a tab/drawer entry, so a flat `accounts.tsx` next to an `accounts/` folder produces both a phantom "accounts" tab AND the real "accounts" tab. Folders collapse the whole stack into one navigable entry.
+
+**Dynamic-route collision rule (HARD):** never emit both `<parent>/[id].tsx` and `<parent>/[id]/<child>.tsx`. Expo Router maps the file and folder to the same `[id]` navigator entry and crashes with `duplicate screen named '[id]'`. When a detail route has child workflows, its detail file is `<parent>/[id]/index.tsx`; child files and `_layout.tsx` live in that same `[id]/` folder.
 
 Decision rule per top-level destination:
 
@@ -226,7 +228,10 @@ Decision rule per top-level destination:
 Examples:
 - `home.tsx` (no children) → flat file `app/(app)/home.tsx`
 - `profile.tsx` (no children) → flat file `app/(app)/profile.tsx`
-- `inspections` (list + detail + form) → folder `app/(app)/inspections/` with `index.tsx`, `[id].tsx`, `new.tsx`
+- `inspections` (list + detail + form, no detail children) → folder `app/(app)/inspections/` with `index.tsx`, `[id].tsx`, `new.tsx`
+- `inspections` (detail owns photo/edit children) → `app/(app)/inspections/[id]/index.tsx`, `app/(app)/inspections/[id]/photo.tsx`, and `app/(app)/inspections/[id]/edit.tsx`; never also create `inspections/[id].tsx`
+
+**Authenticated Dataverse identity rule:** when app identity links through `systemuser`, require `SystemusersService` in the data-source/service plan and record the profile table's planned `systemuser` lookup logical column. Resolve the access-token `oid` with `SystemusersService.getAll({ filter: "azureactivedirectoryobjectid eq <oid> and isdisabled eq false", top: 2 })`. The screen-builder must open the generated profile model and use the exact declared read property corresponding to that lookup column (for example `_new_systemuserid_value` for `new_systemuserid`). Never put generic placeholders such as `_lookup_value` or `_systemuserlookup_value` in a concrete filter, and do not use relationship traversal (`lookupNavigation/azureactivedirectoryobjectid`).
 
 Keep total screen count tight — under 8 for v0 unless the requirements explicitly demand more. The user can iterate later.
 
@@ -381,6 +386,7 @@ For each screen the user adds, provide this compact shape:
 - **Data** — which generated services it calls, with method names (e.g., bounded lookup: `AccountsService.getAll({ top: 50, orderBy: ['name asc'], select: ['name'] })`; cursor list: `InspectionsService.getAll({ maxPageSize: 50, orderBy: ['scheduledDate asc', 'inspectionid asc'], select: [...] })` plus `skipToken` continuation support)
 - **Customer telemetry** (emit only when the user explicitly requested named customer events; omit otherwise) — list each event name, trigger, and approved scalar properties. Example: `OrderSubmitted after successful create; properties: result, duration_ms, item_count`. Never include form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs.
 - **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect`'s Step 6a Cross-entity Read Audit reads this block to decide which calculated columns to propose. Mechanical schema:
+- **Related entity fields** (REQUIRED if any UI field on the screen displays data from an entity OTHER than the primary `Data` service's table; OMIT entirely otherwise) — one entry per cross-entity field. The `data-model-architect` audits that each field has a supported read path. Mechanical schema:
 
   ```yaml
   related_entity_fields:
@@ -388,16 +394,19 @@ For each screen the user adds, provide this compact shape:
       source: <dotted path from primary entity to resolved column, e.g. cr3e9_flightid → cr3e9_gateid → cr3e9_gatename>
       cardinality: "1:1" | "1:many" | "M:N"
       archetype_class: list | detail | tab-root | dashboard
-      recommends: calc-column | chained-fetch
+      recommends: formatted-lookup | chained-fetch | external-projection-required
   ```
 
   **Mechanical derivation of `recommends`** (no judgement — pick from this table):
 
   | `archetype_class` | `cardinality` | `recommends` |
   |---|---|---|
-  | `list`, `tab-root`, `dashboard` | `1:1` | `calc-column` |
+  | `list`, `tab-root`, `dashboard` | direct lookup primary display | `formatted-lookup` |
+  | `list`, `tab-root`, `dashboard` | any other `1:1` related field | `external-projection-required` |
   | `detail` | `1:1` | `chained-fetch` |
-  | any | `1:many` or `M:N` | `chained-fetch` (calc columns can't traverse) |
+  | `list`, `tab-root`, `dashboard` | `1:many` or `M:N` per-row field/aggregate | `external-projection-required` |
+  | `detail` | `1:many` | `chained-fetch` |
+  | `detail` | `M:N` | `external-projection-required` unless a generated intersect-table service and exact bounded query contract are already named in the approved data model |
 
   **`archetype_class` mapping from `Archetype`:** `List` → `list`; `Tab-root` → `tab-root` (or `dashboard` if `Operational pattern: home-dashboard` / `assignment-dashboard`); `Detail` → `detail`; `Form` / `Modal-Sheet` / `Auth` / `Empty-onboarding` → `detail` (cold path, single-record context).
 
@@ -411,22 +420,22 @@ For each screen the user adds, provide this compact shape:
       source: cr3e9_flightid → cr3e9_flightnumber
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      recommends: formatted-lookup
     - field: "Gate name"
       source: cr3e9_flightid → cr3e9_gateid → cr3e9_gatename
       cardinality: "1:1"
       archetype_class: list
-      recommends: calc-column
+      recommends: external-projection-required
     - field: "Defect count"
       source: cr3e9_inspectionzoneid → cr3e9_defect (1:many)
       cardinality: "1:many"
       archetype_class: list
-      recommends: chained-fetch
+      recommends: external-projection-required
   ```
 
   **Hard rule:** if the screen displays a related-entity field but you do NOT emit a `related_entity_fields` block for it, the data-model-architect cannot propose the calc column, the screen-builder will hit `BLOCKED` at scaffold time, and the user will see a `—` cell in the built app. The block is the ONLY signal — there is no fallback inference.
 - **Audit** (omit for read-only / non-write screens) — one line per audit-bearing action: `<trigger>: event <code> (<event label>); payload: <field, field, field>`. Example: `On submit: event 100000006 (Inspection Submitted); payload: inspectionId, submittedAt, defectCount, openCriticalCount.` The screen-builder wraps the payload field list in `JSON.stringify({...})` and writes the full `cr3e9_audit_log_entriesService.create(...)` call from the Generated Services table — do NOT spell out the wrapper or service name.
-- **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly list each lookup field with its `@odata.bind` name + entity set, e.g. `'cr3e9_Project@odata.bind': '/cr3e9_projects(<guid>)'`. Without this the screen-builder will guess and silently lose the relationship. Skip for read-only and no-lookup screens.
+- **Lookup writes** — for form/edit screens that set a parent reference (Task → Project, Comment → Task, etc.), explicitly copy the exact quoted `@odata.bind` property from the generated target model and pair it with the entity set, e.g. `'cr3e9_projectid@odata.bind': '/cr3e9_projects(<guid>)'` when that exact key exists in `src/generated/models/<Entity>Model.ts`. Never derive casing from Dataverse schema-name conventions. Without the generated-model key, mark the spec `BLOCKED: lookup write key not verified`. Skip for read-only and no-lookup screens.
 - **Pagination** — `cursor` if the table has no natural record ceiling (visits, inspections, work orders, tickets, any user-created records over time); `none` if the table is a bounded lookup (status types, categories, job types). When `cursor`, include SDK `maxPageSize: 50`, deterministic `orderBy` with a unique key, `select`, `skipToken` continuation support, and server-side `filter` for search in the data spec. Do not imply that `top: 50` alone is pagination.
 - **Native capabilities** — which native modules/wrappers it uses, and which iOS/Android platforms or permission states need fallback handling. For PDF/pen screens, be precise: `document-picker` (`expo-document-picker`) for user-picked files; `pdf-report` (`expo-print`, plus `expo-sharing` only when present and sharing is required) for generated local PDFs; `native-pdf-viewer` (`@microsoft/power-apps-native-pdf-viewer` 0.2.9+) for HTTPS PDF URLs and local `file://` URIs; `pen-input` (`@microsoft/power-apps-native-pen-input`) for signature/ink capture. For location screens, distinguish `geolocation` (`@microsoft/power-apps-native-bglocation`) — continuous/background tracking with native Dataverse sync, needs start/stop/tracking-status UI plus a permission-denied state — from one-shot `location` (`expo-location`) for a single foreground coordinate read.
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
@@ -473,7 +482,7 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 - **UX contract:** header title = current zone name; primary action = `Save & Continue` bottom CTA; disabled reason = "Capture required photo first" when evidence missing; FAB = `extended FAB` on defects, label "Add defect"; badge count = `defects.filter(d => d.zone === currentZone).length`.
 - **Data:** `Cr3e9_zoneprogressService.getAll({ filter: 'cr3e9_inspectionid eq <id>', orderBy: 'cr3e9_zone asc' })`, `Cr3e9_zoneprogressService.update(...)` on save.
 - **Audit:** On zone Save: event 100000001 (Zone Step Completed); payload: zoneIndex, zoneName, completedAt, evidenceCount, defectCount.
-- **Lookup writes:** `'cr3e9_Inspection@odata.bind': '/cr3e9_inspections(<id>)'` on every zone-progress upsert.
+- **Lookup writes:** exact generated-model key, for example `'cr3e9_inspectionid@odata.bind': '/cr3e9_inspections(<id>)'`, on every zone-progress upsert.
 - **Pagination:** `none` (6-row bounded set).
 - **Native capabilities:** `expo-camera`, `expo-image-picker` (capture tiles).
 - **Navigation:** from inspection detail; pushes to defect form; pops back to inspection summary on last zone Save.
@@ -534,7 +543,7 @@ Section format (same in all phases):
 | OAuth callback | `/oauth-callback` | `app/oauth-callback.tsx` | default | Connector consent return | — | — | template (keep) |
 | Home | `/(app)/home` | `app/(app)/home.tsx` | default | Today dashboard: assignment, progress, stats, recent inspections | `cr123_inspectionService.getAll({ top: 5 })` | — | replace template |
 | Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | new |
-| Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id].tsx` | default | View + edit one | `getById`, `update` | — | new |
+| Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | new |
 | New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | new |
 | Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | new |
 | Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | new |
@@ -688,7 +697,7 @@ Navigation: <Stack | Tabs | Tabs + Stack | Drawer>
 |-----------------|-----------------------------|-----------------------------------------|--------------|-----------|-------------------|---------------|
 | Home            | /(app)/home                 | app/(app)/home.tsx                      | default      | Tab-root  | -                 | -             |
 | Inspections     | /(app)/inspections          | app/(app)/inspections/index.tsx         | default      | List      | InspectionService | -             |
-| Inspection ID   | /(app)/inspections/[id]     | app/(app)/inspections/[id].tsx          | default      | Detail    | InspectionService | -             |
+| Inspection ID   | /(app)/inspections/[id]     | app/(app)/inspections/[id]/index.tsx    | default      | Detail    | InspectionService | -             |
 | New Inspection  | /(app)/inspections/new      | app/(app)/inspections/new.tsx           | modal        | Form      | InspectionService | camera        |
 | Profile         | /(app)/profile              | app/(app)/profile.tsx                   | default      | Tab-root  | -                 | -             |
 
