@@ -19,6 +19,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const PLUGIN_LIB = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry", "lib");
@@ -52,6 +53,32 @@ test("bundled telemetry lib is byte-identical to shared/telemetry/lib", (t) => {
     [],
     "bundled copy has drifted from shared/telemetry/lib — re-copy these files"
   );
+});
+
+test("bundled telemetry CLI discloses the Power Pages framework field", () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-disclosure-"));
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(PLUGIN_LIB, "telemetry-config.js"),
+      "--action",
+      "status",
+      "--plugin",
+      "power-pages",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /eventInfo\.framework/);
+  assert.match(result.stdout, /react, vue, angular, or astro/);
+  assert.match(result.stdout, /never a site name or path/);
 });
 
 // --- Behavior of the bundled copy -------------------------------------------

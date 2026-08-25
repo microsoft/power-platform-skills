@@ -27,9 +27,9 @@ try {
 
 // Loaded separately and NON-fatally: the framework signal is one optional field
 // inside `eventInfo`, so it must not be able to take the whole event down with
-// it. (It pulls in validation-helpers, a large module with its own require
-// graph — bundling it into the block above would widen the blast radius of any
-// packaging slip or syntax error there from "no framework" to "no telemetry".)
+// it. Bundling optional enrichment into the block above would widen the blast
+// radius of any packaging slip or syntax error from "no framework" to
+// "no telemetry".
 let detectFramework = null;
 try {
   detectFramework = require(path.join(

@@ -17,7 +17,7 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-upt-"));
 }
 
-function runHook({ prompt, configDir, fakeProbe, ikeyPath, cwd }) {
+function runHook({ prompt, configDir, fakeProbe, ikeyPath, cwd, extraEnv = {} }) {
   return spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(cwd ? { prompt, cwd } : { prompt }),
     encoding: "utf8",
@@ -29,6 +29,7 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath, cwd }) {
       // Clear the workflow-wide opt-out backstop (set in power-pages-script-tests.yml)
       // so the emit-detection test still exercises the real path to its probe.
       POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      ...extraEnv,
     },
     // The enabled path shells out to `pac auth who` + `pac --version`, each
     // capped at 8s (see lib/pac-auth.js). The hook's documented budget is ~30s;
@@ -36,6 +37,24 @@ function runHook({ prompt, configDir, fakeProbe, ikeyPath, cwd }) {
     // is installed. Match the hook budget so the integration path is reliable.
     timeout: 30_000,
   });
+}
+
+function writeDetectorFailurePreload(configDir) {
+  const preload = path.join(configDir, "fail-detector-load.cjs");
+  fs.writeFileSync(
+    preload,
+    `"use strict";
+const Module = require("node:module");
+const originalLoad = Module._load;
+Module._load = function(request, parent, isMain) {
+  if (typeof request === "string" && request.endsWith("detect-site-framework")) {
+    throw new Error("injected optional detector load failure");
+  }
+  return originalLoad.call(this, request, parent, isMain);
+};
+`
+  );
+  return preload;
 }
 
 // Synchronous sleep that parks the thread instead of busy-spinning the CPU.
@@ -150,7 +169,11 @@ test("hook reports the site framework in eventInfo from the payload cwd", () => 
     configDir,
     fakeProbe: probePath,
     ikeyPath,
-    cwd: mkSite({ vue: "^3.5.0", "vue-router": "^4.5.0" }),
+    cwd: mkSite({
+      vue: "^3.5.0",
+      "vue-router": "^4.5.0",
+      "@vitejs/plugin-vue": "^5.2.0",
+    }),
   });
   assert.equal(status, 0);
   assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
@@ -188,6 +211,31 @@ test("hook omits framework when cwd is not a Power Pages code site", () => {
     !("framework" in eventInfo),
     "no framework key should be emitted outside a Power Pages code site"
   );
+});
+
+test("hook emits and exits 0 when optional detector fails to load", () => {
+  const configDir = mkConfigDir();
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+  const preload = writeDetectorFailurePreload(configDir);
+
+  const { status, stdout, stderr } = runHook({
+    prompt: "/power-pages:add-seo",
+    configDir,
+    fakeProbe: probePath,
+    ikeyPath,
+    cwd: mkSite({ react: "^19.0.0", "@vitejs/plugin-react": "^4.3.0" }),
+    extraEnv: { NODE_OPTIONS: `--require=${preload}` },
+  });
+  assert.equal(status, 0);
+  assert.equal(stdout, "");
+  assert.equal(stderr, "");
+  assert.ok(waitForFile(probePath, 5_000), "dispatcher should still emit the event");
+  const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  assert.equal(body.data.eventName, "skill_started");
+  const eventInfo =
+    typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
+  assert.ok(!("framework" in eventInfo));
 });
 
 test("hook exits 0 and emits nothing for an unrelated prompt", () => {  const configDir = mkConfigDir();

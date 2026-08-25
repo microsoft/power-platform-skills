@@ -30,9 +30,9 @@ try {
 
 // Loaded separately and NON-fatally: the framework signal is one optional field
 // inside `eventInfo`, so it must not be able to take the whole event down with
-// it. (It pulls in validation-helpers, a large module with its own require
-// graph — bundling it into the block above would widen the blast radius of any
-// packaging slip or syntax error there from "no framework" to "no telemetry".)
+// it. Bundling optional enrichment into the block above would widen the blast
+// radius of any packaging slip or syntax error from "no framework" to
+// "no telemetry".
 let detectFramework = null;
 try {
   detectFramework = require(path.join(PLUGIN_ROOT, "scripts", "lib", "detect-site-framework"));
@@ -144,11 +144,12 @@ function readStdin() {
     agentInfo = {};
   }
 
-  // Which SPA framework the site under work uses. Resolved AFTER the disabled /
-  // isProvisioned gates above so an opted-out or unprovisioned plugin pays
-  // nothing for it. Claude Code supplies the host session's working directory on
-  // the hook payload (same field run-skill-posttool-validation.js reads); fall
-  // back to this process's cwd for hosts that don't.
+  // Which SPA framework the site under work uses. Resolved AFTER the hard-off /
+  // isProvisioned gates above so a disabled or unprovisioned plugin pays nothing
+  // for it. User opt-out still builds the event for the local diagnostic mirror.
+  // Claude Code supplies the host session's working directory on the hook payload
+  // (same field run-skill-posttool-validation.js reads); fall back to this
+  // process's cwd for hosts that don't.
   let framework = null;
   try {
     framework = detectFramework
