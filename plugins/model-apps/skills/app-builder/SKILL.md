@@ -319,6 +319,19 @@ forms and sitemap subareas + icons; exits non-zero and lists anything missing):
 node "${PLUGIN_ROOT}/scripts/verify-model-app.js" --env <envUrl> --spec @<working-dir>/app-spec.json
 ```
 
+**Optional — probe what each persona can actually DO.** Verify's `role-privileges` check is a
+*metadata* comparison; it cannot prove the persona can perform the operation, which also depends on
+record ownership, business unit, team membership, sharing and plug-ins. To check that, run read-only
+authorization probes **as each persona** via Dataverse impersonation:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/probe-persona.js" --env <envUrl> --spec @<working-dir>/app-spec.json
+```
+
+Prerequisites, how to read `inconclusive` (it is **not** a pass), and the scope limit — a green run
+means the data operations are authorized, **not** that the app works — are in
+[persona-validation.md](../../references/persona-validation.md).
+
 Then open the app in the browser. Refine `app-spec.json` and re-run Phase 2 to iterate.
 
 **Teardown (cleanup).** To remove everything an App Spec built — e.g. a live-verification probe or a
