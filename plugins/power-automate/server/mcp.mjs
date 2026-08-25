@@ -49305,12 +49305,12 @@ var DirectApiTriggerInputsError = class extends Error {
   cause;
   code = "DirectApiTriggerInputsUnsupported";
   constructor(triggerName, triggerKind, cause) {
-    super(`Trigger "${triggerName}" (kind ${triggerKind ?? "unknown"}) cannot be run with inputs using your credentials. This tenant requires the Power Apps runtime identity to pass inputs to a Power Apps trigger, and a signed-in user token cannot present it.
+    super(`Trigger "${triggerName}" (kind ${triggerKind ?? "unknown"}) could not be run with inputs using your credentials. Inputs for this trigger kind are delivered through the Logic Flows connector runtime, and it refused this call \u2014 most commonly because the flow's connector connection does not grant your user access (observed for Skills / Copilot Studio triggers), or the trigger is disabled.
 
 The flow CAN still be run without inputs \u2014 omit the body and every trigger input will be null.
 
 To exercise it with real data:
-  - run the flow from the Power App that calls it, or
+  - run the flow from the Power App or agent that calls it, or
   - resubmit a past run that already carried inputs (get_past_trigger_inputs then resubmit_run).`);
     this.triggerName = triggerName;
     this.triggerKind = triggerKind;
@@ -50187,6 +50187,7 @@ function createSha256ContentDigest(value) {
 var MAX_RETRIES = 2;
 var INITIAL_DELAY_MS = 500;
 var APIHUB_RESOURCE = "https://apihub.azure.com";
+var LOGIC_FLOWS_CONNECTOR = "shared_logicflows";
 function extractLogicalNamesFromFlow(flow) {
   const refs = flow?.properties?.connectionReferences;
   if (!refs)
@@ -50946,9 +50947,11 @@ var FlowClient = class _FlowClient {
    * invoked with inputs at all.
    *
    * Routing now:
-   *  1. Direct-API kinds always use the authenticated path. `useCallbackUrl` is
-   *     ignored with a warning — honouring it would turn a working call into an
-   *     opaque `DirectApiAuthorizationRequired`.
+   *  1. Direct-API kinds with a body use the Logic Flows connector runtime —
+   *     the only transport that both authenticates a user credential and
+   *     delivers `triggerBody()`. Without a body they use the authenticated
+   *     path; `useCallbackUrl` is ignored with a warning, since honouring it
+   *     would turn a working call into an opaque `DirectApiAuthorizationRequired`.
    *  2. An explicit `useCallbackUrl` otherwise wins.
    *  3. Otherwise the Request-family default is preserved: a body selects the
    *     callback path so `triggerBody()` is populated; no body uses the
@@ -50962,20 +50965,21 @@ var FlowClient = class _FlowClient {
     const { body } = opts;
     const trigger = await this.resolveTrigger(envId, flowId, opts.triggerName);
     const directApi = isDirectApiTriggerKind(trigger.kind);
-    if (!directApi) {
-      assertTriggerInputsSatisfied(trigger, body);
-    } else if (body === void 0 && trigger.inputsSchema) {
-      logger.warn(`Trigger "${trigger.name}" (kind ${trigger.kind}) declares inputs, but they cannot be supplied with user credentials \u2014 the run will proceed with all trigger inputs null. This matches the Power Automate designer's own test run.`);
-    }
+    assertTriggerInputsSatisfied(trigger, body);
     const done = (path6, response) => ({ triggered: true, triggerName: trigger.name, triggerKind: trigger.kind, path: path6, response });
     if (directApi && body !== void 0) {
       try {
-        return done("callback", await this.runFlowViaCallback(envId, flowId, body, trigger.name, { withAuth: true }));
-      } catch (err) {
-        if (isDirectApiInputsRejected(err)) {
-          throw new DirectApiTriggerInputsError(trigger.name, trigger.kind, err);
+        return done("connector", await this.runFlowViaLogicFlowsConnector(envId, flowId, body, trigger.name));
+      } catch (connectorErr) {
+        logger.debug(`Logic Flows connector transport failed for trigger "${trigger.name}": ${String(connectorErr)}`);
+        try {
+          return done("callback", await this.runFlowViaCallback(envId, flowId, body, trigger.name, { withAuth: true }));
+        } catch (err) {
+          if (isDirectApiInputsRejected(err) || isDirectApiInputsRejected(connectorErr)) {
+            throw new DirectApiTriggerInputsError(trigger.name, trigger.kind, connectorErr);
+          }
+          throw connectorErr;
         }
-        throw err;
       }
     }
     let useCallback;
@@ -51084,6 +51088,60 @@ var FlowClient = class _FlowClient {
       throw new FlowApiError(response.status, response.statusText, typeof body === "string" ? body : JSON.stringify(body), callbackUrl.split("?")[0]);
     }
     return { status: response.status, body };
+  }
+  /**
+   * Run a flow through the Logic Flows connector runtime (API Hub).
+   *
+   * This is the transport Power Apps itself uses, and the only one that both
+   * accepts a delegated user credential *and* delivers `triggerBody()` for
+   * Direct-API trigger kinds (PowerApp, PowerAppV2, Button, Skills, PowerPages).
+   *
+   * Measured against live PowerApp and PowerAppV2 flows: returns 202 with the
+   * run id in `x-ms-workflow-run-id`, and `triggerBody()` contains the payload
+   * exactly as sent.
+   *
+   * Notes:
+   *  - The token audience is API Hub, NOT the flow resource. A flow-resource
+   *    token is rejected by the connector's token exchange.
+   *  - The runtime host is per-environment and must be discovered, never
+   *    hardcoded.
+   *  - The connector does not validate required trigger inputs; it accepts the
+   *    payload as-is. Input validation stays the caller's responsibility.
+   */
+  async runFlowViaLogicFlowsConnector(envId, flowId, triggerBody, triggerName) {
+    const resolvedTrigger = triggerName ?? await this.resolveTriggerName(envId, flowId);
+    const connectorUrl = ppapiConnectorUrl(envId, LOGIC_FLOWS_CONNECTOR);
+    const connector = await this.ppapiRequest("GET", connectorUrl);
+    const runtimeUrl = connector.properties.primaryRuntimeUrl;
+    if (!runtimeUrl) {
+      throw new FlowApiError(400, "No runtime URL", `Connector ${LOGIC_FLOWS_CONNECTOR} does not expose a primaryRuntimeUrl in environment ${envId}.`, connectorUrl);
+    }
+    const url2 = `${runtimeUrl.replace(/\/+$/, "")}/${encodeURIComponent(flowId)}/triggers/${encodeURIComponent(resolvedTrigger)}/run?api-version=2016-11-01`;
+    const apihubToken = await this.auth.getAccessToken(APIHUB_RESOURCE);
+    logger.debug(`POST ${url2} (Logic Flows connector)`);
+    const response = await fetch(url2, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apihubToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(triggerBody)
+    });
+    const text = await response.text();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : void 0;
+    } catch {
+      body = text;
+    }
+    if (!response.ok) {
+      throw new FlowApiError(response.status, response.statusText, typeof body === "string" ? body : JSON.stringify(body), url2);
+    }
+    return {
+      status: response.status,
+      runId: response.headers.get("x-ms-workflow-run-id") ?? void 0,
+      body
+    };
   }
   async getRunHistory(envId, flowId, opts) {
     const path6 = `/powerautomate/flows/${flowId}/runs${this.ppapiFlowQs({ $top: opts?.top?.toString(), $filter: opts?.filter })}`;
