@@ -178,3 +178,21 @@ test('a page with no pageInput needs no directEntry', () => {
   s.appShell.areas[0].groups[0].subAreas.push({ page: 'ov', title: 'Overview' });
   assert.strictEqual(validateAppSpec(s, { profile: 'plan' }).ok, true, JSON.stringify(validateAppSpec(s, { profile: 'plan' }).errors));
 });
+
+// The modern ("new look") shell is a per-app SETTING, not an appmodule column — `navigationtype` is
+// Single/Multi *session* and unrelated. Boolean-only, because a string "false" is truthy in JS and
+// would turn the new look ON for an author who wrote it to stay off.
+test('app.newLook must be a boolean', () => {
+  const s = base();
+  s.app.newLook = 'false';
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.ok(r.errors.some((e) => /app.newLook must be a boolean/.test(e)), JSON.stringify(r.errors));
+
+  for (const v of [true, false]) {
+    const ok = base();
+    ok.app.newLook = v;
+    assert.strictEqual(validateAppSpec(ok, { profile: 'plan' }).ok, true, String(v) + ': ' + JSON.stringify(validateAppSpec(ok, { profile: 'plan' }).errors));
+  }
+  // Absent is fine — the new look is opt-in.
+  assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
+});

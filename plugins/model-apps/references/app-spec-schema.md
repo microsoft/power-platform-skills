@@ -68,6 +68,16 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
   a new environment). The app's **sitemap** is also added to the solution automatically.
+- **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
+  Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
+  **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
+  a *setting*, not an appmodule column: `navigationtype` is Single/Multi **session** and unrelated, and
+  the other new-look definitions (`NewLookOptOut`, `NewLookModernExperienceOct2023`) both default to
+  true and are user-facing toggles, so writing them would not give the author a dependable result.
+  Scoped to the app **and** the solution, so it travels on export/import.
+  **Best-effort:** this is a platform feature that rolls out by tenant. If the setting cannot be
+  written the build still succeeds — the app is fully functional on the classic shell — but it warns
+  and reports `created.newLook: false`, so a failure is never mistaken for success.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
@@ -305,7 +315,11 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
-  `parameters`. The build fetches the pushed form, injects the handlers, then publishes it.
+  `parameters` (a comma-separated argument list). All three are **honoured** — an authored
+  `"enabled": false` really does deploy a disabled handler. `enabled` and `passExecutionContext` must
+  be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
+  is truthy in JS and would silently enable a handler you meant to disable.
+  The build fetches the pushed form, injects the handlers, then publishes it.
 
 ## commands[] (optional — modern command-bar buttons)
 ```jsonc

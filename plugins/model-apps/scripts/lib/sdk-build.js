@@ -102,6 +102,11 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
+// The per-app setting name that turns on the modern ("new look") shell. Verified live against a real
+// organization: `settingdefinition` uniquename `NewLookAlwaysOn`, datatype 2 (boolean), default
+// "false". See the app-shell phase for why this one rather than the other new-look definitions.
+const NEW_LOOK_SETTING = 'NewLookAlwaysOn';
+
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
 // already created; the target entity is derived from the referenced view. iframe/webresource tiles
@@ -1727,12 +1732,48 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
+  // 7b-ii. Modern ("new look") shell — opt-in via `app.newLook`.
+  //
+  // This is a per-app SETTING, not an appmodule column: `navigationtype` (the only nav-ish column the
+  // SDK writes) is Single/Multi *session* and unrelated. Of the several new-look definitions Dataverse
+  // ships, `NewLookAlwaysOn` is the one worth writing — its own description says it "enables the new
+  // look and hides the user switch", and that when it is on the user-facing "New look for model driven
+  // apps" preference "will have no effect". The alternatives (`NewLookOptOut`,
+  // `NewLookModernExperienceOct2023`) both DEFAULT to true and are per-user toggles, so writing them
+  // would give a result the app author cannot actually depend on.
+  //
+  // Runs in the app-shell phase, right after the app exists, and is scoped to the app + solution so it
+  // travels on export/import. Best-effort by design: a tenant where the definition is absent (it is a
+  // platform feature that rolls out) must not fail an otherwise-good build, so a failure is reported
+  // and the build continues — the app is fully functional, just on the classic shell.
+  if (has('app-shell') && spec.app && spec.app.newLook === true && result.created.app) {
+    // Deliberately NOT inside runner.run: that helper turns any throw into a BuildHalt, and failing
+    // an otherwise-good app build because a rolling-out preview setting is unavailable in this tenant
+    // is the wrong trade. But a silent ✓ would be worse — reporting success for something that did not
+    // happen is the exact failure mode this build has had to fix elsewhere. So: warn, record the real
+    // outcome, and let the caller see `newLook: false` rather than infer it.
+    try {
+      await provision.saveSettingValue(NEW_LOOK_SETTING, 'true', {
+        appUniqueName: appUniqueName(spec),
+        solutionUniqueName: spec.solution && spec.solution.uniqueName,
+      });
+      result.created.newLook = true;
+    } catch (err) {
+      result.created.newLook = false;
+      const detail = (err && err.message) || String(err);
+      if (typeof opts.warn === 'function') {
+        opts.warn(`could not enable the new look (${NEW_LOOK_SETTING}): ${detail} — the app is fully built and functional, but stays on the classic shell. This setting is a platform feature that rolls out by tenant.`);
+      }
+    }
+  }
+
   // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
   //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
   //     skips features whose admin gate is off; it never throws.
   // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
+
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);

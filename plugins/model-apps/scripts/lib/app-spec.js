@@ -460,6 +460,13 @@ function validateAppSpec(spec, opts = {}) {
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
   }
+  // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
+  // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
+  // "false" is truthy in JS and would silently turn the new look ON for an author who meant to
+  // disable it.
+  if (spec.app && spec.app.newLook !== undefined && typeof spec.app.newLook !== 'boolean') {
+    errors.push('app.newLook must be a boolean');
+  }
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     errors.push('languageCode must be a positive integer LCID');
   }
@@ -567,6 +574,18 @@ function validateAppSpec(spec, opts = {}) {
       else if (!webResourceNames.has(String(ev.library).toLowerCase())) errors.push(`form ${f.entity}: ${ev.event} handler references undeclared web resource '${ev.library}'`);
       if (!ev.function) errors.push(`form ${f.entity}: ${ev.event} handler is missing a function name`);
       if (ev.event === 'onchange' && !ev.attribute) errors.push(`form ${f.entity}: onchange handler requires an attribute (column logical name)`);
+      // These three are documented as optional with defaults, and are now actually honoured by the
+      // build (they used to be hardcoded and the authored value discarded). Validate the types so a
+      // string "false" — which is truthy in JS and would silently enable a handler the author meant
+      // to disable — is rejected rather than coerced.
+      for (const flagKey of ['enabled', 'passExecutionContext']) {
+        if (ev[flagKey] !== undefined && typeof ev[flagKey] !== 'boolean') {
+          errors.push(`form ${f.entity}: ${ev.event} handler ${flagKey} must be a boolean (got ${JSON.stringify(ev[flagKey])})`);
+        }
+      }
+      if (ev.parameters !== undefined && typeof ev.parameters !== 'string') {
+        errors.push(`form ${f.entity}: ${ev.event} handler parameters must be a string (a comma-separated argument list)`);
+      }
     }
     for (const qv of f.quickViews || []) {
       if (!qv || !qv.lookup) { errors.push(`form ${f.entity}: a quickView is missing lookup (the lookup column logical name on this form)`); continue; }

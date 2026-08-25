@@ -2559,3 +2559,53 @@ test('a by-value publish failure reaches the warn channel through the whole buil
     'the failure must surface with its cause; got: ' + JSON.stringify(warnings)
   );
 });
+
+test('app.newLook writes the NewLookAlwaysOn app setting, scoped to the app and solution', async () => {
+  const { sdk, calls } = mockSdk();
+  const saved = [];
+  sdk.saveSettingValue = async (name, value, opts) => { saved.push({ name, value, opts }); };
+  const spec = makeSpec();
+  spec.app.newLook = true;
+
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  assert.strictEqual(saved.length, 1, 'exactly one setting write: ' + JSON.stringify(saved));
+  assert.strictEqual(saved[0].name, 'NewLookAlwaysOn');
+  assert.strictEqual(saved[0].value, 'true', 'the value is a STRING — Dataverse setting values are strings');
+  assert.ok(saved[0].opts.appUniqueName, 'scoped to the app, not the org');
+  assert.ok(saved[0].opts.solutionUniqueName, 'attributed to the solution so it travels on export/import');
+  assert.strictEqual(r.created.newLook, true);
+  void calls;
+});
+
+test('the new look is OPT-IN — absent or false writes nothing', async () => {
+  for (const value of [undefined, false]) {
+    const { sdk } = mockSdk();
+    const saved = [];
+    sdk.saveSettingValue = async (n, v, o) => { saved.push({ n, v, o }); };
+    const spec = makeSpec();
+    if (value !== undefined) spec.app.newLook = value;
+    const r = await runSdkBuild(spec, { sdk, apply: true });
+    assert.ok(r.ok);
+    assert.deepStrictEqual(saved, [], `newLook=${value} must write no setting`);
+  }
+});
+
+test('a failed new-look write does not fail the build, but is never reported as success', async () => {
+  // The definition is a platform feature that rolls out by tenant; a tenant without it must still get
+  // a working app on the classic shell rather than a failed build. But a silent success would be
+  // worse than the failure — the caller must be able to tell the difference.
+  const { sdk } = mockSdk();
+  sdk.saveSettingValue = async () => { throw new Error('setting definition not found'); };
+  const spec = makeSpec();
+  spec.app.newLook = true;
+  const warnings = [];
+  const r = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+
+  assert.ok(r.ok, 'the build still succeeds — the app is fully functional');
+  assert.strictEqual(r.created.newLook, false, 'and the result says plainly that it was NOT applied');
+  assert.ok(
+    warnings.some((w) => /new look/i.test(w) && /setting definition not found/.test(w)),
+    'the cause is surfaced: ' + JSON.stringify(warnings)
+  );
+});

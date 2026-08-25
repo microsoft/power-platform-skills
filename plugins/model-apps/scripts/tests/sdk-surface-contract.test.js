@@ -75,6 +75,9 @@ const SKILL_SDK_SURFACE = [
   'resolveArtifact',
   'seedRecordGraph',
   'setAppAiFeatures',
+  // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
+  // (`NewLookAlwaysOn`), not an appmodule column.
+  'saveSettingValue',
   'setEntityIcon',
   'updateElement',
   'updateRecord',

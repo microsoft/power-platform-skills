@@ -10,6 +10,17 @@ jobs-to-be-done surfaces checkable, adds plugin update notices, fixes four crash
 and corrects a smoke-eval assertion that could never pass live.
 
 ### Added
+- **`app.newLook` — opt into the modern ("new look") shell.** Writes the per-app
+  `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
+  *hiding the user switch*, so the result is deterministic rather than a per-user
+  preference. This is a **setting**, not an app-module column — `navigationtype` is
+  Single/Multi *session* and unrelated, which is why it was long assumed unavailable.
+  Scoped to the app **and** solution so it travels on export/import.
+
+  Best-effort by design: the feature rolls out by tenant, so a tenant without the
+  definition still gets a fully working app on the classic shell — with a warning and
+  `created.newLook: false`, never a silent success.
+
 - **`directEntry` on `pages[]` — resolves a policy conflict authors could not satisfy.** Every page
   must be a sitemap subarea (the sitemap is download's only membership oracle, so a nav-only page is
   invisible to download and gets re-created as a duplicate). But that also means a **detail** page is

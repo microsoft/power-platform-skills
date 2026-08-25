@@ -79,8 +79,16 @@ gen-page landings, custom SVG sitemap icons, in-app agents (`ai.appFeatures` = f
 Insight Card summaries (`ai.summaries`), and
 the dedup/verify quality gates. The open MVP items:
 
-- 🔲 **Wave 2 (header/navigation refresh) enabled by default** (P0) — set the app-module header/nav
-  refresh flag on new apps, and turn it on when editing an app that isn't on it yet. Not set today.
+- ✅ **Wave 2 (header/navigation refresh)** (P0) — DONE, opt-in via `app.newLook`. It turned out to be
+  a per-app **setting** (`NewLookAlwaysOn`), not an app-module column — `navigationtype` is
+  Single/Multi *session* and unrelated, which is why the earlier "app-module header/nav refresh flag"
+  framing found nothing to set. `NewLookAlwaysOn` is the one worth writing of the several new-look
+  definitions: Dataverse says it enables the new look and **hides the user switch**, so the author
+  gets a deterministic result rather than a per-user preference (`NewLookOptOut` and
+  `NewLookModernExperienceOct2023` both default to true and are user toggles). Scoped to app +
+  solution so it travels on export/import. Best-effort: a tenant without the definition still gets a
+  working app on the classic shell, with a warning and `created.newLook: false` — never a silent
+  success. Live-verified: the app-scoped override row holds `"true"` against a `"false"` default.
 - ✅ **Roles + JTBD as first-class planning outputs** (P0) — the Level-(c) design flow now models
   **personas** and their **jobs-to-be-done**: the author declares the entity access each job needs, the builder
   unions it into one security role per persona, and the plan/preview surfaces the proposed roles for review. Built

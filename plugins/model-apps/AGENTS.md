@@ -139,6 +139,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
+  (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
+  app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
+  this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
+  warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
+  a silent success.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,

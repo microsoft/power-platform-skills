@@ -166,6 +166,12 @@ function formEventsRegionIntent(events) {
       // 'attribute' is only present on onchange events; including it on onload/onsave would
       // produce invalid form XML (Dataverse only sets it when a field triggers the handler).
       if (ev.attribute) attrs.push(['attribute', ev.attribute]);
+      // FormXML attribute values are strings, so the booleans are rendered rather than passed
+      // through. `enabled` and `passExecutionContext` default to true because that is what an author
+      // wiring a handler almost always wants — and it is what the App Spec contract documents; these
+      // three were previously HARDCODED here and the authored values silently discarded, so
+      // `"enabled": false` produced a handler that ran anyway.
+      const flag = (v) => (v === false ? 'false' : 'true');
       return {
         n: 'event',
         a: attrs,
@@ -177,9 +183,11 @@ function formEventsRegionIntent(events) {
             a: [
               ['functionName', ev.function],
               ['libraryName', ev.library],
-              ['enabled', 'true'],
-              ['parameters', ''],
-              ['passExecutionContext', 'true']
+              ['enabled', flag(ev.enabled)],
+              // Dataverse expects a comma-separated argument list; an absent value is the empty
+              // string, NOT a missing attribute (the platform writes `parameters=""` itself).
+              ['parameters', ev.parameters === undefined || ev.parameters === null ? '' : String(ev.parameters)],
+              ['passExecutionContext', flag(ev.passExecutionContext)]
             ],
             c: []
           }]
