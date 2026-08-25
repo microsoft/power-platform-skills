@@ -43,7 +43,7 @@ are not part of the identifier.
 - Check 19 — `QACHK-NO-REFLOW` — horizontal row with no narrow-width strategy
 - Check 20 — `QACHK-ROOT-NOT-SCROLLABLE` — screen content taller than the viewport cannot
   be reached
-- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text colour not set against a coloured background
+- Check 21 — `QACHK-LOW-CONTRAST-TEXT` — text color not set against a colored background
 - Check 22 — `QACHK-VARIANT-SURFACE-CONTRAST` — light foreground on a variant-supplied
   surface
 - Check 23 — `QACHK-CARD-PLACEHOLDER` — `ModernCard` slot left unset
@@ -160,6 +160,9 @@ check is cheap; run it first.
 **Fix:** Strip the `@…` suffix, keeping only the bare control name (`Control: Text`).
 
 **Exception:** None. Always use the bare name that `list_controls` returned.
+
+Run this check against composed whole-screen text before its first save as well as against
+the persisted file. A rejected first write leaves no target file for normal self-QA.
 
 ---
 
@@ -803,18 +806,18 @@ viewport.
 
 ---
 
-## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text colour not set against a coloured background)
+## Check 21 — `QACHK-LOW-CONTRAST-TEXT` (text color not set against a colored background)
 
-**Problem:** Text controls do not inherit a contrasting colour from their container. A
+**Problem:** Text controls do not inherit a contrasting color from their container. A
 container with a dark `Fill` whose child text controls omit `Color` renders near-black on
 near-black. `compile_canvas` passes it.
 
 **Detect:** For every container that sets a non-default `Fill`, check every descendant
 text control (`ModernText`, `Badge`, and any control with a `Text` or `Content` property)
-for an explicit colour — `Color` on the modern React controls, `FontColor` on `Badge`,
+for an explicit color — `Color` on the modern React controls, `FontColor` on `Badge`,
 `TitleColor`/`SubtitleColor`/`DescriptionColor` on `ModernCard`.
 
-**Fix:** Set the colour explicitly wherever the background was set:
+**Fix:** Set the color explicitly wherever the background was set:
 
 ```yaml
 Color: =RGBA(239, 246, 250, 1)
@@ -1025,6 +1028,8 @@ Screens:
           Properties:
             Width: =Parent.Width
             Height: =Parent.Height
+            LayoutMinWidth: =0
+            LayoutMinHeight: =0
             LayoutDirection: =LayoutDirection.Vertical
           Children:
             - AppHeader:
@@ -1223,32 +1228,39 @@ wrapping; shorten labels or use icons when the full labels cannot fit.
 
 ## Check 33 — `QACHK-ACTION-CONTRACT` (required action is missing, unreachable, or not wired)
 
-**Problem:** A screen can display the expected entity while omitting the action the user
-requested. Common failures are an Add, Edit, Delete, Search, Filter, Flag, Review, Approve,
-Reject, Export, or period-selection flow with no visible entry control, a permanently
-hidden or disabled control, or an event handler that does not perform the behavior named
-by the screen brief.
+**Problem:** A screen can display the expected entity while omitting or failing to wire a
+required action.
 
 **Detect:** For every row in the screen brief's `## Required Actions` table:
 
 1. Find the named entry point and action control.
-2. Confirm the entry point is visible, non-zero-sized, and reachable from the screen's
-   normal state. If it depends on a local variable, find a reachable control that sets
-   that variable.
-   - A primary destination must be in the initial viewport or behind an immediately
-     visible navigation/menu control.
-   - An action below the fold must have a visible working scroll affordance and cannot be
-     trapped in a nested fixed-height container.
-   - Record actions cannot depend on clicking a text/card control with no matching event.
-3. Confirm the action is not permanently disabled and is not under a read-only ancestor.
-4. Inspect the named event and confirm it contains the required navigation, data
-   operation, state transition, or search/filter binding.
-5. For search and filter actions, confirm the input value participates in the target
-   list's `Items` formula and the formula covers the fields or state named by the brief.
+2. Confirm it is visible, non-zero-sized, enabled, outside read-only ancestors, and
+   reachable from the normal screen state. Trace any visibility variable to a reachable
+   control that sets it.
+3. Confirm actions below the fold have a working scroll path and record actions use an
+   interactive control.
+4. Inspect the named event for the required navigation, mutation, state transition, or
+   search/filter binding.
+5. For search and filter, confirm the input participates in the target list's `Items`
+   formula over the fields named by the brief.
+6. For role-scoped primary-record management, require a visible Edit entry point; review
+   or status controls are not an edit path.
+7. For every primary-record row or immediately reachable detail, find a visible text
+   binding to the canonical human-readable identity field. Avatar initials, icons, IDs,
+   accessible labels, tooltips, and agent-inferred values do not pass.
+8. When the Required Actions include both Approve and Reject/Decline, confirm every
+   eligible pending record exposes both decisions on the same row or in the same
+   immediately reachable detail. A lone Approve or Reject control fails even when the
+   other action exists elsewhere on the screen.
+9. Evaluate the phone branch. Required record actions must remain visible in the row or
+   behind an immediately visible overflow/detail entry, not in clipped desktop columns.
+10. Trace the contract as one loop: precondition/eligibility -> entry point -> event ->
+    named source and stable ID -> postcondition -> observer -> visible evidence. Confirm
+    `Visible` and `DisplayMode` permit the Given state and every name in the trace exists.
 
-**Fix:** Add or surface the planned entry control and implement the exact handler behavior
-from the brief. Do not invent actions absent from `## Required Actions`, and do not add
-universal CRUD across supporting entities merely because the app contains them.
+**Fix:** Surface the full canonical identity text and every planned entry control, and
+implement each required event behavior. Stack paired decisions or move both into the same
+immediately reachable detail rather than dropping one.
 
 **Exception:** None for a Required Actions row. If the brief cannot be implemented with
 the discovered controls or data source, return `Status: Blocked` rather than shipping a
@@ -1265,56 +1277,66 @@ prove that the requested outcome occurred.
 **Detect:** For every Required Actions row whose handler uses `Patch`, `SubmitForm`,
 `Collect`, `Remove`, `RemoveIf`, `UpdateIf`, or a connector mutation:
 
-1. Identify the source, collection, or state changed by the handler.
-2. Identify the control named as the Observable result.
-3. Confirm that control reads from the changed source, collection, or state.
-4. When the visible control uses a local collection or cached source, confirm the success
-   path updates or refreshes it.
-5. Confirm the relevant changed value is visible: the new or edited record appears, the
-   deleted record disappears, or the transitioned record appears in the requested
-   status/filter/dashboard.
-6. Confirm that evidence is visible in the immediate post-action state, reached by
-   navigation in the handler, or opened by an immediately visible control. Flag a result
-   that exists only below a long form or inside an off-screen clipped panel.
+1. Confirm the handler captures or preserves the returned record, changed stable ID
+   (`Patch` result, `Form.LastSubmit`, selected ID, or equivalent), or deletion snapshot
+   before resetting inputs or navigating.
+2. Confirm the new or edited record appears, the deleted record disappears, or the
+   transitioned record appears in the requested status, filter, or dashboard.
+3. Find an in-viewport mutation receipt whose visibility is set by the successful handler
+   and whose displayed identity, action, and verification fields bind to the captured state.
+   It must remain visible until dismissal or the next mutation.
+4. Compare the Required Action's mutation write set with its receipt proof set and the
+   handler formula. Every field or status changed by the formula must appear in the declared
+   write set. For create/edit, every user-entered or user-selected write-set field must also
+   appear in the proof set.
+5. Inspect the receipt controls and confirm each proof-set field has a readable label and a
+   visible binding to the captured state. Input values before submission, hidden variables,
+   agent memory, unlabeled or truncated text, and fields available only in a scrolled list
+   do not count. `Notify()` and navigation do not pass.
+6. For edit, require stable-ID selection and update, complete prepopulation, preservation
+   of unchanged fields, and non-mutating Cancel behavior.
+7. For a shared create/edit form, require intentional state reset after create and save.
+8. Confirm the observer formula reads the same source, stable ID, and changed fields used
+   by the handler. A receipt copied from input controls, a parallel collection, a stale
+   `ThisItem`, or a badge bound to a different status field fails.
+9. Mentally substitute the Functional Test Scenario's concrete Given values into the
+   handler. Confirm its Then postcondition and every proof-set value follow from the
+   formula without assuming runtime state not established by the app.
 
-**Fix:** Refresh or update the visible binding after success and expose the changed field
-or state in the result control. Navigate to the bound list/detail when necessary. Keep
-success feedback, but do not use `Notify()` as the only observable outcome.
+**Fix:** Preserve the affected record state, update or refresh the visible binding, and add
+the required in-viewport mutation receipt with write-set/proof-set parity and one labeled
+binding per proof-set field. `Notify()` alone is not an observable outcome.
 
-**Exception:** A mutation whose Action Contract explicitly defines navigation to a detail
-screen as the observable result, when that screen binds directly to the changed record.
+**Exception:** None for a mutation named in `## Required Actions`.
 
 ---
 
 ## Check 35 — `QACHK-BEHAVIOR-ACCEPTANCE` (advanced behavior omits an acceptance path)
 
-**Problem:** Advanced behavior can look complete while implementing only its easiest
-surface. Examples include a capacity label with no guard, move buttons that do not update
-sort order, a metric copied during `OnVisible`, mutable "versions", a category added to a
-management list but not its selectors, a leaderboard that never recalculates, an Approve
-button with no Reject decision, a quarterly heading with no period field, or an export
-notification that produces no output.
+**Problem:** Advanced behavior can look complete while omitting a boundary, persistence,
+recalculation, or rejection path required by its Action Contract.
 
 **Detect:** Apply this check to every Required Actions row for search/filtering, moving or
 reordering, limits, metrics, versions, category management, ranking, role-scoped record
 management, review decisions, program periods, or export/report output:
 
-1. Match every success, boundary, rejection, persistence, or recalculation path named by
-   the brief to a reachable control event or binding.
-2. Confirm every path reads and writes the source of truth named by the brief.
-3. Confirm the visible evidence reads that same source rather than seeded or copied state.
-4. For limits, require both proactive UI state and a guard in the mutation event.
-5. For ordering and ranking, require an explicit sort and deterministic order.
-6. For versions, confirm a later save cannot overwrite an earlier snapshot and the
-   comparison identifies two distinct selections.
-7. For role-scoped management, confirm edit loads the selected record, remove/cancel has a
-   confirmation path, and the visible list reflects each completed mutation.
-8. For review, confirm every planned decision is reachable and updates the shared status
-   field rendered by the management list.
-9. For program periods, confirm the period is stored or deterministically derived and is
-   visible wherever the brief requires period-aware creation, review, or filtering.
-10. For export/report output, confirm the eligible-record predicate and fields match the
-    brief and that the action produces visible output rather than only a notification.
+1. Apply the relevant acceptance criteria from `${PLUGIN_ROOT}/references/BehaviorGuide.md`.
+2. Match every path named by the brief to a reachable event or binding that reads and
+   writes the named source of truth.
+3. Confirm visible evidence reads that source rather than seeded or copied state.
+4. For short finite choices, require concrete visible options in radio buttons, visible
+   choice buttons, or a dropdown that commits by click or tap. Reject a searchable
+   combobox, typed filtering, or keyboard-only commitment unless search or free-form input
+   is required. Give required short choices valid defaults when the business rule permits.
+5. Mentally execute create → bound list → Edit → prepopulate → change two fields including
+   one finite choice → stable-ID save → verify both values. Flag any broken link.
+6. Execute every row in the brief's `## Functional Test Scenarios` symbolically. For each
+   Given/When/Then path, identify the exact eligibility formula, event formula, source
+   operation, observer formula, and evidence control. Any missing or contradictory link
+   fails even if the controls exist.
+7. For a filter scenario, confirm pointer selection commits a value consumed by the target
+   `Items` formula, keeps all matching seeded records, excludes the non-matching record,
+   visibly identifies the active choice, and clear/reset restores the eligible source.
 
 **Fix:** Implement the missing path from the brief and bind its evidence to the shared
 source of truth. Do not replace a missing behavior with explanatory text.
@@ -1340,10 +1362,13 @@ branch:
    fit before remaining width is distributed.
 5. If the total does not fit, require a wrap or vertical-stack branch and repeat the
    calculation for each resulting row.
+6. For a record row, confirm its phone branch keeps identity, status, and required
+   lifecycle actions visible or uses an immediately visible overflow/detail entry.
 
 **Fix:** Stack or wrap the row, reduce justified minimum widths, group related fields, or
-move secondary actions to another reachable region. Do not shrink interactive controls
-below 44px or hide required actions.
+move secondary actions to another reachable region. Keep required lifecycle actions in the
+visible phone composition. Do not shrink interactive controls below 44px or hide required
+actions.
 
 **Exception:** A deliberately horizontally scrolling region with an obvious visible
 scroll affordance and a brief that explicitly requires it.

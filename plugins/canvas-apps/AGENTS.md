@@ -34,7 +34,6 @@ references/
   LayoutGuide.md               ← Responsive sizing, scrolling, galleries, and contrast
   GridLayoutGuide.md           ← Conditional GridLayout formulas and invariants
   PowerFxGuide.md              ← State, events, named formulas, and mock data
-  BehaviorGuide.md             ← Acceptance contracts for advanced app behavior
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
   QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
   PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures

@@ -23,11 +23,11 @@ Your invocation includes:
 
 - Action: `Create` or `Modify`
 - Logical screen name
-- Absolute target file under the working directory
+- Absolute target file under `[working directory]`
 - YAML screen key
 - Control name prefix
-- Shared plan: an absolute `canvas-app-shared.md` path
-- Screen brief: an absolute `*.screen-plan.md` path
+- Shared plan: `[working directory]/canvas-app-shared.md`
+- Screen brief: an absolute `[working directory]/*.screen-plan.md` path
 
 ## 1. Read Only Assigned Context
 
@@ -36,15 +36,14 @@ Read:
 1. The shared plan
 2. The assigned screen brief
 3. For `Modify`, the exact target `.pa.yaml`
+4. `${PLUGIN_ROOT}/references/BehaviorGuide.md` when the brief contains Required Actions
 
-Do not read `canvas-app-plan.md`, other screen briefs, or other screen YAML files.
+Do not read `[working directory]/canvas-app-plan.md`, other screen briefs, or other screen YAML files.
 Do not call discovery tools. The assigned documents contain all required context.
 
 Before writing, verify that the screen brief includes definitions for every control type
-it asks you to add or create, and that every Required Actions row names an entry point,
-control event, required formula behavior, and observable result. If any definition,
-required assignment field, or action-contract field is missing, do not write partial YAML.
-Return:
+it asks you to add or create. If any definition or required assignment field is missing,
+do not write partial YAML. Return:
 
 ```markdown
 Screen: [logical name]
@@ -68,10 +67,10 @@ Screens:
   Screen1:
 ```
 
-`Screen1.pa.yaml` always exists in a new app. When your target file already exists, the
-create/write tool fails with `File already exists`. Read the file and replace its contents
-with the edit tool instead — the action is still `Create` in the sense that you author the
-whole screen.
+`[working directory]/Screen1.pa.yaml` always exists in a new app. When your target file already exists,
+`create` fails with `File already exists`. Read the file and replace its contents with
+`edit` instead — the action is still `Create` in the sense that you author the whole
+screen, but the tool call is `edit`.
 
 Use meaningful child-control names derived from the logical screen, each carrying your
 assigned control name prefix after the standard control-type abbreviation.
@@ -89,39 +88,6 @@ Do not fix unrelated pre-existing issues.
 
 ### Both
 
-- Implement every row in `## Required Actions`. The entry point must be visible and
-  reachable, the named event must contain the required behavior, and the observable
-  result must be rendered from the same source or state changed by the action.
-- Keep primary navigation and management actions in the initial viewport or behind an
-  immediately visible menu or scroll affordance. A control that exists only below an
-  unscrollable or ambiguous container is not reachable.
-- For search and filter actions, bind the named input directly into the target list's
-  `Items` formula and include every field or state named by the brief.
-- For mutations, update or refresh the collection/source used by the visible list or
-  detail after success. A `Notify()` call without a visible data result is not a complete
-  implementation when the brief requires the changed record to appear, disappear, or
-  move state.
-- Make the mutation's observable result visible immediately after the handler runs. Keep
-  it in the current viewport, navigate to the bound list/detail, or expose an immediately
-  visible action that opens it. Do not leave the only changed row below a long form.
-- Implement every success, boundary, rejection, persistence, and recalculation path named
-  in `## Required Actions`. Reordering, constraints, metrics, versions, categories, and
-  rankings are incomplete when only their happy-path control or display exists.
-- Implement role-scoped management actions on the primary-record surface named by the
-  brief. Edit must load and update the selected record, delete/remove must have a
-  confirmation or cancel path, and approve/reject controls must visibly update status.
-- Persist period or cycle values in the shared record source and render them wherever the
-  brief requires period-aware review. Export/report actions must apply the exact eligibility
-  predicate and fields from the brief and show completion evidence; a notification without
-  an output is incomplete.
-- Implement supporting setup actions from `## Required Actions` against the same shared
-  source used by the requested behavior. Seeded rows do not substitute for reachable
-  creation of the minimum records needed to exercise the behavior.
-- Render every specified core visualization with bound content. Do not ship empty filled
-  containers, disabled-looking input blocks, or decorative placeholders where the brief
-  requires a hierarchy, chart, comparison, board, timeline, or map.
-- Follow the shared Visual Contract exactly. Do not introduce screen-local palette,
-  typography, spacing, surface, or action styles.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
@@ -143,6 +109,50 @@ Do not fix unrelated pre-existing issues.
   only on the gallery's direct child. Use them on the row shell and nowhere else; deeper
   controls use `FillPortions`, `Parent.Width` or `Parent.Height`.
 - Use exact RGBA values and shared state names from the shared plan.
+- Implement every row in `Required Actions` with the named reachable control and event.
+  Do not leave create, edit, delete, search, filter, review, approve, reject, period, or
+  export behavior as static UI.
+- Treat every Required Action as one closed transition loop: reachable eligible entry,
+  event, operation against the named source and stable ID, declared postcondition, observer
+  reading that same source, and visible evidence. Do not write one field and render another.
+- Implement every row in `Functional Test Scenarios`. Use its Given state to verify
+  visibility and enablement, mentally execute the exact When interaction, then trace the
+  resulting source values through the named observer and evidence. Implement boundary and
+  negative behavior rather than replacing it with explanatory copy.
+- For short finite-choice fields, use the radio, visible choice buttons, or directly
+  selectable dropdown named by the brief, populate all concrete options, configure visible
+  item text, and give required fields a valid default when the business rule permits one.
+  Do not substitute an autocomplete combobox or any control that requires typed filtering
+  or keyboard-only commitment.
+- A manageable primary-record row needs a visible Edit action. Its handler stores the
+  stable record ID and prepopulates every editable input; Save updates that ID, preserves
+  unchanged fields, exits edit mode, and reveals the changed values. Cancel clears edit
+  state without mutating the source.
+- Every primary-record row or its immediately reachable detail renders the canonical
+  human-readable identity as full visible text. An avatar, initials, icon, record ID,
+  accessible label, or tooltip may supplement the identity but cannot replace that text.
+- When the brief contains paired Approve and Reject/Decline actions, implement both for
+  every eligible pending record on the same row or in the same immediately reachable
+  detail. Do not omit one action to reduce control count or fit a phone row; stack the
+  controls or use the planned detail entry.
+- For each mutation, capture the returned record, changed stable ID, or deletion snapshot
+  before resetting inputs or navigating. Update or refresh the bound source, then show the
+  brief's in-viewport mutation receipt. Implement one readable labeled binding for every
+  field in the Required Action's proof set. For create and edit, compare the handler's
+  write set with the proof set and do not finish while any user-entered or user-selected
+  field is missing from the receipt. Keep it visible until dismissal or the next mutation.
+  Navigation, `Notify()`, or a selected, highlighted, filtered, or sorted list row may
+  supplement this receipt but cannot replace it.
+- At phone width, stack a manageable record row or provide an immediately visible
+  overflow/detail entry so full identity text, status, and required Edit/review/remove
+  actions remain reachable. Do not implement required actions only in right-side desktop
+  columns.
+- For bounded dynamic galleries, derive height from
+  `CountRows(<the same source/filter used by Items>)`. Never use `Self.AllItemsCount` or
+  another rendered-item count to determine the gallery's own height.
+- The sole responsive root uses exact `Width: =Parent.Width`,
+  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; put
+  breakpoint sizing on descendants.
 - Prefix every property value with `=`. A value without it fails the whole file at parse
   time and suppresses every other diagnostic in the screen.
 - Quote any value containing a colon followed by a space — `Text: '="Votes: " & n'`, not
@@ -153,9 +163,24 @@ Do not fix unrelated pre-existing issues.
 - Quote non-formula strings and YAML-sensitive formula values.
 - Prefer the simplest correct formula.
 - Write the file in as few tool calls as possible. Compose the complete screen, then write
-  it with one `Write` or one whole-file `Edit`. Dozens of incremental edits against a
+  it with one `create` or one whole-file `edit`. Dozens of incremental edits against a
   file you keep re-reading is the dominant cost in this workflow and does not improve the
   result.
+- Before the first `create` or whole-file `edit`, inspect the composed YAML text itself:
+  - Every `Control:` value is bare and contains no `@`. Strip any version returned in
+    discovery or copied from existing text: `ModernBadge@1.0.0` becomes `ModernBadge`.
+  - Every enum qualifier exactly matches the brief's `Enum name:`. In particular, Badge
+    formulas use `='BadgeCanvas.Appearance'.Filled` and
+    `='BadgeCanvas.ThemeColor'.Warning`, never `BadgeAppearance.Filled` or
+    `BadgeColor.Warning`.
+  - Every property used appears in that control's definition and every property value
+    starts with `=`.
+  These are pre-save checks, not only self-QA checks: invalid whole-screen YAML may make
+  the document server reject the write before the file exists to inspect.
+- If a whole-file write returns `failedToSave` or `ServerException`, do not submit the
+  identical content again. Re-run the pre-save checks against the composed text, correct
+  every version suffix, enum qualifier, unsupported property, missing formula prefix, and
+  duplicate key in one pass, then retry the corrected whole file once.
 - Keep the screen proportionate: roughly 40 controls is the practical ceiling for one
   screen. If the brief demands substantially more, implement the specification faithfully
   but say so in your result so the orchestrator can decide whether to split it.
@@ -169,16 +194,20 @@ Do not fix unrelated pre-existing issues.
 
 ## 3. Self-QA
 
-1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a
-   long document; re-reading it between fixes is the largest avoidable cost in this role.
+1. Read `${PLUGIN_ROOT}/references/QAChecks.md` **once** and keep it in context. It is a long document;
+   re-reading it between fixes is the largest avoidable cost in this role.
 2. Re-read the target file.
 3. Apply **every** check in order and fix issues inline. Checks are not optional and not
    sampled: a check you skipped is a defect you shipped, and most of them have no compile
    diagnostic behind them, so nothing downstream will catch it.
 4. For Modify, scope checks to changed or added content.
-5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as the
-   "Reporting" section in `${PLUGIN_ROOT}/references/QAChecks.md` describes. Report the
-   line; do not summarise it as a total.
+5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
+   `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
+   summarize it as a total.
+6. For each Required Action, record a compact transition trace:
+   `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
+   observer -> evidence`. Mark `PASS` only when every link is present in the generated
+   formulas. Mark `BLOCKED: [missing link]` otherwise and repair it before returning.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
 the first builder returns, so return promptly rather than polishing indefinitely.
@@ -189,21 +218,24 @@ the first builder returns, so return promptly rather than polishing indefinitely
 Screen: [logical name]
 Action: [Create / Modify]
 File: [absolute target file]
-Actions: [implemented count]/[required count]
 QA: 1 [outcome] · 2 [outcome] · …
-- [fix summary, or "clean"]
+Fixes: [fix summary, or "clean"]
+Functional:
+- [Action]: PASS — [precondition] -> [control.event] -> [source and stable ID operation] -> [postcondition] -> [observer and visible evidence]
 Status: Done
 ```
 
-The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return
-without it is incomplete, and the orchestrator will send the screen back.
-The `Actions:` count must cover every Required Actions row. A lower implemented count
-means `Status: Blocked` with the unresolved action and reason.
+The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
+incomplete, and the orchestrator will send the screen back.
+
+The `Functional:` section must contain exactly one trace per Required Action. A trace that
+omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
+34, or 35 says `PASS`.
 
 ## Constraints
 
 - Modify exactly one screen file.
-- Never edit `App.pa.yaml` or `_EditorState.pa.yaml`.
+- Do not edit `[working directory]/App.pa.yaml` or `[working directory]/_EditorState.pa.yaml`; the top-level orchestrator owns app-level and cross-file ordering changes.
 - Never substitute a filename, YAML key, or control name prefix.
 - Never use a property absent from that control's definition.
 - Never write a version suffix on a `Control:` value.
@@ -211,13 +243,6 @@ means `Status: Blocked` with the unresolved action and reason.
   unquoted — `DecimalPrecision.'1'`, not `DecimalPrecision.1`.
 - Never leave a `ModernCard` slot unset. For text-only cards set `Image: =Blank()` and,
   when supported by the control definition, `HeaderImage: =Blank()`.
-- The sole responsive screen root always sets `Width: =Parent.Width`,
-  `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`. Never copy a
-  child control's fixed or conditional width onto the root during a repair.
-- A bounded Gallery's `Height` and empty-state visibility count the same source/filter
-  expression used by `Items`. Never size or classify an empty gallery from
-  `Self.AllItems`, `Self.AllItemsCount`, or rendered `AllItemsCount`; those values can
-  create a zero-height materialization cycle.
 - Every multiword ModernButton or link that is a direct child of a vertical AutoLayout
   container sets `Width: =Parent.Width`; `LayoutMinWidth` and stretch alignment alone do
   not make the rendered control fill the row.

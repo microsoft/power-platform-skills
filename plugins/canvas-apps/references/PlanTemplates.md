@@ -31,21 +31,32 @@ CREATE
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Action Contracts
-| Requested action | Entry point | Owner screen | Control and event | Required behavior | Observable result |
-|------------------|-------------|--------------|-------------------|-------------------|-------------------|
-| [Concrete prompt- or approved-plan-derived action] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Exact navigation, filter, search, mutation, or state transition] | [Visible persisted outcome in a list, detail, filter, dashboard, or confirmation] |
+| Requested action | Preconditions | Entry point | Owner screen | Control and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
+|------------------|---------------|-------------|--------------|-------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
 
-[Include only actions stated by the request or approved plan. Do not infer universal CRUD
-for every supporting entity from broad words such as "manage". However, role-scoped
-management of all primary records implies reachable list/detail, correction/update, and
-remove/cancel flows for those records. Decompose each included action into its complete
-reachable flow; do not combine create, edit, delete, search, filter, review, or approval
-into one row. A meaningful review workflow requires separate approve and reject/decline
-contracts. A requested period or cycle requires a visible selector/filter and period-bound
-results. A requested export or report requires a visible trigger and observable output
-whose contents match the requested view. Include minimum supporting setup actions when
-they are necessary to exercise an explicitly requested mutation, metric, relationship,
-comparison, or ranking over local/mock data.]
+[Include only actions stated by the request or approved plan and apply the relevant
+acceptance paths from `${PLUGIN_ROOT}/references/BehaviorGuide.md`. Do not infer universal CRUD for
+supporting entities. Role-scoped management of all primary records requires separate
+list/select, edit/save, and remove/cancel rows. Keep other requested actions separate,
+including paired approve and reject decisions. Add supporting setup only when required to
+exercise requested behavior over local/mock data. For create/edit, include inputs, finite
+choices, defaults, stable identity, prepopulation, cancel behavior, and a deterministic
+post-save mutation receipt bound to the changed ID. For every mutation, enumerate the write
+set and proof set. A create/edit proof set must contain every user-entered or user-selected
+field in the write set. Name the receipt control, visibility state, and labeled binding for
+each proof-set field. Do not use navigation, a notification, or a row somewhere in a longer
+list as the Observable result.]
+
+## Functional Test Matrix
+| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
+|----------|-------|------|------|------------------|---------------------------|
+| [Action-path identifier] | [Deterministic seed and eligible state] | [Exact visible control interaction] | [Exact source postcondition] | [Observer formula/control and receipt fields] | [Blocked, empty, invalid, clear, or failure behavior, or N/A] |
+
+[Include at least one success scenario for every Action Contract and one row for every
+required boundary or negative path. Use concrete seeded IDs and values when the app uses
+local/mock data. Every Then clause must be provable from the named source through the
+Evidence surface; do not use appearance, navigation, or notification as proof.]
 
 ## Working Directory
 [absolute working directory]
@@ -58,8 +69,11 @@ comparison, or ranking over local/mock data.]
 ## Dispatch
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| Create | [Landing] | [working directory]/Screen1.pa.yaml | Screen1 | [Prefix] | [working directory]/Screen1.screen-plan.md |
-| Create | [Additional] | [working directory]/[Name].pa.yaml | [Name] | [Prefix] | [working directory]/[Name].screen-plan.md |
+| Create | [Landing] | `[working directory]/Screen1.pa.yaml` | Screen1 | [Prefix] | `[working directory]/Screen1.screen-plan.md` |
+| Create | [Additional] | `[working directory]/[Name].pa.yaml` | [Name] | [Prefix] | `[working directory]/[Name].screen-plan.md` |
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Plan Index — EDIT
@@ -79,14 +93,22 @@ EDIT
 | [Concrete noun or interaction from the request] | [Visible control and exact behavior] | Exact / Approximation: [reason] |
 
 ## Action Contracts
-| Requested action | Entry point | Owner screen | Control and event | Required behavior | Observable result |
-|------------------|-------------|--------------|-------------------|-------------------|-------------------|
-| [Concrete prompt- or approved-plan-derived action] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Exact navigation, filter, search, mutation, or state transition] | [Visible persisted outcome in a list, detail, filter, dashboard, or confirmation] |
+| Requested action | Preconditions | Entry point | Owner screen | Control and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
+|------------------|---------------|-------------|--------------|-------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+| [Concrete requested action] | [Eligible state and enabled/visible rule] | [Visible control the user starts from] | [Screen] | [PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact operation and resulting source state] | [Every changed field/status, or N/A] | [Identity plus every value rendered after success, or N/A] | [Formula/control reading the post-state plus in-viewport evidence] |
 
 [Include only actions stated by the request or approved plan. Preserve unaffected existing
 actions, and do not expand the edit into universal CRUD. Preserve the semantic contracts
 for role-scoped primary-record management, paired review decisions, requested periods or
 cycles, and requested export/report output.]
+
+## Functional Test Matrix
+| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
+|----------|-------|------|------|------------------|---------------------------|
+| [Changed or regression path] | [Current or seeded state] | [Exact visible interaction] | [Exact preserved or changed postcondition] | [Observer/control reading the source] | [Required failure/boundary behavior, or N/A] |
+
+[Cover every changed Action Contract and every existing action whose source, fields,
+controls, or observer are touched by this edit. This is the regression contract.]
 
 ## Working Directory
 [absolute working directory]
@@ -99,8 +121,8 @@ cycles, and requested export/report output.]
 ## Dispatch
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| Modify | [Existing] | [working directory]/[File].pa.yaml | [existing key] | [Prefix] | [working directory]/[File].screen-plan.md |
-| Create | [New] | [working directory]/[File].pa.yaml | [new key] | [Prefix] | [working directory]/[File].screen-plan.md |
+| Modify | [Existing] | `[working directory]/[File].pa.yaml` | [existing key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
+| Create | [New] | `[working directory]/[File].pa.yaml` | [new key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
 
 ## App Changes
 ### Before builders
@@ -108,6 +130,9 @@ cycles, and requested export/report output.]
 seed data — or "None"]
 ### After builders
 [Changes referencing screens that do not exist yet, such as StartScreen — or "None"]
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Shared Plan
@@ -163,7 +188,7 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 
 ## Assignment
 - Action: Create
-- Target file: [working directory]/[File].pa.yaml
+- Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [key]
 - Control name prefix: [Prefix]
 
@@ -175,7 +200,12 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
   Prove all visible children remain inside their parent and do not overlap at each target
   width. The sole responsive root must use exact `Width: =Parent.Width`,
   `Height: =Parent.Height`, `LayoutMinWidth: =0`, and `LayoutMinHeight: =0`; breakpoint
-  sizing belongs only on descendants.]
+  sizing belongs only on descendants. For record rows, name the canonical human-readable
+  identity field and text binding that renders its full value, then define how that text,
+  status, and required lifecycle actions remain visible or immediately reachable on phone.
+  Avatar initials do not satisfy identity. When review requires both Approve and
+  Reject/Decline, keep both decisions on the same eligible row or same immediately reachable
+  detail; do not drop one to fit the layout.]
 - Text fit: [single-line or wrapping behavior and longest-value width/height budget for
   each text-bearing control]
 - Visual hierarchy: [title, section, body, caption, primary action, and focal content
@@ -198,20 +228,26 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 - State: [OnVisible initialization]
 
 ## Required Actions
-| Action | Entry point | Control and event | Required formula behavior | Observable result |
-|--------|-------------|-------------------|---------------------------|-------------------|
-| [Action copied from the plan index] | [Visible local entry point] | [PrefixedControl.OnSelect / OnChange] | [Exact formula operation or binding] | [What the user sees after completion] |
+| Action | Preconditions | Entry point and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
+|--------|---------------|-----------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+| [Action copied from the plan index] | [Eligible state] | [Visible entry and PrefixedControl.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact formula operation and resulting state] | [Every changed field/status, or N/A] | [Identity plus every labeled bound value, or N/A] | [Formula/control reading the source plus visible result] |
 
-[Copy every Action Contract owned by this screen. For search and filter actions, name the
-input and the Items formula fields it affects. For mutations, name the data operation, target
-source or collection, refresh/update behavior, and visible control that proves the result.
-For constraints and advanced behaviors, include separate rows for every required success,
-boundary, rejection, persistence, and recalculation path from the plan. Give approve and
-reject/decline separate rows. For period/cycle actions, name the selector, bound field, and
-result control. For export/report actions, name the trigger, exported scope, output format,
-and visible success or download evidence. For every mutation, state how its bound
-observable result is visible immediately after the handler: in the current viewport,
-through handler navigation, or through an immediately visible entry control.]
+[Copy every Action Contract owned by this screen. Include the exact input, binding, event,
+source operation, and immediate visible evidence needed to implement each row. For
+create/edit, include finite-choice values and defaults, stable identity, prepopulation,
+save-by-ID, reset, cancel behavior, and the in-viewport mutation receipt's control,
+visibility state, and labeled binding for every proof-set field. Preserve write-set/proof-set
+parity from the Action Contract. Expand every success, boundary, rejection, persistence,
+and recalculation path assigned by the plan. Keep paired review decisions as separate rows
+but require both controls on the same eligible record surface.]
+
+## Functional Test Scenarios
+| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
+|----------|-------|------|------|------------------|---------------------------|
+| [Scenario copied from the plan index] | [Concrete state] | [Exact local interaction] | [Source postcondition] | [Local or downstream observer and receipt] | [Required boundary behavior, or N/A] |
+
+[Copy every Functional Test Matrix row exercised by this screen. The builder must be able
+to trace each row through concrete formulas without reading another brief.]
 
 ## Relevant Data Source Schemas
 [Only the fields this screen reads or writes; omit if none]
@@ -241,7 +277,7 @@ then fails to compile.]
 
 ## Assignment
 - Action: Modify
-- Target file: [working directory]/[File].pa.yaml
+- Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [existing key]
 - Control name prefix: [Prefix]
 
@@ -256,6 +292,8 @@ then fails to compile.]
 - Text fit: [longest-value budget for changed text-bearing controls]
 - Visual contract: [shared type, spacing, surface, and action roles that changed controls
   must preserve]
+- Record presentation: [canonical identity field and full visible text binding; placement
+  of paired review decisions on each eligible record, or N/A]
 
 ## Controls to Add
 [Name, type, placement, properties; or "None"]
@@ -267,16 +305,25 @@ then fails to compile.]
 [Control -> property -> exact value; or "None"]
 
 ## Required Actions
-| Action | Entry point | Control and event | Required formula behavior | Observable result |
-|--------|-------------|-------------------|---------------------------|-------------------|
-| [Action copied from the plan index] | [Visible local entry point] | [Prefixed or preserved Control.OnSelect / OnChange] | [Exact formula operation or binding] | [What the user sees after completion] |
+| Action | Preconditions | Entry point and event | Source and stable ID | Transition and postcondition | Mutation write set | Receipt proof set | Observer and evidence |
+|--------|---------------|-----------------------|----------------------|------------------------------|--------------------|-------------------|-----------------------|
+| [Action copied from the plan index] | [Eligible state] | [Visible entry and Control.OnSelect / OnChange] | [Named source and immutable identity, or N/A] | [Exact formula operation and resulting state] | [Every changed field/status, or N/A] | [Identity plus every labeled bound value, or N/A] | [Formula/control reading the source plus visible result] |
 
-[Copy every Action Contract affected by this screen. Preserve unaffected actions. For
-mutations, identify the target source or collection and the visible post-action result.
-For constraints and advanced behaviors, include separate rows for every changed success,
-boundary, rejection, persistence, and recalculation path. For every mutation, state how
-the changed record is visible in the immediate post-action state or reached by explicit
-navigation in the handler.]
+[Copy every affected Action Contract and preserve unaffected behavior. Include the target
+source and deterministic visible result bound to the changed stable ID for mutations. Copy
+the exact mutation write set and receipt proof set from the Action Contract. For create/edit
+changes, define finite-choice values and defaults, stable identity, visible Edit entry,
+prepopulation, save-by-ID, reset, cancel behavior, and the exact reveal receipt. Name its
+control, visibility state, and one labeled binding per proof-set field. Keep changed
+success, boundary, rejection, persistence, and recalculation paths separate.]
+
+## Functional Test Scenarios
+| Scenario | Given | When | Then | Evidence surface | Boundary or negative case |
+|----------|-------|------|------|------------------|---------------------------|
+| [Changed or regression scenario copied from the plan index] | [Concrete state] | [Exact local interaction] | [Source postcondition] | [Observer/control reading the source] | [Required boundary behavior, or N/A] |
+
+[Copy every affected scenario, including preservation checks for behavior sharing a
+changed source, field, control, or observer.]
 
 ## Relevant Data Source Schemas
 [Only the fields this edit reads or writes; omit if none]
