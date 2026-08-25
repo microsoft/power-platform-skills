@@ -49305,7 +49305,9 @@ var DirectApiTriggerInputsError = class extends Error {
   cause;
   code = "DirectApiTriggerInputsUnsupported";
   constructor(triggerName, triggerKind, cause) {
-    super(`Trigger "${triggerName}" (kind ${triggerKind ?? "unknown"}) could not be run with inputs using your credentials. Inputs for this trigger kind are delivered through the Logic Flows connector runtime, and it refused this call \u2014 most commonly because the flow's connector connection does not grant your user access (observed for Skills / Copilot Studio triggers), or the trigger is disabled.
+    super(`Trigger "${triggerName}" (kind ${triggerKind ?? "unknown"}) could not be run with inputs using your credentials. Inputs for this trigger kind are delivered through the Logic Flows connector runtime, and it refused this call.
+
+The usual cause is that you do not hold the ACL on this flow's Logic Flows connection (the error reads "Permission denied due to missing connection ACL"). That is a per-flow authorization condition, not a limitation of the trigger kind \u2014 the same kind runs fine on a flow you own. Ask the flow owner to share it with you, or run it from the app or agent that owns it. A disabled trigger or stopped flow produces the same refusal.
 
 The flow CAN still be run without inputs \u2014 omit the body and every trigger input will be null.
 
@@ -50124,6 +50126,14 @@ function logConnectionSuccess(conn, connName, connector, mode) {
   logger.info(parts.join(" | "));
 }
 var DIRECT_API_TRIGGER_KINDS = /* @__PURE__ */ new Set(["powerapp", "powerappv2"]);
+var GATED_REQUEST_TRIGGER_KINDS = /* @__PURE__ */ new Set([
+  "powerapp",
+  "powerappv2",
+  "button",
+  "apiconnection",
+  "powerpages",
+  "skills"
+]);
 async function fetchContentLink(uri) {
   const res = await fetch(uri, { method: "GET" });
   const text = await res.text();
@@ -50140,6 +50150,15 @@ async function fetchContentLink(uri) {
 }
 function isDirectApiTriggerKind(kind) {
   return !!kind && DIRECT_API_TRIGGER_KINDS.has(kind.toLowerCase());
+}
+function isGatedTriggerKind(trigger) {
+  const type = trigger.type?.toLowerCase();
+  if (type === "manual")
+    return true;
+  if (type !== void 0 && type !== "request")
+    return false;
+  const kind = trigger.kind?.toLowerCase();
+  return !!kind && GATED_REQUEST_TRIGGER_KINDS.has(kind);
 }
 function isDirectApiInputsRejected(err) {
   if (!(err instanceof FlowApiError))
@@ -50965,9 +50984,11 @@ var FlowClient = class _FlowClient {
     const { body } = opts;
     const trigger = await this.resolveTrigger(envId, flowId, opts.triggerName);
     const directApi = isDirectApiTriggerKind(trigger.kind);
+    const gated = isGatedTriggerKind(trigger);
     assertTriggerInputsSatisfied(trigger, body);
     const done = (path6, response) => ({ triggered: true, triggerName: trigger.name, triggerKind: trigger.kind, path: path6, response });
-    if (directApi && body !== void 0) {
+    const autoRoute = directApi || opts.useCallbackUrl === void 0;
+    if (gated && body !== void 0 && autoRoute) {
       try {
         return done("connector", await this.runFlowViaLogicFlowsConnector(envId, flowId, body, trigger.name));
       } catch (connectorErr) {
