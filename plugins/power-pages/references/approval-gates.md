@@ -477,6 +477,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
+| `create-site:1.5.content-language` | not-a-gate | — | 1.5 | *"Which language should the site content use?"* — validates the single SPA content locale for the from-scratch path; Dataverse and Power Pages system messages remain English | — |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
@@ -492,7 +493,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* - four sub-prompts sharing this gate, plus a free-text brand follow-up (website URL, or colors and logo) when the user has a brand to match; shape the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
-| `create-site:5.8.localization` | not-a-gate | — | 5.8 | *"Would you like to add localization support to this site now?"* — selects whether to enter the child localization workflow after site implementation and design critique; the child workflow's Phase 3 gate approves every localization write | — |
+| `create-site:5.8.localization` | not-a-gate | — | 5.8 | *"Would you like to add more languages now?"* — selects whether to enter the child localization workflow after implementation and design critique; the child workflow preserves the detected document locale as its source/default and its Phase 3 gate approves every localization write | — |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; when `SAMPLE CONTENT` placeholders remain, they are listed first, the question names the count, and Skip becomes the recommended option | nothing |
 
