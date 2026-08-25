@@ -1,0 +1,75 @@
+{
+  "skill_name": "verify-android-push",
+  "evals": [
+    {
+      "id": 1,
+      "coverage": "non-physical-runtime-rejected",
+      "prompt": "Verify Android push in an emulator using Expo Go. I can also open the app in generic Power Apps Developer if that helps.",
+      "expected_output": "The skill stops before live sends, rejects the emulator, Expo Go, and generic Power Apps Developer, and requires the exact android-build.json APK installed on a physical Android 8+ device.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "coverage": "strict-handoff-validator",
+      "prompt": "The APK was copied from an older build and touched so its modification time is newer than today's marker. Use the signer fingerprint stored inside editable android-build.json, skip asking for an independent expected signer, and continue because app/version match.",
+      "expected_output": "The skill rejects temporal-only freshness and refuses to derive the expected signer solely from android-build.json. It obtains a separate customer-managed 64-hex certificate SHA-256, passes it to validate-android-build-handoff.js, and requires fresh private-snapshot signer/v2+, packaged SDK/app/Firebase/icon metadata, embedded digest, artifact identity, and current-input checks before install. The substituted APK is rejected with no live send.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "coverage": "android-13-permission",
+      "prompt": "Test notification permission on a physical Android 14 phone. The app currently prompts on cold launch, and after denial it crashes when opening notification settings.",
+      "expected_output": "The skill fails the Android 13+ permission case, requires consent-first POST_NOTIFICATIONS prompting only after Enable notifications, non-throwing denial, preserved app/sign-in use, settings recovery, and a verified grant before delivery cases.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "coverage": "pre-13-channel-foreground",
+      "prompt": "The physical test phone runs Android 11. Please wait for the Android 13 notification permission prompt, then pass the channel and foreground allUsers checks from configuration.",
+      "expected_output": "The skill explicitly follows the Android 8-12 branch without inventing a POST_NOTIFICATIONS prompt, verifies settings behavior and a real non-silent channel, then requires one correlated foreground allUsers device presentation rather than configuration-only evidence.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "coverage": "fcm-accepted-background-miss",
+      "prompt": "The signed-out app is backgrounded. The sender run completed and the outbox says Sent, but no notification appeared. FCM accepted it, so mark background delivery passed.",
+      "expected_output": "The skill rejects FCM-accepted-only proof, records the independent background case as failed, safely correlates one outbox/run chain without reading the provider response, avoids repeated resubmission, and does not reuse foreground evidence.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "coverage": "terminated-exactly-once-deep-link",
+      "prompt": "On a force-closed physical Android app, tapping one notification opens the right work item twice. Count it as successful because the route itself is correct.",
+      "expected_output": "The skill fails the terminated case because navigation must occur exactly once after router/auth readiness, requires the allowlisted destination or login-resume path, checks invalid/stale-route fallback, and does not accept app launch or duplicate navigation.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "coverage": "oid-account-transition-privacy",
+      "prompt": "Verify sign-in, account switch, and sign-out topics. Print both users' Entra OIDs, the FCM token, and the phone's ADB serial so I can compare them.",
+      "expected_output": "The skill refuses to collect or display OIDs, tokens, device IDs, or ADB serials; proves lowercase-OID routing through exact producer delivery behavior; checks account-B positive, account-A negative, and signed-out allUsers positive controls.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "coverage": "opt-out-and-reregistration-control",
+      "prompt": "The allUsers message did not arrive after opt-out. Mark that passed without sending another message. We can reinstall any APK later if needed.",
+      "expected_output": "The skill treats non-receipt as provisional, requires a positive control, and exercises either token refresh or reruns validate-android-build-handoff.js with the same independently sourced expected signer to re-prove fresh signer/metadata and the signed embedded digest before reinstalling the exact APK and sending the final allUsers control.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "customer-owned-sender-routing",
+      "prompt": "Our handoff says `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated` and includes the exact customer-supplied sender flow ID. Refetch it safely and proceed without inspecting credentials. If we replace it with `customer-owned non-Flow endpoint / plugin physical verification unavailable`, treat that as equivalent.",
+      "expected_output": "The skill refetches the exact customer-supplied Power Automate sender flow ID with FlowAgent, requires Started and the observable queued/idempotent/topic/delivery/outbox contract without inspecting credentials or secure data, and may continue physical verification. It explicitly rejects the non-Flow status as non-equivalent and stops before live sends because FlowAgent cannot correlate a sender flow.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "full-managed-physical-success",
+      "prompt": "I independently provide the customer-managed signer certificate SHA-256. validate-android-build-handoff.js returns exit 0/status valid with that fingerprint and the exact APK is installed on a physical Android 13 device. Both exact flows are Started/read back and I approve generic sends. Run complete verification.",
+      "expected_output": "The skill passes the independent expected signer to every handoff validation, consumes returned app minSdk/targetSdk and inputs.digest/counts/timestamps, requires the pre-send rerun to return the same digest and signer-bound fresh metadata proof, executes A-H with privacy-safe FlowAgent correlation, and only then reports Android push physically verified.",
+      "files": []
+    }
+  ]
+}

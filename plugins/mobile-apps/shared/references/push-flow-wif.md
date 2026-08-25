@@ -1,153 +1,51 @@
-# Keyless FCM authorization from Power Automate
+# Keyless FCM runtime protocol for Power Automate
 
-Use Google Workload Identity Federation (WIF) so the cloud flow never stores a
-Firebase service-account private key and never has to implement RS256.
+This reference is canonical only for the **runtime flow action sequence** used
+when a fresh project-local `sender-auth.json` selects mode `wif` for the same
+Firebase project as the native client. Provisioning, reuse, repair, IAM/RBAC,
+live proof, and handoff creation belong to
+`push-wif-provisioning.md` and `/setup-push-wif`.
 
-This reference applies only when a freshly validated project-local
-`sender-auth.json` selects mode `wif` for the same Firebase project as the
-native client. A flow using mode `function-endpoint` must not include any action
-from this sequence, even as a fallback; the Entra-protected Function owns
-Google authentication and FCM in that mode.
+A `function-endpoint` flow must not contain any action from this sequence, even
+as a fallback. Its validated Entra-protected Function owns Google
+authentication and FCM.
 
-## Identity setup, reuse, and repair
+## Provisioning ownership boundary
 
-Run `/setup-push-wif`. It is MCP-first with explicit tool boundaries:
+The provisioning owner is pinned to
+`@google-cloud/gcloud-mcp@0.5.3` and `@azure/mcp@2.0.5`.
+Google administration uses `mcp__gcloud__run_gcloud_command`, which prepends the `gcloud` executable itself.
+Azure covered reads use
+`mcp__azure__subscription`, `mcp__azure__group`, and `mcp__azure__role`.
+Call the namespace tool with routed command/parameters; use
+`role_assignment_list` for RBAC inventory.
 
-- **Pinned versions** — target `@google-cloud/gcloud-mcp@0.5.3` and
-  `@azure/mcp@2.0.5`. Do not reinterpret this reference through Azure MCP 3.x
-  beta behavior.
-- **Google Cloud** — all Google resource reads, mutations, IAM, WIF, and
-  read-backs use the official `mcp__gcloud__run_gcloud_command` tool. It takes
-  `args: string[]`, one tokenized `gcloud` command per call, and the tool
-  prepends the `gcloud` executable itself. Therefore `args` must start with the
-  subcommand (`config`, `iam`, `services`, and so on), never a literal
-  `"gcloud"` token. Use no pipes, redirects, command substitution, or chained
-  commands. Prefer
-  `--format=json(...)`; if a key path is unknown, discover it first with a
-  separate `--limit=1 --format=json` call.
-- **Azure covered reads** — Azure MCP GA `2.0.5` docs/source expose
-  the relevant namespace-mode tools here:
-  `mcp__azure__subscription`, `mcp__azure__group`, and `mcp__azure__role`.
-  Call the namespace tool with routed command/parameters; for example, use
-  `mcp__azure__role` with operation `role_assignment_list` for RBAC inventory.
-  Do not rely on nonexistent names such as
-  `mcp__azure__azmcp_role_assignment_list` or `keyvault_secret_list`. Azure
-  MCP GA `2.0.5` has value-carrying Key Vault operations but no safe
-  metadata-only route for this workflow, so the plugin does not expose its
-  `keyvault` namespace. Keep the Key Vault step on the documented `az` safe
-  path.
-- **Narrow `az` exceptions** — keep `az` only for Entra
-  app/service-principal/credential work and for the Key Vault metadata/write
-  sequence that Azure MCP GA `2.0.5` docs/source do not expose without secret
-  value disclosure. Do not silently replace covered Azure MCP reads with `az`,
-  and do not use `az` for Google Cloud resource administration.
+The plugin does not expose its `keyvault` namespace because GA 2.0.5 has
+value-carrying secret operations and no safe metadata-only route. Runtime flow
+authoring must not invoke `keyvault_secret_get` or
+`keyvault_secret_create`; it uses the discovered Power Automate Key Vault
+connector action. See `push-wif-provisioning.md` for all resource work.
 
-The skill first inventories live resources, then explicitly selects
-validate/reuse, approved repair, or approved new provisioning. Every route must
-complete a fresh end-to-end token proof before writing `sender-auth.json` or
-before flow authoring. Resource existence and old handoff proof are not proof
-of current authorization.
+## Validated handoff gate
 
-1. Validate or create a dedicated Entra app registration/service principal for
-   notification sending, with a dedicated application ID URI and time-bounded
-   client credential.
-2. For creation or approved rotation, capture the credential directly into a
-   shell variable, write it immediately to Azure Key Vault, then unset it. Never
-   print it or persist it in a file, flow definition, environment file, or
-   memory bank.
-3. Request an app-only access token and pipe it only on stdin to
-   `${PLUGIN_ROOT}/scripts/inspect-entra-wif-jwt.js`. The local helper decodes
-   without verifying/signing and emits only non-secret `iss`, `aud`, present
-   `appid`/`azp`, `selectedAppClaim`, and `googleProviderIssuer`. Provider
-   configuration is based on this output, not assumptions about the endpoint.
-4. In Google Cloud, validate or create an OIDC workload identity provider using
-   `mcp__gcloud__run_gcloud_command` with:
-   - issuer: the normalized, observed `iss`;
-   - allowed audience: the exact, observed `aud`;
-   - `google.subject=assertion.sub`;
-   - an app identity mapping and condition based on the claim actually present.
-5. Grant the exact app-restricted principal set
-   `roles/iam.workloadIdentityUser` on a dedicated sender service account.
-6. Grant the sender account a custom project role containing only
-   `cloudmessaging.messages.create`. Use
-   `roles/firebasecloudmessaging.admin` only when custom roles are prohibited
-   and the administrator explicitly accepts its broader scope.
+Before discovery or authoring:
 
-### Claim-driven provider configuration
+1. Validate `sender-auth.json` with
+   `validate-sender-auth-contract.js --expected-firebase-project`.
+2. Require version `1`, mode `wif`, verifier `setup-push-wif`, a current proof,
+   and all four proof steps true.
+3. Derive tenant/client/application-ID URI, Key Vault URI/secret name, project
+   number, pool/provider IDs, sender service-account email, Firebase project,
+   audience, issuer, and selected `appid`/`azp` claim only from the validated
+   handoff.
+4. Never rediscover or substitute another sender, translate another auth mode,
+   or author from a stale/project-mismatched contract.
 
-Do not assume that a v2 token endpoint guarantees a v2-shaped token or an
-`azp` claim.
+## Runtime HTTP sequence
 
-- A tested v1 app-only token can use
-  `iss=https://sts.windows.net/<tenant-id>/` and `appid=<sender-client-id>`.
-  Preserve that exact observed `iss`, but configure the Google provider with
-  `https://sts.windows.net/<tenant-id>` (no trailing slash), as emitted in
-  `googleProviderIssuer`. Map
-  `attribute.appid=assertion.appid` and condition on that attribute.
-- Use `attribute.azp=assertion.azp` only when `azp` is present in the observed
-  token.
-- Never rewrite `sts.windows.net` to `login.microsoftonline.com`, guess an
-  audience from an app registration field, or fall back to tenant-only trust.
-- If neither `appid` nor `azp` is present, stop and repair the token contract.
-
-Read the provider back with a separate `mcp__gcloud__run_gcloud_command` call
-and verify issuer, audience, mapping, and condition before adding IAM
-bindings. Do not proactively enable Google APIs; if a specific command fails
-because a required API is disabled, stop, show the exact API, obtain approval,
-issue one explicit enable call, and reread the affected resource.
-
-For reuse, also read back the exact app-restricted
-`roles/iam.workloadIdentityUser` principal-set binding, sender service account,
-FCM project binding/custom-role permission set, Key Vault secret reference, and
-the Power Automate Key Vault connection principal's effective
-`Key Vault Secrets User` assignment. Use `mcp__azure__role` with
-`role_assignment_list` for RBAC read-back. Do not use
-`keyvault_secret_get` or `keyvault_secret_create` in sender-auth flows because
-Azure MCP GA `2.0.5` docs/source show those tools can handle secret values, and
-GA `2.0.5` does not expose a safe `keyvault_secret_list`. Missing or mismatched
-state requires an explicit repair choice; it must not silently fall through to
-provisioning.
-
-Keep tenant ID, client ID, audience, project identifiers, pool/provider IDs, and
-service-account email as non-secret environment variables. Keep the Entra
-client credential only in Azure Key Vault. The active provisioning
-administrator may need `Key Vault Secrets Officer` at the narrowest practical
-vault scope to create/update the secret. Separately, the Power Automate Key
-Vault connection's actual Entra principal—not merely the flow owner—needs
-`Key Vault Secrets User` at the narrowest supported secret scope to read it.
-Azure Contributor does not grant secret data-plane access. Treat `Forbidden`,
-`ForbiddenByRbac`, and RBAC propagation failures as blockers; never work around
-them by copying the secret into the flow.
-
-## Required authorization proof
-
-Before flow creation, use fresh values held only in shell variables to prove:
-
-1. Entra client-credentials token issuance.
-2. Google STS exchange using the provider's canonical audience.
-3. Sender service-account impersonation with
-   `https://www.googleapis.com/auth/firebase.messaging` and a 900-second
-   lifetime.
-4. FCM HTTP v1 authorization using a `validateOnly: true` request so no
-   notification is delivered.
-
-Provider creation alone is not proof. Report Entra `invalid_client`, STS
-`invalid_grant`, IAM Credentials `403`, and FCM `403` separately so RBAC and
-claim-contract failures remain actionable. Never log token responses or
-authorization headers.
-
-After all four stages succeed, write the versioned, non-secret WIF handoff
-defined in `sender-auth-contract.md` from the live read-back values and latest
-observed claims, then validate it with
-`${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js`. A failed or partial
-proof must not create or overwrite the handoff.
-
-## Flow HTTP sequence
-
-Populate the sequence from the validated handoff's exact WIF resource
-identifiers and observed claim shape. Do not rediscover a second sender,
-translate a Function handoff into WIF, or continue when the handoff proof is
-expired or project-mismatched.
+Retrieve the Entra client credential through the exact discovered Azure Key
+Vault connection whose principal was proven during setup. The secret value may
+exist only in secure action outputs and downstream secure inputs.
 
 ### 1. Entra client-credentials token
 
@@ -181,11 +79,14 @@ Content-Type: application/json
 }
 ```
 
+The audience and observed claim contract must come from the handoff. Do not
+weaken or reinterpret `appid`/`azp` conditions in the flow.
+
 ### 3. Sender service-account impersonation
 
 ```http
 POST https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sender-service-account}:generateAccessToken
-Authorization: Bearer {sts-access-token}
+Authorization: ******
 Content-Type: application/json
 ```
 
@@ -202,34 +103,42 @@ Content-Type: application/json
 
 ```http
 POST https://fcm.googleapis.com/v1/projects/{firebase-project-id}/messages:send
-Authorization: Bearer {impersonated-access-token}
+Authorization: ******
 Content-Type: application/json
 ```
 
-Use `message.topic`, never a condition assembled from untrusted text.
+Use `message.topic`, never a condition assembled from untrusted text. `User`
+delivery requires a GUID-validated lowercase Entra OID topic. `AllUsers`
+requires an empty Target OID and exact case-sensitive `allUsers`.
 
-## Security requirements
+Send only approved generic notification title/body plus string-valued
+`data.schemaVersion` and allowlisted internal `data.deepLink`, together with
+the discovered Android/APNs fields. OID topics are routing convenience, not an
+authorization boundary.
 
-- Mark inputs/outputs secure on the secret retrieval and all three token actions.
-- Never log token bodies or copy them into outbox error text.
-- Validate every configurable resource ID against an administrator-approved
-  environment variable before composing URLs.
-- Restrict the Google provider by audience and app identity. Tenant-only trust
-  is too broad.
-- Use a dedicated sender service account and short token lifetime.
-- Grant `roles/iam.workloadIdentityUser` only to the exact app-restricted
-  principal set; never grant it to the whole pool.
-- Do not grant Owner, Editor, Service Account Token Creator, or create a Google
-  service-account key.
-- Retry transient `429` and `5xx` responses with bounded exponential backoff;
-  do not retry validation or authorization failures indefinitely.
+## Action security and failure handling
+
+- Mark secure inputs/outputs on secret retrieval, Entra token, STS exchange,
+  service-account impersonation, and authorized FCM actions.
+- Never copy token responses, authorization headers, secret values, raw
+  connector errors, response bodies, or outbox payloads into diagnostics.
+- Validate every configurable resource ID against the handoff before composing
+  URLs.
+- Keep the sender account dedicated and token lifetime short. Never embed a
+  Google service-account key or implement RS256 in flow expressions.
+- Retry only transient `429`/`5xx` responses with bounded exponential backoff;
+  do not retry authentication, authorization, or validation errors
+  indefinitely.
+- On success retain only the bounded provider message ID. On failure retain
+  only bounded sanitized code/message.
+
+The authoring workflow must read the persisted flow back and prove this exact
+Key Vault -> Entra -> STS -> impersonation -> FCM action tree, secure settings,
+and mode-specific connections. Any Function branch, generic fallback,
+service-account JSON, or mixed-mode path is a blocker.
 
 References:
 
-- https://cloud.google.com/iam/docs/workload-identity-federation-with-other-providers
-- https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines
 - https://cloud.google.com/iam/docs/reference/sts/rest/v1/TopLevel/token
 - https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken
 - https://firebase.google.com/docs/cloud-messaging/auth-server
-- https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
-- https://learn.microsoft.com/azure/key-vault/general/rbac-guide

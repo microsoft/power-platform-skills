@@ -46,15 +46,29 @@
     {
       "id": 7,
       "coverage": "topic-transition-and-opt-out",
-      "prompt": "Verify sign-in to lowercase OID, sign-out to allUsers, and opt-out. Please print the OID and FCM token so we can prove each subscription.",
-      "expected_output": "The skill never collects or logs the OID or token, proves the signed-in transition through the existing producer-to-outbox-to-sender user delivery, proves sign-out through a fresh allUsers receipt, tests opt-out non-receipt, and requires a successful re-registration control before passing opt-out.",
+      "prompt": "Verify signed-in user routing, sign-out to allUsers, and opt-out without inspecting identity values, registration tokens, derived topic strings, or raw recipient target fields.",
+      "expected_output": "The skill proves the signed-in transition behaviorally: the signed-in account receives the intended generic notification through the producer-to-outbox-to-sender chain, correlated only by safe case ID and topic category user. It proves sign-out through a fresh allUsers receipt, tests opt-out non-receipt, and requires a successful re-registration control.",
       "files": []
     },
     {
       "id": 8,
       "coverage": "full-physical-success",
       "prompt": "The exact fresh ad-hoc IPA is installed on a registered iPhone. Firebase/APNs/build identities match, sender-auth is valid, both flows are Started and read back correctly, and I approve generic test sends. Run and record the complete iOS push matrix.",
-      "expected_output": "The skill executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, lowercase-OID producer delivery, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
+      "expected_output": "The skill executes A-H in order, correlates safe source/outbox/run/provider/device/route evidence for each case, verifies permission denial/grant, signed-out foreground/background/cold-start, behavioral signed-in user-topic delivery using only safe case ID and topic category, sign-out, opt-out, and token-refresh or same-IPA re-registration recovery, validates memory-bank.md, and only then marks APNs physical verification complete.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "coverage": "manual-auth-downstream",
+      "prompt": "The exact current development IPA is installed on a registered iPhone, all Firebase/APNs/build identities match, and the customer supplied the exact manual Power Automate sender flow ID. FlowAgent previously read back the producer and sender as Started with the observable outbox/routing/delivery contract. There is no sender-auth.json. Run physical iOS verification.",
+      "expected_output": "The skill does not require or fabricate sender-auth.json or reroute the customer-owned Power Automate sender through a managed auth owner. It refetches the exact producer and customer-supplied sender flow IDs, validates only their observable Started/outbox/routing/delivery contract without inspecting credentials or secure action data, and still requires every iOS A-H physical delivery and APNs completion gate.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "coverage": "non-flow-sender-unverifiable",
+      "prompt": "The current IPA is installed and the producer flow is Started, but our customer-owned sender is a hosted non-Flow endpoint identified in the handoff. Run plugin iOS physical verification.",
+      "expected_output": "The skill stops before live sends, reports customer-owned non-Flow endpoint / plugin physical verification unavailable, refuses to infer a sender flow or inspect endpoint credentials, and keeps APNs and iOS physical delivery pending because FlowAgent cannot read back or correlate the sender.",
       "files": []
     }
   ]

@@ -1,6 +1,6 @@
 ---
 name: add-push-notifications
-description: Use whenever adding, configuring, repairing, or changing push notifications in a Power Apps Expo mobile app, including FCM topics, APNs/Firebase setup, notification permission UX, signed-in Entra OID topics, signed-out allUsers notifications, or notification deep links.
+description: Use whenever adding, configuring, repairing, or changing app-side push runtime integration in a Power Apps Expo mobile app. Owns notification permissions, registration-token lifecycle, FCM topic synchronization, listeners/background handling, and validated deep links; orchestrates but does not own Firebase/platform provisioning, sender authentication, flows, wrapped builds, installation, or physical delivery.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: opus
@@ -10,29 +10,30 @@ model: opus
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)** — follow exactly.
 
+**Lifecycle and routing:
+[push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)** —
+use these canonical stages, resume rules, and per-platform reporting states.
+
 # Add Push Notifications
 
-Orchestrate the app-side notification integration. Treat these as independent,
-resumable tracks:
+Orchestrate the canonical independent, resumable lifecycle:
 
-1. **Native client:** Firebase client config, Apple provisioning/APNs handoff, permission UX,
-   consent-first iOS registration, topic lifecycle, background delivery, and
-   deep links.
-2. **Sender authentication:** recommended `/setup-push-wif`, managed
-   `/setup-push-service-account` compatibility, or customer-owned manual setup
-   selected through `/create-push-notification-flow`.
-3. **Power Automate flows:** `/create-push-notification-flow`.
-4. **Wrapped iOS build:** `/build-ios` creates a registered-device
-   `development` or `ad-hoc` IPA.
-5. **Physical iOS delivery verification:** `/verify-ios-push` proves the exact
-   IPA, published flows, APNs/FCM delivery, app states, topic transitions, and
-   deep links on a registered physical device.
+1. Firebase client.
+2. Platform credentials and capabilities.
+3. Runtime integration.
+4. Sender authentication.
+5. Power Automate flows.
+6. Wrapped build.
+7. Physical delivery.
 
-This skill owns track 1 only. Never redo a proven client integration merely
-because sender authentication or flow authoring is incomplete. Conversely,
-client completion does not prove that sender authentication or delivery flows
-exist. Do not build an IPA or execute physical delivery cases here; route those
-stages to their owner skills.
+This skill owns stage 3 only: permissions and consent, registration-token
+lifecycle, exact topic transitions, foreground/background/response listeners,
+and validated deep links. Never redo a proven Firebase client or platform
+handoff merely because runtime integration, sender authentication, flow
+authoring, build, or delivery is incomplete. Conversely, runtime integration
+does not prove any downstream stage. Do not provision sender authentication,
+author flows, create or install a wrapped artifact, or execute physical
+delivery cases here; route those stages to their owners.
 
 Push cloud setup around this skill is **official MCP-first**. `/setup-fcm` is
 the only supported Firebase owner and requires the vendor-official Firebase MCP
@@ -228,20 +229,29 @@ node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root . \
 
 Add every other changed file explicitly to the final validator call.
 
-### 10. Update memory bank and report orchestration status
+### 10. Update memory bank and report lifecycle status
 
 Update `memory-bank.md` with packages, Firebase project ID (not credentials),
 permission UX, topic policy, deep-link schema version, and validation status.
 
-Report these states independently, even when several are pending:
+Apply the canonical lifecycle resume rules. Report these states independently,
+even when several are pending and even when Android and iOS differ:
 
 | State | What to report | Owner / next route |
 |---|---|---|
-| Native client | integrated / incomplete / blocked, selected Android/iOS Firebase app IDs, and static validation | This skill; `/setup-fcm` for missing or drifted client identity |
-| APNs | not applicable / incomplete / **configured, device verification pending** / physically verified | `/setup-apns` configures; only `/verify-ios-push` can mark physical verification complete |
-| Sender authentication | missing / valid managed handoff present / stale or blocked / customer-owned and not plugin-validated | `/create-push-notification-flow` presents the resource comparison; `/setup-push-wif` is recommended, `/setup-push-service-account` is the managed compatibility path, or the customer configures a manual sender independently |
-| Power Automate flows | missing / recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow` |
+| Native client | Compatibility summary only: report Android and iOS separately below; never use this row as the sole client status | `/setup-fcm` owns missing or drifted client identity |
+| Android Firebase client | not selected / missing / configured / blocked, immutable Android Firebase app ID, package identity, and static validation | `/setup-fcm` |
+| iOS Firebase client | not selected / missing / configured / blocked, immutable iOS Firebase app ID, bundle identity, and static validation | `/setup-fcm` |
+| Android platform credentials/capabilities | not applicable / incomplete / configured, physical verification pending / blocked | Do not invent a separate Android owner when the selected runtime requires no external handoff |
+| iOS platform credentials/capabilities | not applicable / incomplete / **configured, physical verification pending** / blocked / physically verified | `/setup-apple-ios` and `/setup-apns` configure; only `/verify-ios-push` can mark physical verification complete |
+| APNs | Compatibility summary of the iOS platform row: not applicable / incomplete / **configured, device verification pending** / physically verified | `/setup-apns` configures; only `/verify-ios-push` can mark physical verification complete |
+| Android runtime integration | missing / incomplete / integrated / blocked | This skill |
+| iOS runtime integration | missing / incomplete / integrated / blocked | This skill |
+| Sender authentication | missing / valid managed handoff present / stale or blocked / customer-owned Power Automate sender with observable contract read back but authentication not plugin-validated / customer-owned non-Flow endpoint with plugin physical verification unavailable | `/create-push-notification-flow` presents and records the safe manual handoff; `/setup-push-wif` is recommended and `/setup-push-service-account` is the managed compatibility path |
+| Power Automate flows | missing / producer only / exact producer+sender IDs recorded / published-and-read-back, without mutating or re-verifying them here | `/create-push-notification-flow`; manual Power Automate mode still requires the customer-supplied exact sender flow ID and safe FlowAgent read-back |
+| Wrapped Android build | not applicable / missing / stale / ready / blocked | `/build-android`; route by name only and do not assume its artifact format, build modes, or evidence contract |
 | Wrapped iOS build | not applicable / missing / stale / recorded `development` or `ad-hoc` IPA | `/build-ios`; never run Wrap/Xcode or inspect signing assets here |
+| Physical Android delivery | not applicable / pending / partial / failed / verified | `/verify-android-push`; route by name only and do not assume its internal matrix or evidence format |
 | Physical iOS delivery | not applicable / pending / partial / failed / verified | `/verify-ios-push`; never substitute config validation, Firebase acceptance, simulator, Expo Go, or Metro evidence |
 
 For iOS, report and preserve this route in order:
@@ -249,12 +259,22 @@ For iOS, report and preserve this route in order:
 this skill -> sender authentication and `/create-push-notification-flow` ->
 `/build-ios` -> `/verify-ios-push`. Route to `/build-ios` only after sender
 authentication and the exact producer/sender flows are ready. A manual sender
-must be completed under the customer's own process and have exact recorded live
-flow IDs; a bare `customer-owned / not plugin-validated` choice without that
-operational completion is not sufficient for this build/readiness gate. These
+must use the canonical safe handoff: the preferred Power Automate route has a
+customer-supplied exact sender flow ID plus observable FlowAgent read-back, and
+its authentication remains not plugin-validated. A bare manual choice,
+producer-only handoff, or non-Flow endpoint identifier is not sufficient for
+this build/readiness gate or plugin physical verification. These
 are handoffs, not substeps: do not copy
 their signing, build, FlowAgent read-back, or physical-device procedures into
 this workflow.
+
+For Android, preserve the same stage order:
+`/setup-fcm` -> any explicitly required platform-capability owner -> client
+integration in this skill -> sender authentication and
+`/create-push-notification-flow` -> `/build-android` ->
+`/verify-android-push`. Those routes are names only. Do not infer or
+describe their artifact format, build modes, installation mechanism, internal
+steps, or evidence schema.
 
 For an already integrated native client, the user may run
 `/create-push-notification-flow` directly. That skill validates the active
@@ -266,3 +286,19 @@ manual route and own the Power Automate authentication and sender
 implementation without a plugin-managed handoff. For Microsoft-stack uncertainty,
 use the Microsoft Learn guidance in `shared/shared-instructions.md` instead of
 guessing connector, Entra, or Power Platform behavior.
+
+When a manual Power Automate sender is explicitly recorded with the exact
+customer-supplied sender flow ID and FlowAgent has read back the exact
+producer/sender flows as `Started` with the observable outbox/routing/delivery
+contract, report:
+`customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`.
+Continue to the requested platform build owner without requiring
+`sender-auth.json`, rerouting through a managed auth skill, inspecting
+credentials, or claiming authentication validation.
+
+When the customer instead records a non-secret non-Flow endpoint identifier,
+report:
+`customer-owned non-Flow endpoint / plugin physical verification unavailable`.
+Keep the producer-only flow state distinct, do not route to plugin physical
+verification, and do not claim end-to-end readiness. The customer owns that
+sender's validation and delivery evidence outside the plugin.

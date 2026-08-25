@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 34 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0 — 36 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -90,7 +90,7 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ **Per-section approval gates** in the planner (data model → native APIs → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
 - ✅ `/deploy` remains the Power Platform web-bundle path (`npm run build` +
-  `npx power-apps push`). Registered-device iOS native builds route to
+  `npx power-apps push`). Native push builds route to `/build-android` or
   `/build-ios`; `/deploy` does not run `expo run:ios`/`expo run:android`.
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
 - ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.
@@ -99,11 +99,25 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Push notification architecture: `expo-notifications` for consent/presentation/responses, React Native Firebase Messaging for Android+iOS FCM topics, lowercase-canonical Entra OID while signed in, exact `allUsers` while signed out, Expo Router for validated deep links. Client-managed OID topics are explicitly not an authorization boundary.
 - ✅ Push cloud setup is **official MCP-first**: `/setup-fcm` owns Firebase project/app selection and SDK config retrieval through the vendor-official Firebase MCP only. `/setup-push-wif` separately requires gcloud MCP for Google-side WIF operations. No Firebase or gcloud CLI fallback is part of the documented architecture.
 - ✅ Firebase native app setup is idempotent by exact Android package name and exact iOS bundle identifier. One exact match is reused automatically; safe duplicates require an immutable app-ID selection independently per platform and a fresh identity read-back. Validated client configs live in committed `firebase/` files and are auto-discovered by Expo config. `/setup-apns` validates the exact `/setup-apple-ios` Team/identifier/Push handoff first, then permits only manual Firebase Console upload of a one-time-downloaded APNs `.p8`; no supported Firebase CLI/Management API upload exists, and agents never handle the key.
-- ✅ Push setup has independently resumable owners, but the prescribed new iOS
-  chain is `/setup-fcm` → `/setup-apple-ios` → `/setup-apns` → native client
-  integration → sender authentication/flows → `/build-ios` →
-  `/verify-ios-push`. Existing active client integrations may resume at their
-  first unproven stage.
+- ✅ Push setup has independently resumable owners. The prescribed Android chain
+  is `/setup-fcm` → native client integration → sender authentication/flows →
+  `/build-android` → `/verify-android-push`. The prescribed iOS chain is
+  `/setup-fcm` → `/setup-apple-ios` → `/setup-apns` → native client integration
+  → sender authentication/flows → `/build-ios` → `/verify-ios-push`. Existing
+  active client integrations may resume at their first unproven stage.
+- ✅ Android v1 native distribution is customer-signed direct-test APK only.
+  `/build-android` uses the template's `npm run build:android` Wrap path,
+  rejects repository-local or symlinked keystores and secret-bearing config,
+  never creates a keystore or handles signing passwords, verifies the result
+  with `apksigner`, and writes only non-secret artifact identity to
+  `android-build.json`. AAB and Google Play distribution are deferred.
+- ✅ `/verify-android-push` proves delivery on the exact fresh APK installed on
+  a physical Android 8+ device. It covers Android 13+ runtime permission versus
+  Android 8-12 behavior, notification channels, foreground/background/
+  terminated delivery, exactly-once deep links, lowercase-OID account
+  transitions, opt-out, and token refresh or exact-APK re-registration.
+  Emulator, Expo Go, Metro/browser preview, Firebase acceptance, and outbox
+  `Sent` state are not sufficient evidence.
 - ✅ iOS push orchestration adds two independently resumable stages after
   configuration: `/build-ios` creates an exact registered-device
   `development` or `ad-hoc` IPA through `npm run build:ios`, and
@@ -145,9 +159,11 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   keychain outside repositories. Its generated password stays in login
   Keychain/Security APIs; the previous search list is restored on all exits,
   and handoffs expose only a service ID plus path fingerprint.
-- ✅ `/debug-app` retains Metro and editable JS/TS diagnostics, but wrapped iOS
-  notification runtime/delivery failures route to `/verify-ios-push`; stale
-  build or APNs ownership then routes onward to `/build-ios` or `/setup-apns`.
+- ✅ `/debug-app` retains Metro and editable JS/TS diagnostics, but wrapped
+  Android/iOS notification runtime and delivery failures route to
+  `/verify-android-push` or `/verify-ios-push`; stale build or platform
+  credential ownership then routes onward to the corresponding build/setup
+  owner.
 - ✅ WIF is the preferred sender authentication: Power Automate exchanges a dedicated Entra app token through Google Workload Identity Federation, impersonates a least-privilege Firebase sender service account, and calls FCM HTTP v1. `/setup-push-wif` validates/reuses, repairs, or provisions resources through the official gcloud MCP plus Azure MCP read-back/settings coverage, derives trust from observed `iss` plus `appid`/`azp`, proves the full exchange, and writes a non-secret `sender-auth.json`. Azure MCP GA 2.0.5 does not cover the full Azure provisioning surface here, so RBAC mutations, Function provisioning/deployment/auth/managed identity, Entra resource work, secret-safe writes, and narrow local-identity checks remain explicit `az` gaps.
 - ✅ Existing service-account integrations use `/setup-push-service-account` only. It validates/reuses or deploys an Entra-protected Azure Function whose managed identity reads the existing Firebase JSON from Azure Key Vault and mints short-lived Google tokens. Azure MCP is limited to covered read-back/settings work (including `role_assignment_list`, `functionapp_get`, `appservice_webapp_get`, `appservice_webapp_deployment_get`, `appservice_webapp_settings_get-appsettings`, `appservice_webapp_settings_update-appsettings`, and diagnostics). The plugin does not expose Azure MCP's `keyvault` namespace because its available secret operations are value-carrying, so RBAC mutations, Function provisioning/deployment/auth/managed identity, Entra resource work, and secret-safe writes remain on the documented `az` gap path. The workflow never creates/downloads a Firebase Admin key or places it in the flow/repository, and this compatibility path still requires the matching Azure/Entra/Key Vault/Function permissions plus a suitable premium Power Automate connector/license.
 - ✅ `/create-push-notification-flow` presents three informed sender-auth choices before authoring: WIF is recommended and lists its Entra, Key Vault, Google WIF/service-account/IAM, and premium Power Automate resources; the managed Function compatibility path lists its existing Firebase key, Key Vault, Function hosting/managed identity, Entra protection, connector, RBAC, and licensing requirements; manual/customer-owned setup lists the customer's connector/endpoint, identity, secret store, hosting, monitoring, and licensing ownership. Manual setup has no new skill or `sender-auth.json` mode: the plugin may author producer/outbox work, but never accepts credentials or claims the customer sender is plugin-validated.

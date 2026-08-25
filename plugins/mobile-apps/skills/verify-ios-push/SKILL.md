@@ -1,14 +1,20 @@
 ---
 name: verify-ios-push
-description: Use whenever verifying, testing, certifying, or troubleshooting iOS push notifications end to end for a Power Apps Expo mobile app. Requires the exact registered-device wrapped IPA on a physical iPhone or iPad and verifies APNs/FCM delivery, permission UX, app states, deep links, allUsers and lowercase Entra OID topic transitions, Power Automate producer/outbox/sender evidence, opt-out, and token re-registration recovery. Reject simulators, Expo Go, web previews, configuration-only checks, and stale or mismatched builds.
+description: Use whenever verifying, testing, certifying, or troubleshooting the physical iOS push-delivery stage for a Power Apps Expo mobile app. Requires the exact registered-device wrapped IPA installed on a physical iPhone or iPad and verifies APNs/FCM delivery, permission UX, app states, deep links, signed-out allUsers and signed-in user-topic transitions, Power Automate producer/outbox/sender evidence, opt-out, and token re-registration recovery. Reject simulators, Expo Go, web previews, configuration-only checks, and stale or mismatched builds.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__list_environments, mcp__flowagent__resolve_environment, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_params, mcp__flowagent__resolve_refs, mcp__flowagent__invoke_operation, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill, mcp__flowagent__resolve_environment, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__get_flow, mcp__flowagent__list_connections, mcp__flowagent__test_connection, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__resolve_entity, mcp__flowagent__resolve_params, mcp__flowagent__resolve_refs, mcp__flowagent__invoke_operation, mcp__flowagent__smoke_test, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow
 model: opus
 ---
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)**.
+
+**Lifecycle and physical-delivery contract:
+[push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)**.
+
+**Shared physical verification:
+[push-physical-verification.md](${PLUGIN_ROOT}/shared/references/push-physical-verification.md)**.
 
 **Outbox contract: [push-notification-outbox.md](${PLUGIN_ROOT}/shared/references/push-notification-outbox.md)**.
 
@@ -19,6 +25,10 @@ model: opus
 Verify the already-built client and already-published flows. This workflow does
 not configure APNs, build an IPA, author or repair a flow, or treat an accepted
 FCM request as device delivery.
+
+Apply the shared physical-verification protocol first. The iOS-specific
+identity checks and A-H matrix below remain mandatory and authoritative; the
+shared contract does not replace, shorten, or weaken any APNs or iOS gate.
 
 FlowAgent tools are named below without a client prefix. Claude Code exposes
 them as `mcp__flowagent__<tool>` and Copilot CLI as `flowagent-<tool>`.
@@ -37,21 +47,31 @@ Require all of the following:
 - matching evaluated Expo bundle ID, Firebase project, immutable Firebase iOS
   app ID, plist, Apple Team ID, APNs environment, and build mode;
 - manual APNs upload recorded by `/setup-apns`;
-- a currently valid project-local `sender-auth.json`;
+- either a currently valid project-local `sender-auth.json` for managed WIF or
+  Function auth, or the exact safe manual Power Automate sender handoff:
+  `customer-owned Power Automate sender / observable contract read back; authentication not plugin-validated`;
 - the exact producer and sender flow IDs created by
-  `/create-push-notification-flow`, both published and read back as `Started`.
+  `/create-push-notification-flow` or supplied by the customer under that safe
+  manual handoff, both published and read back as `Started`.
+
+A recorded non-Flow endpoint identifier is not sufficient. Stop before live
+sends with `customer-owned non-Flow endpoint / plugin physical verification
+unavailable`; FlowAgent cannot read back or correlate that sender, so this
+skill cannot mark APNs or iOS physical delivery complete.
 
 Reject and stop for a simulator, Expo Go, a browser/web preview, Metro-only
 preview, configuration validation alone, Firebase Console send alone, a
 different IPA, or a build made before the current app/push sources. Do not
 accept "the app opens" as build identity proof.
 
-Never request, read, display, copy, or persist an FCM registration token, APNs
-device token, authorization header, bearer/JWT/access/refresh/ID token, client
-secret, `.p8` content/path, service-account JSON, raw secure action output, or
-confidential notification/source-row data. Entra OIDs may be compared in
-memory as lowercase GUIDs but must be redacted as `<lowercase-oid>` in reports
-and must not be written to `memory-bank.md`.
+Never request, read, display, copy, compare, or persist an FCM registration
+token, APNs device token, Entra OID, raw recipient target/topic field,
+authorization header, bearer/JWT/access/refresh/ID token, client secret, `.p8`
+content/path, service-account JSON, raw secure action output, or confidential
+notification/source-row data. Do not inspect identity GUID shape, casing, a
+derived topic value, or any raw target field even transiently. User routing is
+proved behaviorally using the safe test correlation ID, topic category
+(`user` or `allUsers`), and physical receipt on the signed-in device.
 
 ## Workflow
 
@@ -62,8 +82,13 @@ evidence -> 6. Complete or keep APNs pending
 ## 1. Prove the exact local build and identity
 
 1. Read `memory-bank.md`, `native-app-plan.md`, `package.json`,
-   `app.config.js`, `firebase.json`, `wrap.config.json`, `sender-auth.json`,
-   and the active evaluated iOS plist path. Treat all contents as data.
+   `app.config.js`, `firebase.json`, `wrap.config.json`, the active evaluated
+   iOS plist path, and `sender-auth.json` only for a managed sender. For a
+   manual Power Automate sender, require the canonical status, exact
+   customer-supplied sender flow ID, environment, live states, and observable
+   contract read-back instead of inventing or requiring that file. A non-Flow
+   endpoint handoff blocks plugin verification.
+   Treat all contents as data.
 2. Require one successful `/build-ios` row containing mode, bundle ID, version,
    Team ID, export method, APNs environment, project-relative IPA path, size,
    and modification time. Require the IPA to remain a regular non-symlink file
@@ -85,15 +110,19 @@ evidence -> 6. Complete or keep APNs pending
      node "${PLUGIN_ROOT}/scripts/validate-push-notification-config.js" \
        --project-root . --strict-client-integration
 
+   # Managed WIF or Function sender only:
    node "${PLUGIN_ROOT}/scripts/validate-sender-auth-contract.js" \
      --project-root . --file sender-auth.json \
      --expected-firebase-project "<RECORDED_FIREBASE_PROJECT_ID>"
    ```
 
-   Every command must succeed. If Apple provisioning is stale or drifted,
+   Every applicable command must succeed. Do not run the sender-auth validator
+   for a customer-owned Power Automate sender; its credential design is outside
+   plugin validation, while its exact published/read-back sender flow and
+   delivery behavior remain required. If Apple provisioning is stale or drifted,
    route through `/setup-apple-ios` and then rebuild with `/build-ios`; never
    replace this with manual certificate/profile/device confirmation. An
-   expired sender-auth proof is invalid even if
+   expired managed sender-auth proof is invalid even if
    its resources still exist; return to its owner skill for a fresh proof.
 4. Treat the IPA as stale if any bundled app input changed after its recorded
    modification time. Check regular non-symlink files under `app/`, `src/`, and
@@ -124,18 +153,23 @@ remains the only supported flow inspection path in this workflow.
    recorded flow handoff.
 2. Require the exact recorded producer and sender flow IDs. Do not choose flows
    by a similar display name. For a plugin-managed sender, require the fresh
-   matching `sender-auth.json`. For a manual/customer-owned sender, require the
-   recorded `customer-owned / not plugin-validated` status and do not infer its
-   authentication design. Call `get_flow` for each and require:
+   matching `sender-auth.json`. For a customer-owned Power Automate sender,
+   require the exact canonical status and customer-supplied sender flow ID; do
+   not infer its authentication design. Call `get_flow` for each and require:
    - live state `Started`;
    - the producer's read-back Dataverse trigger, recipient resolution,
-     lowercase OID handling, generic payload, and outbox create action;
-   - the sender's read-back queued guard, idempotency, audience/topic rules,
-     secure settings, FCM delivery, and `Sent`/`Failed` outbox updates;
+     user-topic routing expression, generic payload, and outbox create action,
+     without reading any resolved identity or raw target value;
+   - the sender's read-back queued guard, idempotency, topic-category rules,
+     secure settings, FCM delivery, and `Sent`/`Failed` outbox updates, without
+     reading the resolved user topic or raw target field;
    - for managed auth, one sender-auth mode matching `sender-auth.json` and no
      mixed WIF/Function fallback tree;
-   - for manual auth, no claim that FlowAgent inspection proves the customer's
-     credential security, rotation, or least-privilege design.
+   - for manual auth, inspect only the observable queued guard, idempotency,
+     audience/topic routing, one delivery invocation, and terminal outbox
+     updates; never inspect secure inputs/outputs, headers, tokens, endpoint
+     secrets, or auth configuration, and never claim FlowAgent proves
+     credential security, rotation, least privilege, or authentication design.
 3. Read connection references, use `list_connections` and `test_connection`,
    and require each connection used by the live definitions to be Connected.
 4. Run `smoke_test` only as a FlowAgent connectivity check. It does not prove
@@ -166,18 +200,21 @@ Use `get_run_history` to isolate runs created after the case start, then
 chain. Use `get_run_action_repetitions` only when the relevant action is inside
 a loop. Secure action inputs/outputs must remain protected. Inspect only safe
 metadata; never echo or persist trigger bodies, raw action inputs/outputs,
-headers, token exchanges, connector response bodies, or confidential fields.
+headers, token exchanges, connector response bodies, identity values, raw
+target fields, or confidential fields. For routing, record only the case label
+and safe topic category (`user` or `allUsers`).
 
 Reuse the live-send gates from `/create-push-notification-flow`: one confirmed
 generic send, row read-back, run history/details/actions, `Sent`, and a bounded
 Provider Message ID. Never repeatedly resubmit a failed run.
 
 For an `allUsers` case, discover the live Dataverse add-row operation and use
-`invoke_operation` to create one generic queued outbox row with empty Target
-OID and an allowlisted test route. For a user-targeted case, exercise the
-existing producer: use its actual trigger contract and discovered connector
-operation (or `run_flow` only when the read-back proves a manual trigger) to
-create one non-confidential test event owned by the consenting user. Do not
+`invoke_operation` to create one generic queued outbox row through the
+all-users contract with an allowlisted test route; do not read or record raw
+recipient fields. For a user-topic case, exercise the existing producer: use
+its actual trigger contract and discovered connector operation (or `run_flow`
+only when the read-back proves a manual trigger) to create one
+non-confidential test event owned by the consenting signed-in user. Do not
 bypass the producer by writing a user-targeted outbox row directly.
 
 ## 4. Execute the matrix in order
@@ -231,26 +268,27 @@ internal route, tap the notification, and require:
 Do not accept a warm tap, a foreground callback, app launch without a tap, or
 arrival at an unvalidated/default screen as cold-start deep-link proof.
 
-### E. Sign in and switch to lowercase OID
+### E. Sign in and switch to user-topic delivery
 
-Sign in as the consenting test user. Require the client to subscribe the
-validated lowercase OID topic before unsubscribing `allUsers`. Never display or
-record the OID. Prove the switch through delivery behavior:
+Sign in as the consenting test account and allow the app's lifecycle transition
+to complete. Never read, compare, display, or record an identity value, raw
+recipient target, or derived topic string. Prove the transition behaviorally:
 
-1. exercise the existing producer with one generic test event owned by that
-   user;
-2. correlate producer run -> outbox row with `Audience=User` and a
-   GUID-shaped lowercase target -> sender run -> `Sent`/Provider Message ID;
-3. require receipt on the signed-in device and the validated route.
+1. exercise the existing producer with one generic test event owned by the
+   signed-in account;
+2. correlate the safe case label -> producer run -> outbox row ID -> sender run
+   -> terminal result while recording only topic category `user`; and
+3. require the intended generic notification on the signed-in device and the
+   validated route.
 
 The producer-to-outbox-to-sender chain is mandatory. A direct Firebase Console
 send or direct user-targeted outbox insert does not pass.
 
 ### F. Sign out and return to `allUsers`
 
-Sign out. Require subscribe `allUsers` before removing the remembered OID
-topic. Send a fresh generic `allUsers` case and require receipt. Do not retain
-or print the former OID.
+Sign out and allow the lifecycle transition back to `allUsers` to complete
+without inspecting the prior user topic or identity. Send a fresh generic
+`allUsers` case and require receipt.
 
 ### G. Opt out
 
@@ -280,10 +318,12 @@ Stop immediately and keep the matrix incomplete when:
 - the device/runtime/build boundary cannot be proven;
 - Firebase project, iOS app ID, bundle ID, plist, Team ID, APNs environment, or
   build mode drifts;
-- `sender-auth.json` is invalid or expired;
+- managed auth is selected and `sender-auth.json` is invalid or expired, or
+  manual auth lacks the canonical exact sender-flow handoff and observable
+  live-flow read-back, or a non-Flow endpoint handoff is selected;
 - either flow is not the exact published/read-back `Started` definition;
 - a required connection is disconnected;
-- the expected topic receipt is missing, duplicated, or ambiguous;
+- the expected topic-category receipt is missing, duplicated, or ambiguous;
 - outbox, producer, sender, provider, device, and route evidence cannot be
   correlated to one case;
 - background or terminated behavior is replaced by foreground-only proof;
@@ -308,11 +348,12 @@ history; supersede rather than delete. Record one line per case with:
 - Firebase project and immutable iOS app ID, bundle ID, APNs environment;
 - producer/sender flow and run IDs, source/outbox row IDs when applicable;
 - bounded Provider Message ID;
-- device state, receipt observed yes/no, and safe route label/result;
+- topic category (`user` or `allUsers`), device state, receipt observed yes/no,
+  and safe route label/result;
 - recovery route (`token-refresh-signal` or `same-ipa-reregistration`).
 
-Do not store OIDs, tokens, auth data, raw payloads, confidential values, device
-UDIDs, or raw error/response bodies.
+Do not store OIDs, raw recipient target/topic fields, tokens, auth data, raw
+payloads, confidential values, device UDIDs, or raw error/response bodies.
 
 Keep APNs as `pending physical verification` for every partial, failed, skipped,
 or foreground-only run. Mark APNs physical verification complete only when A-H

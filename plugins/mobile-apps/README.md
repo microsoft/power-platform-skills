@@ -7,6 +7,10 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 - Node.js 24 LTS.
 - npm 10 or newer.
 - The Power Apps Developer app from the Apple App Store or Google Play.
+- For wrapped Android push delivery: a physical Android 8/API 26+ device and
+  the local Wrap/Android SDK toolchain, including `apksigner` for signature
+  verification. Direct-test APK signing remains customer-managed; AAB and
+  Google Play distribution are not included in the preview.
 - For wrapped iOS push delivery: macOS with the installed Wrap/Xcode toolchain,
   Apple Developer team access, and a physical iPhone or iPad registered to that
   team. The preview supports registered-device `development` and `ad-hoc`
@@ -200,13 +204,19 @@ Native modules are allowlist-bound by the current template `package.json`. Push 
 
 Notification delivery must be tested on matching wrapped physical-device
 builds. Native client setup, sender authentication, and Power Automate flow
-authoring are independent resumable stages. iOS adds two more independent
-stages: a wrapped registered-device build and physical delivery verification.
+authoring are independent resumable stages. Each platform then adds a wrapped
+build and physical delivery-verification stage.
 An already integrated client can run `/create-push-notification-flow` directly;
 a new or newly added native platform still runs `/setup-fcm`. The prescribed
-iOS route is:
+routes are:
 
 ```text
+Android:
+/setup-fcm -> /add-push-notifications
+-> sender auth + /create-push-notification-flow -> /build-android
+-> /verify-android-push
+
+iOS:
 /setup-fcm -> /setup-apple-ios -> /setup-apns -> /add-push-notifications
 -> sender auth + /create-push-notification-flow -> /build-ios
 -> /verify-ios-push
@@ -257,6 +267,22 @@ foreground, background, terminated/cold-start deep-link, signed-out
 `allUsers`, signed-in lowercase-OID, sign-out, opt-out, and re-registration
 cases. Firebase acceptance, a `Sent` outbox row, simulator, Expo Go, Metro, or
 configuration checks alone do not prove delivery.
+
+For Android, run `/build-android` to produce and validate a direct-test APK
+through the template's `npm run build:android` Wrap path. Android v1 does not
+cover AAB or Google Play distribution. The plugin never creates a keystore or
+handles signing passwords: customers provide an existing signing setup and run
+credential-bearing signing in their own uncaptured terminal or approved
+external signing system. The skill records only non-secret artifact identity
+and `apksigner verify` evidence in `android-build.json`.
+
+Run `/verify-android-push` only after that exact APK is installed and sender
+auth plus both Power Automate flows are ready. It verifies permission and
+notification-channel behavior, foreground/background/terminated delivery,
+exactly-once deep links, signed-out `allUsers`, signed-in lowercase-OID account
+transitions, opt-out, and token refresh or exact-APK re-registration recovery
+on a physical Android 8+ device. Emulator, Expo Go, Metro/browser preview,
+Firebase acceptance, and an outbox `Sent` state alone do not prove delivery.
 
 Run `/setup-push-wif` before flow authoring when the Google trust is not already
 verified. WIF is the preferred sender mode: it uses the official gcloud MCP and
@@ -422,6 +448,8 @@ Example edit flows:
 | `/setup-fcm` | 🟡 preview | Official MCP-first Firebase owner — uses the vendor-official Firebase MCP to list/select/create Firebase projects, idempotently reuse or register exact-identity Android/iOS apps, explicitly select among safe duplicates by immutable app ID, then validate committed `firebase/` client configs that Expo auto-discovers. No CLI fallback. |
 | `/setup-apns` | 🟡 preview | After `/setup-apple-ios`, validate the Firebase iOS identity plus exact Apple Team/identifier/Push handoff, then guide the supported manual APNs `.p8` upload in Firebase Console; no supported CLI/API upload exists and the agent never handles the key. |
 | `/setup-apple-ios` | 🟡 preview | Scaffold pinned local Bundler/Fastlane tooling; prove the exact Apple Team and Expo/Firebase bundle ID; create/reuse the explicit identifier, Push capability, registered devices, modern certificates, and verified development/ad-hoc profiles; emit the fresh non-secret build handoff. Fastlane stays because Apple provides no vendor-official provisioning MCP for this workflow, and community MCPs are excluded. Creates no App Store Connect listing and does not build. |
+| `/build-android` | 🟡 preview | Build and validate a customer-signed direct-test APK through `npm run build:android` (`wrap android`). Requires an existing customer-managed signing setup, never creates a keystore or handles signing passwords, rejects repository-local/symlinked keystores and secret-bearing config, and emits a non-secret `android-build.json`. APK only; AAB/Google Play is deferred. |
+| `/verify-android-push` | 🟡 preview | Verify the exact fresh wrapped APK and published producer/sender flows on a physical Android 8+ device across permission/channel behavior, foreground/background/terminated delivery, exactly-once deep links, topic transitions, opt-out, and token refresh or same-APK re-registration recovery. |
 | `/build-ios` | 🟡 preview | Build a registered-device development or ad-hoc IPA through `npm run build:ios` (`wrap ios`), requiring the fresh exact Apple provisioning handoff and a secure dedicated-keychain/profile/APNs proof immediately before Wrap. The previous keychain search list is always restored. Not for simulator, TestFlight, App Store, or enterprise distribution. |
 | `/verify-ios-push` | 🟡 preview | Verify the exact fresh wrapped IPA and published producer/sender flows on a registered physical iPhone/iPad across permission, foreground/background/terminated delivery, deep links, topic transitions, opt-out, and re-registration recovery. |
 | `/setup-push-wif` | 🟡 preview | Preferred sender-auth path: validate/reuse, repair, or provision keyless Entra-to-Google Workload Identity Federation through the official gcloud MCP plus Azure MCP read-back/settings coverage, while explicit `az` gaps remain for RBAC, Function provisioning/auth/managed identity, Entra resource work, and secret-safe writes that Azure MCP GA 2.0.5 does not cover. Then prove the complete exchange and write the non-secret sender-auth handoff. |
@@ -430,8 +458,8 @@ Example edit flows:
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
-| `/deploy` | ✅ v0 | Power Platform web deployment — `npm run build` then `npx power-apps push` to the env in `power.config.json`. Routes registered-device iOS native builds to `/build-ios`; it does not run `expo run:ios` or `expo run:android`. |
-| `/debug-app` | ✅ v0 | Diagnose Metro/dev-client runtime and silent failures. Keeps general JS/bundle diagnostics local, but routes wrapped iOS notification delivery/runtime verification to `/verify-ios-push`. |
+| `/deploy` | ✅ v0 | Power Platform web deployment — `npm run build` then `npx power-apps push` to the env in `power.config.json`. Routes native push builds to `/build-android` or `/build-ios`; it does not run `expo run:ios` or `expo run:android`. |
+| `/debug-app` | ✅ v0 | Diagnose Metro/dev-client runtime and silent failures. Keeps general JS/bundle diagnostics local, but routes wrapped Android/iOS notification delivery verification to `/verify-android-push` or `/verify-ios-push`. |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |

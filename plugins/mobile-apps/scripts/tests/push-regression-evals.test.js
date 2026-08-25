@@ -23,7 +23,7 @@ test('the handoff regression scenarios are represented exactly once', () => {
   ));
   const ids = evals.map(({ id }) => id).sort((left, right) => left - right);
 
-  assert.deepStrictEqual(ids, Array.from({ length: 45 }, (_, index) => index + 1));
+  assert.deepStrictEqual(ids, Array.from({ length: 48 }, (_, index) => index + 1));
   for (const evaluation of evals) {
     assert.ok(evaluation.prompt.trim(), `scenario ${evaluation.id} needs a prompt`);
     assert.ok(evaluation.expected_output.trim(), `scenario ${evaluation.id} needs expected output`);
@@ -110,6 +110,10 @@ test('push flow presents informed managed and customer-owned sender auth choices
     path.join(PLUGIN_ROOT, 'shared/references/sender-auth-contract.md'),
     'utf8',
   );
+  const authoring = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-authoring.md'),
+    'utf8',
+  );
   const readme = fs.readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
   const agents = fs.readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
 
@@ -118,10 +122,46 @@ test('push flow presents informed managed and customer-owned sender auth choices
   assert.match(flow, /Manual\/customer-owned sender authentication/);
   assert.match(flow, /show its three-option comparison/);
   assert.match(flow, /do not invoke or create a\s+setup skill/i);
-  assert.match(flow, /customer-owned \/ not plugin-validated/);
-  assert.match(flow, /offer to continue with the producer and outbox only/i);
-  assert.match(flow, /must not create a placeholder[\s\S]*unauthenticated HTTP action/i);
+  assert.match(
+    flow,
+    /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
+  );
+  assert.match(
+    flow,
+    /authors only the producer\/outbox artifacts[\s\S]*not ready for downstream routing without a safe sender handoff/i,
+  );
+  assert.match(flow, /must not create a placeholder[\s\S]*unauthenticated HTTP\s+action/i);
   assert.match(flow, /checkbox or verbal confirmation cannot promote/i);
+  assert.match(flow, /customer-supplied and\s+approved \*\*exact sender flow ID\*\*/i);
+  assert.match(flow, /call\s+`get_flow` for that ID/i);
+  assert.match(flow, /returned ID to match exactly and state `Started`/i);
+  assert.match(flow, /observable\s+queued-outbox trigger\/guard, idempotent claim/i);
+  assert.match(flow, /no\s+authentication-validation result/i);
+  assert.match(
+    authoring,
+    /A display name, URL with\s+an unproved ID, screenshot,\s+checkbox, or verbal "it works" is not a flow identity/i,
+  );
+  assert.match(authoring, /Read back only its observable, non-secret contract/i);
+  assert.match(authoring, /Push flow handoff/);
+  assert.match(authoring, /Sender flow ID/);
+  assert.match(
+    authoring,
+    /customer-owned Power Automate sender \/ observable contract read back;\s+authentication not plugin-validated/,
+  );
+  assert.match(authoring, /### Flow-backed handoff schema/);
+  assert.match(authoring, /both exact IDs must read back by ID\s+as `Started`/i);
+  assert.match(authoring, /### Non-Flow blocked handoff schema/);
+  const nonFlowFields = authoring.match(
+    /### Non-Flow blocked handoff schema[\s\S]*?Use only these fields:\n([\s\S]*?)\n\nThe endpoint identifier/,
+  )?.[1] || '';
+  assert.match(nonFlowFields, /`Sender endpoint identifier`/);
+  assert.match(nonFlowFields, /`Producer flow ID`/);
+  assert.match(nonFlowFields, /`Producer flow state`/);
+  assert.doesNotMatch(nonFlowFields, /`Sender flow ID`|`Sender flow state`/);
+  assert.match(
+    flow,
+    /For a non-Flow endpoint[\s\S]*Omit `Sender flow ID` and `Sender flow state` entirely/i,
+  );
 
   assert.match(options, /Workload Identity Federation \(Recommended\)/);
   assert.match(options, /Dedicated Entra app\/service principal and credential/);
@@ -136,10 +176,44 @@ test('push flow presents informed managed and customer-owned sender auth choices
 
   assert.match(contract, /covers only the plugin-managed `wif` and\s+`function-endpoint` modes/i);
   assert.match(contract, /Do not create a manual mode/i);
-  assert.match(orchestration, /customer-owned and not plugin-validated/i);
+  assert.match(
+    orchestration,
+    /customer-owned Power Automate sender[\s\S]*authentication not plugin-validated/i,
+  );
   assert.match(readme, /three choices—\*\*WIF \(Recommended\)\*\*/);
   assert.match(readme, /Manual\/customer-owned/);
   assert.match(agents, /three informed sender-auth choices/);
+});
+
+test('push flow recovery keeps the tool surface non-destructive', () => {
+  const fs = require('node:fs');
+  const flow = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/SKILL.md'),
+    'utf8',
+  );
+  const authoring = fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-flow-authoring.md'),
+    'utf8',
+  );
+  const frontmatter = flow.match(/^---\n([\s\S]*?)\n---/)?.[1] || '';
+  const evals = JSON.parse(fs.readFileSync(
+    path.join(PLUGIN_ROOT, 'skills/create-push-notification-flow/evals/evals.json'),
+    'utf8',
+  )).evals;
+
+  assert.doesNotMatch(frontmatter, /mcp__flowagent__delete_flow/);
+  assert.doesNotMatch(authoring, /\bdelete_flow\b/);
+  assert.doesNotMatch(authoring, /Delete only an empty\/incorrect flow/i);
+  assert.match(authoring, /use `disable_flow`[\s\S]*disabled\/`Stopped`/i);
+  assert.match(authoring, /make cleanup explicitly user-owned/i);
+  assert.match(flow, /leave cleanup explicitly user-owned; do not delete it/i);
+  assert.deepStrictEqual(evals.slice(-3).map(({ id }) => id), [46, 47, 48]);
+  assert.match(evals.find(({ id }) => id === 46).expected_output, /exact producer and sender IDs\/states/i);
+  assert.match(evals.find(({ id }) => id === 47).expected_output, /does not use delete_flow/i);
+  assert.match(
+    evals.find(({ id }) => id === 48).expected_output,
+    /omits Sender flow ID and Sender flow state entirely/i,
+  );
 });
 
 test('push sender auth skills pin GA MCP versions and namespace semantics', () => {
@@ -238,7 +312,7 @@ test('push orchestration documents independent resumable setup tracks', () => {
   assert.strictEqual(orchestration.skill_name, 'add-push-notifications');
   assert.deepStrictEqual(
     orchestration.evals.map(({ id }) => id),
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
   );
 
   const skill = require('node:fs').readFileSync(
@@ -247,13 +321,14 @@ test('push orchestration documents independent resumable setup tracks', () => {
   );
   const readme = require('node:fs').readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
   const agents = require('node:fs').readFileSync(path.join(PLUGIN_ROOT, 'AGENTS.md'), 'utf8');
-
-  assert.match(skill, /independent,\s+resumable tracks/);
-  assert.match(
-    skill,
-    /Multiple safe exact\s+matches require.*independently for Android\s+and iOS/s,
+  const lifecycle = require('node:fs').readFileSync(
+    path.join(PLUGIN_ROOT, 'shared/references/push-lifecycle.md'),
+    'utf8',
   );
-  assert.match(skill, /run\s+`\/create-push-notification-flow` directly/);
+
+  assert.match(skill, /independent,\s+resumable lifecycle/);
+  assert.match(lifecycle, /Track Android and iOS independently/);
+  assert.match(lifecycle, /\| 5\. Power Automate flows .*`\/create-push-notification-flow` \|/);
   assert.match(readme, /`\/setup-push-service-account`/);
   assert.match(readme, /Push notification cloud prerequisites/);
   assert.match(readme, /premium connector/);
@@ -296,7 +371,7 @@ test('iOS push orchestration reports stage ownership without duplicating build o
   assert.match(readme, /\| `\/verify-ios-push` \|/);
   assert.match(readme, /development and ad-hoc registered-device IPA workflows/);
   assert.match(readme, /certificates, private keys, provisioning profiles, device\s+UDIDs/s);
-  assert.match(agents, /36 skills \+ 5 agents/);
+  assert.match(agents, /38 skills \+ 5 agents/);
   assert.match(agents, /Apple certificates, private keys/);
 });
 

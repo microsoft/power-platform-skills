@@ -1,6 +1,6 @@
 ---
 name: setup-push-service-account
-description: Use when a Power Apps mobile push sender must call an Entra-protected Azure Function that sends FCM HTTP v1 with an existing Firebase service-account JSON stored in Azure Key Vault. Use this skill to validate and reuse an existing endpoint or, after explicit confirmation, scaffold and deploy the bundled least-privilege Function. Never create or download a Firebase Admin key.
+description: Use when validating, reusing, or provisioning the managed Function compatibility sender-auth stage for a Power Apps mobile push sender that calls an Entra-protected Azure Function and uses an existing Firebase service-account JSON stored in Azure Key Vault. Owns only this sender-auth handoff, not client integration, flows, wrapped builds, installation, or delivery. Never create or download a Firebase Admin key.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__azure__subscription, mcp__azure__group, mcp__azure__role, mcp__azure__functionapp, mcp__azure__appservice
 model: opus

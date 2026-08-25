@@ -312,7 +312,7 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   }
 
   const provisioning = fs.readFileSync(
-    path.join(PLUGIN_ROOT, 'shared/references/firebase-cli-provisioning.md'),
+    path.join(PLUGIN_ROOT, 'shared/references/firebase-mcp-provisioning.md'),
     'utf8',
   );
   const officialMcp = fs.readFileSync(
@@ -350,20 +350,16 @@ test('fixtures and workflow remain sanitized and MCP-first with no Firebase CLI 
   assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_list_apps/);
   assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_create_app/);
   assert.match(skill, /allowed-tools: [^\n]*mcp__firebase__firebase_get_sdk_config/);
-  assert.match(skill, /MCP readiness gate/);
-  assert.match(skill, /\/mcp[\s\S]*\/setup[\s\S]*\/restart[\s\S]*\/mcp/);
-  assert.match(skill, /show `firebase` connected with the required[\s\S]*tools/i);
-  assert.match(skill, /extract-firebase-sdk-config\.js/);
-  assert.match(skill, /firebase\/\.android-sdk-config\.mcp\.txt/);
-  assert.match(skill, /firebase\/\.ios-sdk-config\.mcp\.txt/);
-  assert.match(skill, /--selected-app-id "<ANDROID_APP_ID>"/);
-  assert.match(skill, /selection-required/);
+  assert.match(skill, /firebase-mcp-provisioning\.md/);
+  assert.match(skill, /official-mcp-servers\.md/);
   assert.match(skill, /\/setup-apns/);
   assert.match(skill, /Never request, download, copy, or commit a Firebase Admin/);
-  assert.match(skill, /Do not run `firebase-tools`, raw REST, or browser automation as fallback/);
-  assert.match(skill, /The official Firebase MCP `firebase_create_project` tool[\s\S]*Do not fall back to CLI parent flags/);
-  assert.match(skill, /15\.27\.0/);
-  assert.match(skill, /no separate addFirebase core MCP tool/i);
+  assert.match(provisioning, /## 1\. Verify Firebase MCP authentication/);
+  assert.match(provisioning, /firebase_get_environment/);
+  assert.match(provisioning, /firebase_login/);
+  assert.match(provisioning, /--selected-app-id "<APP_ID>"/);
+  assert.match(provisioning, /selection-required/);
+  assert.doesNotMatch(provisioning, /npx firebase-tools/);
   assert.doesNotMatch(skill, /npx firebase-tools/);
   assert.doesNotMatch(skill, /15\.28\.1/);
   assert.doesNotMatch(skill, /projects:create <PROJECT_ID>/);

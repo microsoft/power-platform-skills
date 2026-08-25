@@ -84,6 +84,24 @@
       "prompt": "Firebase accepted our iOS message and the outbox row says Sent, so mark APNs and iOS delivery complete even though we only tested in Metro.",
       "expected_output": "The skill refuses to treat Firebase acceptance, Sent state, or Metro as device proof; keeps APNs configured, device verification pending and physical delivery pending; and routes the exact wrapped physical-device verification to /verify-ios-push.",
       "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "Android push runtime integration, sender authentication, and the exact published flows are ready; iOS is not selected. Build and verify Android push next.",
+      "expected_output": "The skill reports Android and iOS build and physical-delivery states independently, keeps iOS not applicable, routes by name to /build-android and then /verify-android-push, and does not assume an Android artifact format, build mode, installation mechanism, internal matrix, or evidence schema.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "Use our customer-owned manual Power Automate sender. The producer exists, and we can provide the exact sender flow ID. Continue toward iOS build and physical verification without validating our credentials.",
+      "expected_output": "The skill requires the exact customer-supplied sender flow ID in the producer's recorded environment and the safe FlowAgent read-back of both Started flows plus the observable queued/idempotent/topic/delivery/outbox contract. It records authentication as customer-owned and not plugin-validated, never inspects credentials or secure action data, and only then routes to build-ios and verify-ios-push.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "Our customer-owned sender is a hosted non-Flow endpoint, not a Power Automate sender flow. Record it and proceed with plugin physical push verification.",
+      "expected_output": "The skill records only a non-secret immutable endpoint identifier with customer-owned non-Flow endpoint / plugin physical verification unavailable, keeps producer-only state distinct, and blocks plugin physical verification because FlowAgent cannot read back or correlate an exact sender flow.",
+      "files": []
     }
   ]
 }

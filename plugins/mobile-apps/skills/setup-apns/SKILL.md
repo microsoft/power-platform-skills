@@ -1,6 +1,6 @@
 ---
 name: setup-apns
-description: Use when enabling iOS push notifications for a Power Apps Expo mobile app through Firebase Cloud Messaging and APNs, including APNs authentication keys, Firebase APNs upload, iOS entitlements, or troubleshooting iOS FCM topic delivery.
+description: Use when configuring, validating, or repairing the APNs credential handoff for the exact iOS Firebase app after Apple provisioning. Owns Apple Team/bundle/Push-capability continuity and the supported manual APNs p8 upload in Firebase Console; use add-push-notifications for app entitlements/runtime/topics and verify-ios-push for physical delivery troubleshooting.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, mcp__firebase__firebase_get_environment, mcp__firebase__firebase_login, mcp__firebase__firebase_update_environment, mcp__firebase__firebase_list_projects, mcp__firebase__firebase_get_project, mcp__firebase__firebase_list_apps
 model: sonnet
@@ -10,7 +10,7 @@ model: sonnet
 
 **Push contract: [push-notifications.md](${PLUGIN_ROOT}/shared/references/push-notifications.md)**.
 
-**Firebase MCP provisioning: [firebase-cli-provisioning.md](${PLUGIN_ROOT}/shared/references/firebase-cli-provisioning.md)** —
+**Firebase MCP provisioning: [firebase-mcp-provisioning.md](${PLUGIN_ROOT}/shared/references/firebase-mcp-provisioning.md)** —
 use the read-only identity and project checks here whenever the `/setup-fcm`
 Firebase MCP session state is unavailable.
 
@@ -63,7 +63,7 @@ APNs setup extends the exact Firebase iOS app already configured by
    a newly supplied path or identity as a substitute for `/setup-fcm` output.
 5. Reuse the Firebase MCP authenticated user confirmed by `/setup-fcm`. If that
    session state is not available in the current session, rerun the read-only
-   identity preflight from `firebase-cli-provisioning.md`: use only
+   identity preflight from `firebase-mcp-provisioning.md`: use only
    `mcp__firebase__firebase_get_environment`,
    `mcp__firebase__firebase_update_environment`, and
    `mcp__firebase__firebase_login` to restore the exact intended account. Do not

@@ -1,12 +1,16 @@
 ---
 name: build-ios
-description: Use when building, wrapping, signing, exporting, or installing a Power Apps Expo app for registered physical iPhones or iPads. Creates development or ad-hoc iOS artifacts through npm run build:ios only; never use for simulators, TestFlight, App Store submission, or store distribution.
+description: Use when building, wrapping, signing, or exporting a Power Apps Expo app for registered physical iPhones or iPads. Creates development or ad-hoc iOS artifacts through npm run build:ios only; it does not install or verify them and is never used for simulators, TestFlight, App Store submission, or store distribution.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
 **Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
+
+**Lifecycle and routing:
+[push-lifecycle.md](${PLUGIN_ROOT}/shared/references/push-lifecycle.md)** —
+this skill owns only the iOS wrapped-build stage.
 
 # Build iOS
 
@@ -18,6 +22,11 @@ Build a registered-device `.ipa` through the template's supported
 
 Do not use this skill for a simulator, TestFlight, App Store Connect, enterprise
 distribution, or App Store export.
+
+This skill ends after creating, validating, and recording the fresh artifact.
+It does not install, launch, or test the IPA. Installation is a
+user/operator-owned handoff consumed by `/verify-ios-push`, which alone owns
+physical delivery verification.
 
 ## Signing boundary
 

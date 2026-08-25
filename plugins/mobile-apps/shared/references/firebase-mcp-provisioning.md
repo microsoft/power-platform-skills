@@ -1,4 +1,19 @@
-# Firebase MCP provisioning preflight
+# Firebase MCP project, app, and client provisioning
+
+This is the canonical workflow for Firebase MCP authentication, project
+selection/provisioning, native app identity, client SDK configuration, and the
+manual APNs upload boundary.
+
+## Contents
+
+1. [Verify Firebase MCP authentication](#1-verify-firebase-mcp-authentication)
+2. [List, select, and activate a Firebase project](#2-list-select-and-activate-a-firebase-project)
+3. [Create a project or add Firebase](#3-create-a-project-or-add-firebase-to-an-existing-google-cloud-project)
+4. [Read back active-project readiness](#4-read-back-active-project-readiness)
+5. [List, register, and re-read native Firebase apps](#5-list-register-and-re-read-native-firebase-apps)
+6. [Retrieve, validate, and install SDK config](#6-retrieve-validate-and-install-sdk-config-through-firebase-mcp)
+7. [Verify Expo activation and write the handoff](#7-verify-expo-activation-and-write-the-handoff)
+8. [APNs credentials remain manual](#8-apns-credentials-remain-a-manual-console-boundary)
 
 Use this workflow for local, interactive Firebase provisioning through the
 **official Firebase MCP server** backed by stable `firebase-tools` **15.27.0**. Use
@@ -102,7 +117,8 @@ project ID, then activate it with `mcp__firebase__firebase_update_environment`:
 ## 3. Create a project or add Firebase to an existing Google Cloud project
 
 Creation and Firebase enablement are persistent actions. Show the authenticated
-user, project ID, and display name first.
+user, project ID, and display name first, explain the immutable/persistent
+effect, and require explicit confirmation before calling the create tool.
 
 Use `mcp__firebase__firebase_create_project` (`firebase_create_project`) with:
 
@@ -149,6 +165,20 @@ is wrong, STOP before app registration or SDK config retrieval.
 
 Always work against the **active** Firebase project selected above.
 
+Evaluate dynamic Expo config through the deterministic resolver before listing
+apps:
+
+```bash
+npx expo config --type public --json |
+  node "${PLUGIN_ROOT}/scripts/resolve-firebase-app-identity.js" \
+    --project-root .
+```
+
+Require `status == "ready"` and use only its display name, Android package,
+iOS bundle ID, and selected native platforms. Stop on missing/placeholder
+identifiers. Report Web as skipped. Create `firebase/` before writing scratch
+or candidate files.
+
 List apps with `mcp__firebase__firebase_list_apps` (`firebase_list_apps`):
 
 ```json
@@ -165,8 +195,23 @@ the official server's flat js-yaml app-list format and rejects general-purpose
 YAML features. Never synthesize, truncate, or hand-edit the output before
 matching.
 
-Register a native app only after explicit confirmation and only for a selected
-native platform. Use `mcp__firebase__firebase_create_app`
+Branch only on the resolver's structured result:
+
+- `match`: reuse and record the exact `.app.appId`.
+- `selection-required`: show only safe candidates (`appId`, display name,
+  platform, exact package/bundle), require one immutable app ID independently
+  per platform, and rerun the same unmodified input with
+  `--selected-app-id "<APP_ID>"`. Never select by display name or accept an ID
+  absent from the candidates.
+- `no-match`: app creation may be proposed.
+- `ambiguous`: stop on conflicts, missing selected IDs, or platform/identity
+  mismatch; never guess, delete, rename, or create around them.
+- `error`: stop on the safe parser/input error.
+
+Register a native app only after showing the authenticated user, project ID,
+platform, exact package/bundle identity, and display name and receiving
+explicit confirmation. Create only selected native platforms. Use
+`mcp__firebase__firebase_create_app`
 (`firebase_create_app`) with one of these shapes:
 
 ```json
@@ -192,12 +237,20 @@ native platform. Use `mcp__firebase__firebase_create_app`
 
 Never create a Web app in these mobile push workflows. After every creation,
 rerun `mcp__firebase__firebase_list_apps` and the deterministic local resolver.
-A rerun with unchanged Expo identity must reuse the same app IDs and require no
-additional creation.
+Require `match` and a non-empty app ID; if safe duplicates now require
+selection, use the explicit branch above. A rerun with unchanged Expo identity
+must reuse the same app IDs and require no additional creation or confirmation.
+Delete only completed/stopped app-list scratch files, never canonical configs.
 
-## 6. Retrieve SDK config through Firebase MCP
+## 6. Retrieve, validate, and install SDK config through Firebase MCP
 
-For native apps, use `mcp__firebase__firebase_get_sdk_config`
+Immediately before retrieval, refresh each selected platform's app-list scratch
+file and rerun `resolve-firebase-app-identity.js` with
+`--selected-app-id "<APP_ID>"`. Require `status == "match"` and the same
+project/platform/package-or-bundle identity. Stop on `selection-required`,
+`no-match`, `ambiguous`, `error`, or drift.
+
+Then use `mcp__firebase__firebase_get_sdk_config`
 (`firebase_get_sdk_config`) with the **exact selected app ID**:
 
 ```json
@@ -240,10 +293,88 @@ the non-canonical candidate path:
 - `firebase/GoogleService-Info.download.plist`
 
 Do not write directly onto a canonical file and do not normalize or reformat
-contents before validation. Then run the deterministic local validator and move
-or reuse files only according to its structured result.
+contents before validation.
 
-## 7. APNs credentials remain a manual Console boundary
+Validate each candidate against its canonical destination:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-firebase-client-config.js" \
+  --project-root . --platform android \
+  --candidate firebase/google-services.download.json \
+  --destination firebase/google-services.json \
+  --expected-project-id "<PROJECT_ID>" \
+  --expected-app-id "<ANDROID_APP_ID>" \
+  --expected-identifier "<ANDROID_PACKAGE>"
+
+node "${PLUGIN_ROOT}/scripts/validate-firebase-client-config.js" \
+  --project-root . --platform ios \
+  --candidate firebase/GoogleService-Info.download.plist \
+  --destination firebase/GoogleService-Info.plist \
+  --expected-project-id "<PROJECT_ID>" \
+  --expected-app-id "<IOS_APP_ID>" \
+  --expected-identifier "<IOS_BUNDLE_ID>"
+```
+
+Run only selected platforms. The helper rejects path escapes, symlinks,
+credential-shaped Android JSON, and unsafe plist constructs without making
+network calls. Branch only on its structured result:
+
+- `ready`: move the validated candidate to the canonical destination.
+- `reuse`: retain the byte-identical canonical file and delete the candidate.
+- `invalid`: stop; never install or replace from a mismatched candidate.
+- `conflict`: show only safe issue codes and require explicit replacement
+  confirmation before `mv -f`; otherwise delete the candidate unchanged.
+- `error`: stop on the safe path/parser/input error.
+
+Never print either config. A rerun with unchanged Firebase output must take
+`reuse` without another replacement confirmation. Delete only MCP scratch and
+candidate files after their branch completes; never delete canonical config.
+
+Native client configs contain client identifiers, not Firebase Admin private
+keys, and may be committed under `firebase/`. Never request, download, copy, or
+commit a Firebase Admin service-account private-key JSON.
+
+## 7. Verify Expo activation and write the handoff
+
+The template auto-discovers the canonical project-relative files. Use
+`GOOGLE_SERVICES_JSON` or `GOOGLE_SERVICE_INFO_PLIST` only for an explicitly
+requested project-relative regular file inside the project; reject absolute,
+outside-project, symlink, and missing paths.
+
+Evaluate rather than trusting source text or environment variables:
+
+```bash
+EXPO_CONFIG="$(npx expo config --type public --json)"
+printf '%s' "$EXPO_CONFIG" |
+  jq -e '.android.googleServicesFile == "./firebase/google-services.json"'
+printf '%s' "$EXPO_CONFIG" |
+  jq -e '.ios.googleServicesFile == "./firebase/GoogleService-Info.plist"'
+```
+
+Run only selected-platform assertions, using the normalized override path when
+one was explicitly approved. Whenever either service file is active, require
+the evaluated plugin list to contain `@react-native-firebase/app` and
+`@react-native-firebase/messaging`. If neither config exists, require both
+service-file fields and both plugins to be absent.
+
+Record non-secret setup state in `memory-bank.md`: Firebase project ID and, for
+each selected native platform, the immutable app ID, evaluated package/bundle
+identity, reused/created result, and evaluated project-relative config path.
+Use stable `Firebase push handoff` table keys:
+
+- `Firebase project ID`
+- `Android Firebase app ID`, `Android package`, `Android client config path`
+- `iOS Firebase app ID`, `iOS bundle ID`, `iOS client config path`
+
+Omit unselected platform rows. Do not record Google account details, login
+URLs, Session IDs, authorization codes, tokens, credentials, config contents,
+runtime registration tokens, or topic subscriptions. Runtime token/topic
+lifecycle belongs to `/add-push-notifications`.
+
+Run `npx expo config --type public`, `npx tsc --noEmit`, the push config
+validator, and changed-file validation before reporting completion.
+
+## 8. APNs credentials remain a manual Console boundary
 
 The official Firebase MCP server does **not** expose an APNs authentication-key
 upload tool. There is no supported Firebase MCP, Firebase CLI, or Firebase

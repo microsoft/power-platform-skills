@@ -42,9 +42,9 @@ test('iOS push chain: setup-fcm handles Google credentials safely', () => {
     'utf8',
   );
 
-  assert.ok(skill.includes('Record non-secret setup state'), 'documents state recording');
+  assert.match(skill, /Record\s+non-secret setup state/, 'documents state recording');
   assert.ok(skill.includes('memory-bank.md'), 'uses memory-bank.md');
-  assert.ok(skill.includes('Do not record Google account details'), 'blocks credential storage');
+  assert.match(skill, /Do not record Google\s+account details/, 'blocks credential storage');
   assert.ok(skill.includes('mcp__firebase__firebase_get_environment'), 'uses Firebase MCP environment readback');
   assert.ok(skill.includes('mcp__firebase__firebase_login'), 'uses Firebase MCP login');
   assert.ok(skill.includes('Session ID'), 'requires session-id verification during login');
@@ -147,7 +147,8 @@ test('iOS push chain: verify-ios-push requires exact IPA and flow state', () => 
     'does not create IPA');
   assert.ok(skill.includes('development') && skill.includes('ad-hoc') && skill.includes('IPA'),
     'requires specific IPA modes');
-  assert.ok(skill.includes('Never') && skill.includes('FCM registration token'),
+  assert.ok(skill.includes('Never request') && skill.includes('FCM registration') &&
+      skill.includes('token'),
     'blocks token access');
 });
 
@@ -179,7 +180,7 @@ test('iOS push chain: credentials are protected throughout', () => {
   const verify = fs.readFileSync(path.join(PLUGIN_ROOT, 'skills/verify-ios-push/SKILL.md'), 'utf8');
 
   // All skills block credential storage
-  assert.ok(fcm.includes('Do not record Google account'), 'setup-fcm blocks Google creds');
+  assert.match(fcm, /Do not record Google\s+account/, 'setup-fcm blocks Google creds');
   assert.ok(apns.includes('Never persist the `.p8`'), 'setup-apns blocks .p8');
   assert.ok(build.includes('credential fields to') && build.includes('`wrap.config.json` or logs'),
     'build-ios blocks credential fields');

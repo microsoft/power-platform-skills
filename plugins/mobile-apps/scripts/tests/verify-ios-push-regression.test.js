@@ -29,11 +29,13 @@ test('verify-ios-push evals cover the approved physical-device matrix', () => {
       'cold-start-deep-link',
       'topic-transition-and-opt-out',
       'full-physical-success',
+      'manual-auth-downstream',
+      'non-flow-sender-unverifiable',
     ],
   );
   assert.deepStrictEqual(
     document.evals.map(({ id }) => id),
-    Array.from({ length: 8 }, (_, index) => index + 1),
+    Array.from({ length: 10 }, (_, index) => index + 1),
   );
   for (const evaluation of document.evals) {
     assert.ok(evaluation.prompt.trim(), `${evaluation.coverage} needs a prompt`);
@@ -71,6 +73,8 @@ test('verify-ios-push is public, FlowAgent-readback based, and cannot reauthor f
   ]) {
     assert.doesNotMatch(skill, new RegExp(mutationTool));
   }
+  assert.doesNotMatch(skill, /mcp__flowagent__get_past_trigger_inputs/);
+  assert.doesNotMatch(skill, /mcp__flowagent__list_flows/);
   assert.match(
     skill,
     /does\s+not configure APNs, build an IPA, author or repair a\s+flow/,
@@ -88,7 +92,7 @@ test('verify-ios-push rejects non-device proof and requires every physical case'
   assert.match(skill, /### B\. Signed out `allUsers`, foreground/);
   assert.match(skill, /### C\. Signed out `allUsers`, background/);
   assert.match(skill, /### D\. Terminated\/cold-start tap and validated deep link/);
-  assert.match(skill, /### E\. Sign in and switch to lowercase OID/);
+  assert.match(skill, /### E\. Sign in and switch to user-topic delivery/);
   assert.match(skill, /### F\. Sign out and return to `allUsers`/);
   assert.match(skill, /### G\. Opt out/);
   assert.match(skill, /### H\. Token refresh\/re-registration recovery/);
@@ -104,9 +108,14 @@ test('verify-ios-push records only privacy-safe correlated evidence', () => {
 
   assert.match(skill, /producer run -> outbox row/);
   assert.match(skill, /bounded Provider Message ID/);
-  assert.match(skill, /Never request, read, display, copy, or persist an FCM registration token/);
-  assert.match(skill, /must be redacted as `<lowercase-oid>`/);
-  assert.match(skill, /Do not store OIDs, tokens, auth data, raw payloads/);
+  assert.match(skill, /Never request, read, display, copy, compare, or persist an FCM registration\s+token/);
+  assert.match(skill, /safe case label -> producer run -> outbox row ID -> sender run/);
+  assert.match(skill, /recording only topic category `user`/);
+  assert.doesNotMatch(skill, /Entra OIDs may be compared/);
+  assert.doesNotMatch(skill, /GUID-shaped lowercase target/);
+  assert.doesNotMatch(skill, /empty Target OID/);
+  assert.doesNotMatch(skill, /<lowercase-oid>/);
+  assert.match(skill, /Do not store OIDs, raw recipient target\/topic fields/);
   assert.match(skill, /validate-mobile-files\.js/);
   assert.match(skill, /--file memory-bank\.md/);
 });

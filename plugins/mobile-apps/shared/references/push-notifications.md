@@ -4,6 +4,13 @@ Use this reference from `/add-push-notifications`, `/setup-fcm`,
 `/setup-apple-ios`, `/setup-apns`,
 the planner, and screen builders.
 
+The canonical lifecycle, stage owners, per-platform resume rules, and physical
+delivery boundary are defined in
+[push-lifecycle.md](./push-lifecycle.md). This document defines stage 3,
+runtime integration; it does not make Firebase setup, platform provisioning,
+sender authentication, flows, wrapped builds, installation, or physical
+delivery part of `/add-push-notifications`.
+
 ## Native ownership
 
 - `@react-native-firebase/messaging` owns FCM registration tokens, token refresh,
