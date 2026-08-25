@@ -45,7 +45,9 @@ const DEFAULT_LANGUAGE_CODE = 1033;
 // it reads like an environment fault.
 //
 // Warning instead of halting would not help: by the time a warning is read the table already exists
-// and has to be torn down. Halting costs the user one flag before anything is written.
+// and has to be torn down. Halting costs the user one flag before any LABEL is written. Note this is
+// deliberately not "before any write at all" — `provisionSolution` runs first in `runSdkBuild` and
+// may create the publisher and solution — but those carry no language, so nothing lands mislabelled.
 //
 // Only an explicit override is checked; the org's own base language is provisioned by definition, so
 // probing it would cost a round trip to learn nothing.

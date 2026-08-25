@@ -291,7 +291,7 @@ labels in a different **provisioned** language, or if the build warns that it co
 the base language and fell back to 1033.
 
 If you pass an LCID the organization has **not** provisioned, the build now stops in the data-model
-phase, before anything is written, and lists the ones it does have. That check exists because
+phase, before any label is written, and lists the ones it does have. That check exists because
 Dataverse handles this **inconsistently**: table and choice labels are accepted (HTTP 204) and
 silently stored under the organization's base language, while `DateTime` and `Memo` columns are
 rejected with *"The language code N is not a valid language for this organization"*. Without the

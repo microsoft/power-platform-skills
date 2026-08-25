@@ -167,15 +167,17 @@ it only to deliberately author labels in a *different* provisioned language. It 
 integer LCID up to 65535 (`1031`, not `"de-DE"`); an invalid value is rejected before any Dataverse
 write. `--language-code` / `--languageCode <lcid>` overrides it for one run.
 
-**If you pass an LCID the organization has not provisioned,** provisioning now stops before any
-Dataverse write and lists the languages the org does have. Previously this failed *partway through*:
+**If you pass an LCID the organization has not provisioned,** provisioning now stops at the start of
+the data-model step, before any label is written, and lists the languages the org does have.
+(The solution and publisher may already exist by then — they carry no language, so nothing lands
+mislabelled.) Previously this failed *partway through*:
 Dataverse accepts table and Choice labels in an unprovisioned language (silently storing them under
 the org's base language) but rejects `DateTime` and `Memo` columns with `The language code N is not a
 valid language for this organization` — so the table and Choice columns were created first and it
 died on the first `DateTime`/`Memo` column, which looked like an environment fault. Re-run with
 `--language-code <an LCID the org actually has>`; list them with
-`node scripts/dataverse-request.js <envUrl> GET RetrieveProvisionedLanguages`. The check is
-best-effort: if that read fails, provisioning proceeds unchanged.
+`node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`. The
+check is best-effort: if that read fails, provisioning proceeds unchanged.
 
 A `⚠ could not determine the organization's base language …` warning on stderr
 means discovery failed and 1033 was assumed — pass the flag explicitly.

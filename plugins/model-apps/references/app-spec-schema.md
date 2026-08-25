@@ -92,6 +92,11 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
   Set it only to deliberately author labels in a *different* provisioned language than the org
   default; `--language-code <lcid>` overrides it for a single run.
+  If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
+  data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
+  Choice labels (silently storing them under the org's base language) and then reject the first
+  `DateTime` or `Memo` column, leaving a half-built data model. The check is best-effort: if
+  `RetrieveProvisionedLanguages` cannot be read, the build proceeds unchanged.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.

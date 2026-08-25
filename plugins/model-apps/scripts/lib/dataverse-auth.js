@@ -209,9 +209,12 @@ async function getDefaultPublisherPrefix(envUrl) {
 async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
   try {
     const res = await request(envUrl, 'GET', 'RetrieveProvisionedLanguages');
-    // dataverseRequest resolves { status, data } for EVERY response — it does NOT throw on 4xx/5xx.
-    // Without this gate an error envelope would parse as "zero languages provisioned", which is
-    // indistinguishable from a real empty list and would reject every otherwise-valid LCID.
+    // `dataverseRequest` has TWO failure surfaces and both must land on null:
+    //   * an HTTP response, including 4xx/5xx, is RESOLVED as { status, data } — it does not throw.
+    //     Without this status gate an error envelope would parse as "zero languages provisioned",
+    //     indistinguishable from a real empty list, and would reject every otherwise-valid LCID.
+    //   * token acquisition, transport, and retry exhaustion THROW — handled by the catch below,
+    //     which is why that catch is load-bearing rather than defensive padding.
     if (!res || res.status < 200 || res.status >= 300) return null;
     // Live-verified shape:
     //   { "@odata.context": ".../$metadata#Microsoft.Dynamics.CRM.RetrieveProvisionedLanguagesResponse",

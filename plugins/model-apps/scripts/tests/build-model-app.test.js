@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -821,7 +822,6 @@ test('a failing or unhelpful provisioned-languages probe never blocks the build'
 // list, and it would reject every otherwise-valid LCID. dataverseRequest resolves { status, data }
 // for EVERY response rather than throwing, so the status gate is the only thing preventing that.
 test('readProvisionedLanguages returns null (not []) for a non-2xx response', async () => {
-  const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
   // Live-verified 200 shape:
   //   { status: 200, data: { '@odata.context': '...', RetrieveProvisionedLanguages: [1033] } }
   const responses = {
@@ -851,4 +851,75 @@ test('readProvisionedLanguages returns null (not []) for a non-2xx response', as
     await readProvisionedLanguages('https://contoso.crm.dynamics.com', async () => { throw new Error('ENOTFOUND'); }),
     null
   );
+});
+
+// AGENTS.md convention: test the reader ITSELF, not only an injected stub. A stub that ignores its
+// arguments would keep passing if the verb or the function name were mistyped -- and because the
+// check is fail-soft, that typo would degrade every build to "cannot verify, proceeding" in
+// silence, which is indistinguishable from an org that legitimately returns nothing. That is the
+// exact failure mode this guard exists to prevent, so it must not be reachable through the guard.
+test('readProvisionedLanguages calls the unbound function by name with GET', async () => {
+  const calls = [];
+  const out = await readProvisionedLanguages('https://contoso.crm.dynamics.com/', async (...args) => {
+    calls.push(args);
+    return { status: 200, data: { RetrieveProvisionedLanguages: [1033] } };
+  });
+  assert.deepStrictEqual(out, [1033]);
+  assert.strictEqual(calls.length, 1, 'exactly one round trip');
+  const [envUrl, method, apiPath] = calls[0];
+  assert.strictEqual(envUrl, 'https://contoso.crm.dynamics.com/', 'the caller-supplied env url is passed through untouched');
+  assert.strictEqual(method, 'GET', 'RetrieveProvisionedLanguages is a FUNCTION, not an action -- POST would 405');
+  assert.strictEqual(apiPath, 'RetrieveProvisionedLanguages',
+    'unbound function name, no entity-set prefix and no $-query -- a typo here fails open and silently disables the guard');
+});
+
+// The wiring, not just the function. `deps.provisionedLanguages` crosses three seams before it
+// reaches the check -- build-model-app deps -> runSdkBuild opts -> provisionDataModel -> resolve --
+// and a break at any one of them silently restores the old broken behaviour with every unit test
+// above still green. This is the same reason the `deps.warn` wiring test exists.
+test('an unprovisioned --language-code halts the real buildModelApp path (wiring, not just the unit)', async () => {
+  const { sdk } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') return [{ languagecode: 1033 }];
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  let probed = 0;
+  const r = await buildModelApp(
+    desk,
+    { apply: true, env: 'https://x', languageCode: 1036 },
+    { sdk, warn: () => undefined, provisionedLanguages: async () => { probed += 1; return [1033]; } }
+  ).then((x) => x, (e) => e);
+
+  assert.strictEqual(probed, 1, 'deps.provisionedLanguages must actually reach the data-model phase');
+  const message = (r && r.message) || (r && r.error) || JSON.stringify(r);
+  assert.match(String(message), /1036 is not provisioned/,
+    `the halt must surface from the real build path; got: ${JSON.stringify(r)}`);
+});
+
+// Same wiring, other entry point: provision-entities.js is the genpage data-model path and builds
+// its own deps object, so it can regress independently of build-model-app.js.
+test('an unprovisioned languageCode halts the real provisionEntities path too', async () => {
+  const { provisionEntities } = require(path.join(__dirname, '..', 'provision-entities.js'));
+  const input = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_a', displayName: 'A', pluralName: 'As', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }],
+    relationships: [],
+    languageCode: 1036,
+  };
+  const provision = {
+    queryRecords: async (set) => (set === 'organization' ? [{ languagecode: 1033 }] : [{ solutionid: 's', publisherid: 'p' }]),
+    createPublisher: async () => ({ id: 'p' }),
+    createSolution: async () => ({ id: 's' }),
+  };
+  let probed = 0;
+  const r = await provisionEntities(input, { apply: true }, {
+    sdk: mockSdk().sdk, provision, warn: () => undefined,
+    provisionedLanguages: async () => { probed += 1; return [1033]; },
+  }).then((x) => x, (e) => e);
+
+  assert.strictEqual(probed, 1, 'deps.provisionedLanguages must reach the genpage data-model path');
+  const message = (r && r.message) || (r && r.error) || JSON.stringify(r);
+  assert.match(String(message), /1036 is not provisioned/,
+    `the halt must surface from provisionEntities; got: ${JSON.stringify(r)}`);
 });

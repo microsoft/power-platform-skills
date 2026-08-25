@@ -50,7 +50,7 @@ and corrects a smoke-eval assertion that could never pass live.
   do not need this: see the fix below.
 
 - **An explicit `languageCode` the organization has not provisioned now stops the build
-  before anything is written**
+  at the start of the data-model phase, before any label is written**
   ([#456](https://github.com/microsoft/power-platform-skills/issues/456)). The error names
   the LCID you asked for and lists the ones the organization actually has.
 
