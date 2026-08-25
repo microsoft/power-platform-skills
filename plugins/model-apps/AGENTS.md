@@ -155,7 +155,15 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   ([#447](https://github.com/microsoft/power-platform-skills/issues/447)) — and confusingly only on
   *some* column types, because (observed 2026-08) Dataverse tolerates an unprovisioned LCID on
   `EntityMetadata` and `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fallback
-  to 1033 warns, as does an explicitly supplied LCID that had to be discarded. Note
+  to 1033 warns, as does an explicitly supplied LCID that had to be discarded.
+  An **explicitly supplied** LCID is additionally checked against `RetrieveProvisionedLanguages`
+  (`readProvisionedLanguages`, `scripts/lib/dataverse-auth.js`, injected as `deps.provisionedLanguages`)
+  and halts the data-model phase before any write if the org does not have it — because of the
+  split behaviour above, the alternative is a table created with silently-wrong labels followed by a
+  failure on the first `DateTime`/`Memo` column. Only *explicit* overrides are probed; the org's base
+  language is provisioned by definition. The probe is best-effort — an unreachable or non-2xx
+  `RetrieveProvisionedLanguages` resolves to `null` ("unknown") and the build proceeds unchanged, so
+  the diagnostic can never itself break a build. Note
   `updateTable(logical, { quickCreateEnabled })` deliberately passes no language: it only builds a
   Label when a `displayName`/`pluralName`/`description` is supplied, and otherwise round-trips
   Dataverse's own labels under `MSCRM.MergeLabels`.

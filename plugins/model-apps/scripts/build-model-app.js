@@ -17,7 +17,7 @@ const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageC
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes } = require('./lib/content-hash.js');
@@ -265,6 +265,8 @@ async function buildModelApp(spec, opts, deps) {
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
         languageCode: opts.languageCode,
+        // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
+        provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
         genpageCli: deps.genpageCli, // injectable seam for tests; else constructed from env
         workspaceDir: opts.workspaceDir, // lease/staging live under the real workspace dir
@@ -522,6 +524,9 @@ async function main() {
       // clean PASS having never checked what any persona's role actually grants. Caught live —
       // standalone verify ran 10 checks against the same app where the build's inline verify ran 8.
       verify: (s) => verifySpec(s, readerFor(provisionSdk, appUniqueName(s), { genpageCli: makeGenpageCli(env), workspaceDir, httpClient, envUrl: env })),
+      // The set of LCIDs this organization actually has. Injected so the pure lib stays free of
+      // transport, and only consulted for an EXPLICIT `--language-code` / spec `languageCode`.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
     if (changedOnly && opts.apply) {
       // #changed-only: the flow decides fast (pages-only via the sdk-build seams) vs full, gated on the

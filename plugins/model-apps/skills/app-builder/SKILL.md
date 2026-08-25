@@ -288,10 +288,19 @@ their phase ranges are not dependency-closed and are rejected on `--apply`.
 Data-model labels are
 stamped with the organization's own base language, read once per build. Pass it only to author
 labels in a different **provisioned** language, or if the build warns that it could not determine
-the base language and fell back to 1033. If a build fails with *"The language code N is not a valid
-language for this organization"*, that is this setting — re-run with `--language-code <an LCID the
-org actually has>`, listing them with
+the base language and fell back to 1033.
+
+If you pass an LCID the organization has **not** provisioned, the build now stops in the data-model
+phase, before anything is written, and lists the ones it does have. That check exists because
+Dataverse handles this **inconsistently**: table and choice labels are accepted (HTTP 204) and
+silently stored under the organization's base language, while `DateTime` and `Memo` columns are
+rejected with *"The language code N is not a valid language for this organization"*. Without the
+check a build therefore creates the table with the wrong labels and then dies partway through the
+columns, phases away from the flag that caused it — which reads like an environment fault. List the
+provisioned set with
 `node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`.
+The check is best-effort: if that read fails the build proceeds unchanged.
+
 The App Spec field `languageCode` pins the same value across runs. Note this covers the data-model
 phase only; form and sitemap labels still carry 1033 (SDK limitation, issue #455).
 

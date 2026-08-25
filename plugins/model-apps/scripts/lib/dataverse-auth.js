@@ -190,6 +190,41 @@ async function getDefaultPublisherPrefix(envUrl) {
 }
 
 /**
+ * The set of LCIDs this organization actually has provisioned.
+ *
+ * `RetrieveProvisionedLanguages` is an unbound OData *function*, so it is not something the maker SDK
+ * models — this is the sanctioned `dataverseRequest` hatch (see the "Dataverse Access From Scripts"
+ * policy), the same class of read as `WhoAmI`.
+ * See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveprovisionedlanguages
+ *
+ * Fail-soft by design: this is a *diagnostic* used to turn a silently-ignored language override into
+ * a clear message, so every failure mode resolves to `null` ("unknown") rather than throwing. A build
+ * must never break because the diagnostic could not run.
+ *
+ * @param {string} envUrl
+ * @param {Function} [request=dataverseRequest] injectable transport, so the status gate below is
+ *   testable without a network or a live org
+ * @returns {Promise<number[]|null>} provisioned LCIDs, or null when they could not be determined
+ */
+async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
+  try {
+    const res = await request(envUrl, 'GET', 'RetrieveProvisionedLanguages');
+    // dataverseRequest resolves { status, data } for EVERY response — it does NOT throw on 4xx/5xx.
+    // Without this gate an error envelope would parse as "zero languages provisioned", which is
+    // indistinguishable from a real empty list and would reject every otherwise-valid LCID.
+    if (!res || res.status < 200 || res.status >= 300) return null;
+    // Live-verified shape:
+    //   { "@odata.context": ".../$metadata#Microsoft.Dynamics.CRM.RetrieveProvisionedLanguagesResponse",
+    //     "RetrieveProvisionedLanguages": [1033] }
+    const list = res.data && res.data.RetrieveProvisionedLanguages;
+    if (!Array.isArray(list)) return null;
+    return list.map(Number).filter((n) => Number.isFinite(n));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parses CLI args. Accepts both space-separated (`--flag value`) and
  * equals-separated (`--flag=value`) forms, plus bare boolean flags (`--bool`).
  *   <positional> [--flag value] [--flag=value] [--bool]
@@ -286,6 +321,7 @@ module.exports = {
   label,
   requiredLevel,
   getDefaultPublisherPrefix,
+  readProvisionedLanguages,
   parseArgs,
   readAliasedFlag,
   readJsonArg,

@@ -12,7 +12,7 @@ const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
@@ -167,6 +167,10 @@ async function provisionEntities(input, opts = {}, deps = {}) {
     spec,
     apply: true,
     languageCode: opts.languageCode,
+    // Same guard as the build path: an explicit override the org has not provisioned fails here,
+    // before any write, rather than half-succeeding (labels silently coerced to the base language,
+    // then a hard 400 on the first DateTime/Memo column).
+    provisionedLanguages: deps.provisionedLanguages,
     warn,
   });
   
@@ -320,6 +324,9 @@ async function main() {
       warn: (m) => process.stderr.write(`⚠ ${m}\n`),
       sdk,
       provision,
+      // Only consulted for an explicit override, and any failure resolves to null so a build never
+      // breaks on the diagnostic itself.
+      provisionedLanguages: () => readProvisionedLanguages(env),
     };
 
     r = await provisionEntities(input, opts, deps);

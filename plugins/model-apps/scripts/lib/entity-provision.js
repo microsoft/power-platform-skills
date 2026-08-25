@@ -30,11 +30,55 @@ const SDK_COLUMN_TYPE = {
 const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
 const DEFAULT_LANGUAGE_CODE = 1033;
 
+// Halt on an EXPLICIT language choice the organization cannot serve, naming what it does have.
+//
+// Live-verified: Dataverse handles an unprovisioned label LCID INCONSISTENTLY, which is why doing
+// nothing is not an option and why a warning is not enough. Against a 1033-only org, writing labels
+// at LanguageCode 1036:
+//   * EntityDefinitions create      -> HTTP 204, label silently stored at 1033
+//   * GlobalOptionSetDefinitions    -> HTTP 204, label silently stored at 1033
+//   * DateTime / Memo column create -> HTTP 400 "The language code 1036 is not a valid language
+//                                      for this organization"
+// So the build does not fail cleanly and it does not succeed either: the table is created with
+// silently wrong labels, then it dies on the first DateTime or Memo column. That leaves a
+// half-provisioned data model, and the error surfaces phases away from the flag that caused it —
+// it reads like an environment fault.
+//
+// Warning instead of halting would not help: by the time a warning is read the table already exists
+// and has to be torn down. Halting costs the user one flag before anything is written.
+//
+// Only an explicit override is checked; the org's own base language is provisioned by definition, so
+// probing it would cost a round trip to learn nothing.
+//
+// `provisionedLanguages` is injected rather than called directly so this module stays free of transport.
+// Best-effort: an unavailable probe must NOT block a build, because it is a diagnostic — if it cannot
+// answer, the build proceeds exactly as it did before.
+async function checkProvisioned(lcid, source, provisionedLanguages) {
+  if (typeof provisionedLanguages !== 'function') return lcid;
+  let list;
+  try {
+    list = await provisionedLanguages();
+  } catch {
+    return lcid; // the probe is a nicety; never let it fail a build
+  }
+  if (!Array.isArray(list) || !list.length) return lcid;
+  if (list.includes(lcid)) return lcid;
+  throw new BuildHalt(
+    `${source} ${lcid} is not provisioned in this organization, so the data model cannot be built in `
+    + 'that language. Dataverse fails inconsistently here: table and choice labels are accepted and '
+    + "silently stored under the organization's base language, while DateTime and Memo columns are "
+    + `rejected outright — so the build would create the table, label it wrong, then stop partway `
+    + `through the columns. Provisioned languages: ${list.join(', ')}. Pick one of those, provision `
+    + `${lcid} in the organization first, or omit the override to use the base language.`,
+    { phase: 'data-model', code: 'language-not-provisioned', recoverable: false }
+  );
+}
+
 // Dataverse label payloads must use an LCID the org actually has provisioned. Resolve an explicit
 // CLI override first, then an App Spec override, then the org's base `organization.languagecode`,
 // and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
 // the whole build.
-async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
+async function resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages }) {
   // A supplied-but-invalid value is DISCARDED, not honoured — but it must not be discarded in
   // silence. "You gave me nothing" and "you gave me something I could not use" are different facts,
   // and only the second means the caller believes they pinned a language and is wrong. The CLI flags
@@ -48,11 +92,11 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
   };
 
   const explicit = normalizeLanguageCode(languageCode);
-  if (explicit) return explicit;
+  if (explicit) return await checkProvisioned(explicit, '--language-code', provisionedLanguages);
   if (languageCode !== undefined && languageCode !== null) rejected('--language-code', languageCode);
 
   const specLanguage = normalizeLanguageCode(spec?.languageCode);
-  if (specLanguage) return specLanguage;
+  if (specLanguage) return await checkProvisioned(specLanguage, 'languageCode', provisionedLanguages);
   if (spec && spec.languageCode !== undefined && spec.languageCode !== null) rejected('languageCode', spec.languageCode);
 
   // EVERY fallback to the default is announced, not just the read-threw case. 1033 is precisely the
@@ -261,9 +305,9 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
-  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode, warn });
+  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
   
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;

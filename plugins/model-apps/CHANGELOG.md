@@ -49,6 +49,22 @@ and corrects a smoke-eval assertion that could never pass live.
   LCID `1` — is rejected up front rather than failing deep in the build. Normally you
   do not need this: see the fix below.
 
+- **An explicit `languageCode` the organization has not provisioned now stops the build
+  before anything is written**
+  ([#456](https://github.com/microsoft/power-platform-skills/issues/456)). The error names
+  the LCID you asked for and lists the ones the organization actually has.
+
+  This matters because Dataverse fails *inconsistently* here rather than cleanly: table and
+  Choice labels are accepted and silently stored under the organization's base language,
+  while `DateTime` and `Memo` columns are rejected outright. Without the check a build
+  therefore created the table with the wrong labels and then died partway through the
+  columns — phases away from the flag that caused it, looking like an environment fault.
+
+  Only an **explicit** override is checked; the organization's own base language is
+  provisioned by definition. The check is best-effort: if `RetrieveProvisionedLanguages`
+  cannot be read the build proceeds exactly as before, so the diagnostic can never itself
+  break a build.
+
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
   marker, so a role built with the wrong access — or one whose privilege write
