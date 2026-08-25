@@ -3,7 +3,7 @@
  * Detect the active publisher prefix for a Dataverse environment.
  *
  * Usage:
- *   node scripts/detect-publisher-prefix.js <envUrl> [solutionName]
+ *   node scripts/detect-publisher-prefix.js <envUrl> [solutionName] [--tenant-id <id>]
  *
  * solutionName defaults to "Default" (the built-in Default solution).
  *
@@ -18,14 +18,18 @@ const { getAuthToken } = require('./lib/validation-helpers');
 
 async function main() {
   const envUrl = process.argv[2];
-  const solutionName = process.argv[3] || 'Default';
+  const solutionName = process.argv[3] && !process.argv[3].startsWith('--')
+    ? process.argv[3]
+    : 'Default';
+  const tenantFlagIndex = process.argv.indexOf('--tenant-id');
+  const tenantId = tenantFlagIndex >= 0 ? process.argv[tenantFlagIndex + 1] : null;
 
   if (!envUrl) {
     console.log(JSON.stringify({ prefix: null, reason: 'envUrl arg missing' }));
     process.exit(0);
   }
 
-  const token = await getAuthToken(envUrl);
+  const token = await getAuthToken(envUrl, tenantId);
   if (!token) {
     console.log(JSON.stringify({
       prefix: null,

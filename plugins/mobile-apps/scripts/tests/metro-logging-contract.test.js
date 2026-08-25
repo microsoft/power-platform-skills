@@ -35,8 +35,9 @@ test('template imports the host Metro logger at config startup', () => {
     'the host package must include the Metro logger introduced in 0.2.26',
   );
   assert.match(gitignore, /^\.powernative\//m);
-  assert.match(workflow, /plugins\/mobile-apps\/template\/metro\.config\.js/);
-  assert.match(workflow, /plugins\/mobile-apps\/template\/package\.json/);
+  const workflowCoversMobileApps = /plugins\/mobile-apps\/\*\*/.test(workflow);
+  assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/metro\.config\.js/.test(workflow));
+  assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
 });
 
 test('skill contracts read .powernative logs directly', () => {

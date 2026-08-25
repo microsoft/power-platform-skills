@@ -41,8 +41,11 @@ CREATE
 ## Dispatch
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| Create | [Landing] | [working directory]/Screen1.pa.yaml | Screen1 | [Prefix] | [working directory]/Screen1.screen-plan.md |
-| Create | [Additional] | [working directory]/[Name].pa.yaml | [Name] | [Prefix] | [working directory]/[Name].screen-plan.md |
+| Create | [Landing] | `[working directory]/Screen1.pa.yaml` | Screen1 | [Prefix] | `[working directory]/Screen1.screen-plan.md` |
+| Create | [Additional] | `[working directory]/[Name].pa.yaml` | [Name] | [Prefix] | `[working directory]/[Name].screen-plan.md` |
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Plan Index — EDIT
@@ -72,8 +75,8 @@ EDIT
 ## Dispatch
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| Modify | [Existing] | [working directory]/[File].pa.yaml | [existing key] | [Prefix] | [working directory]/[File].screen-plan.md |
-| Create | [New] | [working directory]/[File].pa.yaml | [new key] | [Prefix] | [working directory]/[File].screen-plan.md |
+| Modify | [Existing] | `[working directory]/[File].pa.yaml` | [existing key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
+| Create | [New] | `[working directory]/[File].pa.yaml` | [new key] | [Prefix] | `[working directory]/[File].screen-plan.md` |
 
 ## App Changes
 ### Before builders
@@ -81,6 +84,9 @@ EDIT
 seed data — or "None"]
 ### After builders
 [Changes referencing screens that do not exist yet, such as StartScreen — or "None"]
+
+## Editor State Changes
+[Exact final ScreensOrder and ComponentDefinitionsOrder lists, or "None"]
 ```
 
 ## Shared Plan
@@ -129,7 +135,7 @@ for cross-screen navigation; reserve ModernTabList for panels within one screen.
 
 ## Assignment
 - Action: Create
-- Target file: [working directory]/[File].pa.yaml
+- Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [key]
 - Control name prefix: [Prefix]
 
@@ -180,7 +186,7 @@ then fails to compile.]
 
 ## Assignment
 - Action: Modify
-- Target file: [working directory]/[File].pa.yaml
+- Target file: `[working directory]/[File].pa.yaml`
 - YAML key: [existing key]
 - Control name prefix: [Prefix]
 

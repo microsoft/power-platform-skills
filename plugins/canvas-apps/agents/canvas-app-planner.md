@@ -60,7 +60,7 @@ Read:
 
 - `${PLUGIN_ROOT}/references/YamlSyntax.md` — file structure, syntax rules, parse-error triage
 - `${PLUGIN_ROOT}/references/ControlGuide.md` — control selection, per-control properties, enums
-- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, colour contrast
+- `${PLUGIN_ROOT}/references/LayoutGuide.md` — responsive layout, scrolling, color contrast
 - `${PLUGIN_ROOT}/references/PowerFxGuide.md` — state, events, named formulas, mock data
 - `${PLUGIN_ROOT}/references/DesignGuide.md` — aesthetic direction and design process
 - `${PLUGIN_ROOT}/references/PlanTemplates.md` — the exact shape of every artifact you write
@@ -88,6 +88,13 @@ ManualLayout.
    types. An existing `ModernText` gaining its first `Wrap` still needs its definition
    recorded, because the builder cannot look it up.
 5. Call API and schema detail tools only for resources involved in the edit.
+
+### Component refresh checkpoint
+
+Immediately before auditing properties, re-run `describe_control` for
+every Canvas or Code Component used by the plan to ensure any imported or updated components made in Studio are available.
+Especially if a successful compile applied local component-definition changes, since the previous lookup.
+Treat earlier component responses as stale; builders cannot refresh them.
 
 ## 3. Audit Control Properties
 
@@ -151,7 +158,7 @@ clear navigation is cheaper than a screen that no builder can write correctly in
 and no user can scan. Prefer splitting by task (entry vs. history vs. analysis) rather
 than by control count.
 
-## 5. Specify the Narrow-Width Behaviour
+## 5. Specify the Narrow-Width Behavior
 
 Builders implement exactly what the brief specifies. If the brief describes only the
 desktop composition, the screen will break on a phone — this is the most frequently
@@ -168,7 +175,7 @@ For every screen brief, state explicitly:
 - That the root container scrolls (`LayoutOverflowY: =LayoutOverflow.Scroll`).
 - That the screen-level `Children:` list contains only that root, with every visible
   section nested under the root's `Children:` list.
-- The foreground colour for text on every coloured surface, so nothing renders
+- The foreground color for text on every colored surface, so nothing renders
   dark-on-dark.
 - A width or `LayoutMinWidth` for status badges and KPI values that fits the longest value
   they can display.
@@ -244,6 +251,12 @@ Do not edit any `.pa.yaml` file. Put all required app-level edits in the plan in
 
 If a group is empty, write `None` for it.
 
+### All modes
+
+Put requested screen or component-definition ordering in `## Editor State Changes` as
+the exact final `ScreensOrder` and `ComponentDefinitionsOrder` lists. Write `None` when
+the current Studio order should remain unchanged.
+
 ## 8. Write Progressive Plan Artifacts
 
 Follow `${PLUGIN_ROOT}/references/PlanTemplates.md`.
@@ -257,6 +270,7 @@ Write only orchestration information:
 - Compact discovery summary
 - Dispatch table
 - EDIT-mode App changes
+- Editor state changes
 
 The dispatch table columns are:
 
@@ -340,11 +354,11 @@ Planning complete.
 
 | Action | Screen | Target File | YAML Key | Name Prefix | Screen Brief |
 |--------|--------|-------------|----------|-------------|--------------|
-| [Create / Modify] | [Screen] | [absolute file path] | [key] | [prefix] | [absolute brief path] |
+| [Create / Modify] | [Screen] | `[working directory]/[file].pa.yaml` | [key] | [prefix] | `[working directory]/[file-base].screen-plan.md` |
 
-Plan index: [absolute plan index path]
-Shared plan: [absolute shared plan path]
-App file: [[absolute App.pa.yaml path] for CREATE, "unchanged" for EDIT]
+Plan index: `[working directory]/canvas-app-plan.md`
+Shared plan: `[working directory]/canvas-app-shared.md`
+App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
 App compile: [Clean / diagnostics remaining, with detail]
 ```
 
@@ -354,7 +368,7 @@ App compile: [Clean / diagnostics remaining, with detail]
 - Do not edit existing `.pa.yaml` files in EDIT mode.
 - Call `compile_canvas` only to validate CREATE-mode `App.pa.yaml`. Do not use it to
   chase screen-file diagnostics; the orchestrator owns full-app validation.
-- Do not edit `[working directory]/_EditorState.pa.yaml`.
+- Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.

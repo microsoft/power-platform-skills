@@ -737,3 +737,77 @@ test('a COMPONENT-only table with no primary name is dropped with a warning, not
   assert.strictEqual(good.primaryAttribute.schemaName, 'name');
   assert.strictEqual(bad.primaryAttribute, null, 'an empty PrimaryNameAttribute must not become a guessed name');
 });
+
+test('collectSitemap collects the web resource a URL subarea TARGETS, so its content is fetched (#430)', () => {
+  // The Site Map Designer's "custom page backed by an HTML web resource" writes a token into a URL
+  // subarea. Without collecting it, a rebuild would emit a nav entry pointing at a resource the spec
+  // never recreates -- a dangling link in the target environment.
+  const app = {
+    siteMap: {
+      areas: [{
+        title: 'Main',
+        groups: [{
+          title: 'G',
+          subAreas: [
+            { type: 'URL', url: '$webresource:new_homepage.html', title: 'Home' },
+            { type: 'URL', url: '/WebResources/new_second.html', title: 'Second' },
+            { type: 'URL', url: 'https://contoso.example/help', title: 'Help' },
+          ],
+        }],
+      }],
+    },
+  };
+  const { customRefs, navRefs } = collectSitemap(app);
+  assert.ok(navRefs.includes('new_homepage.html'), '$webresource: token must be collected as a NAV ref');
+  assert.ok(navRefs.includes('new_second.html'), '/WebResources/ form must be collected as a NAV ref');
+  assert.strictEqual(
+    navRefs.some((r) => /contoso\.example|https/.test(r)), false,
+    'a real http(s) link is not a web resource and must NOT be collected',
+  );
+});
+
+test('iconWebResources re-declares a NON-IMAGE web resource a URL subarea targets (#430)', async () => {
+  // The icon path gates on IMAGE_WR_TYPES by design, and a "custom page backed by an HTML web
+  // resource" is html (type 1). Without a separate nav-ref policy the page is never re-declared, so a
+  // rebuild's nav entry points at a resource the spec cannot recreate -- the fix would look complete
+  // and still be broken.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'crba3_homepage.html') return [{ name, webresourcetype: 1, content: 'PGh0bWw+', ismanaged: false }];
+    if (name === 'crba3_nav.svg') return [{ name, webresourcetype: 11, content: 'c3Zn', ismanaged: false }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], ['crba3_nav.svg'], 'crba3', true, ['crba3_homepage.html']);
+  const byName = Object.fromEntries(webResources.map((w) => [w.name, w]));
+  assert.ok(byName['crba3_homepage.html'], 'the html nav page must be re-declared');
+  assert.strictEqual(byName['crba3_homepage.html'].type, 'html');
+  assert.strictEqual(byName['crba3_homepage.html'].external, true, 'external:true so teardown never deletes it');
+  assert.ok(byName['crba3_nav.svg'], 'the icon path must still work');
+});
+
+test('a MANAGED nav web resource is left as a bare reference, not re-declared (#430)', async () => {
+  // It exists in every environment; re-creating it would be wrong, and failing the download over it
+  // is what issue #430 was.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'crba3_managed.html') return [{ name, webresourcetype: 1, content: 'eA==', ismanaged: true }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['crba3_managed.html']);
+  assert.strictEqual(webResources.length, 0, 'a managed nav resource must not be re-declared');
+});
+
+test('a FOREIGN-prefix nav web resource is left as a bare reference, not re-declared (#430)', async () => {
+  // Together with the managed case above, this pins why nav refs go through PASS 1 rather than being
+  // added to `icons`. PASS 2 (the bare-name path) applies NEITHER an `ismanaged` check NOR an
+  // own-prefix check, so routing nav targets there would re-declare a resource owned by another
+  // publisher's managed solution -- and re-creating a foreign prefix on a fresh environment
+  // hard-fails the build. PASS 1 declines both.
+  const sdk = { queryRecords: async (_set, o) => {
+    const name = (/name eq '([^']+)'/.exec(o.filter) || [])[1];
+    if (name === 'isv_page.html') return [{ name, webresourcetype: 1, content: 'PGh0bWw+', ismanaged: false }];
+    return [];
+  } };
+  const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['isv_page.html']);
+  assert.strictEqual(webResources.length, 0, 'a foreign-prefix nav resource must not be re-declared');
+});

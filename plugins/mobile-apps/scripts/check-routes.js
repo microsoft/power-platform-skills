@@ -67,7 +67,7 @@ function findTsxFiles(dir) {
 // app/(app)/inspections/index.tsx        → /inspections
 
 function fileToRoute(filePath, appRoot) {
-  const rel = path.relative(appRoot, filePath);
+  const rel = path.relative(appRoot, filePath).replace(/\\/g, '/');
   const noExt = rel.replace(/\.tsx$/, '');
   if (/(^|\/)_layout$/.test(noExt)) return null;          // layouts aren't screens
   if (/(^|\/)\+not-found$/.test(noExt)) return null;      // not-found boundary
@@ -243,9 +243,31 @@ function main() {
   }
 
   const files = findTsxFiles(appRoot);
+  const screenFiles = files.filter(file => path.basename(file) !== '_layout.tsx');
+  const fileFolderCollisionFindings = [];
+  for (const file of screenFiles) {
+    const relative = path.relative(appRoot, file).replace(/\\/g, '/');
+    const base = relative.replace(/\.tsx$/, '');
+    const children = screenFiles.filter((other) => {
+      const otherRelative = path.relative(appRoot, other).replace(/\\/g, '/');
+      return otherRelative.startsWith(`${base}/`);
+    });
+    const hasIndex = children.some(
+      (child) => path.relative(appRoot, child).replace(/\\/g, '/') === `${base}/index.tsx`,
+    );
+    if (children.length > 0 && !hasIndex) {
+      fileFolderCollisionFindings.push({
+        route: fileToRoute(file, appRoot),
+        file,
+        childFiles: children,
+        kind: 'file-folder-route-collision',
+      });
+    }
+  }
 
   // Build dest registry: { route: { file, declaredKeys, declaredRaw } }
   const dests = {};
+  const duplicateRouteFindings = [];
   // Collect senders: array of { fromFile, route, params }
   const allSenders = [];
 
@@ -255,11 +277,20 @@ function main() {
 
     if (route) {
       const declared = parseLocalSearchParams(content);
-      dests[route] = {
-        file,
-        declaredKeys: declared ? declared.keys : null,
-        declaredRaw: declared ? declared.raw : null,
-      };
+      if (dests[route]) {
+        duplicateRouteFindings.push({
+          route,
+          file,
+          otherFile: dests[route].file,
+          kind: 'duplicate-route',
+        });
+      } else {
+        dests[route] = {
+          file,
+          declaredKeys: declared ? declared.keys : null,
+          declaredRaw: declared ? declared.raw : null,
+        };
+      }
     }
 
     const senders = parseSenders(content);
@@ -289,11 +320,12 @@ function main() {
   }
 
   // Diff: for each dest, what's received but not declared?
-  const findings = [];
+  const findings = [...fileFolderCollisionFindings, ...duplicateRouteFindings];
   for (const r of destRouteList) {
     const d = dests[r];
     const r2 = received[r];
     if (r2.sources.length === 0) continue; // unreachable destination — different bug class
+    if (Object.keys(r2.params).length === 0) continue; // navigation without params needs no declaration
     if (!d.declaredKeys) {
       // Destination receives params but has NO useLocalSearchParams call.
       // That's a real issue if the screen uses any of those params.
@@ -340,10 +372,24 @@ function main() {
     process.exit(0);
   }
 
-  console.error(`✗ check-routes: ${findings.length} destination(s) missing param declarations.\n`);
+  console.error(`✗ check-routes: ${findings.length} route contract issue(s).\n`);
   for (const f of findings) {
     console.error(`  Route:  ${f.route}`);
     console.error(`  File:   ${path.relative(cwd, f.file)}`);
+    if (f.kind === 'file-folder-route-collision') {
+      console.error(`  Issue:  Route file conflicts with a same-name child folder.`);
+      console.error(`  Child:  ${f.childFiles.map(child => path.relative(cwd, child)).join(', ')}`);
+      console.error(`  Fix:    Move ${path.basename(f.file)} to ${path.basename(f.file, '.tsx')}/index.tsx.`);
+      console.error('');
+      continue;
+    }
+    if (f.kind === 'duplicate-route') {
+      console.error(`  Issue:  Duplicate Expo route.`);
+      console.error(`  Other:  ${path.relative(cwd, f.otherFile)}`);
+      console.error(`  Fix:    If the route owns child screens, use <route>/index.tsx and remove the sibling <route>.tsx file.`);
+      console.error('');
+      continue;
+    }
     if (f.kind === 'no-declaration') {
       console.error(`  Issue:  No useLocalSearchParams<>() call, but ${Object.keys(f.receivedParams).length} param(s) are sent here.`);
     } else {

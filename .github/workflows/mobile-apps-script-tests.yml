@@ -1,4 +1,6 @@
-# Functional tests for mobile-app scripts and template contracts.
+# Functional unit tests for the mobile-apps plugin across supported operating
+# systems and Node versions. These scripts spawn Azure CLI shims and manipulate
+# filesystem paths, so cross-platform coverage protects real behavior.
 name: mobile-apps-script-tests
 
 on:
@@ -6,16 +8,12 @@ on:
         branches:
             - main
         paths:
-            - "plugins/mobile-apps/scripts/**"
-            - "plugins/mobile-apps/skills/create-mobile-app/SKILL.md"
-            - "plugins/mobile-apps/skills/debug-app/SKILL.md"
-            - "plugins/mobile-apps/template/metro.config.js"
-            - "plugins/mobile-apps/template/package.json"
+            - "plugins/mobile-apps/**"
             - ".github/workflows/mobile-apps-script-tests.yml"
 
 jobs:
-    test-mobile-app-scripts:
-        name: test-mobile-app-scripts (${{ matrix.os }})
+    test-mobile-apps-scripts:
+        name: test-mobile-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
         runs-on: ${{ matrix.os }}
         strategy:
             fail-fast: false
@@ -24,6 +22,9 @@ jobs:
                     - ubuntu-latest
                     - windows-latest
                     - macos-latest
+                node:
+                    - 20
+                    - 22
         steps:
             - name: checkout
               uses: actions/checkout@v4
@@ -31,12 +32,13 @@ jobs:
             - name: setup-node
               uses: actions/setup-node@v4
               with:
-                  node-version: 22
+                  node-version: ${{ matrix.node }}
 
             - name: syntax-check-mobile-template
               shell: bash
               run: node --check plugins/mobile-apps/template/metro.config.js
 
-            - name: run-mobile-script-tests
+            - name: run-mobile-apps-script-tests
               shell: bash
-              run: node --test plugins/mobile-apps/scripts/tests/*.test.js
+              working-directory: plugins/mobile-apps
+              run: node --test scripts/tests/*.test.js

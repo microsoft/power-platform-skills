@@ -112,6 +112,7 @@ function collectSitemap(app) {
   const entities = new Set();
   const icons = new Set();
   const customRefs = new Set();
+  const navRefs = new Set();   // web resources a URL SUBAREA targets (non-image types allowed)
   const addIcon = (v) => { if (!v) return; if (isPlatformIconRef(v)) { const n = webResourceNameFromRef(v); if (n) customRefs.add(n); } else icons.add(v); };
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
     addIcon(a.icon); addIcon(a.vectorIcon);
@@ -119,10 +120,20 @@ function collectSitemap(app) {
       for (const sa of g.subAreas || []) {
         if (sa.type === 'Entity' && sa.entity) entities.add(String(sa.entity).toLowerCase());
         addIcon(sa.icon); addIcon(sa.vectorIcon);
+        // A URL subarea can TARGET a web resource rather than link out — the Site Map Designer's
+        // "custom page backed by an HTML web resource" writes `$webresource:<name>`. Collected
+        // SEPARATELY from icon refs because the type policy differs: such a page is `html`, which the
+        // icon path's image-only gate excludes by design. Capturing it means the page travels with
+        // the app instead of the rebuild emitting a nav entry the spec cannot recreate.
+        // `webResourceNameFromRef` returns null for a real http(s) link, so those are untouched.
+        if (sa.type === 'URL' && sa.url) {
+          const wr = webResourceNameFromRef(sa.url);
+          if (wr) navRefs.add(wr);
+        }
       }
     }
   }
-  return { entities: [...entities], icons: [...icons], customRefs: [...customRefs] };
+  return { entities: [...entities], icons: [...icons], customRefs: [...customRefs], navRefs: [...navRefs] };
 }
 
 // The entity logical names that are COMPONENTS of the app module, regardless of whether they appear
@@ -353,11 +364,19 @@ const IMAGE_WR_TYPES = new Set([5, 6, 7, 10, 11]);
 //   any path-derived WR (an unknown non-'new' prefix would BuildHalt on a fresh env) but we PROBE every
 //   customRef and surface each genuine CUSTOM (unmanaged image) one as `unresolved` — a managed/OOB/absent
 //   ref is a system icon present in every env, so it stays silent (no false alarm).
-async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved) {
+async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolved, navRefs) {
   const out = [];
   const seen = new Set();                 // lowercased names actually re-declared into `out`
   const prefixLc = ownPrefix ? String(ownPrefix).toLowerCase() + '_' : null;
   const customRefSet = new Set((customRefs || []).map((n) => String(n).toLowerCase()));
+  // `navRefs` are web resources a URL SUBAREA targets (the Site Map Designer's "custom page backed by
+  // an HTML web resource"), as opposed to an icon. They take the SAME safety gates as a path-derived
+  // icon — own prefix, unmanaged, has content, `external: true` so teardown never deletes it — but
+  // NOT the image-type gate: such a page is `html` (type 1), which `IMAGE_WR_TYPES` excludes by
+  // design. Without this distinction the page is never re-declared and a rebuild's nav entry points
+  // at a resource the spec cannot recreate.
+  const navRefSet = new Set((navRefs || []).map((n) => String(n).toLowerCase()));
+  const allowedTypeFor = (key) => (navRefSet.has(key) ? null : IMAGE_WR_TYPES); // null = any type
   const candidateUnresolved = new Map();  // key -> original name; a path ref we could NOT re-declare in PASS 1
   const queryWr = async (name) =>
     (await sdk.queryRecords('webresource', { select: ['name', 'webresourcetype', 'content', 'ismanaged'], filter: `name eq '${String(name).replace(/'/g, "''")}'`, top: 1 }))?.[0];
@@ -367,7 +386,7 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
   // path AND by a bare name is classified by the STRICTER path rules (and flagged `external`) before the
   // lenient bare pass can re-declare it as deletable — otherwise the overlap silently loses teardown
   // protection and a shared nav icon gets deleted (Sol review, High).
-  for (const name of customRefs || []) {
+  for (const name of [...(customRefs || []), ...(navRefs || [])]) {
     const key = String(name).toLowerCase();
     if (seen.has(key)) continue;
     const ownScoped = !!prefixLc && key.startsWith(prefixLc);
@@ -384,7 +403,8 @@ async function iconWebResources(sdk, icons, customRefs, ownPrefix, prefixResolve
         continue;
       }
       if (!wr || !wr.content) { candidateUnresolved.set(key, name); continue; }         // own-prefix but absent on source → will dangle
-      if (wr.ismanaged === true || !IMAGE_WR_TYPES.has(wr.webresourcetype)) continue;   // managed/non-image → leave as a bare reference
+      const allowed = allowedTypeFor(key);
+      if (wr.ismanaged === true || (allowed && !allowed.has(wr.webresourcetype))) continue;   // managed / wrong type → leave as a bare reference
       seen.add(key);
       out.push({ name, type: WR_TYPE[wr.webresourcetype] || 'png', contentBase64: wr.content, external: true });
     } catch { candidateUnresolved.set(key, name); /* read failure → candidate (surface unless a bare pass resolves it) */ }
@@ -498,7 +518,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     }
     throw e;
   }
-  const { entities: entityLogicals, icons, customRefs } = collectSitemap(app);
+  const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
   // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
@@ -697,7 +717,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // publisher (`solution.publisherPrefix`). A FOREIGN-prefix / OOB reference is left as a bare reference:
   // re-declaring it would make the build try to createWebResource under an unregistered prefix on a fresh
   // env → a hard BuildHalt, turning a cosmetic broken icon into a failed build (Opus review).
-  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved);
+  const { webResources, unresolved: unresolvedIcons } = await iconWebResources(sdk, icons, customRefs, solution.publisherPrefix, solution.prefixResolved, navRefs);
   if (unresolvedIcons && unresolvedIcons.length) {
     // A custom nav icon we couldn't safely round-trip: either an own-prefix WR that's absent on the source
     // env / failed to read, OR (when the publisher prefix couldn't be verified) any custom image icon we

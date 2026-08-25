@@ -358,6 +358,32 @@ function resolveChoiceValue(byLabel, v, isMulti) {
 // See docs/app-builder-design.md §7.1.
 const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 
+// Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
+//
+// This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
+// never disagree about what is valid: the `--language-code` CLI flag (always a string), the App Spec
+// `languageCode` field (JSON, so nominally a number but in practice anything), and a programmatic
+// caller of resolveLanguageCode().
+//
+// It deliberately does NOT use a bare `Number(value)` cast, which is far too lenient for a value that
+// is sent straight to Dataverse as a label LanguageCode:
+//   Number(true)   === 1     -> `"languageCode": true` would build every label with LCID 1
+//   Number([1033]) === 1033  -> a one-element array would silently "work"
+//   Number('1e3')  === 1000  -> exponent notation is never a real LCID
+// Each of those passes a naive positive-integer check and then fails deep inside the data-model phase
+// with an opaque Dataverse 400, instead of a clear spec/CLI error up front. Accept only a real number
+// or an all-digits string, and bound it: an LCID is a 16-bit value, so anything above 0xFFFF cannot be
+// one and would fail the same opaque way (65536, 1e20 and MAX_SAFE_INTEGER all cleared an unbounded
+// positive-integer check).
+// LCID reference: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
+const MAX_LCID = 0xFFFF;
+function normalizeLanguageCode(value) {
+  const ok = (n) => (n > 0 && n <= MAX_LCID ? n : null);
+  if (typeof value === 'number') return Number.isInteger(value) ? ok(value) : null;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return ok(Number(value.trim()));
+  return null;
+}
+
 // Normalize a page's implementation source into a discriminated shape:
 //   { kind: 'tsx', codeFile } | { kind: 'intent' } | null
 // A legacy top-level `codeFile` (schemaVersion < 2) is treated as an implemented tsx page. `null`
@@ -426,6 +452,9 @@ function validateAppSpec(spec, opts = {}) {
   }
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
+  }
+  if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
+    errors.push('languageCode must be a positive integer LCID');
   }
   const entityNames = new Set();
   const entityByLower = new Map(); // logical (lowercased schemaName) -> entity
@@ -851,7 +880,25 @@ function validateAppSpec(spec, opts = {}) {
         // `entity: "account"`. Matches the chart check above, which already uses `entityByLower`.
         if (sa.entity && !entityByLower.has(String(sa.entity).toLowerCase())) errors.push(`sitemap subArea references unknown entity '${sa.entity}'`);
         if (sa.dashboard && !dashNamesSet.has(sa.dashboard)) errors.push(`sitemap subArea references unknown dashboard '${sa.dashboard}' (declare it in dashboards[])`);
-        if (sa.url && !isSafeHttpUrl(sa.url)) errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL (got '${sa.url}')`);
+        // A sitemap URL subarea is EITHER a real link OR a web-resource reference —
+        // `$webresource:<name>` (what the Site Map Designer writes for a "custom page backed by an
+        // HTML web resource") or the equivalent `/WebResources/<name>` path.
+        //
+        // A web-resource reference passes through AS-IS, exactly like a platform icon ref above,
+        // and for the same reason recorded there: it is a live/OOB value a downloaded app carries,
+        // and rejecting it broke the download→build round-trip on real apps. Requiring it to be
+        // DECLARED would re-make that mistake in a new place — the referenced resource is often
+        // managed or owned by another publisher, which download deliberately leaves as a bare
+        // reference (it exists in the target env; re-creating a foreign prefix would hard-fail a
+        // fresh build). Download still captures the CONTENT when it can safely do so, so an
+        // own-prefix unmanaged page travels with the app.
+        //
+        // This does not weaken the http(s) guard, which exists to stop an ARBITRARY scheme
+        // (`javascript:`, `file:`) becoming a nav entry in a shipped app. A web-resource reference
+        // is not arbitrary: it names a resource inside Dataverse, not a script or a local file.
+        if (sa.url && !webResourceNameFromRef(sa.url) && !isSafeHttpUrl(sa.url)) {
+          errors.push(`sitemap subArea "${sa.title || ''}" url must be an http(s) URL or a $webresource:<name> reference (got '${sa.url}')`);
+        }
         // schemaVersion 2 references pages by stable KEY; legacy specs still reference by name.
         const pageRefSet = isV2 ? pageKeysSet : pageNamesSet;
         if (sa.page && !pageRefSet.has(sa.page)) errors.push(`sitemap subArea references unknown page '${sa.page}' (declare it in pages[])`);
@@ -1253,6 +1300,7 @@ function migrateAppSpec(spec) {
 module.exports = {
   validateAppSpec,
   normalizePageSource,
+  normalizeLanguageCode,
   quickCreateEnabledFor,
   isPlatformIconRef,
   webResourceNameFromRef,
@@ -1277,5 +1325,6 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  isSafeHttpUrl,
   CHART_TYPES,
 };

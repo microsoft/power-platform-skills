@@ -160,6 +160,20 @@ PREFIX="<Publisher Prefix>"  # e.g. new
 
 ### JSON Structure
 
+Optional top-level field: **`languageCode`** — the LCID for the Dataverse labels this step creates.
+**Normally omit it.** `provision-entities.js` reads the organization's base language
+(`organization.languagecode`) and uses that, which is always a language the org has provisioned. Set
+it only to deliberately author labels in a *different* provisioned language. It must be a positive
+integer LCID up to 65535 (`1031`, not `"de-DE"`); an invalid value is rejected before any Dataverse
+write. `--language-code` / `--languageCode <lcid>` overrides it for one run.
+
+**If provisioning fails with `The language code N is not a valid language for this organization`,**
+that is this setting — the organization does not have LCID N. Re-run with `--language-code <an LCID
+the org actually has>`. Note the failure is *not* all-or-nothing: the table and any Choice columns
+are created first and it fails on the first `DateTime`/`Memo` column, so it can look like an
+environment fault. A `⚠ could not determine the organization's base language …` warning on stderr
+means discovery failed and 1033 was assumed — pass the flag explicitly.
+
 The input JSON follows the App Spec format. Build it with:
 
 ```json

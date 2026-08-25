@@ -12,6 +12,7 @@ const {
   relationshipSchemaName,
   manyToManySchemaName,
   quickCreateEnabledFor,
+  normalizeLanguageCode,
 } = require('./app-spec.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
@@ -27,11 +28,65 @@ const SDK_COLUMN_TYPE = {
   File: 'file', Image: 'image', AutoNumber: 'autonumber',
 };
 const REQUIRED = (c) => (c.required === true ? 'ApplicationRequired' : c.required === 'recommended' ? 'Recommended' : 'None');
+const DEFAULT_LANGUAGE_CODE = 1033;
+
+// Dataverse label payloads must use an LCID the org actually has provisioned. Resolve an explicit
+// CLI override first, then an App Spec override, then the org's base `organization.languagecode`,
+// and only fall back to 1033 if discovery itself fails so an unrelated read error does not block
+// the whole build.
+async function resolveLanguageCode({ provision, spec, languageCode, warn }) {
+  // A supplied-but-invalid value is DISCARDED, not honoured — but it must not be discarded in
+  // silence. "You gave me nothing" and "you gave me something I could not use" are different facts,
+  // and only the second means the caller believes they pinned a language and is wrong. The CLI flags
+  // hard-error before reaching here; this covers the programmatic seam and any caller that skips the
+  // validation gate. Nobody's build breaks by being told their explicit input was rejected.
+  const rejected = (label, value) => {
+    if (typeof warn === 'function') {
+      warn(`ignoring ${label} '${value}' — not a valid LCID (expected a positive integer up to 65535); `
+        + 'falling back to the next source.');
+    }
+  };
+
+  const explicit = normalizeLanguageCode(languageCode);
+  if (explicit) return explicit;
+  if (languageCode !== undefined && languageCode !== null) rejected('--language-code', languageCode);
+
+  const specLanguage = normalizeLanguageCode(spec?.languageCode);
+  if (specLanguage) return specLanguage;
+  if (spec && spec.languageCode !== undefined && spec.languageCode !== null) rejected('languageCode', spec.languageCode);
+
+  // EVERY fallback to the default is announced, not just the read-threw case. 1033 is precisely the
+  // value that breaks a non-English organization (#447), so a build that silently lands here fails
+  // later in the data-model phase with an opaque "The language code 1033 is not a valid language for
+  // this organization" and nothing connecting it back to language resolution — which is exactly the
+  // confusing failure this change exists to remove.
+  const fallback = (reason) => {
+    if (typeof warn === 'function') {
+      warn(`could not determine the organization's base language (${reason}); using ${DEFAULT_LANGUAGE_CODE}. `
+        + `If this organization does not have ${DEFAULT_LANGUAGE_CODE} provisioned, pass `
+        + '--language-code (or --languageCode) <lcid>, or set "languageCode" in the App Spec.');
+    }
+    return DEFAULT_LANGUAGE_CODE;
+  };
+
+  if (!provision || typeof provision.queryRecords !== 'function') {
+    return fallback('no Dataverse reader was supplied');
+  }
+
+  try {
+    const rows = await provision.queryRecords('organization', { select: ['languagecode'], top: 1 });
+    const orgLanguage = normalizeLanguageCode(rows && rows[0] && rows[0].languagecode);
+    if (orgLanguage) return orgLanguage;
+    return fallback('organization.languagecode was missing or not a valid LCID');
+  } catch (err) {
+    return fallback(`the organization read failed: ${(err && err.message) || err}`);
+  }
+}
 
 // Map an App Spec column to SDK CreateColumnOptions. `globalChoiceIds` maps a global-choice
 // name -> its metadataId (so a column can bind to a shared option set).
-function columnOptions(c, globalChoiceIds, globalChoices) {
-  const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c) };
+function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
+  const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c), languageCode };
   switch (c.type) {
     case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
     case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
@@ -162,8 +217,9 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
 
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
-async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
+  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode, warn });
   
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
@@ -177,7 +233,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
   // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }
@@ -195,7 +251,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
         const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
-          primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true };
+          primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
         try {
@@ -234,8 +290,8 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
       () => c.type === 'Customer'
-        ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c) })
-        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices)),
+        ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
+        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)),
       { skipIf: isAlreadyExists }));
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
@@ -262,7 +318,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
       srIdx += 1;
       (statusReasonValues[logical] = statusReasonValues[logical] || {})[sr.label] = { value: pinned, stateCode };
       await runner.run('data-model', `status reason ${e.schemaName}: ${sr.label}`, async () => {
-        const v = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned });
+        const v = await sdk.insertStatusValue(logical, { label: sr.label, stateCode, color: sr.color, value: pinned, languageCode: resolvedLanguageCode });
         statusReasonValues[logical][sr.label] = { value: typeof v === 'number' ? v : pinned, stateCode };
       }, { recoverable: true, skipIf: isAlreadyExists });
     }
@@ -270,7 +326,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
     // already-exists error is treated as a skip (not a halt) via skipIf.
     for (const k of e.alternateKeys || []) {
       await runner.run('data-model', `alt key ${e.schemaName}.${k.schemaName}`,
-        () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()) }),
+        () => sdk.createAlternateKey(logical, { schemaName: k.schemaName, displayName: k.displayName || k.schemaName, keyAttributes: (k.columns || []).map((x) => x.toLowerCase()), languageCode: resolvedLanguageCode }),
         { recoverable: true, skipIf: isAlreadyExists });
     }
   }
@@ -286,7 +342,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
       try { exists = ((await provision.fetchEntityMetadata(rel.referenced.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
-        const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName });
+        const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
         result.relationships.push({
           schemaName: res.schemaName || schema,
           metadataId: res.metadataId,
@@ -300,7 +356,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply }) {
       try { exists = ((await provision.fetchEntityMetadata(rel.entity1.toLowerCase())).relationships || []).some((r) => r.schemaName.toLowerCase() === schema.toLowerCase()); } catch { /* just created */ }
       if (exists) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
       await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
-        const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName });
+        const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
         result.relationships.push({
           schemaName: res.schemaName || schema,
           metadataId: res.metadataId,
@@ -445,4 +501,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, makeEntitySetResolver, resolveLanguageCode, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };

@@ -438,3 +438,84 @@ test('requireSuccessfulPush halts (BuildHalt) on a 412 version-conflict result',
     (err) => err.name === 'BuildHalt' && /re-download the app and rebuild/.test(err.message) && err.code === 'version-conflict'
   );
 });
+
+// #447 regression net. The bug this fixes was a SINGLE label-emitting call that forgot to pass a
+// language, and it stayed invisible until a user in a German org filed a bug — CI runs offline mocks
+// and nobody's CI runs against a non-1033 org. So pinning only the two call sites that happened to be
+// mutation-tested leaves the same detection gap for the other six.
+//
+// This asserts GENERICALLY: every recorded SDK call that carries a label must carry the resolved LCID.
+// A new label-emitting call added later is therefore covered by construction rather than by someone
+// remembering to extend a list.
+test('EVERY label-emitting SDK call carries the resolved language code (#447)', async () => {
+  const seen = [];
+  const rec = (name) => (...args) => {
+    // The options object is the last argument for every one of these SDK signatures.
+    seen.push({ name, opts: args[args.length - 1] });
+    return {};
+  };
+
+  const sdk = {
+    createGlobalOptionSet: async (...a) => { seen.push({ name: 'createGlobalOptionSet', opts: a[0] }); return { metadataId: 'g1' }; },
+    createTable: async (...a) => { seen.push({ name: 'createTable', opts: a[0] }); return { logicalName: a[0].schemaName.toLowerCase(), entitySetName: a[0].schemaName.toLowerCase() + 's', metadataId: 't1' }; },
+    createColumn: async (...a) => { seen.push({ name: 'createColumn', opts: a[1] }); return { logicalName: a[1].schemaName.toLowerCase(), metadataId: 'c1' }; },
+    createCustomerColumn: async (...a) => { seen.push({ name: 'createCustomerColumn', opts: a[1] }); return { logicalName: a[1].schemaName.toLowerCase(), metadataId: 'c2' }; },
+    insertStatusValue: async (...a) => { seen.push({ name: 'insertStatusValue', opts: a[1] }); return 100000000; },
+    createAlternateKey: async (...a) => { seen.push({ name: 'createAlternateKey', opts: a[1] }); return {}; },
+    createRelationship: async (...a) => { seen.push({ name: 'createRelationship', opts: a[0] }); return { schemaName: a[0].schemaName, metadataId: 'r1' }; },
+    updateTable: rec('updateTable'),
+  };
+  const provision = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    fetchEntityMetadata: async (l) => ({ logicalName: l, entitySetName: l + 's', relationships: [] }),
+    queryRecords: async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : [{ solutionid: 's' }]),
+  };
+
+  // A spec that reaches all seven call sites in one pass.
+  const spec = {
+    solution: { uniqueName: 'Cover', publisherPrefix: 'cr' },
+    globalChoices: [{ name: 'cr_pri', displayName: 'Priority', options: ['Low', 'High'] }],
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', pluralName: 'Parents',
+        primaryAttribute: { schemaName: 'cr_name', displayName: 'Name' },
+        columns: [
+          { schemaName: 'cr_when', displayName: 'When', type: 'DateTime' },
+          { schemaName: 'cr_cust', displayName: 'Cust', type: 'Customer' },
+        ],
+        statusReasons: [{ label: 'Open', state: 'Active' }],
+        alternateKeys: [{ schemaName: 'cr_key', displayName: 'Key', columns: ['cr_name'] }] },
+      { schemaName: 'cr_child', displayName: 'Child', pluralName: 'Children',
+        primaryAttribute: { schemaName: 'cr_cname', displayName: 'CName' }, columns: [] },
+      { schemaName: 'cr_tag', displayName: 'Tag', pluralName: 'Tags',
+        primaryAttribute: { schemaName: 'cr_tname', displayName: 'TName' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_ParentId', displayName: 'Parent' } },
+      { type: 'ManyToMany', entity1: 'cr_parent', entity2: 'cr_tag' },
+    ],
+  };
+
+  const runner = makeRunner({ emit: () => {}, total: 99 });
+  await provisionDataModel({ sdk, provision, runner, spec, apply: true });
+
+  // `updateTable` is deliberately excluded: with only `quickCreateEnabled` the SDK builds no Label at
+  // all, it round-trips Dataverse's own labels under MSCRM.MergeLabels. Passing a language there would
+  // be noise, not safety.
+  const LABEL_EMITTING = new Set([
+    'createGlobalOptionSet', 'createTable', 'createColumn', 'createCustomerColumn',
+    'insertStatusValue', 'createAlternateKey', 'createRelationship',
+  ]);
+
+  const emitted = seen.filter((c) => LABEL_EMITTING.has(c.name));
+  const names = new Set(emitted.map((c) => c.name));
+  for (const expected of LABEL_EMITTING) {
+    assert.ok(names.has(expected), `${expected} was never exercised — this test no longer covers it`);
+  }
+
+  const missing = emitted.filter((c) => !c.opts || c.opts.languageCode !== 1031);
+  assert.deepStrictEqual(
+    missing.map((c) => c.name), [],
+    'these label-emitting calls did not carry the resolved LCID: ' + JSON.stringify(missing.map((c) => c.name))
+  );
+});
