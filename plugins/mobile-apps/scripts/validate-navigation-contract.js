@@ -41,6 +41,15 @@ function validateNavigationContract(contract, context = {}) {
   }
   if (!destinationIds.has(contract?.initialDestinationId)) errors.push('initial destination is not registered');
   const screenIds = new Set((context.screenContract?.screens || []).map((screen) => screen.id));
+  const routeByScreenId = new Map((context.screenContract?.screens || []).map((screen) => [screen.id, screen.route]));
+  const routing = contract?.routingPolicy;
+  if (!routing || !screenIds.has(routing.primaryScreenId) || !screenIds.has(routing.launchScreenId)) errors.push('navigation routing policy requires known primary and launch screens');
+  if (routing && routeByScreenId.get(routing.launchScreenId) !== routing.launchRoute) errors.push('navigation launch route does not match its screen');
+  if (routing?.resumeScreenId === null && routing?.resumeRoute !== null) errors.push('navigation null resume screen requires null route');
+  if (routing?.resumeScreenId && (!screenIds.has(routing.resumeScreenId) || routeByScreenId.get(routing.resumeScreenId) !== routing.resumeRoute)) errors.push('navigation resume route does not match its screen');
+  if (routing?.resumeRoutePolicy === 'none' && routing.resumeScreenId !== null) errors.push('navigation none resume policy requires null screen');
+  if (routing?.resumeRoutePolicy === 'home' && routing.resumeScreenId !== routing.primaryScreenId) errors.push('navigation home resume policy requires the primary screen');
+  if (routing?.keyFlowEntryScreenId && !screenIds.has(routing.keyFlowEntryScreenId)) errors.push('navigation key-flow entry screen is unknown');
   for (const destination of destinations) if (screenIds.size && !screenIds.has(destination.rootScreenId)) errors.push(`destination root ${destination.rootScreenId} is absent from the Screen Graph`);
   const ownedScreens = new Set(destinationScreens);
   for (const flow of contract?.flows || []) {

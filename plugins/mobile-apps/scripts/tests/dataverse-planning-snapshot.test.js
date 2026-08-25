@@ -1060,7 +1060,7 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
     'utf8',
   );
   const planner = fs.readFileSync(
-    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+    path.join(pluginRoot, 'agents', 'real-app-planner.md'),
     'utf8',
   );
   const createSkill = fs.readFileSync(

@@ -16,6 +16,7 @@ test('domain-first workflow artifacts and executable gates are present', () => {
     'scripts/schema-prototype-domain-model.json',
     'scripts/schema-workflow-journey-contract.json',
     'scripts/schema-navigation-contract.json',
+    'scripts/schema-native-prototype-design-recipe.json',
     'scripts/lib/prototype-domain-model.js',
     'scripts/lib/workflow-regression.js',
     'scripts/resolve-workflow-journey.js',
@@ -34,12 +35,22 @@ test('domain-first workflow artifacts and executable gates are present', () => {
     'scripts/validate-semantic-color-usage.js',
     'scripts/validate-static-layout-budgets.js',
     'scripts/validate-prototype-domain-model.js',
+    'scripts/compile-native-prototype-design.js',
+    'scripts/validate-native-prototype-design.js',
+    'scripts/resolve-design-instruction-manifest.js',
+    'scripts/prepare-native-canary.js',
+    'scripts/validate-native-canary.js',
+    'scripts/start-prototype-metro.js',
+    'scripts/record-prototype-performance.js',
     'scripts/schema-dataverse-repository-mapping.json',
     'scripts/reconcile-domain-dataverse.js',
     'scripts/validate-mobile-app.js',
     'skills/create-mobile-prototype/scripts/gen-data-layer.js',
     'skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js',
     'skills/create-mobile-prototype/scripts/configure-prototype-runtime.js',
+    'skills/design-system/automatic-native.md',
+    'skills/design-system/optional-modes.md',
+    'skills/design-system/reference-ownership.json',
     'skills/prototype-to-real-app/scripts/gen-dataverse-repositories.js',
     'shared/references/lifecycle-state.md',
   ]) assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, relativePath);
@@ -54,6 +65,7 @@ test('domain-first workflow Markdown keeps fenced blocks balanced', () => {
     'skills/edit-plan/SKILL.md',
     'skills/sync-from-plan/SKILL.md',
     'agents/native-app-planner.md',
+    'agents/real-app-planner.md',
     'agents/data-model-architect.md',
     'agents/screen-planner.md',
     'agents/screen-builder.md',
@@ -67,10 +79,11 @@ test('domain-first workflow Markdown keeps fenced blocks balanced', () => {
 test('prototype creation plans a neutral domain with consolidated and explicit full local review modes', () => {
   const skill = read('skills/create-mobile-prototype/SKILL.md');
   assert.match(skill, /prototype-domain-model\.json/);
-  assert.match(skill, /prototypeDomainModel/);
-  assert.match(skill, /workflowJourneyContract/);
-  assert.match(skill, /navigationContract/);
-  assert.match(skill, /resolve-navigation-contract\.js/);
+  assert.match(skill, /prototype-semantic-plan/);
+  assert.match(skill, /designIntent/);
+  assert.match(skill, /navigationIntent/);
+  assert.match(skill, /finalize-prototype-plan\.js/);
+  assert.match(skill, /validate-prototype-semantic-preservation\.js/);
   assert.match(skill, /apply-navigation-shell\.js/);
   assert.match(skill, /validate-navigation-continuity\.js/);
   assert.match(skill, /resolve-workflow-journey\.js/);
@@ -80,7 +93,7 @@ test('prototype creation plans a neutral domain with consolidated and explicit f
   assert.match(skill, /validate-capability-composition\.js/);
   assert.match(skill, /validate-semantic-color-usage\.js/);
   assert.match(skill, /validate-static-layout-budgets\.js/);
-  assert.match(skill, /dataverseSchemaContract: null/);
+  assert.match(skill, /dataverse-schema-contract\.json` must be absent/);
   assert.match(skill, /--section prototype-review/);
   assert.match(skill, /mayAuthorizeExternalMutations: false/);
   assert.match(skill, /gen-data-layer\.js/);
@@ -96,21 +109,23 @@ test('prototype creation plans a neutral domain with consolidated and explicit f
 });
 
 test('planning agents keep Dataverse separate from canonical domain operations', () => {
-  const nativePlanner = read('agents/native-app-planner.md');
+  const prototypePlanner = read('agents/native-app-planner.md');
+  const realPlanner = read('agents/real-app-planner.md');
   const dataArchitect = read('agents/data-model-architect.md');
   const screenPlanner = read('agents/screen-planner.md');
-  for (const content of [nativePlanner, dataArchitect]) {
+  for (const content of [realPlanner, dataArchitect]) {
     assert.match(content, /prototypeDomainModel/);
     assert.match(content, /dataverseSchemaContract: null/);
-    assert.match(content, /no environment/i);
   }
-  assert.match(nativePlanner, /bundle schema version 3/);
-  assert.match(nativePlanner, /workflowJourneyContract/);
-  assert.match(nativePlanner, /navigationContract/);
-  assert.match(nativePlanner, /foreground resolver owns the final instance/i);
+  assert.match(prototypePlanner, /provisional Dataverse names/);
+  assert.match(prototypePlanner, /environment facts/);
+  assert.match(realPlanner, /bundle schema version 3/);
+  assert.match(realPlanner, /workflowJourneyContract/);
+  assert.match(realPlanner, /navigationContract/);
+  assert.match(realPlanner, /foreground resolver owns the final instance/i);
   assert.match(screenPlanner, /Workflow Journey Contract/);
   assert.match(screenPlanner, /completion\s+guards/);
-  assert.match(nativePlanner, /domain operation\/repository\/method\/hook/);
+  assert.match(realPlanner, /domain operation\/repository\/method\/hook/);
   assert.match(dataArchitect, /stable opaque IDs/);
   assert.match(dataArchitect, /fixtures/);
   assert.match(screenPlanner, /domainOperation/);
@@ -206,6 +221,7 @@ test('runtime and lifecycle preserve host query ownership and revision identity'
   const lifecycle = read('shared/references/lifecycle-state.md');
   assert.match(runtime, /<PrototypeDataProvider>\{children\}<\/PrototypeDataProvider>/);
   assert.match(runtime, /<PowerAppsProvider/);
+  assert.match(runtime, /powerConfig=\{dataMode === 'prototype' \? \{ \.\.\.powerConfig, environmentId: '' \} : powerConfig\}/);
   assert.doesNotMatch(runtime, /QueryClientProvider/);
   assert.doesNotMatch(generator, /QueryClientProvider/);
   assert.match(lifecycle, /"schemaVersion": 2/);
@@ -213,9 +229,31 @@ test('runtime and lifecycle preserve host query ownership and revision identity'
   assert.match(lifecycle, /lastWorkflowJourneyHash/);
   assert.match(lifecycle, /lastNavigationContractHash/);
   assert.match(lifecycle, /lastNavigationShellHash/);
+  assert.match(lifecycle, /lastPrototypeSemanticPlanHash/);
+  assert.match(lifecycle, /lastPrototypeSemanticPreservationHash/);
   assert.match(lifecycle, /lastRepositoryMappingHash/);
   assert.match(lifecycle, /lastFixtureRevision/);
   assert.match(lifecycle, /lastValidation/);
+});
+
+test('prompt-only prototypes use the automatic design fast path before builder compilation', () => {
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+  const design = read('skills/design-system/SKILL.md');
+  const fastPath = read('skills/design-system/automatic-native.md');
+  assert.match(design, /Select exactly one mode/);
+  assert.match(design, /Do not preload\s+references or combine modes/);
+  assert.match(design, /Do\s+not read `optional-modes\.md`/);
+  assert.match(fastPath, /compile-native-prototype-design\.js/);
+  assert.match(fastPath, /validate-native-prototype-design\.js/);
+  assert.match(fastPath, /no additional model call/);
+  assert.doesNotMatch(fastPath, /references\//);
+  assert.doesNotMatch(fastPath, /AskUserQuestion|ask the maker|wait for confirmation/i);
+  assert.match(design, /optional-modes\.md/);
+  assert.ok(prototype.indexOf('validate-native-prototype-design.js') < prototype.indexOf('compile-screen-build-pack.js'));
+  assert.match(prototype, /--require-build-pack/);
+  assert.match(prototype, /Do not recreate Foundation or signature components here/);
+  assert.match(prototype, /Do not invoke `\/design-system` on[\s\S]*normal prompt-only path/);
+  assert.match(prototype, /Invoke `\/design-system`[\s\S]*only when the maker explicitly selected/);
 });
 
 test('legacy compatibility is explicit, transactional, and not the normal path', () => {
@@ -237,7 +275,7 @@ test('reference-led and brief-only experience inputs remain supported', () => {
   assert.match(prototype, /reference fidelity/i);
   assert.match(prototype, /one-line mobile app brief/);
   assert.match(nativePlanner, /Product Experience\s+Contract/);
-  assert.match(nativePlanner, /contractHash\(\)/);
+  assert.match(nativePlanner, /compiler-owned exact revisions/);
   assert.match(screenPlanner, /first-viewport focal point/);
   assert.match(screenPlanner, /experienceFoundationContract/);
 });

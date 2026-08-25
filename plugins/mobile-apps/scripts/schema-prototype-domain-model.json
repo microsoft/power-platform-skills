@@ -56,7 +56,9 @@
       "properties": {
         "connectivity": { "enum": ["offline-required", "offline-preferred", "network-optional"] },
         "requiredOperations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "pendingSyncBehavior": { "type": "string", "minLength": 5 },
+        "resumeBehavior": { "type": "string", "minLength": 5 }
       },
       "additionalProperties": false
     },
@@ -133,7 +135,8 @@
         "child": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
         "cardinality": { "enum": ["one-to-many", "one-to-one"] },
         "childField": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
-        "required": { "type": "boolean" }
+        "required": { "type": "boolean" },
+        "deleteBehavior": { "enum": ["restrict", "cascade", "orphan"] }
       },
       "additionalProperties": false
     },
@@ -172,6 +175,11 @@
         "filterFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "sortFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
         "writeFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "failureStates": {
+          "type": "array",
+          "items": { "enum": ["empty", "error", "offline", "unavailable", "permission-denied", "conflict"] },
+          "uniqueItems": true
+        },
         "pagination": {
           "type": "object",
           "required": ["mode"],

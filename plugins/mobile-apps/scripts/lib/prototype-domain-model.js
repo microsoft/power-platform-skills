@@ -181,7 +181,7 @@ function validatePrototypeDomainModel(model, context = {}) {
   }
 
   for (const [relationshipIndex, relationship] of relationships.entries()) {
-    exactKeys(relationship, ['key', 'parent', 'child', 'cardinality', 'childField', 'required'], ['key', 'parent', 'child', 'cardinality', 'childField', 'required'], `domainModel.relationships[${relationshipIndex}]`, errors);
+    exactKeys(relationship, ['key', 'parent', 'child', 'cardinality', 'childField', 'required', 'deleteBehavior'], ['key', 'parent', 'child', 'cardinality', 'childField', 'required'], `domainModel.relationships[${relationshipIndex}]`, errors);
     const parent = entityMap.get(relationship.parent);
     const child = entityMap.get(relationship.child);
     if (!parent || !child) errors.push(`relationship ${relationship.key} references an unknown entity`);
@@ -191,7 +191,7 @@ function validatePrototypeDomainModel(model, context = {}) {
 
   for (const [operationIndex, operation] of operations.entries()) {
     const operationLabel = `domainModel.operations[${operationIndex}]`;
-    exactKeys(operation, ['key', 'entity', 'kind', 'repository', 'method', 'hook', 'selectFields', 'filterFields', 'sortFields', 'writeFields', 'pagination'], ['key', 'entity', 'kind', 'repository', 'method', 'hook', 'selectFields', 'filterFields', 'sortFields', 'pagination'], operationLabel, errors);
+    exactKeys(operation, ['key', 'entity', 'kind', 'repository', 'method', 'hook', 'selectFields', 'filterFields', 'sortFields', 'writeFields', 'pagination', 'failureStates'], ['key', 'entity', 'kind', 'repository', 'method', 'hook', 'selectFields', 'filterFields', 'sortFields', 'pagination'], operationLabel, errors);
     if (!['list', 'get', 'create', 'update', 'delete'].includes(operation.kind)) errors.push(`${operationLabel}.kind is invalid`);
     if (!/^[A-Z][A-Za-z0-9]*Repository$/.test(String(operation.repository || ''))) errors.push(`${operationLabel}.repository is invalid`);
     if (!/^use[A-Z][A-Za-z0-9]*$/.test(String(operation.hook || ''))) errors.push(`${operationLabel}.hook is invalid`);
@@ -233,7 +233,7 @@ function validatePrototypeDomainModel(model, context = {}) {
   for (const key of offlineOperations) {
     if (!operationMap.has(key)) errors.push(`offlineUxIntent references unknown operation ${key}`);
   }
-  exactKeys(model?.offlineUxIntent, ['connectivity', 'requiredOperations', 'notes'], ['connectivity', 'requiredOperations'], 'domainModel.offlineUxIntent', errors);
+  exactKeys(model?.offlineUxIntent, ['connectivity', 'requiredOperations', 'notes', 'pendingSyncBehavior', 'resumeBehavior'], ['connectivity', 'requiredOperations'], 'domainModel.offlineUxIntent', errors);
 
   const fixtures = model?.fixtures && typeof model.fixtures === 'object' && !Array.isArray(model.fixtures) ? model.fixtures : {};
   const allIds = new Map();

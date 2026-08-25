@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents when working with the **mobile-app** plugin.
 
-> **Status:** v0 — 26 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
+> **Status:** v0.3 — 26 skills + 5 agents authored. The latest Expo standalone template snapshot is bundled under `template/`. Read [README.md](./README.md) for the command list.
 
 ## What This Plugin Is
 
@@ -23,7 +23,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/mobile-apps
 .claude-plugin/plugin.json     ← Legacy metadata mirror
 AGENTS.md                      ← This file
 README.md                      ← Plugin overview
-agents/                        ← native-app-planner, data-model-architect, screen-planner, screen-builder
+agents/                        ← native-app-planner, real-app-planner, data-model-architect, screen-planner, screen-builder
 shared/                        ← shared-instructions, references, samples, memory-bank template
 skills/                        ← /create-mobile-app, /create-mobile-prototype, /prototype-to-real-app, /sync-from-plan, /design-react-native-app, /add-*, ...
 scripts/                       ← shared helpers, including validate-mobile-files.js for skill-owned changed-file validation
@@ -68,7 +68,7 @@ its compact in-memory work order extracted from the immutable pack revision.
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — Do not add `hooks/hooks.json`: Claude loads plugin hooks during unrelated workflows, so a mobile write hook can block Canvas Apps tool calls. Mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
-12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
+12. **Sub-agent return-status protocol** — Every agent in this plugin (`real-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. The tool-free `native-app-planner` is the sole exception: it returns one raw `prototype-semantic-plan` JSON object whose exact bytes are staged by `stage-prototype-planner-response.js`. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch for all status-protocol agents:
 
     | Code | Meaning | Orchestrator action |
     |---|---|---|
@@ -79,7 +79,8 @@ its compact in-memory work order extracted from the immutable pack revision.
     | `BLOCKED: <reason>` | Hit a hard wall | STOP, escalate to user, never silently retry |
 
     Hard rules:
-    - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary. `native-app-planner` follows `NEEDS_USER_APPROVAL: <json>` with exactly one fenced `mobile-plan-artifact-bundle`; it does not return paths, approval IDs, or write instructions.
+    - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary. `real-app-planner` follows `NEEDS_USER_APPROVAL: <json>` with exactly one fenced `mobile-plan-artifact-bundle`; it does not return paths, approval IDs, or write instructions.
+    - `native-app-planner` has no tools, receives one complete inline request, and returns compact semantic JSON only. It never returns Markdown, hashes, final routes/files, copied foreground contracts, or final Navigation. The foreground allows one recorded schema repair, compiles the final bundle deterministically, and never reconstructs either artifact conversationally.
     - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
     - Nested planners, data-model architects, and screen planners never write planning artifacts, scratch sections, previews, or checkpoint state. The foreground writes only the eight active planning targets through `scripts/write-plan-artifact-bundle.js` after Navigation resolution and `scripts/validate-plan-artifact-bundle.js` succeed; null domain/schema targets are removed rather than persisted as executable-looking files.
     - Screen builders are also return-only. A successful builder returns exactly
@@ -96,6 +97,17 @@ its compact in-memory work order extracted from the immutable pack revision.
     - A low-confidence Product Experience Contract permits one focused clarification about the first user outcome before normal planning resumes. Do not use industry or generic style-picker early-return signals.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
 13. **Lifecycle state** — Repository mode lives in `<project>/.mobile-app/state.json` per [`shared/references/lifecycle-state.md`](shared/references/lifecycle-state.md). Schema version 2 records domain, repository mapping, fixture, and validation revisions. Conversion uses `prototype → transitioning → dataverse`; only passing reconciliation, adapter generation, unchanged-screen proof, and `validate-mobile-app.js --scope all --record` commit the final mode. The legacy `.code-apps-native/state.json` path is migration input only.
+14. **Prototype vertical-slice authority** — PR1 semantic plans independently
+    declare permanent Home, launch, resume, key-flow entry, product roles,
+    durable jobs, bounded flows, and operation-bound capability ownership.
+    Generation order cannot select any of them. Prompt-only design loads the
+    thin dispatcher plus `automatic-native.md` and zero optional references or
+    design model calls. After domain/design join, the single build pack owns a
+    native canary containing Home plus the complete critical flow. Builders use
+    the existing return-only artifact envelope and atomic writer; supporting
+    screens do not fan out in this milestone. Metro may report ready only after
+    a current canary receipt and HTTP health response. Performance evidence
+    records planner/context bytes and calls without controlling phase flow.
 
 ## Decisions made
 

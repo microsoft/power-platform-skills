@@ -645,7 +645,7 @@ function validateV3Operations(screenContract, contract, context, errors) {
       if (screen.navigation?.kind !== 'pushed') continue;
       const visited = new Set([screen.route]);
       let parent = byRoute.get(screen.navigation.parentRoute);
-      while (parent?.navigation?.kind === 'pushed' && !visited.has(parent.route)) {
+      while (['pushed', 'modal'].includes(parent?.navigation?.kind) && !visited.has(parent.route)) {
         visited.add(parent.route);
         parent = byRoute.get(parent.navigation.parentRoute);
       }

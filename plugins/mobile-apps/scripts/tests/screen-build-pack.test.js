@@ -8,11 +8,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { compileScreenBuildPack } = require('../compile-screen-build-pack');
-const { screenWorkOrder } = require('../compile-screen-build-pack');
+const { compileScreenBuildPack, screenWorkOrder } = require('../compile-screen-build-pack');
 const { deriveExperienceFromBrief, foundationContract, primaryComposition } = require('../experience-patterns');
 const { validateScreenBuildPack } = require('../validate-screen-build-pack');
 const { validateScreenComposition } = require('../validate-screen-composition');
+const { validateNativeCanary } = require('../validate-native-canary');
 const { screenInputFingerprint, validateScreenArtifact } = require('../validate-screen-artifact');
 const { validateScreenSourceContract } = require('../lib/screen-source-contract');
 const { writeScreenArtifact } = require('../write-screen-artifact');
@@ -23,7 +23,9 @@ const { domainModelRevision } = require('../lib/prototype-domain-model');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
 const { resolveNavigationContract } = require('../resolve-navigation-contract');
 const { applyNavigationShell } = require('../apply-navigation-shell');
+const { validate: validateExperienceArtifacts } = require('../validate-experience-contract');
 
+const pluginRoot = path.resolve(__dirname, '..', '..');
 const passengerBrief = [
   'Create a mobile app for showcasing inventory items to flight passengers.',
   'This app will be used in flight for selling travel accessories, beauty products and watches.',
@@ -413,6 +415,19 @@ test('pack validation rejects execution facts or operations changed after compil
   assert.ok(rules.has('screen-operation-drift'));
 });
 
+test('standalone Experience validation enforces schema-v3 domain operation bindings', (context) => {
+  const { root } = createProject(context);
+  const screenPath = path.join(root, '.tmp', 'experience-screen-contract.json');
+  const screenContract = JSON.parse(fs.readFileSync(screenPath, 'utf8'));
+  screenContract.screens[0].data.operations[0].domainOperation = 'unknownDomainOperation';
+  fs.writeFileSync(screenPath, `${JSON.stringify(screenContract, null, 2)}\n`);
+  const issues = validateExperienceArtifacts(root, 'plan');
+  assert.ok(
+    issues.some((issue) => issue.rule === 'invalid-screen-contract' && /domainOperation unknownDomainOperation does not exist/.test(issue.message)),
+    JSON.stringify(issues, null, 2),
+  );
+});
+
 test('legacy v2 screen contracts require explicit re-planning before build', (context) => {
   const { root } = createProject(context);
   const screenPath = path.join(root, '.tmp', 'experience-screen-contract.json');
@@ -531,6 +546,50 @@ function screenArtifactFixture(root, pack) {
   };
 }
 
+function detailArtifactFixture(root, pack) {
+  const screen = pack.screens.find((candidate) => candidate.id === 'ProductDetail');
+  const target = path.join(root, screen.file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, [
+    "import { ScreenShell } from '@/components';",
+    'export default function ProductDetailScreen() {',
+    '  // TODO: screen-builder fills JSX here',
+    '  return null;',
+    '}',
+  ].join('\n'));
+  return {
+    target,
+    artifact: {
+      schemaVersion: 1,
+      kind: 'mobile-screen-artifact',
+      packRevision: pack.revision,
+      screenId: screen.id,
+      route: screen.route,
+      file: screen.file,
+      inputFileSha256: hash(fs.readFileSync(target)),
+      source: [
+        "import { BottomActionBar, EntityImage, ScreenShell } from '@/components';",
+        "import { isDomainRecordActionable, resolveDomainMedia, useCreateCartItem, useProduct } from '@/data';",
+        "import { useLocalSearchParams } from 'expo-router';",
+        "import { ScrollView } from 'react-native';",
+        "import { Button, YStack } from 'tamagui';",
+        '',
+        'export default function ProductDetailScreen() {',
+        "  const { id } = useLocalSearchParams<{ id: string }>();",
+        '  // operation:get-product',
+        '  const product = useProduct(id);',
+        '  // operation:create-cart-item',
+        '  const addItem = useCreateCartItem();',
+        '  const item = product.data;',
+        '  const actionable = isDomainRecordActionable(item || {});',
+        `  return <ScreenShell scroll={false} headerMode="${screen.headerMode}" title="Product detail"><ScrollView><YStack testID="screen-productdetail">{item ? <EntityImage media={resolveDomainMedia(item.media)} aspectRatio={1} /> : null}</YStack></ScrollView><BottomActionBar safeArea tabBarClearance="above"><Button testID="add-to-cart" disabled={!actionable || addItem.isPending} onPress={() => item && addItem.mutate({ cartId: 'cart-seat-12a', productId: item.id, label: item.name, quantity: 1 })}>Add to bag</Button></BottomActionBar></ScreenShell>;`,
+        '}',
+      ].join('\n'),
+      warnings: [],
+    },
+  };
+}
+
 test('return-only screen artifact validates and writes only its pack-authorized target', (context) => {
   const { root } = createProject(context);
   const pack = compileScreenBuildPack(root);
@@ -553,6 +612,35 @@ test('return-only screen artifact validates and writes only its pack-authorized 
   assert.equal(result.sourceSha256, hash(`${artifact.source}\n`));
   assert.equal(fs.readFileSync(target, 'utf8'), `${artifact.source}\n`);
   assert.equal(fs.readFileSync(packagePath, 'utf8'), packageBefore);
+});
+
+test('Home and key flow write through the real artifact envelope and pass native canary gates', (context) => {
+  const { root } = createProject(context);
+  const pack = compileScreenBuildPack(root);
+  fs.writeFileSync(path.join(root, '.tmp', 'screen-build-pack.json'), `${JSON.stringify(pack, null, 2)}\n`);
+  const home = screenArtifactFixture(root, pack);
+  const detail = detailArtifactFixture(root, pack);
+  assert.deepEqual(validateScreenArtifact(root, pack, home.artifact, 'Home').errors, []);
+  assert.deepEqual(validateScreenArtifact(root, pack, detail.artifact, 'ProductDetail').errors, []);
+  writeScreenArtifact(root, pack, home.artifact, 'Home');
+  writeScreenArtifact(root, pack, detail.artifact, 'ProductDetail');
+  const report = validateNativeCanary(root, pack, { skipTypecheck: true });
+  assert.deepEqual(report.issues, []);
+  assert.deepEqual(report.screenIds, ['Home', 'ProductDetail']);
+  assert.equal(report.sources.Home.sha256, hash(fs.readFileSync(home.target)));
+  assert.equal(report.sources.ProductDetail.sha256, hash(fs.readFileSync(detail.target)));
+  const templateModules = path.join(pluginRoot, 'template', 'node_modules');
+  fs.symlinkSync(templateModules, path.join(root, 'node_modules'), 'dir');
+  fs.writeFileSync(path.join(root, 'canary-modules.d.ts'), [
+    "declare module '@/components' { export const BottomActionBar: any; export const EntityImage: any; export const ScreenShell: any; }",
+    "declare module '@/data' { export const PROTOTYPE_CONTEXT: any; export function isDomainRecordActionable(value: any): boolean; export function resolveDomainMedia(value: any): any; export function useProducts(...args: any[]): any; export function useProduct(...args: any[]): any; export function useCreateCartItem(...args: any[]): any; }",
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, 'tsconfig.canary.json'), `${JSON.stringify({
+    compilerOptions: { strict: true, noEmit: true, jsx: 'react-jsx', module: 'esnext', moduleResolution: 'bundler', skipLibCheck: true },
+    include: ['canary-modules.d.ts', pack.screens.find((screen) => screen.id === 'Home').file, pack.screens.find((screen) => screen.id === 'ProductDetail').file],
+  }, null, 2)}\n`);
+  const typecheck = spawnSync(path.join(root, 'node_modules', '.bin', 'tsc'), ['-p', 'tsconfig.canary.json'], { cwd: root, encoding: 'utf8' });
+  assert.equal(typecheck.status, 0, `${typecheck.stdout}\n${typecheck.stderr}`);
 });
 
 test('screen artifact rejects an omitted or disconnected enriched context entry', (context) => {

@@ -111,6 +111,7 @@
         },
         "navigation": { "$ref": "#/definitions/navigation" },
         "role": { "enum": ["primary", "key-flow", "supporting"] },
+        "productRole": { "enum": ["primary-hub", "durable-destination", "workflow-step", "detail", "capture-surface", "transient", "modal", "immersive-utility"] },
         "purpose": { "type": "string", "minLength": 5 },
         "presentation": {
           "type": "object",
@@ -166,6 +167,8 @@
             "label": { "type": "string", "minLength": 1 },
             "placement": { "enum": ["inline", "sticky-bottom", "header", "floating"] },
             "destination": { "type": "string" },
+            "binding": { "type": "string", "minLength": 1 },
+            "doubleTapPolicy": { "enum": ["disable-while-pending", "idempotent", "not-applicable"] },
             "clearance": {
               "type": "object",
               "required": ["safeArea", "tabBar"],
@@ -187,7 +190,8 @@
             "aspectRatio": { "type": "string", "minLength": 3 },
             "minCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
             "fallback": { "enum": ["local-asset", "code-native-illustration", "text-only", "none"] }
-            ,"prominence": { "enum": ["none", "low", "medium", "high"] }
+            ,"prominence": { "enum": ["none", "low", "medium", "high"] },
+            "altTextBinding": { "type": "string", "minLength": 1 }
           },
           "additionalProperties": false
         },
@@ -223,7 +227,7 @@
         { "$ref": "#/definitions/screen" },
         {
           "type": "object",
-          "required": ["routeParameters", "navigation", "context", "signatureComponent", "data"],
+          "required": ["routeParameters", "navigation", "context", "signatureComponent", "productRole", "data"],
           "properties": {
             "firstViewport": {
               "type": "object",
@@ -261,6 +265,7 @@
         "writeFields": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "idField": { "type": "string", "minLength": 1 },
         "connectorOperationId": { "type": "string", "pattern": "^connector-[a-z0-9][a-z0-9-]*$" }
+        ,"failureStates": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
       },
       "additionalProperties": false
     },

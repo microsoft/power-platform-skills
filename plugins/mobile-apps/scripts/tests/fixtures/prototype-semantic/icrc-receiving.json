@@ -1,0 +1,443 @@
+{
+  "name": "ICRC receiving",
+  "brief": "Field logisticians identify expected shipments, then scan a barcode, record received quantities, photograph damage evidence during review, and tag confirmation with current location, then confirm recipient details, and finally complete goods receipts offline with saved drafts and pending sync.",
+  "semanticPlan": {
+    "schemaVersion": 1,
+    "kind": "prototype-semantic-plan",
+    "domain": {
+      "entities": [
+        {
+          "key": "GoodsReceipt",
+          "displayName": "Goods receipt",
+          "displayPluralName": "Goods receipts",
+          "description": "A receiving session for one expected humanitarian shipment.",
+          "primaryNameField": "receiptNumber",
+          "estimatedPrototypeRows": 2,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "receiptNumber", "displayName": "Receipt number", "type": "text", "required": true, "maximumLength": 40 },
+            { "key": "supplierName", "displayName": "Supplier", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "status", "displayName": "Status", "type": "choice", "required": true, "choiceKey": "ReceiptStatus" },
+            { "key": "warehouseName", "displayName": "Warehouse", "type": "text", "required": true, "maximumLength": 100 },
+            { "key": "expectedDate", "displayName": "Expected date", "type": "date", "required": true, "dateSemantics": "scheduled" }
+          ]
+        },
+        {
+          "key": "ReceiptLine",
+          "displayName": "Receipt line",
+          "displayPluralName": "Receipt lines",
+          "description": "An expected shipment line whose delivered quantity and condition are recorded.",
+          "primaryNameField": "description",
+          "estimatedPrototypeRows": 3,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "receiptId", "displayName": "Receipt", "type": "reference", "required": true, "referenceTarget": "GoodsReceipt" },
+            { "key": "itemCode", "displayName": "Item code", "type": "text", "required": true, "maximumLength": 30 },
+            { "key": "description", "displayName": "Description", "type": "text", "required": true, "maximumLength": 160 },
+            { "key": "expectedQuantity", "displayName": "Expected quantity", "type": "whole-number", "required": true, "minimum": 0 },
+            { "key": "receivedQuantity", "displayName": "Received quantity", "type": "whole-number", "required": true, "minimum": 0 },
+            { "key": "condition", "displayName": "Condition", "type": "choice", "required": true, "choiceKey": "LineCondition" },
+            { "key": "barcode", "displayName": "Barcode", "type": "text", "required": false, "maximumLength": 80 }
+          ]
+        },
+        {
+          "key": "DamageEvidence",
+          "displayName": "Damage evidence",
+          "displayPluralName": "Damage evidence",
+          "description": "A local photograph documenting damage for one received shipment line.",
+          "primaryNameField": "label",
+          "estimatedPrototypeRows": 1,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "receiptLineId", "displayName": "Receipt line", "type": "reference", "required": true, "referenceTarget": "ReceiptLine" },
+            { "key": "label", "displayName": "Label", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "image", "displayName": "Damage photograph", "type": "image", "required": true, "mediaIntent": "supporting" }
+          ]
+        },
+        {
+          "key": "RecipientConfirmation",
+          "displayName": "Recipient confirmation",
+          "displayPluralName": "Recipient confirmations",
+          "description": "The named recipient acknowledgement recorded before local completion.",
+          "primaryNameField": "recipientName",
+          "estimatedPrototypeRows": 1,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "receiptId", "displayName": "Receipt", "type": "reference", "required": true, "referenceTarget": "GoodsReceipt" },
+            { "key": "recipientName", "displayName": "Recipient name", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "recipientRole", "displayName": "Recipient role", "type": "text", "required": true, "maximumLength": 80 },
+            { "key": "confirmedAt", "displayName": "Confirmed at", "type": "date-time", "required": true, "dateSemantics": "instant" }
+          ]
+        },
+        {
+          "key": "SyncEvent",
+          "displayName": "Sync event",
+          "displayPluralName": "Sync events",
+          "description": "A local queue entry that explains pending or failed synchronization.",
+          "primaryNameField": "state",
+          "estimatedPrototypeRows": 2,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "receiptId", "displayName": "Receipt", "type": "reference", "required": true, "referenceTarget": "GoodsReceipt" },
+            { "key": "state", "displayName": "State", "type": "choice", "required": true, "choiceKey": "SyncState" },
+            { "key": "queuedAt", "displayName": "Queued at", "type": "date-time", "required": true, "dateSemantics": "created" },
+            { "key": "lastError", "displayName": "Last error", "type": "multiline-text", "required": false, "maximumLength": 500 }
+          ]
+        }
+      ],
+      "relationships": [
+        { "key": "ReceiptLines", "parent": "GoodsReceipt", "child": "ReceiptLine", "cardinality": "one-to-many", "childField": "receiptId", "required": true, "deleteBehavior": "cascade" },
+        { "key": "LineDamageEvidence", "parent": "ReceiptLine", "child": "DamageEvidence", "cardinality": "one-to-many", "childField": "receiptLineId", "required": true, "deleteBehavior": "cascade" },
+        { "key": "ReceiptConfirmation", "parent": "GoodsReceipt", "child": "RecipientConfirmation", "cardinality": "one-to-one", "childField": "receiptId", "required": true, "deleteBehavior": "cascade" },
+        { "key": "ReceiptSyncEvents", "parent": "GoodsReceipt", "child": "SyncEvent", "cardinality": "one-to-many", "childField": "receiptId", "required": true, "deleteBehavior": "cascade" }
+      ],
+      "choices": [
+        { "key": "ReceiptStatus", "options": [{ "key": "expected", "label": "Expected" }, { "key": "in-progress", "label": "In progress" }, { "key": "pending-sync", "label": "Pending sync" }, { "key": "complete", "label": "Complete" }] },
+        { "key": "LineCondition", "options": [{ "key": "good", "label": "Good" }, { "key": "damaged", "label": "Damaged" }, { "key": "missing", "label": "Missing" }] },
+        { "key": "SyncState", "options": [{ "key": "queued", "label": "Queued" }, { "key": "syncing", "label": "Syncing" }, { "key": "failed", "label": "Failed" }] }
+      ],
+      "operations": [
+        { "key": "listReceipts", "entity": "GoodsReceipt", "kind": "list", "repository": "ReceivingRepository", "method": "listReceipts", "hook": "useReceipts", "selectFields": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filterFields": ["status"], "sortFields": ["expectedDate"], "pagination": { "mode": "cursor", "pageSize": 20 }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "getReceipt", "entity": "GoodsReceipt", "kind": "get", "repository": "ReceivingRepository", "method": "getReceipt", "hook": "useReceipt", "selectFields": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filterFields": ["id"], "sortFields": [], "pagination": { "mode": "none" }, "failureStates": ["error", "offline"] },
+        { "key": "listReceiptLines", "entity": "ReceiptLine", "kind": "list", "repository": "ReceivingRepository", "method": "listReceiptLines", "hook": "useReceiptLines", "selectFields": ["id", "receiptId", "itemCode", "description", "expectedQuantity", "receivedQuantity", "condition", "barcode"], "filterFields": ["receiptId"], "sortFields": ["itemCode"], "pagination": { "mode": "bounded", "maximumExpectedCount": 30, "boundedReason": "A shipment receipt is capped at thirty lines in the prototype." }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "updateReceiptLine", "entity": "ReceiptLine", "kind": "update", "repository": "ReceivingRepository", "method": "updateReceiptLine", "hook": "useUpdateReceiptLine", "selectFields": [], "filterFields": ["id"], "sortFields": [], "writeFields": ["receivedQuantity", "condition", "barcode"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline", "conflict"] },
+        { "key": "listDamageEvidence", "entity": "DamageEvidence", "kind": "list", "repository": "ReceivingRepository", "method": "listDamageEvidence", "hook": "useDamageEvidence", "selectFields": ["id", "receiptLineId", "label", "image"], "filterFields": ["receiptLineId"], "sortFields": ["label"], "pagination": { "mode": "bounded", "maximumExpectedCount": 6, "boundedReason": "Each damaged line is capped at six local evidence photographs." }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "createDamageEvidence", "entity": "DamageEvidence", "kind": "create", "repository": "ReceivingRepository", "method": "createDamageEvidence", "hook": "useCreateDamageEvidence", "selectFields": [], "filterFields": [], "sortFields": [], "writeFields": ["receiptLineId", "label", "image"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline", "conflict"] },
+        { "key": "createConfirmation", "entity": "RecipientConfirmation", "kind": "create", "repository": "ReceivingRepository", "method": "createConfirmation", "hook": "useCreateConfirmation", "selectFields": [], "filterFields": [], "sortFields": [], "writeFields": ["receiptId", "recipientName", "recipientRole", "confirmedAt"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline"] },
+        { "key": "completeReceipt", "entity": "GoodsReceipt", "kind": "update", "repository": "ReceivingRepository", "method": "completeReceipt", "hook": "useCompleteReceipt", "selectFields": [], "filterFields": ["id"], "sortFields": [], "writeFields": ["status"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline", "conflict"] }
+      ],
+      "actors": [
+        { "key": "FieldLogistician", "displayName": "Field logistician" },
+        { "key": "WarehouseOfficer", "displayName": "Warehouse officer" }
+      ],
+      "uxPermissions": [
+        { "actor": "FieldLogistician", "operation": "listReceipts", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "getReceipt", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "listReceiptLines", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "updateReceiptLine", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "listDamageEvidence", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "createDamageEvidence", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "createConfirmation", "allowed": true },
+        { "actor": "FieldLogistician", "operation": "completeReceipt", "allowed": true },
+        { "actor": "WarehouseOfficer", "operation": "listReceipts", "allowed": true },
+        { "actor": "WarehouseOfficer", "operation": "getReceipt", "allowed": true }
+      ],
+      "offlineIntent": {
+        "connectivity": "offline-required",
+        "requiredOperations": ["listReceipts", "getReceipt", "listReceiptLines", "updateReceiptLine", "listDamageEvidence", "createDamageEvidence", "createConfirmation", "completeReceipt"],
+        "notes": "All receiving work remains local until connectivity returns.",
+        "pendingSyncBehavior": "Completed receipts remain visibly queued with their local timestamp and retry state.",
+        "resumeBehavior": "Saved drafts reopen at the last completed receiving stage with entered quantities intact."
+      },
+      "fixtureRequirements": [
+        { "key": "receipts-populated", "state": "populated", "description": "Two realistic expected shipments are available.", "entity": "GoodsReceipt", "minimumRecords": 2 },
+        { "key": "receipts-loading", "state": "loading", "description": "Expected receipts are loading." },
+        { "key": "receipts-empty", "state": "empty", "description": "No expected receipts are available." },
+        { "key": "receipts-error", "state": "error", "description": "Expected receipts could not be loaded." },
+        { "key": "receipts-offline", "state": "offline", "description": "Saved receipt work remains available offline.", "entity": "GoodsReceipt", "minimumRecords": 1 },
+        { "key": "receipt-damage-edge", "state": "edge", "description": "A damaged line requires explicit local photograph review.", "entity": "DamageEvidence", "minimumRecords": 1 }
+      ],
+      "mediaPolicy": { "mode": "local-first", "requiredFields": ["imageAltText", "imageAssetKey"], "requiresFallback": true },
+      "fixtures": {
+        "GoodsReceipt": [
+          { "id": "receipt-kigali-0142", "receiptNumber": "GR-2026-0142", "supplierName": "Regional Medical Supply Hub", "status": "in-progress", "warehouseName": "Kigali Central Warehouse", "expectedDate": "2026-08-25" },
+          { "id": "receipt-goma-0067", "receiptNumber": "GR-2026-0067", "supplierName": "Emergency Shelter Consortium", "status": "expected", "warehouseName": "Goma Transit Store", "expectedDate": "2026-08-27" }
+        ],
+        "ReceiptLine": [
+          { "id": "line-ors-001", "receiptId": "receipt-kigali-0142", "itemCode": "MED-ORS-20", "description": "Oral rehydration salts, cartons of 20", "expectedQuantity": 120, "receivedQuantity": 118, "condition": "good", "barcode": "7612345001428" },
+          { "id": "line-dressing-002", "receiptId": "receipt-kigali-0142", "itemCode": "MED-DRS-10", "description": "Sterile wound dressings, packs of 10", "expectedQuantity": 80, "receivedQuantity": 76, "condition": "damaged", "barcode": "7612345001435" },
+          { "id": "line-tarpaulin-003", "receiptId": "receipt-goma-0067", "itemCode": "SHL-TAR-04", "description": "Reinforced family tarpaulins", "expectedQuantity": 200, "receivedQuantity": 0, "condition": "missing", "barcode": null }
+        ],
+        "DamageEvidence": [
+          { "id": "damage-dressing-001", "receiptLineId": "line-dressing-002", "label": "Torn outer wrap on dressing carton", "image": { "imageAltText": "Torn outer wrapping on one sterile dressing carton", "imageAssetKey": "asset://experience/damage-dressing-001.jpg" } }
+        ],
+        "RecipientConfirmation": [
+          { "id": "confirmation-kigali-0142", "receiptId": "receipt-kigali-0142", "recipientName": "Aline Mukamana", "recipientRole": "Warehouse receiving officer", "confirmedAt": "2026-08-25T14:35:00Z" }
+        ],
+        "SyncEvent": [
+          { "id": "sync-kigali-0142", "receiptId": "receipt-kigali-0142", "state": "queued", "queuedAt": "2026-08-25T14:36:00Z", "lastError": null },
+          { "id": "sync-goma-0067", "receiptId": "receipt-goma-0067", "state": "failed", "queuedAt": "2026-08-24T11:20:00Z", "lastError": "Connection ended before acknowledgement; local draft is unchanged." }
+        ]
+      },
+      "scenarios": [
+        { "key": "receipts-populated", "state": "populated", "description": "Two realistic expected shipments are available.", "entity": "GoodsReceipt", "recordIds": ["receipt-kigali-0142", "receipt-goma-0067"] },
+        { "key": "receipts-loading", "state": "loading", "description": "Expected receipts are loading." },
+        { "key": "receipts-empty", "state": "empty", "description": "No expected receipts are available." },
+        { "key": "receipts-error", "state": "error", "description": "Expected receipts could not be loaded." },
+        { "key": "receipts-offline", "state": "offline", "description": "Saved receipt work remains available offline.", "entity": "GoodsReceipt", "recordIds": ["receipt-kigali-0142"] },
+        { "key": "receipt-damage-edge", "state": "edge", "description": "A damaged line and its local photograph require explicit discrepancy review.", "entity": "DamageEvidence", "recordIds": ["damage-dressing-001"] }
+      ]
+    },
+    "screens": {
+      "primaryScreenId": "identify",
+      "keyFlowScreenIds": ["record", "review", "confirm", "complete"],
+      "criticalFlow": { "screenIds": ["identify", "record", "review", "confirm", "complete"], "outcome": "Complete a goods receipt locally with discrepancies and recipient acknowledgement preserved for synchronization." },
+      "productStructure": {
+        "primaryScreenId": "identify",
+        "primaryScreenRole": "primary-hub",
+        "homeRationale": "The expected-receipt queue is the permanent workspace because receivers start, resume, and monitor local receipts without opening the scanner first.",
+        "durableDestinationIds": ["identify", "drafts", "history"],
+        "launchRoute": "identify",
+        "launchRationale": "A shift launches into the receipt queue so the receiver can choose expected work or resume a draft before requesting device permission.",
+        "resumeRoute": "record",
+        "resumeRoutePolicy": "incomplete-flow-step",
+        "resumeRationale": "Interrupted offline receiving resumes the first incomplete stage for the selected receipt while the queue remains the permanent return destination.",
+        "keyFlowScreenIds": ["record", "review", "confirm", "complete"],
+        "independentJobs": [
+          { "id": "receive-expected-work", "outcome": "Choose and complete expected receiving work.", "owningScreenId": "identify", "evidencePaths": ["/screens/items/@identify/purpose", "/navigationIntent/durableDestinations/@identify"] },
+          { "id": "resume-drafts", "outcome": "Resume interrupted local receipt drafts.", "owningScreenId": "drafts", "evidencePaths": ["/screens/items/@drafts/purpose", "/navigationIntent/durableDestinations/@drafts"] },
+          { "id": "review-history", "outcome": "Review completed and failed-sync receipt history.", "owningScreenId": "history", "evidencePaths": ["/screens/items/@history/purpose", "/navigationIntent/durableDestinations/@history"] }
+        ],
+        "boundedFlows": [
+          { "id": "receive-goods", "ownerDestinationId": "identify", "screenIds": ["record", "review", "confirm", "complete"], "outcome": "Record, inspect, confirm, and complete one selected goods receipt.", "evidencePaths": ["/screens/criticalFlow", "/navigationIntent/nestedScreenTabVisibility"] }
+        ],
+        "singlePurposeImmersiveEvidence": [],
+        "intentionalEqualities": [
+          { "left": "primaryScreenId", "right": "launchRoute", "rationale": "The queue is both the permanent hub and safest shift entry because it requires no selected receipt or device permission.", "evidencePaths": ["/screens/primaryScreenId", "/screens/productStructure/launchRationale"] },
+          { "left": "resumeRoute", "right": "keyFlowScreenIds[0]", "rationale": "The first key-flow screen is also the concrete resume target because it restores the selected receipt at its first incomplete receiving stage.", "evidencePaths": ["/screens/productStructure/resumeRoute", "/screens/keyFlowScreenIds/0"] }
+        ]
+      },
+      "items": [
+        {
+          "id": "identify", "role": "primary", "productRole": "primary-hub", "purpose": "Find the expected shipment and understand its current local receiving state.", "outcome": "Open the correct expected shipment without losing offline draft context.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "home" }], "parentScreenId": null, "presentation": "root", "parameters": [] },
+          "journeyStageIds": ["identify"],
+          "presentation": { "pattern": "guided-flow", "density": "dense", "hierarchy": ["Warehouse and pending-sync context", "Expected shipment queue", "Resume draft", "Open receipt"] },
+          "regions": [{ "id": "identify-context", "kind": "context", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "identify-queue", "kind": "work-queue", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "identify-history-preview", "kind": "supporting", "priority": 2, "viewport": "below-fold", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["identify-context", "identify-queue"], "focalPoint": "The next expected shipment and any resumable local draft", "maxRegions": 3, "nextContentVisible": true, "maxFeatureViewportShare": 0.28 },
+          "context": { "source": "foreground-primary-context" },
+          "signatureComponent": { "source": "experience-primary-signature" },
+          "header": { "mode": "root", "title": "Receiving" },
+          "primaryAction": { "id": "work-identify", "label": "Open expected shipment", "placement": "inline", "destinationScreenId": "record", "binding": "navigation:record", "doubleTapPolicy": "not-applicable" },
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["The next receipt remains the single focal point.", "Pending-sync status is never represented as an error.", "Large text keeps receipt numbers and actions readable."],
+          "testIds": ["screen-identify", "experience-signature-capture-frame"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "SyncEvent"], "screens": ["record", "drafts", "history"] },
+          "data": { "entities": ["GoodsReceipt", "SyncEvent"], "fixtureScenarios": ["receipts-populated", "receipts-loading", "receipts-empty", "receipts-error", "receipts-offline"], "operations": [{ "id": "list-receipts", "kind": "list", "entity": "GoodsReceipt", "domainOperation": "listReceipts", "repository": "ReceivingRepository", "repositoryMethod": "listReceipts", "hook": "useReceipts", "select": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filter": [], "sort": [{ "field": "expectedDate", "direction": "asc" }], "pagination": { "mode": "cursor", "pageSize": 20, "cursorParameter": "receiptCursor" }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["generic-dashboard", "equal-weight-card-grid"]
+        },
+        {
+          "id": "record", "role": "key-flow", "productRole": "workflow-step", "purpose": "Scan and record delivered quantities and condition for each receipt line.", "outcome": "Every received line has a trustworthy quantity, condition, and optional barcode.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "receipts" }, { "kind": "parameter", "name": "receiptId" }, { "kind": "literal", "value": "lines" }], "parentScreenId": "identify", "presentation": "nested-stack", "parameters": [{ "name": "receiptId", "source": "path", "required": true }, { "name": "lineId", "source": "query", "required": true }] },
+          "journeyStageIds": ["record"],
+          "presentation": { "pattern": "capture", "density": "dense", "hierarchy": ["Current line identity", "Expected versus received quantity", "Condition", "On-demand barcode scanner", "Continue"] },
+          "regions": [{ "id": "record-line", "kind": "line-editor", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "record-scanner", "kind": "on-demand-capture", "priority": 2, "viewport": "first", "mediaRequired": false }, { "id": "record-progress", "kind": "progress", "priority": 2, "viewport": "below-fold", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["record-line", "record-scanner"], "focalPoint": "The current receipt line and quantity discrepancy", "maxRegions": 3, "nextContentVisible": true, "maxFeatureViewportShare": 0.32 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "receiving-progress", "required": true, "testId": "receiving-progress" },
+          "header": { "mode": "back", "title": "Record receipt" },
+          "primaryAction": { "id": "work-record", "label": "Save line and continue", "placement": "sticky-bottom", "destinationScreenId": "review", "binding": "operation:updateReceiptLine", "doubleTapPolicy": "disable-while-pending", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": false, "role": "capture-support", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "low", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["The scanner is optional and never replaces manual entry.", "Quantity and condition remain visible above the action.", "Pending writes disable repeat submission."],
+          "testIds": ["screen-record", "receiving-progress", "receipt-line-editor"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "ReceiptLine"], "screens": ["identify", "review"] },
+          "data": { "entities": ["GoodsReceipt", "ReceiptLine"], "fixtureScenarios": ["receipts-populated", "receipt-damage-edge", "receipts-offline"], "operations": [
+            { "id": "get-receipt", "kind": "get", "entity": "GoodsReceipt", "domainOperation": "getReceipt", "repository": "ReceivingRepository", "repositoryMethod": "getReceipt", "hook": "useReceipt", "select": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filter": [], "sort": [], "routeBindings": [{ "parameter": "receiptId", "target": "id", "field": "id" }], "idField": "id", "failureStates": ["error", "offline"] },
+            { "id": "list-receipt-lines", "kind": "list", "entity": "ReceiptLine", "domainOperation": "listReceiptLines", "repository": "ReceivingRepository", "repositoryMethod": "listReceiptLines", "hook": "useReceiptLines", "select": ["id", "receiptId", "itemCode", "description", "expectedQuantity", "receivedQuantity", "condition", "barcode"], "filter": [{ "field": "receiptId", "operator": "eq", "valueFrom": "route:receiptId" }], "sort": [{ "field": "itemCode", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 30, "boundedReason": "A shipment receipt is capped at thirty lines in the prototype." }, "routeBindings": [{ "parameter": "receiptId", "target": "filter", "field": "receiptId" }], "failureStates": ["empty", "error", "offline"] },
+            { "id": "update-receipt-line", "kind": "update", "entity": "ReceiptLine", "domainOperation": "updateReceiptLine", "repository": "ReceivingRepository", "repositoryMethod": "updateReceiptLine", "hook": "useUpdateReceiptLine", "select": [], "filter": [], "sort": [], "writeFields": ["receivedQuantity", "condition", "barcode"], "routeBindings": [{ "parameter": "lineId", "target": "id", "field": "id" }], "idField": "id", "failureStates": ["error", "offline", "conflict"] }
+          ] },
+          "forbiddenDefaults": ["always-mounted-camera", "generic-form"]
+        },
+        {
+          "id": "review", "role": "key-flow", "productRole": "workflow-step", "purpose": "Review received totals and discrepancies before recipient confirmation.", "outcome": "The logistician understands every short, damaged, or complete line before confirming.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "receipts" }, { "kind": "parameter", "name": "receiptId" }, { "kind": "literal", "value": "review" }], "parentScreenId": "record", "presentation": "nested-stack", "parameters": [{ "name": "receiptId", "source": "path", "required": true }] },
+          "journeyStageIds": ["review"],
+          "presentation": { "pattern": "summary", "density": "dense", "hierarchy": ["Receipt identity", "Discrepancy summary", "Line evidence", "Confirm readiness"] },
+          "regions": [{ "id": "review-summary", "kind": "discrepancy-summary", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "review-lines", "kind": "line-list", "priority": 2, "viewport": "below-fold", "mediaRequired": false }, { "id": "damage-evidence", "kind": "evidence-gallery", "priority": 2, "viewport": "below-fold", "mediaRequired": true }],
+          "firstViewport": { "regionIds": ["review-summary"], "focalPoint": "The exact discrepancy count and affected lines", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.28 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "receiving-progress", "required": true, "testId": "receiving-progress" },
+          "header": { "mode": "back", "title": "Review receipt" },
+          "primaryAction": { "id": "work-review", "label": "Continue to confirmation", "placement": "sticky-bottom", "destinationScreenId": "confirm", "binding": "navigation:confirm", "doubleTapPolicy": "not-applicable", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": true, "role": "damage-evidence", "aspectRatio": "4:3", "minCoverage": 0.9, "fallback": "local-asset", "prominence": "medium", "altTextBinding": "DamageEvidence.image.imageAltText" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["Discrepancies are distinguishable without color alone.", "Expected and received totals remain paired.", "Review cannot be skipped before confirmation."],
+          "testIds": ["screen-review", "receiving-progress", "discrepancy-summary"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "ReceiptLine", "DamageEvidence"], "screens": ["record", "confirm"] },
+          "data": { "entities": ["GoodsReceipt", "ReceiptLine", "DamageEvidence"], "fixtureScenarios": ["receipts-populated", "receipt-damage-edge", "receipts-offline"], "operations": [
+            { "id": "review-receipt", "kind": "get", "entity": "GoodsReceipt", "domainOperation": "getReceipt", "repository": "ReceivingRepository", "repositoryMethod": "getReceipt", "hook": "useReceipt", "select": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filter": [], "sort": [], "routeBindings": [{ "parameter": "receiptId", "target": "id", "field": "id" }], "idField": "id", "failureStates": ["error", "offline"] },
+            { "id": "review-lines", "kind": "list", "entity": "ReceiptLine", "domainOperation": "listReceiptLines", "repository": "ReceivingRepository", "repositoryMethod": "listReceiptLines", "hook": "useReceiptLines", "select": ["id", "receiptId", "itemCode", "description", "expectedQuantity", "receivedQuantity", "condition", "barcode"], "filter": [{ "field": "receiptId", "operator": "eq", "valueFrom": "route:receiptId" }], "sort": [{ "field": "itemCode", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 30, "boundedReason": "A shipment receipt is capped at thirty lines in the prototype." }, "routeBindings": [{ "parameter": "receiptId", "target": "filter", "field": "receiptId" }], "failureStates": ["empty", "error", "offline"] },
+            { "id": "list-damage-evidence", "kind": "list", "entity": "DamageEvidence", "domainOperation": "listDamageEvidence", "repository": "ReceivingRepository", "repositoryMethod": "listDamageEvidence", "hook": "useDamageEvidence", "select": ["id", "receiptLineId", "label", "image"], "filter": [], "sort": [{ "field": "label", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 6, "boundedReason": "Each damaged line is capped at six local evidence photographs." }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] },
+            { "id": "create-damage-evidence", "kind": "create", "entity": "DamageEvidence", "domainOperation": "createDamageEvidence", "repository": "ReceivingRepository", "repositoryMethod": "createDamageEvidence", "hook": "useCreateDamageEvidence", "select": [], "filter": [], "sort": [], "writeFields": ["receiptLineId", "label", "image"], "routeBindings": [], "failureStates": ["error", "offline", "conflict"] }
+          ] },
+          "forbiddenDefaults": ["generic-card-grid", "hidden-discrepancy-detail"]
+        },
+        {
+          "id": "confirm", "role": "key-flow", "productRole": "modal", "purpose": "Capture recipient identity and acknowledgement after review.", "outcome": "A named recipient confirmation is saved locally against the correct receipt.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "receipts" }, { "kind": "parameter", "name": "receiptId" }, { "kind": "literal", "value": "confirm" }], "parentScreenId": "review", "presentation": "modal", "parameters": [{ "name": "receiptId", "source": "path", "required": true }] },
+          "journeyStageIds": ["confirm"],
+          "presentation": { "pattern": "form", "density": "balanced", "hierarchy": ["Recipient identity", "Role", "Acknowledgement", "Save confirmation"] },
+          "regions": [{ "id": "confirm-form", "kind": "recipient-form", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "confirm-context", "kind": "receipt-context", "priority": 2, "viewport": "below-fold", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["confirm-form"], "focalPoint": "Recipient name, role, and explicit acknowledgement", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.32 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "receiving-progress", "required": true, "testId": "receiving-progress" },
+          "header": { "mode": "close", "title": "Recipient confirmation" },
+          "primaryAction": { "id": "work-confirm", "label": "Save confirmation", "placement": "sticky-bottom", "destinationScreenId": "complete", "binding": "operation:createConfirmation", "doubleTapPolicy": "disable-while-pending", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["Keyboard avoidance keeps the active field visible.", "Confirmation is associated with the canonical receipt ID.", "The save action is double-tap safe."],
+          "testIds": ["screen-confirm", "receiving-progress", "recipient-confirmation-form"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "RecipientConfirmation"], "screens": ["review", "complete"] },
+          "data": { "entities": ["GoodsReceipt", "RecipientConfirmation"], "fixtureScenarios": ["receipts-populated", "receipts-offline"], "operations": [{ "id": "create-confirmation", "kind": "create", "entity": "RecipientConfirmation", "domainOperation": "createConfirmation", "repository": "ReceivingRepository", "repositoryMethod": "createConfirmation", "hook": "useCreateConfirmation", "select": [], "filter": [], "sort": [], "writeFields": ["receiptId", "recipientName", "recipientRole", "confirmedAt"], "routeBindings": [{ "parameter": "receiptId", "target": "input", "field": "receiptId" }], "failureStates": ["error", "offline"] }] },
+          "forbiddenDefaults": ["unbounded-form", "implicit-confirmation"]
+        },
+        {
+          "id": "complete", "role": "key-flow", "productRole": "workflow-step", "purpose": "Complete the receipt locally and make pending synchronization explicit.", "outcome": "The locally complete receipt is safely queued and the user knows what happens next.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "receipts" }, { "kind": "parameter", "name": "receiptId" }, { "kind": "literal", "value": "complete" }], "parentScreenId": "confirm", "presentation": "nested-stack", "parameters": [{ "name": "receiptId", "source": "path", "required": true }] },
+          "journeyStageIds": ["complete"],
+          "presentation": { "pattern": "summary", "density": "balanced", "hierarchy": ["Local completion", "Pending-sync status", "Receipt reference", "Return to queue"] },
+          "regions": [{ "id": "complete-status", "kind": "completion-status", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "complete-sync", "kind": "sync-explanation", "priority": 2, "viewport": "first", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["complete-status", "complete-sync"], "focalPoint": "Local completion and pending synchronization state", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.3 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "receiving-progress", "required": true, "testId": "receiving-progress" },
+          "header": { "mode": "back", "title": "Receipt complete" },
+          "primaryAction": { "id": "work-complete", "label": "Complete locally", "placement": "sticky-bottom", "binding": "operation:completeReceipt", "doubleTapPolicy": "idempotent", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["Pending sync is not presented as failure.", "Completion remains idempotent under repeated taps.", "The receipt reference remains visible at large text sizes."],
+          "testIds": ["screen-complete", "receiving-progress", "pending-sync-status"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "SyncEvent"], "screens": ["identify", "history"] },
+          "data": { "entities": ["GoodsReceipt", "SyncEvent"], "fixtureScenarios": ["receipts-populated", "receipts-offline"], "operations": [{ "id": "complete-receipt", "kind": "update", "entity": "GoodsReceipt", "domainOperation": "completeReceipt", "repository": "ReceivingRepository", "repositoryMethod": "completeReceipt", "hook": "useCompleteReceipt", "select": [], "filter": [], "sort": [], "writeFields": ["status"], "routeBindings": [{ "parameter": "receiptId", "target": "id", "field": "id" }], "idField": "id", "failureStates": ["error", "offline", "conflict"] }] },
+          "forbiddenDefaults": ["success-only-sync-copy", "automatic-navigation-before-acknowledgement"]
+        },
+        {
+          "id": "drafts", "role": "supporting", "productRole": "durable-destination", "purpose": "Revisit saved incomplete receipts across sessions.", "outcome": "Resume the exact local receipt stage and entered quantities.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "drafts" }], "parentScreenId": null, "presentation": "root", "parameters": [] },
+          "journeyStageIds": [],
+          "presentation": { "pattern": "compact-list", "density": "dense", "hierarchy": ["Saved receipt identity", "Last completed stage", "Pending line count", "Resume"] },
+          "regions": [{ "id": "draft-list", "kind": "draft-list", "priority": 1, "viewport": "first", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["draft-list"], "focalPoint": "The most recently saved receiving draft", "maxRegions": 1, "nextContentVisible": true, "maxFeatureViewportShare": 0.24 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "offline-draft-queue", "required": true, "testId": "offline-draft-queue" },
+          "header": { "mode": "root", "title": "Drafts" },
+          "primaryAction": { "id": "resume-draft", "label": "Resume draft", "placement": "inline", "destinationScreenId": "record", "binding": "navigation:record", "doubleTapPolicy": "not-applicable" },
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["Draft stage and receipt identity are both visible.", "Offline drafts remain fully actionable.", "Resume never creates a duplicate receipt."],
+          "testIds": ["screen-drafts", "offline-draft-queue"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt"], "screens": ["record"] },
+          "data": { "entities": ["GoodsReceipt"], "fixtureScenarios": ["receipts-populated", "receipts-empty", "receipts-offline"], "operations": [{ "id": "list-draft-receipts", "kind": "list", "entity": "GoodsReceipt", "domainOperation": "listReceipts", "repository": "ReceivingRepository", "repositoryMethod": "listReceipts", "hook": "useReceipts", "select": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filter": [{ "field": "status", "operator": "eq", "value": "in-progress" }], "sort": [{ "field": "expectedDate", "direction": "asc" }], "pagination": { "mode": "cursor", "pageSize": 20, "cursorParameter": "draftCursor" }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["generic-record-list", "lost-stage-context"]
+        },
+        {
+          "id": "history", "role": "supporting", "productRole": "durable-destination", "purpose": "Revisit completed and pending-sync receipts independently.", "outcome": "Understand local completion and synchronization history without reopening work.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "history" }], "parentScreenId": null, "presentation": "root", "parameters": [] },
+          "journeyStageIds": [],
+          "presentation": { "pattern": "timeline", "density": "dense", "hierarchy": ["Completion time", "Receipt reference", "Sync state", "Failure explanation"] },
+          "regions": [{ "id": "history-timeline", "kind": "receipt-timeline", "priority": 1, "viewport": "first", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["history-timeline"], "focalPoint": "Recent completed receipts and their synchronization state", "maxRegions": 1, "nextContentVisible": true, "maxFeatureViewportShare": 0.24 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] },
+          "signatureComponent": { "kind": "receipt-history-timeline", "required": true, "testId": "receipt-history-timeline" },
+          "header": { "mode": "root", "title": "History" },
+          "primaryAction": null,
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"],
+          "qualityCriteria": ["Sync states have text labels in addition to color.", "Failures show a recoverable next action.", "History remains read-only and independently revisitable."],
+          "testIds": ["screen-history", "receipt-history-timeline"], "foundationMotifs": [],
+          "dependencies": { "fixtures": ["GoodsReceipt", "SyncEvent"], "screens": [] },
+          "data": { "entities": ["GoodsReceipt"], "fixtureScenarios": ["receipts-populated", "receipts-empty", "receipts-offline"], "operations": [{ "id": "list-receipt-history", "kind": "list", "entity": "GoodsReceipt", "domainOperation": "listReceipts", "repository": "ReceivingRepository", "repositoryMethod": "listReceipts", "hook": "useReceipts", "select": ["id", "receiptNumber", "supplierName", "status", "warehouseName", "expectedDate"], "filter": [{ "field": "status", "operator": "in", "value": ["complete", "pending-sync"] }], "sort": [{ "field": "expectedDate", "direction": "desc" }], "pagination": { "mode": "cursor", "pageSize": 20, "cursorParameter": "historyCursor" }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["editable-history", "color-only-sync-state"]
+        }
+      ]
+    },
+    "requirementBindings": [
+      { "requirementOrdinal": 0, "satisfiedBy": ["screen:record", "screen:review", "screen:confirm", "native-barcode-scanner", "native-camera", "native-location", "operation:updateReceiptLine", "operation:createDamageEvidence", "operation:createConfirmation"], "status": "planned" }
+    ],
+    "capabilitySelections": [
+      {
+        "capabilityId": "native-barcode-scanner",
+        "supportedJobId": "receive-goods",
+        "operationId": "updateReceiptLine",
+        "owningScreenId": "record",
+        "presentation": "inline",
+        "permissionTiming": "after-user-action",
+        "unavailableFallback": "Keep manual barcode entry available beside the current receipt line.",
+        "deniedFallback": "Keep the same line editor and focus the manual barcode field after denial.",
+        "failureBehavior": "Preserve entered quantities and show a retry action without leaving the line.",
+        "offlineBehavior": "Scan and manual values remain local with the receipt draft until synchronization.",
+        "primaryProductCapability": false,
+        "evidencePaths": ["/screens/items/@record", "/domain/operations/@updateReceiptLine", "/screens/productStructure/boundedFlows/@receive-goods"],
+        "rationale": "Barcode capture accelerates line identification inside receiving while manual entry remains the reliable fallback."
+      },
+      {
+        "capabilityId": "native-camera",
+        "supportedJobId": "receive-goods",
+        "operationId": "createDamageEvidence",
+        "owningScreenId": "review",
+        "presentation": "modal",
+        "permissionTiming": "after-user-action",
+        "unavailableFallback": "Keep discrepancy review usable and allow a text evidence note for the damaged line.",
+        "deniedFallback": "Keep the same review hierarchy and focus the text evidence fallback after denial.",
+        "failureBehavior": "Preserve captured discrepancy details and allow an explicit photograph retry.",
+        "offlineBehavior": "Store captured photographs as local evidence assets with the receipt draft.",
+        "primaryProductCapability": false,
+        "evidencePaths": ["/screens/items/@review", "/domain/operations/@createDamageEvidence", "/screens/productStructure/boundedFlows/@receive-goods"],
+        "rationale": "Damage photography supports discrepancy review on demand and cannot replace the queue, receiving stages, or manual evidence fallback."
+      },
+      {
+        "capabilityId": "native-location",
+        "supportedJobId": "receive-goods",
+        "operationId": "createConfirmation",
+        "owningScreenId": "confirm",
+        "presentation": "inline",
+        "permissionTiming": "after-user-action",
+        "unavailableFallback": "Continue recipient confirmation without a location tag and explain that omission.",
+        "deniedFallback": "Keep confirmation usable and label location as not shared after permission denial.",
+        "failureBehavior": "Preserve recipient details and allow one explicit location retry before completion.",
+        "offlineBehavior": "Store a one-shot location tag locally with confirmation when the device provides it.",
+        "primaryProductCapability": false,
+        "evidencePaths": ["/screens/items/@confirm", "/domain/operations/@createConfirmation", "/screens/productStructure/boundedFlows/@receive-goods"],
+        "rationale": "One-shot location supports receipt confirmation and never creates Home, reorders the journey, or requires continuous tracking."
+      }
+    ],
+    "connectorIntentBindings": [],
+    "designIntent": {
+      "rationale": "A dense field-work surface keeps the current receiving decision dominant while preserving offline confidence.",
+      "contentTone": "direct, calm, operational",
+      "visualCharacter": "high-clarity humanitarian field utility",
+      "informationHierarchy": ["current receipt and stage", "next required action", "discrepancy evidence", "offline and sync state", "supporting history"],
+      "density": "dense",
+      "typographyIntent": { "character": "compact utilitarian hierarchy with strong numeric legibility", "headingFamily": "system-sans", "bodyFamily": "system-sans", "monoFamily": "system-monospace", "hierarchy": ["receipt reference", "stage title", "line quantity", "supporting status"], "dynamicTypeBehavior": "Reflow labels and quantities without truncating receipt references or actions." },
+      "colorBehavior": { "brandRole": "Use the deep teal accent only for navigation and the single primary action.", "palette": { "background": "#F4F7F5", "surface": "#FFFFFF", "surfaceElevated": "#E8F0EC", "text": "#17221D", "textMuted": "#52635B", "accent": "#006D5B", "accentText": "#FFFFFF", "selection": "#D5ECE5", "warning": "#A35A00", "error": "#B42318", "success": "#287A4B", "border": "#CAD6D0" }, "stateSemantics": ["selection is neutral", "warning marks discrepancy", "error marks failed synchronization", "success marks local completion"], "contrastIntent": "All text and controls retain accessible contrast in light and dark host themes." },
+      "shapeAndElevation": { "shapeLanguage": "Compact grouped rows and bounded input surfaces with restrained corner radius.", "radiusScale": { "control": 6, "container": 8, "modal": 12 }, "elevationStrategy": "Reserve elevation for the sticky action and modal confirmation, not ordinary sections." },
+      "mediaStrategy": { "role": "Operational evidence is textual and scanner-assisted rather than decorative.", "treatment": "Keep camera output on demand and subordinate to line identity and quantity.", "accessibility": "Scanner results are repeated as readable text with a manual fallback.", "licensingIntent": "user-captured", "connectivityRationale": "Required operational evidence is captured or bundled locally so receipt work never depends on a network image." },
+      "signatureComponents": [
+        { "source": "experience-primary", "kind": "capture-frame", "purpose": "Keep capture mechanics and completion feedback unambiguous.", "screenIds": ["identify"], "testId": "experience-signature-capture-frame", "foundationMotifs": ["capture-frame"], "requiredContent": ["title", "status"], "dataBindings": ["WorkflowJourney.currentStageId", "WorkflowJourney.completedStageCount"], "variants": ["active", "complete"], "states": ["default", "loading", "offline"], "responsiveBehavior": "Stack context above progress labels at large Dynamic Type sizes.", "accessibilitySemantics": "Expose the current receiving stage and completion value as one labelled progress group.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] },
+        { "source": "experience-foundation", "kind": "manual-fallback", "purpose": "Keep a reliable manual entry path beside on-demand barcode capture.", "screenIds": ["identify"], "testId": "experience-motif-manual-fallback", "foundationMotifs": ["manual-fallback"], "requiredContent": ["fieldLabel", "actionLabel"], "dataBindings": ["GoodsReceipt.receiptNumber"], "variants": ["collapsed", "expanded"], "states": ["default", "permission-denied", "error"], "responsiveBehavior": "Keep the field and action in one reachable vertical group at large text sizes.", "accessibilitySemantics": "Expose the field label, entered receipt reference, and submit action in logical order.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] },
+        { "source": "semantic", "kind": "receiving-progress", "purpose": "Keep stage order and completion status visible through the receipt stages.", "screenIds": ["record", "review", "confirm", "complete"], "testId": "receiving-progress", "foundationMotifs": [], "requiredContent": ["stageLabel", "progressLabel"], "dataBindings": ["WorkflowJourney.stages", "WorkflowJourney.stateActions"], "variants": ["active", "complete", "blocked"], "states": ["default", "offline", "error"], "responsiveBehavior": "Wrap stage labels below their markers without horizontal scrolling.", "accessibilitySemantics": "Announce stage position, completion state, and blocking reason in logical order.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] },
+        { "source": "semantic", "kind": "offline-draft-queue", "purpose": "Make resumable local work distinct from completed history.", "screenIds": ["drafts"], "testId": "offline-draft-queue", "foundationMotifs": [], "requiredContent": ["receiptReference", "savedStage", "savedAt"], "dataBindings": ["GoodsReceipt.receiptNumber", "WorkflowJourney.currentStageId", "WorkflowJourney.draftState"], "variants": ["recent", "older"], "states": ["populated", "empty", "offline"], "responsiveBehavior": "Keep receipt identity and resume action visible while metadata wraps.", "accessibilitySemantics": "Each row exposes receipt reference, saved stage, time, and Resume action.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] },
+        { "source": "semantic", "kind": "receipt-history-timeline", "purpose": "Connect local completion events to pending or failed synchronization.", "screenIds": ["history"], "testId": "receipt-history-timeline", "foundationMotifs": [], "requiredContent": ["receiptReference", "completedAt", "syncState"], "dataBindings": ["GoodsReceipt.receiptNumber", "SyncEvent.queuedAt", "SyncEvent.state"], "variants": ["complete", "pending-sync", "failed-sync"], "states": ["populated", "empty", "offline", "error"], "responsiveBehavior": "Collapse timeline metadata beneath the receipt reference at narrow widths.", "accessibilitySemantics": "Expose completion time and synchronization state with text, not color alone.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] }
+      ],
+      "stateTreatment": { "loading": "Preserve receipt-row geometry with compact skeleton lines.", "empty": "Keep warehouse context and offer the next valid recovery action.", "error": "Use explicit error text and retry without replacing the workflow hierarchy.", "offline": "Show saved-on-device status in the task context without warning styling.", "partialData": "Show available receipt facts and identify fields awaiting local completion.", "success": "Confirm local completion while retaining pending-sync state.", "permissionDenied": "Keep manual barcode entry available when camera permission is denied.", "recovery": "Return to the same receipt and stage with entered values intact." },
+      "motionIntent": { "principles": ["Use motion only for stage progression and save acknowledgement.", "Keep scanner opening explicit and reversible."], "reducedMotionBehavior": "Replace progress transitions with immediate state changes while retaining status announcements." },
+      "accessibilityIntent": { "dynamicType": "All labels and values reflow at large accessibility sizes.", "screenReader": "Stage, discrepancy, and sync states expose explicit names, roles, values, and hints.", "focusOrder": "Follow receipt context, task fields, state feedback, then the one primary action.", "modalFocus": "Confirmation modals contain focus and restore it to the invoking receipt action.", "touchTargets": "Every action and line control provides at least a 44-point target.", "contrast": "Selection, warning, error, and completion remain distinguishable without color alone.", "keyboard": "Dense form inputs remain visible and the sticky action stays reachable above the keyboard.", "safeArea": "Headers, scanner controls, sticky actions, and tabs stay inside device safe areas." },
+      "avoid": ["generic dashboard home", "card wrapping for every section", "always-mounted camera", "color-only status", "remote critical media", "decorative empty space"]
+    },
+    "navigationIntent": {
+      "primaryDestinationScreenId": "identify",
+      "durableDestinations": [
+        { "screenId": "identify", "label": "Receiving", "iconIntent": "home", "badgeBinding": "pendingReceiptCount" },
+        { "screenId": "drafts", "label": "Drafts", "iconIntent": "draft", "badgeBinding": "savedDraftCount" },
+        { "screenId": "history", "label": "History", "iconIntent": "history", "badgeBinding": "failedSyncCount" }
+      ],
+      "revisitPatterns": [
+        { "screenId": "identify", "frequency": "continuous", "preservesState": true, "crossSessionValue": true, "evidence": "The receipt queue is the repeated starting point for every shift." },
+        { "screenId": "drafts", "frequency": "cross-session", "preservesState": true, "crossSessionValue": true, "evidence": "Interrupted offline receipts must be resumed later." },
+        { "screenId": "history", "frequency": "frequent", "preservesState": true, "crossSessionValue": true, "evidence": "Completed and failed-sync receipts are checked independently from active work." }
+      ],
+      "jobStructure": { "mode": "mixed", "evidence": ["Receiving itself is linear.", "Draft recovery and history are independent durable jobs."] },
+      "tabsStackRecommendation": { "recommended": true, "rationale": "Three durable peer jobs require persistent switching while receipt stages stay nested." },
+      "nestedScreenTabVisibility": [
+        { "screenId": "record", "visibility": "visible" },
+        { "screenId": "review", "visibility": "visible" },
+        { "screenId": "confirm", "visibility": "covered-by-modal" },
+        { "screenId": "complete", "visibility": "visible" }
+      ],
+      "stackOnlyEvidence": []
+    },
+    "assumptions": ["Fixture locations and organizations are fictional and used only for local prototype realism."],
+    "warnings": []
+  }
+}

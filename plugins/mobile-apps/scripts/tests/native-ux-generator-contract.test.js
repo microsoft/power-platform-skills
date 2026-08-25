@@ -44,7 +44,7 @@ test('explicit CDN media and category context remain policy-driven planning inpu
 });
 
 test('design-system records brand role and source without recoloring product brands', () => {
-  const designSystem = read('skills/design-system/SKILL.md');
+  const designSystem = read('skills/design-system/optional-modes.md');
   const schema = read('skills/design-system/references/design-system-schema.md');
   assert.match(designSystem, /resolve-brand-context\.js/);
   assert.match(designSystem, /product brand sold[\s\S]*cannot recolor the[\s\S]*host app/i);

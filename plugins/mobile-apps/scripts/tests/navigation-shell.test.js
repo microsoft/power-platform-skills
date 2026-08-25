@@ -59,7 +59,7 @@ test('applies labeled tabs, inner stacks, and hidden temporary routes without ch
   assert.match(shell, /<Tabs/);
   assert.match(shell, /from 'expo-router\/tabs'/);
   assert.match(shell, /tabBarAccessibilityLabel: "Records"/);
-  assert.match(shell, /tabBarTestID: "navigation-destination-records"/);
+  assert.match(shell, /tabBarButtonTestID: "navigation-destination-records"/);
   assert.match(shell, /name="capture" options=\{\{ href: null \}\}/);
   assert.equal(fs.existsSync(path.join(root, 'app/(app)/records/_layout.tsx')), true);
   assert.match(fs.readFileSync(path.join(root, 'app/(app)/records/_layout.tsx'), 'utf8'), /from 'expo-router\/stack'/);

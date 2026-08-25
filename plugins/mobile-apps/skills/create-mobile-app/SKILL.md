@@ -16,7 +16,7 @@ interaction tool is absent.
 
 # Create Power Apps Code App (Native)
 
-Top-level orchestrator. Owns the user-visible flow; delegates planning to the `native-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
+Top-level orchestrator. Owns the user-visible flow; delegates real/connector planning to the `real-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
 
 ## Visual reference input
 
@@ -679,10 +679,10 @@ approval UI.
 - `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Draft quality is data-model-first with a 10–15 minute target. I will print each factual foreground milestone and elapsed count as it lands."
 - `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
-Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
+Then spawn the `mobile-app:real-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
 
 ```
-Spawn agent: mobile-app:native-app-planner
+Spawn agent: mobile-app:real-app-planner
 
 Prompt:
   Plan a Power Apps mobile app.
@@ -717,7 +717,7 @@ Prompt:
   Dataverse planning evidence: <absolute EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Return one complete
+  Follow real-app-planner.md. Return one complete
   `mobile-plan-artifact-bundle` without writing any project path or invoking
   host approval UI. For a real or connector app, return
   `NEEDS_USER_APPROVAL: <json>` followed by a blank line and one fenced JSON
@@ -2889,4 +2889,4 @@ Which option? (or "none — I'll keep iterating locally")
 
 - [shared/shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)
 - [shared/references/screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md)
-- [agents/native-app-planner.md](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md)
+- [agents/real-app-planner.md](${CLAUDE_SKILL_DIR}/../../agents/real-app-planner.md)

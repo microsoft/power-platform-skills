@@ -1,0 +1,298 @@
+{
+  "name": "Flight Shop",
+  "brief": "Passengers browse travel accessories, beauty products, and watches during a flight and compare categories.\nUse cache-backed CDN media for product imagery.\nLet passengers add products to a cart and review the order.\nKeep product and action content accessible.\nContinue browsing and reviewing while offline.",
+  "semanticPlan": {
+    "schemaVersion": 1,
+    "kind": "prototype-semantic-plan",
+    "domain": {
+      "entities": [
+        {
+          "key": "Category", "displayName": "Category", "displayPluralName": "Categories", "description": "A visual collection passengers can browse independently.", "primaryNameField": "name", "estimatedPrototypeRows": 3,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "name", "displayName": "Name", "type": "text", "required": true, "maximumLength": 80 },
+            { "key": "description", "displayName": "Description", "type": "multiline-text", "required": true, "maximumLength": 240 }
+          ]
+        },
+        {
+          "key": "Product", "displayName": "Product", "displayPluralName": "Products", "description": "A passenger-facing product with price, availability, and substantive imagery.", "primaryNameField": "name", "estimatedPrototypeRows": 4,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "categoryId", "displayName": "Category", "type": "reference", "required": true, "referenceTarget": "Category" },
+            { "key": "name", "displayName": "Name", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "description", "displayName": "Description", "type": "multiline-text", "required": true, "maximumLength": 500 },
+            { "key": "price", "displayName": "Price", "type": "money", "required": true },
+            { "key": "availability", "displayName": "Availability", "type": "choice", "required": true, "choiceKey": "ProductAvailability" },
+            { "key": "inventoryQuantity", "displayName": "Inventory", "type": "whole-number", "required": true, "minimum": 0 },
+            { "key": "media", "displayName": "Media", "type": "image", "required": true, "mediaIntent": "featured" }
+          ]
+        },
+        {
+          "key": "ProductMedia", "displayName": "Product media", "displayPluralName": "Product media", "description": "An additional inspectable product view with accessible alternative text.", "primaryNameField": "label", "estimatedPrototypeRows": 4,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "productId", "displayName": "Product", "type": "reference", "required": true, "referenceTarget": "Product" },
+            { "key": "label", "displayName": "Label", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "media", "displayName": "Media", "type": "image", "required": true, "mediaIntent": "gallery" }
+          ]
+        },
+        {
+          "key": "Cart", "displayName": "Cart", "displayPluralName": "Carts", "description": "The current passenger bag retained for the prototype session.", "primaryNameField": "displayName", "estimatedPrototypeRows": 1,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "displayName", "displayName": "Display name", "type": "text", "required": true, "maximumLength": 80 },
+            { "key": "status", "displayName": "Status", "type": "choice", "required": true, "choiceKey": "CartStatus" }
+          ]
+        },
+        {
+          "key": "CartItem", "displayName": "Cart item", "displayPluralName": "Cart items", "description": "A canonical product selection and quantity inside the passenger bag.", "primaryNameField": "label", "estimatedPrototypeRows": 2,
+          "fields": [
+            { "key": "id", "displayName": "ID", "type": "id", "required": true },
+            { "key": "cartId", "displayName": "Cart", "type": "reference", "required": true, "referenceTarget": "Cart" },
+            { "key": "productId", "displayName": "Product", "type": "reference", "required": true, "referenceTarget": "Product" },
+            { "key": "label", "displayName": "Label", "type": "text", "required": true, "maximumLength": 120 },
+            { "key": "quantity", "displayName": "Quantity", "type": "whole-number", "required": true, "minimum": 1, "maximum": 10 },
+            { "key": "unitPrice", "displayName": "Unit price", "type": "money", "required": true }
+          ]
+        }
+      ],
+      "relationships": [
+        { "key": "CategoryProducts", "parent": "Category", "child": "Product", "cardinality": "one-to-many", "childField": "categoryId", "required": true, "deleteBehavior": "restrict" },
+        { "key": "ProductGallery", "parent": "Product", "child": "ProductMedia", "cardinality": "one-to-many", "childField": "productId", "required": true, "deleteBehavior": "cascade" },
+        { "key": "CartItems", "parent": "Cart", "child": "CartItem", "cardinality": "one-to-many", "childField": "cartId", "required": true, "deleteBehavior": "cascade" },
+        { "key": "ProductSelections", "parent": "Product", "child": "CartItem", "cardinality": "one-to-many", "childField": "productId", "required": true, "deleteBehavior": "restrict" }
+      ],
+      "choices": [
+        { "key": "ProductAvailability", "options": [{ "key": "available", "label": "Available" }, { "key": "low-stock", "label": "Low stock" }, { "key": "sold-out", "label": "Sold out" }] },
+        { "key": "CartStatus", "options": [{ "key": "active", "label": "Active" }, { "key": "review", "label": "Ready for review" }, { "key": "submitted", "label": "Submitted" }] }
+      ],
+      "operations": [
+        { "key": "listProducts", "entity": "Product", "kind": "list", "repository": "CatalogRepository", "method": "listProducts", "hook": "useProducts", "selectFields": ["id", "categoryId", "name", "description", "price", "availability", "inventoryQuantity", "media"], "filterFields": ["categoryId", "availability"], "sortFields": ["name", "price"], "pagination": { "mode": "cursor", "pageSize": 20 }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "getProduct", "entity": "Product", "kind": "get", "repository": "CatalogRepository", "method": "getProduct", "hook": "useProduct", "selectFields": ["id", "categoryId", "name", "description", "price", "availability", "inventoryQuantity", "media"], "filterFields": ["id"], "sortFields": [], "pagination": { "mode": "none" }, "failureStates": ["error", "offline"] },
+        { "key": "listCategories", "entity": "Category", "kind": "list", "repository": "CatalogRepository", "method": "listCategories", "hook": "useCategories", "selectFields": ["id", "name", "description"], "filterFields": [], "sortFields": ["name"], "pagination": { "mode": "bounded", "maximumExpectedCount": 8, "boundedReason": "The onboard catalog has at most eight passenger-facing categories." }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "listProductMedia", "entity": "ProductMedia", "kind": "list", "repository": "CatalogRepository", "method": "listProductMedia", "hook": "useProductMedia", "selectFields": ["id", "productId", "label", "media"], "filterFields": ["productId"], "sortFields": ["label"], "pagination": { "mode": "bounded", "maximumExpectedCount": 6, "boundedReason": "Each product has at most six approved gallery views." }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "listCartItems", "entity": "CartItem", "kind": "list", "repository": "CartRepository", "method": "listCartItems", "hook": "useCartItems", "selectFields": ["id", "cartId", "productId", "label", "quantity", "unitPrice"], "filterFields": ["cartId"], "sortFields": ["label"], "pagination": { "mode": "bounded", "maximumExpectedCount": 25, "boundedReason": "The passenger bag is capped at twenty-five lines." }, "failureStates": ["empty", "error", "offline"] },
+        { "key": "createCartItem", "entity": "CartItem", "kind": "create", "repository": "CartRepository", "method": "createCartItem", "hook": "useCreateCartItem", "selectFields": [], "filterFields": [], "sortFields": [], "writeFields": ["cartId", "productId", "label", "quantity", "unitPrice"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline", "conflict"] },
+        { "key": "updateCartItem", "entity": "CartItem", "kind": "update", "repository": "CartRepository", "method": "updateCartItem", "hook": "useUpdateCartItem", "selectFields": [], "filterFields": ["id"], "sortFields": [], "writeFields": ["quantity"], "pagination": { "mode": "none" }, "failureStates": ["error", "offline", "conflict"] }
+      ],
+      "actors": [{ "key": "Passenger", "displayName": "Passenger" }],
+      "uxPermissions": [
+        { "actor": "Passenger", "operation": "listProducts", "allowed": true },
+        { "actor": "Passenger", "operation": "getProduct", "allowed": true },
+        { "actor": "Passenger", "operation": "listCategories", "allowed": true },
+        { "actor": "Passenger", "operation": "listProductMedia", "allowed": true },
+        { "actor": "Passenger", "operation": "listCartItems", "allowed": true },
+        { "actor": "Passenger", "operation": "createCartItem", "allowed": true },
+        { "actor": "Passenger", "operation": "updateCartItem", "allowed": true }
+      ],
+      "offlineIntent": {
+        "connectivity": "offline-required",
+        "requiredOperations": ["listProducts", "getProduct", "listCategories", "listProductMedia", "listCartItems", "createCartItem", "updateCartItem"],
+        "notes": "Catalog and bag interactions remain usable during the flight without network access.",
+        "pendingSyncBehavior": "Bag changes remain local and visibly current without implying remote checkout.",
+        "resumeBehavior": "The active bag and last viewed category remain available for the prototype session."
+      },
+      "fixtureRequirements": [
+        { "key": "catalog-populated", "state": "populated", "description": "A varied media-rich onboard catalog is available.", "entity": "Product", "minimumRecords": 4 },
+        { "key": "catalog-loading", "state": "loading", "description": "Product media and details are loading." },
+        { "key": "catalog-empty", "state": "empty", "description": "No products are available for the selected category." },
+        { "key": "catalog-error", "state": "error", "description": "The saved onboard catalog could not be read." },
+        { "key": "catalog-offline", "state": "offline", "description": "Cached product media and bag state remain available offline.", "entity": "Product", "minimumRecords": 4 },
+        { "key": "catalog-low-stock-edge", "state": "edge", "description": "A low-stock product remains inspectable but signals limited availability.", "entity": "Product", "minimumRecords": 1 }
+      ],
+      "mediaPolicy": { "mode": "remote-cdn-cached", "requiredFields": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"], "requiresFallback": true },
+      "fixtures": {
+        "Category": [
+          { "id": "category-travel", "name": "Travel comfort", "description": "Compact essentials for a more comfortable journey." },
+          { "id": "category-beauty", "name": "Beauty and wellness", "description": "Cabin-friendly care selected for travel." },
+          { "id": "category-watches", "name": "Watches", "description": "Distinctive timepieces for gifting or personal use." }
+        ],
+        "Product": [
+          { "id": "product-organizer", "categoryId": "category-travel", "name": "Cabin travel organizer", "description": "A slim navy organizer with passport, cable, and document compartments.", "price": { "amount": 42.5, "currencyCode": "USD" }, "availability": "available", "inventoryQuantity": 8, "media": { "imageUrl": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62", "imageAltText": "Navy travel organizer opened to show zip compartments", "imageCacheKey": "flight-shop-organizer-v1", "imageAssetKey": "asset://experience/product-organizer.png" } },
+          { "id": "product-mist", "categoryId": "category-beauty", "name": "Hydration face mist", "description": "A refreshing cabin-size facial mist in a recyclable glass bottle.", "price": { "amount": 18, "currencyCode": "USD" }, "availability": "low-stock", "inventoryQuantity": 2, "media": { "imageUrl": "https://images.unsplash.com/photo-1556228578-8c89e6adf883", "imageAltText": "Clear hydration mist bottle beside green leaves", "imageCacheKey": "flight-shop-mist-v1", "imageAssetKey": "asset://experience/product-mist.png" } },
+          { "id": "product-watch", "categoryId": "category-watches", "name": "Classic aviation watch", "description": "A brushed-steel watch with a high-contrast dial and leather strap.", "price": { "amount": 129, "currencyCode": "USD" }, "availability": "available", "inventoryQuantity": 4, "media": { "imageUrl": "https://images.unsplash.com/photo-1523275335684-37898b6baf30", "imageAltText": "Steel aviation watch with black dial and brown leather strap", "imageCacheKey": "flight-shop-watch-v1", "imageAssetKey": "asset://experience/product-watch.png" } },
+          { "id": "product-mask", "categoryId": "category-travel", "name": "Contoured sleep mask", "description": "A soft blackout mask shaped to avoid pressure around the eyes.", "price": { "amount": 24, "currencyCode": "USD" }, "availability": "sold-out", "inventoryQuantity": 0, "media": { "imageUrl": "https://images.unsplash.com/photo-1581553680321-4fffae59fccd", "imageAltText": "Dark contoured sleep mask folded in its travel pouch", "imageCacheKey": "flight-shop-mask-v1", "imageAssetKey": "asset://experience/product-mask.png" } }
+        ],
+        "ProductMedia": [
+          { "id": "media-organizer", "productId": "product-organizer", "label": "Organizer compartments", "media": { "imageUrl": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62", "imageAltText": "Organizer compartments holding passport and charging cables", "imageCacheKey": "flight-shop-organizer-detail-v1", "imageAssetKey": "asset://experience/product-organizer-detail.png" } },
+          { "id": "media-mist", "productId": "product-mist", "label": "Mist bottle detail", "media": { "imageUrl": "https://images.unsplash.com/photo-1556228578-8c89e6adf883", "imageAltText": "Hydration mist spray nozzle and glass bottle detail", "imageCacheKey": "flight-shop-mist-detail-v1", "imageAssetKey": "asset://experience/product-mist-detail.png" } },
+          { "id": "media-watch", "productId": "product-watch", "label": "Watch dial detail", "media": { "imageUrl": "https://images.unsplash.com/photo-1524805444758-089113d48a6d", "imageAltText": "Close view of the aviation watch dial and crown", "imageCacheKey": "flight-shop-watch-detail-v1", "imageAssetKey": "asset://experience/product-watch-detail.png" } },
+          { "id": "media-mask", "productId": "product-mask", "label": "Sleep mask profile", "media": { "imageUrl": "https://images.unsplash.com/photo-1581553680321-4fffae59fccd", "imageAltText": "Side profile showing the sleep mask eye contour", "imageCacheKey": "flight-shop-mask-detail-v1", "imageAssetKey": "asset://experience/product-mask-detail.png" } }
+        ],
+        "Cart": [{ "id": "cart-current", "displayName": "Seat 14A bag", "status": "active" }],
+        "CartItem": [
+          { "id": "cart-item-organizer", "cartId": "cart-current", "productId": "product-organizer", "label": "Cabin travel organizer", "quantity": 1, "unitPrice": { "amount": 42.5, "currencyCode": "USD" } },
+          { "id": "cart-item-mist", "cartId": "cart-current", "productId": "product-mist", "label": "Hydration face mist", "quantity": 1, "unitPrice": { "amount": 18, "currencyCode": "USD" } }
+        ]
+      },
+      "scenarios": [
+        { "key": "catalog-populated", "state": "populated", "description": "A varied media-rich onboard catalog is available.", "entity": "Product", "recordIds": ["product-organizer", "product-mist", "product-watch", "product-mask"] },
+        { "key": "catalog-loading", "state": "loading", "description": "Product media and details are loading." },
+        { "key": "catalog-empty", "state": "empty", "description": "No products are available for the selected category." },
+        { "key": "catalog-error", "state": "error", "description": "The saved onboard catalog could not be read." },
+        { "key": "catalog-offline", "state": "offline", "description": "Cached product media and bag state remain available offline.", "entity": "Product", "recordIds": ["product-organizer", "product-mist", "product-watch", "product-mask"] },
+        { "key": "catalog-low-stock-edge", "state": "edge", "description": "A low-stock product remains inspectable but signals limited availability.", "entity": "Product", "recordIds": ["product-mist"] }
+      ]
+    },
+    "screens": {
+      "primaryScreenId": "discover",
+      "keyFlowScreenIds": ["product-detail", "checkout"],
+      "criticalFlow": { "screenIds": ["discover", "product-detail", "bag", "checkout"], "outcome": "Discover a product, add it to the bag, and review the local onboard order." },
+      "productStructure": {
+        "primaryScreenId": "discover",
+        "primaryScreenRole": "primary-hub",
+        "homeRationale": "Discovery is the permanent return point because passengers repeatedly browse featured products before and after inspecting details or reviewing their bag.",
+        "durableDestinationIds": ["discover", "categories", "bag"],
+        "launchRoute": "discover",
+        "launchRationale": "A new session launches into product discovery because it is the broadest safe catalog entry and does not assume a prior selection.",
+        "resumeRoute": null,
+        "resumeRoutePolicy": "last-visited",
+        "resumeRationale": "Browsing and bag state are durable peer jobs, so a returning passenger resumes the last destination while each destination preserves its own stack.",
+        "keyFlowScreenIds": ["product-detail", "checkout"],
+        "independentJobs": [
+          { "id": "discover-products", "outcome": "Find a suitable available product.", "owningScreenId": "discover", "evidencePaths": ["/screens/items/@discover/purpose", "/navigationIntent/durableDestinations/@discover"] },
+          { "id": "browse-categories", "outcome": "Browse product collections independently.", "owningScreenId": "categories", "evidencePaths": ["/screens/items/@categories/purpose", "/navigationIntent/durableDestinations/@categories"] },
+          { "id": "review-bag", "outcome": "Review retained product selections and totals.", "owningScreenId": "bag", "evidencePaths": ["/screens/items/@bag/purpose", "/navigationIntent/durableDestinations/@bag"] }
+        ],
+        "boundedFlows": [
+          { "id": "inspect-product", "ownerDestinationId": "discover", "screenIds": ["product-detail"], "outcome": "Inspect one product and add it to the local bag.", "evidencePaths": ["/screens/items/@product-detail", "/navigationIntent/nestedScreenTabVisibility/@product-detail"] },
+          { "id": "review-local-order", "ownerDestinationId": "bag", "screenIds": ["checkout"], "outcome": "Review the local order without payment or external submission.", "evidencePaths": ["/screens/items/@checkout", "/navigationIntent/nestedScreenTabVisibility/@checkout"] }
+        ],
+        "singlePurposeImmersiveEvidence": [],
+        "intentionalEqualities": [
+          { "left": "primaryScreenId", "right": "launchRoute", "rationale": "The permanent discovery hub is also the safest new-session entry because it requires no prior product or bag state.", "evidencePaths": ["/screens/primaryScreenId", "/screens/productStructure/launchRationale"] }
+        ]
+      },
+      "items": [
+        {
+          "id": "discover", "role": "primary", "productRole": "primary-hub", "purpose": "Discover distinctive products and immediately understand what is available onboard.", "outcome": "Open a relevant product from a media-rich first viewport.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "home" }], "parentScreenId": null, "presentation": "root", "parameters": [] }, "journeyStageIds": ["discover"],
+          "presentation": { "pattern": "editorial-hero", "density": "balanced", "hierarchy": ["Featured product story", "Availability and price", "Category pathways", "Bag status"] },
+          "regions": [{ "id": "featured-product", "kind": "editorial-feature", "priority": 1, "viewport": "first", "mediaRequired": true }, { "id": "category-preview", "kind": "category-strip", "priority": 2, "viewport": "first", "mediaRequired": true }, { "id": "more-products", "kind": "product-grid", "priority": 2, "viewport": "below-fold", "mediaRequired": true }],
+          "firstViewport": { "regionIds": ["featured-product", "category-preview"], "focalPoint": "The featured product image, name, availability, and price", "maxRegions": 3, "nextContentVisible": true, "maxFeatureViewportShare": 0.38 },
+          "context": { "source": "foreground-primary-context" }, "signatureComponent": { "source": "experience-primary-signature" }, "header": { "mode": "root", "title": "Flight Shop" },
+          "primaryAction": { "id": "work-discover", "label": "View featured product", "placement": "inline", "destinationScreenId": "product-detail", "binding": "navigation:product-detail", "doubleTapPolicy": "not-applicable" },
+          "media": { "required": true, "role": "featured-product", "aspectRatio": "16:9", "minCoverage": 0.95, "fallback": "local-asset", "prominence": "high", "altTextBinding": "Product.media.imageAltText" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"], "qualityCriteria": ["The featured product remains the only first-viewport focal point.", "Availability and price are readable without relying on imagery.", "The next category content remains visibly discoverable."],
+          "testIds": ["screen-discover", "experience-signature-editorial-promotion"], "foundationMotifs": [], "dependencies": { "fixtures": ["Product", "Category"], "screens": ["product-detail", "categories", "bag"] },
+          "data": { "entities": ["Product", "Category"], "fixtureScenarios": ["catalog-populated", "catalog-loading", "catalog-empty", "catalog-error", "catalog-offline", "catalog-low-stock-edge"], "operations": [{ "id": "list-featured-products", "kind": "list", "entity": "Product", "domainOperation": "listProducts", "repository": "CatalogRepository", "repositoryMethod": "listProducts", "hook": "useProducts", "select": ["id", "categoryId", "name", "description", "price", "availability", "inventoryQuantity", "media"], "filter": [], "sort": [{ "field": "name", "direction": "asc" }], "pagination": { "mode": "cursor", "pageSize": 20, "cursorParameter": "productCursor" }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["generic-dashboard", "equal-weight-card-grid", "decorative-placeholder-media"]
+        },
+        {
+          "id": "categories", "role": "supporting", "productRole": "durable-destination", "purpose": "Browse the onboard catalog by visual product collection.", "outcome": "Choose a category and see products that belong to it.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "categories" }], "parentScreenId": null, "presentation": "root", "parameters": [{ "name": "categoryId", "source": "query", "required": false }] }, "journeyStageIds": [],
+          "presentation": { "pattern": "image-card-grid", "density": "balanced", "hierarchy": ["Category identity", "Category image treatment", "Product count", "Available products"] },
+          "regions": [{ "id": "category-grid", "kind": "visual-category-grid", "priority": 1, "viewport": "first", "mediaRequired": true }, { "id": "category-products", "kind": "product-grid", "priority": 2, "viewport": "below-fold", "mediaRequired": true }],
+          "firstViewport": { "regionIds": ["category-grid"], "focalPoint": "Three distinct visual category choices", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.34 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] }, "signatureComponent": { "kind": "category-visual-index", "required": true, "testId": "category-visual-index" }, "header": { "mode": "root", "title": "Categories" }, "primaryAction": null,
+          "media": { "required": true, "role": "category-content", "aspectRatio": "4:3", "minCoverage": 0.9, "fallback": "local-asset", "prominence": "high", "altTextBinding": "Product.media.imageAltText" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"], "qualityCriteria": ["Category choices remain distinct at large text sizes.", "Images reveal the product family rather than atmosphere alone.", "Selected category state is not encoded by color alone."],
+          "testIds": ["screen-categories", "category-visual-index"], "foundationMotifs": [], "dependencies": { "fixtures": ["Category", "Product"], "screens": ["product-detail"] },
+          "data": { "entities": ["Category", "Product"], "fixtureScenarios": ["catalog-populated", "catalog-empty", "catalog-offline"], "operations": [
+            { "id": "list-categories", "kind": "list", "entity": "Category", "domainOperation": "listCategories", "repository": "CatalogRepository", "repositoryMethod": "listCategories", "hook": "useCategories", "select": ["id", "name", "description"], "filter": [], "sort": [{ "field": "name", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 8, "boundedReason": "The onboard catalog has at most eight passenger-facing categories." }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] },
+            { "id": "list-category-products", "kind": "list", "entity": "Product", "domainOperation": "listProducts", "repository": "CatalogRepository", "repositoryMethod": "listProducts", "hook": "useProducts", "select": ["id", "categoryId", "name", "description", "price", "availability", "inventoryQuantity", "media"], "filter": [{ "field": "categoryId", "operator": "eq", "valueFrom": "route:categoryId" }], "sort": [{ "field": "name", "direction": "asc" }], "pagination": { "mode": "cursor", "pageSize": 20, "cursorParameter": "categoryCursor" }, "routeBindings": [{ "parameter": "categoryId", "target": "filter", "field": "categoryId" }], "failureStates": ["empty", "error", "offline"] }
+          ] },
+          "forbiddenDefaults": ["text-only-category-list", "one-note-color-grid"]
+        },
+        {
+          "id": "bag", "role": "supporting", "productRole": "durable-destination", "purpose": "Review selected products, quantities, availability, and subtotal.", "outcome": "Understand the current local bag before reviewing the order.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "bag" }], "parentScreenId": null, "presentation": "root", "parameters": [] }, "journeyStageIds": [],
+          "presentation": { "pattern": "summary", "density": "balanced", "hierarchy": ["Bag total", "Selected product rows", "Quantity controls", "Review order"] },
+          "regions": [{ "id": "bag-summary", "kind": "bag-total", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "bag-lines", "kind": "selected-product-list", "priority": 1, "viewport": "first", "mediaRequired": true }],
+          "firstViewport": { "regionIds": ["bag-summary", "bag-lines"], "focalPoint": "Bag subtotal and selected products", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.28 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] }, "signatureComponent": { "kind": "bag-summary", "required": true, "testId": "bag-summary" }, "header": { "mode": "root", "title": "Bag" },
+          "primaryAction": { "id": "review-order", "label": "Review order", "placement": "sticky-bottom", "destinationScreenId": "checkout", "binding": "navigation:checkout", "doubleTapPolicy": "not-applicable", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": true, "role": "thumbnail", "aspectRatio": "1:1", "minCoverage": 0.9, "fallback": "local-asset", "prominence": "low", "altTextBinding": "Product.media.imageAltText" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"], "qualityCriteria": ["The subtotal and review action remain visible.", "Repeated products retain distinct cart item identities.", "Sold-out or unavailable state disables invalid quantity increases."],
+          "testIds": ["screen-bag", "bag-summary"], "foundationMotifs": [], "dependencies": { "fixtures": ["Cart", "CartItem", "Product"], "screens": ["checkout", "product-detail"] },
+          "data": { "entities": ["CartItem", "Product"], "fixtureScenarios": ["catalog-populated", "catalog-empty", "catalog-offline"], "operations": [{ "id": "list-cart-items", "kind": "list", "entity": "CartItem", "domainOperation": "listCartItems", "repository": "CartRepository", "repositoryMethod": "listCartItems", "hook": "useCartItems", "select": ["id", "cartId", "productId", "label", "quantity", "unitPrice"], "filter": [], "sort": [{ "field": "label", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 25, "boundedReason": "The passenger bag is capped at twenty-five lines." }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["generic-cart-list", "hard-coded-currency-symbol"]
+        },
+        {
+          "id": "product-detail", "role": "key-flow", "productRole": "detail", "purpose": "Inspect one real product, its availability, gallery, price, and travel-relevant details.", "outcome": "Decide whether to add the canonical product to the local bag.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "products" }, { "kind": "parameter", "name": "productId" }], "parentScreenId": "discover", "presentation": "nested-stack", "parameters": [{ "name": "productId", "source": "path", "required": true }] }, "journeyStageIds": [],
+          "presentation": { "pattern": "detail", "density": "balanced", "hierarchy": ["Inspectable product image", "Name, price, and availability", "Description", "Add to bag"] },
+          "regions": [{ "id": "product-media", "kind": "product-gallery", "priority": 1, "viewport": "first", "mediaRequired": true }, { "id": "product-facts", "kind": "product-detail", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "product-description", "kind": "supporting-copy", "priority": 2, "viewport": "below-fold", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["product-media", "product-facts"], "focalPoint": "The actual product image with price and availability", "maxRegions": 3, "nextContentVisible": true, "maxFeatureViewportShare": 0.48 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] }, "signatureComponent": { "kind": "inspectable-product-stage", "required": true, "testId": "inspectable-product-stage" }, "header": { "mode": "back", "title": "Product details" },
+          "primaryAction": { "id": "add-to-bag", "label": "Add to bag", "placement": "sticky-bottom", "destinationScreenId": "bag", "binding": "operation:createCartItem", "doubleTapPolicy": "disable-while-pending", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": true, "role": "product-gallery", "aspectRatio": "1:1", "minCoverage": 0.95, "fallback": "local-asset", "prominence": "high", "altTextBinding": "ProductMedia.media.imageAltText" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"], "qualityCriteria": ["The actual product remains inspectable without dark overlays.", "Price and availability remain visible with large text.", "Add to bag is disabled while pending or unavailable."],
+          "testIds": ["screen-product-detail", "inspectable-product-stage"], "foundationMotifs": [], "dependencies": { "fixtures": ["Product", "ProductMedia", "CartItem"], "screens": ["discover", "bag"] },
+          "data": { "entities": ["Product", "ProductMedia", "CartItem"], "fixtureScenarios": ["catalog-populated", "catalog-error", "catalog-offline", "catalog-low-stock-edge"], "operations": [
+            { "id": "get-product", "kind": "get", "entity": "Product", "domainOperation": "getProduct", "repository": "CatalogRepository", "repositoryMethod": "getProduct", "hook": "useProduct", "select": ["id", "categoryId", "name", "description", "price", "availability", "inventoryQuantity", "media"], "filter": [], "sort": [], "routeBindings": [{ "parameter": "productId", "target": "id", "field": "id" }], "idField": "id", "failureStates": ["error", "offline"] },
+            { "id": "list-product-media", "kind": "list", "entity": "ProductMedia", "domainOperation": "listProductMedia", "repository": "CatalogRepository", "repositoryMethod": "listProductMedia", "hook": "useProductMedia", "select": ["id", "productId", "label", "media"], "filter": [{ "field": "productId", "operator": "eq", "valueFrom": "route:productId" }], "sort": [{ "field": "label", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 6, "boundedReason": "Each product has at most six approved gallery views." }, "routeBindings": [{ "parameter": "productId", "target": "filter", "field": "productId" }], "failureStates": ["empty", "error", "offline"] },
+            { "id": "create-cart-item", "kind": "create", "entity": "CartItem", "domainOperation": "createCartItem", "repository": "CartRepository", "repositoryMethod": "createCartItem", "hook": "useCreateCartItem", "select": [], "filter": [], "sort": [], "writeFields": ["cartId", "productId", "label", "quantity", "unitPrice"], "routeBindings": [{ "parameter": "productId", "target": "input", "field": "productId" }], "failureStates": ["error", "offline", "conflict"] }
+          ] },
+          "forbiddenDefaults": ["decorative-product-placeholder", "hard-coded-currency-symbol", "always-enabled-add-action"]
+        },
+        {
+          "id": "checkout", "role": "key-flow", "productRole": "workflow-step", "purpose": "Review the local onboard order without implying real payment or submission.", "outcome": "Confirm the selected products and total while the prototype remains fail-closed.",
+          "routeIntent": { "pathSegments": [{ "kind": "literal", "value": "checkout" }], "parentScreenId": "bag", "presentation": "nested-stack", "parameters": [] }, "journeyStageIds": [],
+          "presentation": { "pattern": "summary", "density": "balanced", "hierarchy": ["Order total", "Selected products", "Offline prototype boundary", "Return to bag"] },
+          "regions": [{ "id": "checkout-summary", "kind": "order-summary", "priority": 1, "viewport": "first", "mediaRequired": false }, { "id": "checkout-boundary", "kind": "prototype-boundary", "priority": 2, "viewport": "first", "mediaRequired": false }],
+          "firstViewport": { "regionIds": ["checkout-summary", "checkout-boundary"], "focalPoint": "The exact local order total and selected products", "maxRegions": 2, "nextContentVisible": true, "maxFeatureViewportShare": 0.3 },
+          "context": { "entryIds": [], "placementIntent": "none", "assumptions": [] }, "signatureComponent": { "kind": "local-order-review", "required": true, "testId": "local-order-review" }, "header": { "mode": "back", "title": "Review order" }, "primaryAction": { "id": "finish-review", "label": "Finish review", "placement": "sticky-bottom", "destinationScreenId": "bag", "binding": "navigation:bag", "doubleTapPolicy": "not-applicable", "clearance": { "safeArea": true, "tabBar": "above" } },
+          "media": { "required": false, "role": "supporting", "aspectRatio": "4:3", "minCoverage": 0, "fallback": "text-only", "prominence": "none", "altTextBinding": "none" },
+          "states": ["populated", "loading", "empty", "error", "offline", "recovery"], "qualityCriteria": ["No control implies real payment or external submission.", "The total uses canonical ISO currency formatting.", "The user can return to the bag without losing quantities."],
+          "testIds": ["screen-checkout", "local-order-review", "finish-review"], "foundationMotifs": [], "dependencies": { "fixtures": ["Cart", "CartItem", "Product"], "screens": ["bag"] },
+          "data": { "entities": ["CartItem", "Product"], "fixtureScenarios": ["catalog-populated", "catalog-empty", "catalog-offline"], "operations": [{ "id": "review-cart-items", "kind": "list", "entity": "CartItem", "domainOperation": "listCartItems", "repository": "CartRepository", "repositoryMethod": "listCartItems", "hook": "useCartItems", "select": ["id", "cartId", "productId", "label", "quantity", "unitPrice"], "filter": [], "sort": [{ "field": "label", "direction": "asc" }], "pagination": { "mode": "bounded", "maximumExpectedCount": 25, "boundedReason": "The passenger bag is capped at twenty-five lines." }, "routeBindings": [], "failureStates": ["empty", "error", "offline"] }] },
+          "forbiddenDefaults": ["real-payment-claim", "external-submit-action"]
+        }
+      ]
+    },
+    "requirementBindings": [
+      { "requirementOrdinal": 0, "satisfiedBy": ["screen:discover", "screen:categories", "operation:listProducts"], "status": "planned" },
+      { "requirementOrdinal": 1, "satisfiedBy": ["asset-policy", "screen:discover"], "status": "planned" },
+      { "requirementOrdinal": 2, "satisfiedBy": ["screen:bag", "screen:checkout", "operation:createCartItem"], "status": "planned" },
+      { "requirementOrdinal": 3, "satisfiedBy": ["design", "screen-plan"], "status": "planned" },
+      { "requirementOrdinal": 4, "satisfiedBy": ["asset-policy", "data-model", "screen:discover"], "status": "planned" }
+    ],
+    "capabilitySelections": [],
+    "connectorIntentBindings": [],
+    "designIntent": {
+      "rationale": "An editorial retail rhythm lets passengers inspect real products while keeping availability and bag actions unmistakable.",
+      "contentTone": "polished, concise, travel-aware",
+      "visualCharacter": "refined onboard editorial commerce",
+      "informationHierarchy": ["featured product imagery", "price and availability", "category discovery", "bag continuity", "local review boundary"],
+      "density": "balanced",
+      "typographyIntent": { "character": "editorial display headings paired with highly legible compact commerce labels", "headingFamily": "platform-serif", "bodyFamily": "system-sans", "monoFamily": "system-monospace", "hierarchy": ["featured product title", "price and availability", "category title", "supporting description"], "dynamicTypeBehavior": "Product names, prices, and actions reflow without cropping media or hiding the next section." },
+      "colorBehavior": { "brandRole": "Use the coral accent for selected navigation and the one primary commerce action.", "palette": { "background": "#F7F7F2", "surface": "#FFFFFF", "surfaceElevated": "#EAF2F4", "text": "#152128", "textMuted": "#5B6870", "accent": "#C83E3A", "accentText": "#FFFFFF", "selection": "#D8ECEF", "warning": "#A85D00", "error": "#B42318", "success": "#2E7652", "border": "#CBD5D8" }, "stateSemantics": ["availability uses text and icon", "selection remains distinct from warning", "sold out uses neutral unavailable treatment"], "contrastIntent": "Text over media is avoided unless a solid accessible scrim preserves product inspection." },
+      "shapeAndElevation": { "shapeLanguage": "Crisp image frames and compact grouped commerce rows with restrained rounding.", "radiusScale": { "control": 4, "container": 6, "modal": 10 }, "elevationStrategy": "Use elevation only for sticky bag actions and temporary overlays, not every product section." },
+      "mediaStrategy": { "role": "Product media is substantive evidence and the dominant discovery signal.", "treatment": "Use inspectable aspect-ratio media with cached CDN primary and bundled fallback.", "accessibility": "Every image binds domain alt text and preserves readable product facts outside the image.", "licensingIntent": "approved-remote-source", "connectivityRationale": "Approved remote product media is cached on device and every required image has a bundled local fallback." },
+      "signatureComponents": [
+        { "source": "experience-primary", "kind": "editorial-promotion", "purpose": "Make the curated offer memorable and actionable.", "screenIds": ["discover"], "testId": "experience-signature-editorial-promotion", "foundationMotifs": ["featured-product-media"], "requiredContent": ["productName", "price", "availability"], "dataBindings": ["Product.name", "Product.price", "Product.availability", "Product.media"], "variants": ["featured", "low-stock", "sold-out"], "states": ["populated", "loading", "offline", "error"], "responsiveBehavior": "Clamp product media while keeping title, price, availability, and the next category visible.", "accessibilitySemantics": "Expose product alt text, name, ISO price, availability, and action in reading order.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": ["Product.media"] },
+        { "source": "semantic", "kind": "category-visual-index", "purpose": "Make collections visually scannable without generic equal-weight cards.", "screenIds": ["categories"], "testId": "category-visual-index", "foundationMotifs": ["category-browse"], "requiredContent": ["categoryName", "categoryDescription"], "dataBindings": ["Category.name", "Category.description", "Product.media"], "variants": ["default", "selected"], "states": ["populated", "loading", "empty", "offline"], "responsiveBehavior": "Move from three columns to one without changing category order or image ratio.", "accessibilitySemantics": "Each category exposes its name, description, selected state, and destination.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": ["Product.media"] },
+        { "source": "semantic", "kind": "bag-summary", "purpose": "Keep quantities and subtotal coherent across repeated actions.", "screenIds": ["bag"], "testId": "bag-summary", "foundationMotifs": ["cart-action"], "requiredContent": ["itemCount", "subtotal", "availabilityStatus"], "dataBindings": ["CartItem.quantity", "CartItem.unitPrice", "Product.availability"], "variants": ["compact", "expanded"], "states": ["populated", "empty", "offline", "error"], "responsiveBehavior": "Keep subtotal and Review order action visible while line details wrap.", "accessibilitySemantics": "Announce item count, subtotal currency, availability, and quantity controls.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": ["Product.media"] },
+        { "source": "semantic", "kind": "inspectable-product-stage", "purpose": "Make the actual product, availability, and price inspectable together.", "screenIds": ["product-detail"], "testId": "inspectable-product-stage", "foundationMotifs": [], "requiredContent": ["productName", "price", "availability", "description"], "dataBindings": ["Product.name", "Product.price", "Product.availability", "Product.description", "ProductMedia.media"], "variants": ["available", "low-stock", "sold-out"], "states": ["populated", "loading", "offline", "error"], "responsiveBehavior": "Preserve a square inspectable image and keep price and action above the fold.", "accessibilitySemantics": "Gallery images expose alt text and the action exposes pending and unavailable values.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": ["Product.media", "ProductMedia.media"] },
+        { "source": "semantic", "kind": "local-order-review", "purpose": "Separate local order review from any real checkout promise.", "screenIds": ["checkout"], "testId": "local-order-review", "foundationMotifs": [], "requiredContent": ["itemCount", "subtotal", "prototypeBoundary"], "dataBindings": ["CartItem.quantity", "CartItem.unitPrice"], "variants": ["review"], "states": ["populated", "empty", "offline"], "responsiveBehavior": "Keep total and local-only boundary adjacent at all widths.", "accessibilitySemantics": "Announce total and explicitly state that no payment or external submission occurs.", "tokenDependencies": ["color", "typography", "spacing", "radius"], "mediaDependencies": [] }
+      ],
+      "stateTreatment": { "loading": "Preserve media and commerce-row geometry with muted skeleton surfaces.", "empty": "Retain the editorial hierarchy and offer category recovery without decorative filler.", "error": "Keep product context and show a concise retry action below the failed region.", "offline": "Use cached imagery and label the catalog as available offline without warning color.", "partialData": "Render available product facts and mark missing gallery views without hiding actions.", "success": "Acknowledge bag changes inline without shifting the product layout.", "permissionDenied": "No normal commerce state depends on device permission; retain the current content.", "recovery": "Return to the same product, category, or bag state with selections intact." },
+      "motionIntent": { "principles": ["Use a restrained reveal for featured media and category transitions.", "Acknowledge bag changes without moving surrounding layout."], "reducedMotionBehavior": "Replace reveals with immediate content and retain explicit bag state announcements." },
+      "accessibilityIntent": { "dynamicType": "Names, prices, availability, and actions support large accessibility sizes.", "screenReader": "Images, availability, quantities, and totals expose ordered names, roles, values, and hints.", "focusOrder": "Follow product media, product identity, availability, price, details, then the primary action.", "modalFocus": "Temporary commerce overlays contain focus and restore it to the invoking product or bag action.", "touchTargets": "Category, product, quantity, and bag controls meet the 44-point minimum.", "contrast": "Product facts and controls meet contrast independently of imagery.", "keyboard": "Quantity and review inputs stay visible without covering sticky actions or persistent tabs.", "safeArea": "Product media, headers, sticky actions, and persistent tabs remain inside device safe areas." },
+      "avoid": ["generic dashboard home", "card wrapping for every section", "icon-only product media", "copied airline branding", "remote-only critical imagery", "hard-coded currency symbols"]
+    },
+    "navigationIntent": {
+      "primaryDestinationScreenId": "discover",
+      "durableDestinations": [
+        { "screenId": "discover", "label": "Shop", "iconIntent": "browse", "badgeBinding": null },
+        { "screenId": "categories", "label": "Categories", "iconIntent": "list", "badgeBinding": null },
+        { "screenId": "bag", "label": "Bag", "iconIntent": "bag", "badgeBinding": "cartItemCount" }
+      ],
+      "revisitPatterns": [
+        { "screenId": "discover", "frequency": "frequent", "preservesState": true, "crossSessionValue": false, "evidence": "Passengers repeatedly return to product discovery while browsing." },
+        { "screenId": "categories", "frequency": "frequent", "preservesState": true, "crossSessionValue": false, "evidence": "Category browsing is an independent product-finding job." },
+        { "screenId": "bag", "frequency": "continuous", "preservesState": true, "crossSessionValue": true, "evidence": "The bag must remain reachable and retain selections throughout the session." }
+      ],
+      "jobStructure": { "mode": "independent", "evidence": ["Discovery, category browsing, and bag review are durable peer jobs.", "Product detail and order review remain nested flows."] },
+      "tabsStackRecommendation": { "recommended": true, "rationale": "Three durable commerce destinations require persistent switching with nested product and review stacks." },
+      "nestedScreenTabVisibility": [
+        { "screenId": "product-detail", "visibility": "visible" },
+        { "screenId": "checkout", "visibility": "visible" }
+      ],
+      "stackOnlyEvidence": []
+    },
+    "assumptions": ["Product names, prices, availability, and imagery are fictional local prototype content."],
+    "warnings": []
+  }
+}

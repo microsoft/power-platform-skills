@@ -17,10 +17,10 @@ function tools(relativePath) {
   return [...frontmatter[1].matchAll(/^\s+-\s+(\w+)$/gm)].map((match) => match[1]);
 }
 
-test('Copilot CLI-like draft agent surface can plan without plan-mode or question tools', () => {
+test('prototype planner is tool-free while targeted specialist agents remain read-only', () => {
   const required = ['Read', 'Task', 'Bash', 'Grep', 'Glob'];
   for (const relativePath of [
-    'agents/native-app-planner.md',
+    'agents/real-app-planner.md',
     'agents/data-model-architect.md',
     'agents/screen-planner.md',
   ]) {
@@ -33,8 +33,11 @@ test('Copilot CLI-like draft agent surface can plan without plan-mode or questio
     assert.equal(declared.includes('AskUserQuestion'), false, `${relativePath} must not require AskUserQuestion`);
   }
   const planner = read('agents/native-app-planner.md');
-  assert.match(planner, /return-only planning agent/);
-  assert.match(planner, /The foreground workflow is the sole owner of[\s\S]*(?:artifact|filesystem) persistence/);
+  assert.deepEqual(tools('agents/native-app-planner.md'), []);
+  assert.match(planner, /single normal-path semantic planner/);
+  assert.match(planner, /no filesystem, shell, search, write, or delegation tools/i);
+  assert.match(planner, /one schema-focused repair call/i);
+  assert.match(planner, /raw JSON/);
   assert.doesNotMatch(planner, /plan-checkpoints\.js/);
   assert.doesNotMatch(planner, /BLOCKED: tool surface missing/);
 });
@@ -56,7 +59,9 @@ test('Copilot CLI-like draft agent surface can plan without plan-mode or questio
 
 test('prototype workflow defaults to consolidated review and supports explicit full local review', () => {
   const prototype = read('skills/create-mobile-prototype/SKILL.md');
-  assert.match(prototype, /version-3 `mobile-plan-artifact-bundle`/i);
+  assert.match(prototype, /raw `prototype-semantic-plan` JSON object/i);
+  assert.match(prototype, /finalize-prototype-plan\.js/);
+  assert.match(prototype, /mobile-app:native-app-planner/);
   assert.match(prototype, /neutral data layer/i);
   assert.match(prototype, /By default set `REVIEW_MODE=consolidated`/);
   assert.match(prototype, /--review=consolidated\|full/);
@@ -93,7 +98,7 @@ test('screen builders return artifacts without requiring a writable agent worksp
 
 test('real workflow uses textual approval and validates it before external mutation', () => {
   const real = read('skills/create-mobile-app/SKILL.md');
-  const planner = read('agents/native-app-planner.md');
+  const planner = read('agents/real-app-planner.md');
   assert.match(planner, /NEEDS_USER_APPROVAL/);
   assert.match(planner, /mobile-plan-artifact-bundle/);
   assert.match(planner, /nine fixed artifact slots/);

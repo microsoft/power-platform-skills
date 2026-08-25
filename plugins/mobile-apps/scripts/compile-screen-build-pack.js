@@ -25,6 +25,7 @@ const { resolveDesignRecipe } = require('./resolve-design-recipe');
 const { validateWorkflowJourney } = require('./validate-workflow-journey');
 const { navigationContractRevision } = require('./resolve-navigation-contract');
 const { validateNavigationContract } = require('./validate-navigation-contract');
+const { validateNativePrototypeDesign } = require('./validate-native-prototype-design');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -326,6 +327,55 @@ function screenRuntimeBindings(screen, data, entities) {
   };
 }
 
+function compatibilityProductRole(screen) {
+  if (screen.role === 'primary') return 'primary-hub';
+  if (['tab-root', 'stack-root'].includes(screen.navigation?.kind)) return 'durable-destination';
+  if (screen.navigation?.kind === 'modal') return 'modal';
+  if (screen.presentation?.pattern === 'capture') return 'capture-surface';
+  if (screen.role === 'key-flow') return 'workflow-step';
+  return 'detail';
+}
+
+function compilePackProductStructure(semanticPlan, screens) {
+  if (!semanticPlan) return null;
+  const structure = semanticPlan.screens.productStructure;
+  const routeById = new Map(screens.map((screen) => [screen.id, screen.route]));
+  return {
+    primaryScreenId: structure.primaryScreenId,
+    primaryScreenRole: structure.primaryScreenRole,
+    homeRationale: structure.homeRationale,
+    durableDestinationIds: structure.durableDestinationIds,
+    launchScreenId: structure.launchRoute,
+    launchRoute: routeById.get(structure.launchRoute),
+    launchRationale: structure.launchRationale,
+    resumeScreenId: structure.resumeRoute,
+    resumeRoute: structure.resumeRoute ? routeById.get(structure.resumeRoute) : null,
+    resumeRoutePolicy: structure.resumeRoutePolicy,
+    resumeRationale: structure.resumeRationale,
+    keyFlowScreenIds: structure.keyFlowScreenIds,
+    independentJobs: structure.independentJobs,
+    boundedFlows: structure.boundedFlows,
+    singlePurposeImmersiveEvidence: structure.singlePurposeImmersiveEvidence,
+    intentionalEqualities: structure.intentionalEqualities,
+  };
+}
+
+function compileCapabilityBindings(semanticPlan, executionContract) {
+  if (!semanticPlan) return [];
+  const capabilityById = new Map(executionContract.nativeCapabilities.map((capability) => [capability.id, capability]));
+  return semanticPlan.capabilitySelections.map((selection) => {
+    const capability = capabilityById.get(selection.capabilityId);
+    return {
+      ...selection,
+      capability: capability.capability,
+      execution: capability.execution,
+      mode: selection.primaryProductCapability ? 'primary' : selection.presentation === 'immersive-step' ? 'primary' : 'on-demand',
+      fallbackStates: ['loading', 'permission-denied', 'unavailable', 'offline', 'manual-entry'],
+      maxViewportShare: selection.primaryProductCapability ? 0.42 : 0.24,
+    };
+  });
+}
+
 const SEMANTIC_COLOR_ROLES = Object.freeze([
   { role: 'brand-accent', intent: 'limited-brand-emphasis', token: '$accentDeep' },
   { role: 'primary-action', intent: 'single-state-primary-action', token: '$accentBase' },
@@ -419,7 +469,7 @@ function journeyIntentForScreen(screen, workflowJourney) {
   };
 }
 
-function screenRecord(screen, data, contract, contextContract, workflowJourney) {
+function screenRecord(screen, data, contract, contextContract, workflowJourney, capabilityBindings = null) {
   const entities = screen.data.entities.length ? screen.data.entities : data.entities;
   const foundationFiles = screen.dependencies.foundation.map((component) => `foundation:${component}`);
   const fixtureDependencies = screen.dependencies.fixtures.length
@@ -434,11 +484,13 @@ function screenRecord(screen, data, contract, contextContract, workflowJourney) 
     .filter(Boolean)
     .map((entry) => ({ ...entry, testId: `experience-context-${entry.id}` }));
   const journeyIntent = journeyIntentForScreen(screen, workflowJourney);
+  if (capabilityBindings) journeyIntent.capabilityComposition = capabilityBindings.filter((binding) => binding.owningScreenId === screen.id);
   return {
     id: screen.id,
     route: screen.route,
     file: screen.file,
     role: screen.role,
+    productRole: screen.productRole || compatibilityProductRole(screen),
     routeParameters: screen.routeParameters,
     navigation: screen.navigation,
     contractSource: screen.contractSource,
@@ -502,6 +554,9 @@ function screenRecord(screen, data, contract, contextContract, workflowJourney) 
 
 function uiContractProjection(pack) {
   return {
+    productStructure: pack.productStructure,
+    capabilityBindings: pack.capabilityBindings,
+    nativeCanary: pack.nativeCanary,
     journey: pack.journey,
     shell: pack.shell,
     navigation: pack.navigation,
@@ -511,11 +566,15 @@ function uiContractProjection(pack) {
       navigation: pack.design?.recipe?.navigation,
       signatureComponent: pack.design?.recipe?.signatureComponent,
       primitives: pack.design?.primitives,
+      signatureComponents: pack.design?.signatureComponents,
+      tokenSourceBindings: pack.design?.tokenSourceBindings,
+      escapePolicy: pack.design?.escapePolicy,
     },
     screens: (pack.screens || []).map((screen) => ({
       id: screen.id,
       route: screen.route,
       role: screen.role,
+      productRole: screen.productRole,
       purpose: screen.purpose,
       navigation: screen.navigation,
       headerMode: screen.headerMode,
@@ -550,6 +609,9 @@ function screenWorkOrder(pack, screenId) {
     packRevision: pack.revision,
     target: { screenId: screen.id, route: screen.route, file: screen.file },
     experience: pack.experience,
+    productStructure: pack.productStructure,
+    capabilityBindings: pack.capabilityBindings,
+    nativeCanary: pack.nativeCanary,
     context: pack.context,
     design: pack.design,
     shell: { safeAreaOwner: pack.shell.safeAreaOwner, rootSafeAreaProviderOnly: pack.shell.rootSafeAreaProviderOnly, headerMode: screen.headerMode },
@@ -605,6 +667,27 @@ function compactExecutionContract(executionContract) {
 
 function compileScreenBuildPack(projectRoot) {
   const root = path.resolve(projectRoot);
+  const semanticPlanPath = path.join(root, '.tmp', 'prototype-semantic-plan.json');
+  const automaticDesign = fs.existsSync(semanticPlanPath);
+  const semanticPlan = automaticDesign ? readJson(semanticPlanPath, 'Prototype semantic plan') : null;
+  let designValidation = null;
+  let signatureRegistry = null;
+  let designManifest = null;
+  if (automaticDesign) {
+    const validationPath = requiredFile(root, '.tmp/prototype-design-validation.json', 'Native prototype design validation');
+    designValidation = readJson(validationPath, 'Native prototype design validation');
+    if (designValidation.schemaVersion !== 1 || designValidation.kind !== 'native-prototype-design-validation' || designValidation.valid !== true) {
+      throw new Error('Native prototype design validation must pass before screen build-pack compilation.');
+    }
+    const currentValidation = validateNativePrototypeDesign(root, { checkBuildPack: false });
+    if (!currentValidation.valid
+      || stableStringify(designValidation.sourceBindings) !== stableStringify(currentValidation.sourceBindings)
+      || stableStringify(designValidation.artifactHashes) !== stableStringify(currentValidation.artifactHashes)) {
+      throw new Error(`Native prototype design validation is stale or invalid: ${currentValidation.errors.map((entry) => `${entry.path} ${entry.message}`).join('; ')}`);
+    }
+    signatureRegistry = readJson(requiredFile(root, 'brand/signature-components.json', 'Signature component registry'), 'Signature component registry');
+    designManifest = readJson(requiredFile(root, '.mobile-app/prototype-design-manifest.json', 'Native prototype design manifest'), 'Native prototype design manifest');
+  }
   const experiencePath = requiredFile(root, '.tmp/experience-contract.json', 'Experience contract');
   const screenPath = requiredFile(root, '.tmp/experience-screen-contract.json', 'Experience screen contract');
   const foundationPath = requiredFile(root, '.tmp/experience-foundation-contract.json', 'Experience foundation contract');
@@ -684,7 +767,9 @@ function compileScreenBuildPack(projectRoot) {
   const foundationRuntimePaths = foundation.primitives.map((primitive) => primitive.file);
   const foundationRuntimeHash = aggregateProjectFilesHash(root, foundationRuntimePaths, 'Experience foundation runtime');
   const normalizedScreens = normalizeScreenContract(screenContract, contract, screenMap, foundationComponents);
-  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract, contextContract, workflowJourney));
+  const capabilityBindings = compileCapabilityBindings(semanticPlan, executionContract);
+  const screens = normalizedScreens.map((screen) => screenRecord(screen, data, contract, contextContract, workflowJourney, automaticDesign ? capabilityBindings : null));
+  const productStructure = compilePackProductStructure(semanticPlan, screens);
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
   const designRecipePath = path.join(root, 'brand', 'design-recipe.json');
@@ -714,6 +799,11 @@ function compileScreenBuildPack(projectRoot) {
     domainLayer: domainManifestRelativePath,
     executionContract: '.tmp/mobile-plan-execution-contract.json',
     designRecipe: hasDesignRecipe ? 'brand/design-recipe.json' : null,
+    ...(automaticDesign ? {
+      prototypeSemanticPlan: '.tmp/prototype-semantic-plan.json',
+      designManifest: '.mobile-app/prototype-design-manifest.json',
+      signatureRegistry: 'brand/signature-components.json',
+    } : {}),
   };
   const pack = {
     schemaVersion: 2,
@@ -734,6 +824,11 @@ function compileScreenBuildPack(projectRoot) {
       domainLayer: domainLayerHash(root, domainManifestRelativePath),
       executionContract: sha256(fs.readFileSync(executionPath, 'utf8')),
       tokens: sha256(fs.readFileSync(tokensPath, 'utf8')),
+      ...(automaticDesign ? {
+        prototypeSemanticPlan: sha256(fs.readFileSync(semanticPlanPath)),
+        designManifest: sha256(fs.readFileSync(path.join(root, sourcePaths.designManifest))),
+        signatureRegistry: sha256(fs.readFileSync(path.join(root, sourcePaths.signatureRegistry))),
+      } : {}),
     },
     sourcePaths,
     experience: {
@@ -756,18 +851,43 @@ function compileScreenBuildPack(projectRoot) {
       mode: contextContract.contextMode,
       forbiddenInferences: contextContract.forbiddenInferences,
     },
+    productStructure,
+    capabilityBindings,
+    nativeCanary: {
+      waveId: 'vertical-slice',
+      primaryScreenId: primaryScreen.id,
+      keyFlowScreenIds: productStructure?.keyFlowScreenIds || [keyFlowScreen.id],
+      screenIds: verticalSlice.map((screen) => screen.id),
+      outcome: screenContract.criticalFlow?.outcome || keyFlow.outcome,
+      supportingScreenIds: screens.filter((screen) => !criticalIds.includes(screen.id)).map((screen) => screen.id),
+    },
     journey: compactWorkflowJourney(workflowJourney),
     design: {
       tokensPath: 'brand/tokens.ts',
       designSystemPath: 'brand/design-system.md',
       recipePath: hasDesignRecipe ? 'brand/design-recipe.json' : null,
       recipe: designRecipe,
-      primitives: foundation.primitives.map((primitive) => ({
+      primitives: automaticDesign ? designRecipe.foundationPrimitives : foundation.primitives.map((primitive) => ({
         motif: primitive.motif,
         component: primitive.component,
         file: primitive.file,
         testID: primitive.testID,
       })),
+      ...(automaticDesign ? {
+        registryPath: 'brand/signature-components.json',
+        manifestPath: '.mobile-app/prototype-design-manifest.json',
+        signatureComponents: signatureRegistry.components,
+        tokenSourceBindings: {
+          color: '/colorBehavior/palette',
+          space: '/density/spacingScale',
+          size: '/density/minimumControlSize',
+          radius: '/shapeAndElevation/radiusScale',
+          elevation: '/shapeAndElevation/elevationStrategy',
+          zIndex: '/navigationChrome',
+          typography: '/typographyIntent',
+        },
+        escapePolicy: 'blocked-until-reviewed',
+      } : {}),
     },
     shell: {
       safeAreaOwner: 'screen',
@@ -829,14 +949,14 @@ function compileScreenBuildPack(projectRoot) {
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['confirmedBrief', 'packageManifest', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']
-        : ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract']])),
+        ? ['confirmedBrief', 'packageManifest', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationRuntime', 'designRecipe', 'tokens', ...(automaticDesign ? ['designManifest', 'signatureRegistry'] : []), 'domainModel', 'domainLayer', 'executionContract']
+        : ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', ...(automaticDesign ? ['designManifest', 'signatureRegistry'] : []), 'domainModel', 'domainLayer', 'executionContract']])),
       fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['confirmedBrief', 'experienceContract', 'contextEnrichment', 'workflowJourney', 'domainModel', 'domainLayer', 'executionContract']])),
       validatorDependencies: {
         experience: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'foundationContract', 'foundationRuntime', 'domainLayer', 'executionContract'],
         workflow: ['confirmedBrief', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'domainModel', 'domainLayer'],
         navigation: ['confirmedBrief', 'experienceContract', 'screenContract', 'workflowJourney', 'navigationContract', 'navigationShell'],
-        staticComposition: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainLayer', 'executionContract'],
+        staticComposition: ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', ...(automaticDesign ? ['designManifest', 'signatureRegistry'] : []), 'domainLayer', 'executionContract'],
       },
     },
   };
@@ -881,6 +1001,8 @@ module.exports = {
   compactExecutionContract,
   compactWorkflowJourney,
   compileScreenBuildPack,
+  compileCapabilityBindings,
+  compilePackProductStructure,
   aggregateProjectFilesHash,
   domainLayerHash,
   navigationShellHash,

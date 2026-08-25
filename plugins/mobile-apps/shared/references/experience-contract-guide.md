@@ -14,7 +14,7 @@ one-line or few-line brief; a screenshot, HTML page, or image is optional.
 | `.tmp/experience-foundation-contract.json` | foreground creation workflow, from the return-only `screen-planner` contract | Hash-bound ownership of the 2-5 reusable motif components |
 | `.tmp/prototype-domain-model.json` | foreground creation workflow, from the return-only data architect | Canonical neutral entities, operations, fixtures, and scenarios |
 | `.tmp/screen-build-pack.json` | compiler/orchestrator | Compact revision-bound assembly sheet for orchestration and validation |
-| `native-app-plan.md` → `## Design` | foreground creation workflow, from the return-only `native-app-planner` bundle | Human-reviewable Product Experience Contract mirror |
+| `native-app-plan.md` → `## Design` | foreground creation workflow, deterministically rendered for prototypes or returned through the `real-app-planner` bundle | Human-reviewable Product Experience Contract mirror |
 | `brand/design-system.md` → `## Product Experience Primitives` | `/design-system` | Token/component translation of motifs and hierarchy |
 | `.tmp/experience-visual-review.json` | native review/refiner | Native evidence for the product experience |
 

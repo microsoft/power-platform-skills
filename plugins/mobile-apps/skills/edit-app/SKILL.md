@@ -724,5 +724,5 @@ Final summary must say what changed in the app, what verification ran, where the
 
 - `native-app-plan.md` is still the durable source of truth. The change should be planned before it is applied, but planning is not the end state.
 - For complex multi-section edits, update and gate every required section first, then apply the mutation in dependency order. Do not leave a native capability entry that references missing Dataverse storage or a screen state that was never planned.
-- The architect agents are the same ones used by `native-app-planner` during initial creation, so planning improvements flow through here.
+- The architect agents are the same ones used by `real-app-planner` during initial real-app creation, so planning improvements flow through here.
 - This skill intentionally covers post-generation iteration. It is acceptable for `/edit-app` to touch Dataverse, `src/native/`, route layouts, screen TSX, brand tokens, `preview.html`, and `memory-bank.md` when the approved edit requires it.

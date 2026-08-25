@@ -80,14 +80,14 @@ function hasContractSummary(designSection, contract) {
     && /Prompt evidence/i.test(designSection);
 }
 
-function validateScreenContract(contract, screenContract, issues) {
+function validateScreenContract(contract, screenContract, context, issues) {
   if (!screenContract) return;
   const expected = primaryComposition(contract);
   if (![1, 2, 3].includes(screenContract.schemaVersion)) {
     issues.push({ rule: 'invalid-screen-contract-schema', message: 'Experience screen contract schemaVersion must be 1, 2, or 3.' });
     return;
   }
-  for (const message of validateExperienceScreenContract(screenContract, contract)) {
+  for (const message of validateExperienceScreenContract(screenContract, contract, context)) {
     issues.push({ rule: 'invalid-screen-contract', message });
   }
   if (screenContract.experienceContractSha256 !== contractHash(contract)) {
@@ -259,7 +259,16 @@ function validate(projectRoot, phase) {
     issues.push({ rule: 'missing-plan-experience-summary', message: '## Design must include a matching ### Product Experience Contract summary.' });
   }
   const screenContract = readJson(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), 'Experience screen contract', issues);
-  validateScreenContract(contract, screenContract, issues);
+  const optionalJson = (relativePath) => {
+    const filePath = path.join(projectRoot, relativePath);
+    return fs.existsSync(filePath) ? readJson(filePath, relativePath, issues) : null;
+  };
+  validateScreenContract(contract, screenContract, {
+    dataContract: optionalJson('.tmp/prototype-domain-model.json'),
+    executionContract: optionalJson('.tmp/mobile-plan-execution-contract.json'),
+    contextContract: optionalJson('.tmp/context-enrichment-contract.json'),
+    navigationContract: optionalJson('.tmp/navigation-contract.json'),
+  }, issues);
   const foundation = validateFoundationContract(projectRoot, contract, phase, issues);
   validateBuildPackAgreement(projectRoot, contract, screenContract, issues);
   if (phase === 'build') validateBuiltPrimary(projectRoot, contract, screenContract, foundation, issues);
@@ -289,4 +298,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { hasContractSummary, validate, validateBuildPackAgreement, validateFoundationContract };
+module.exports = { hasContractSummary, validate, validateBuildPackAgreement, validateFoundationContract, validateScreenContract };

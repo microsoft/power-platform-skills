@@ -1,6 +1,6 @@
 # Design Planning Reference
 
-Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+Shared logic for inferring and planning the visual design system for a real Power Apps mobile app. Used by `real-app-planner` (Step 3c) and `setup-datamodel`.
 
 Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
 

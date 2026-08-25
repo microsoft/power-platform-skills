@@ -143,7 +143,7 @@ Then:
 
 If the user picked Path B (or the user-provided diagram parse failed), spawn the `mobile-app:data-model-architect` agent via `Task` (the `mobile-app:` plugin-name prefix is required) with the user's high-level requirements as input. The agent returns one fenced JSON `data-model-draft` with `dataModelMarkdown`, `dataverseSchemaContract`, and `warnings`; it never writes a project file. The foreground workflow validates the returned contract, inserts `dataModelMarkdown` into `native-app-plan.md`, and presents that foreground-owned draft for approval before continuing to Step 3.
 
-If they need new tables and refuse both paths, recommend they run `/setup-datamodel` (alias of this skill) explicitly, or `native-app-planner` for a full app-level plan. STOP if neither.
+If they need new tables and refuse both paths, recommend they run `/setup-datamodel` (alias of this skill) explicitly, or `real-app-planner` through `/create-mobile-app` for a full app-level plan. STOP if neither.
 
 ### Step 3 — Setup Dataverse Web API auth
 

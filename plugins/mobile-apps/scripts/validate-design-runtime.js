@@ -29,7 +29,7 @@ function sourceFiles(root, relativeDirectory) {
 
 function literalPresent(source, property, value) {
   const escaped = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`${property}\\s*:\\s*['\"]${escaped}['\"]`).test(source);
+  return new RegExp(`['\"]?${property}['\"]?\\s*:\\s*['\"]${escaped}['\"]`).test(source);
 }
 
 function validateTypographyRecipe(typography) {

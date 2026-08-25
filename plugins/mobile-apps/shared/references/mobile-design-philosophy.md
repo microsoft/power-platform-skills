@@ -1,6 +1,6 @@
 # Mobile Design Philosophy
 
-Required reading for `screen-builder` and `native-app-planner`. Defines **why** screens look a certain way. Companion docs: `screen-templates.md` (archetypes), `tamagui-component-recipes.md` (snippets), `accessibility-checklist.md` (a11y).
+Required reading for `screen-builder` and `real-app-planner`. Defines **why** screens look a certain way. Companion docs: `screen-templates.md` (archetypes), `tamagui-component-recipes.md` (snippets), `accessibility-checklist.md` (a11y).
 
 ---
 

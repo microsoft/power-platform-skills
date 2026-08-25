@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "automaticMode": {
+    "instructionFiles": ["skills/design-system/SKILL.md", "skills/design-system/automatic-native.md"],
+    "referenceFiles": [],
+    "modelCalls": 0
+  },
+  "references": [
+    { "path": "references/code-app-extraction.md", "classification": "mode-specific", "owner": "code-app" },
+    { "path": "references/design-system-schema.md", "classification": "mode-specific", "owner": "standalone-spec" },
+    { "path": "references/vibe/direction-airline.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/design-directions.md", "classification": "mode-specific", "owner": "style-comparison" },
+    { "path": "references/vibe/linear-design.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/uber-design.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/intercom-design.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/brand-examples.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/direction-polished-inspection.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/direction-product.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/direction-saas.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/design-bundle-schema.md", "classification": "mode-specific", "owner": "style-comparison" },
+    { "path": "references/vibe/style-picker.md", "classification": "mode-specific", "owner": "style-comparison" },
+    { "path": "references/vibe/sentry-design.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/vibe/direction-inspection.md", "classification": "historical-example", "owner": "style-comparison" },
+    { "path": "references/canvas-app-extraction.md", "classification": "mode-specific", "owner": "canvas-app" },
+    { "path": "references/design-spec-extraction.md", "classification": "mode-specific", "owner": "design-spec" },
+    { "path": "references/figma-extraction.md", "classification": "mode-specific", "owner": "figma" },
+    { "path": "references/input-modes.md", "classification": "mode-specific", "owner": "external-input" },
+    { "path": "references/refresh-flow.md", "classification": "mode-specific", "owner": "refresh-reskin-history" },
+    { "path": "references/tamagui-integration.md", "classification": "mode-specific", "owner": "real-or-standalone-runtime" },
+    { "path": "references/reference-intake.md", "classification": "mode-specific", "owner": "screenshot-intake" },
+    { "path": "references/power-pages-extraction.md", "classification": "mode-specific", "owner": "power-pages" },
+    { "path": "references/preview-template.md", "classification": "mode-specific", "owner": "gallery" }
+  ]
+}

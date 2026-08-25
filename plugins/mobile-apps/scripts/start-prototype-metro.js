@@ -2,9 +2,14 @@
 'use strict';
 
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { sha256 } = require('./validate-native-canary');
+
+const CANARY_RECEIPT_PATH = '.tmp/native-canary-validation.json';
+const METRO_EVIDENCE_PATH = '.tmp/prototype-metro-evidence.json';
 
 function patchTextPreservingEol(source, search, replacement) {
   if (!source.includes(search)) throw new Error(`patch anchor is missing: ${search}`);
@@ -26,23 +31,112 @@ async function selectMetroPort(preferred = 8081, maximum = preferred + 20) {
   throw new Error(`no available Metro port between ${preferred} and ${maximum}`);
 }
 
+function readJson(filePath, label) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    throw new Error(`${label} is invalid JSON: ${error.message}`);
+  }
+}
+
+function validateCanaryReceipt(projectRoot, options = {}) {
+  const root = fs.realpathSync(path.resolve(projectRoot));
+  const pack = readJson(path.resolve(root, options.packPath || '.tmp/screen-build-pack.json'), 'Screen build pack');
+  const receipt = readJson(path.resolve(root, options.receiptPath || CANARY_RECEIPT_PATH), 'Native canary receipt');
+  if (receipt.kind !== 'native-canary-validation' || receipt.valid !== true || receipt.packRevision !== pack.revision) throw new Error('native canary receipt is missing, invalid, or stale for the current build pack');
+  if (JSON.stringify(receipt.screenIds) !== JSON.stringify(pack.nativeCanary?.screenIds || [])) throw new Error('native canary receipt screen set is stale');
+  for (const screenId of receipt.screenIds) {
+    const source = receipt.sources?.[screenId];
+    if (!source?.file || !/^[a-f0-9]{64}$/.test(String(source.sha256 || ''))) throw new Error(`native canary receipt lacks source evidence for ${screenId}`);
+    const filePath = path.resolve(root, source.file);
+    if (!filePath.startsWith(`${root}${path.sep}`) || !fs.existsSync(filePath) || sha256(fs.readFileSync(filePath)) !== source.sha256) throw new Error(`native canary source changed after validation: ${screenId}`);
+  }
+  return { pack, receipt };
+}
+
+function probeMetroStatus(port, host = '127.0.0.1', request = http.get) {
+  return new Promise((resolve) => {
+    const client = request({ host, port, path: '/status', timeout: 750 }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve(response.statusCode === 200 && /packager-status:running|metro/i.test(body)));
+    });
+    client.once('timeout', () => { client.destroy(); resolve(false); });
+    client.once('error', () => resolve(false));
+  });
+}
+
+async function waitForMetroReady(port, options = {}) {
+  const startedAt = Date.now();
+  const timeoutMs = options.timeoutMs || 30000;
+  const intervalMs = options.intervalMs || 250;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await probeMetroStatus(port, options.host, options.request)) return { ready: true, durationMs: Date.now() - startedAt };
+    if (options.child && options.child.exitCode !== null) return { ready: false, durationMs: Date.now() - startedAt, reason: `process exited ${options.child.exitCode}` };
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return { ready: false, durationMs: Date.now() - startedAt, reason: `health probe timed out after ${timeoutMs}ms` };
+}
+
+function writeAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
+    fs.renameSync(temporary, filePath);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
 async function startPrototypeMetro(projectRoot, options = {}) {
   const root = fs.realpathSync(path.resolve(projectRoot));
   const port = await selectMetroPort(options.preferredPort || 8081, options.maximumPort || (options.preferredPort || 8081) + 20);
   const command = ['npm', '--prefix', root, 'run', 'dev', '--', '--port', String(port), '--non-interactive'];
   if (options.planOnly) return { port, command, cwd: root, status: 'planned' };
-  const child = spawn(command[0], command.slice(1), {
+  const { receipt } = validateCanaryReceipt(root, options);
+  const logPath = path.join(root, '.tmp', 'prototype-metro.log');
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const log = fs.openSync(logPath, 'a');
+  const child = (options.spawnProcess || spawn)(command[0], command.slice(1), {
     cwd: root,
     detached: true,
-    stdio: 'ignore',
+    stdio: ['ignore', log, log],
     env: { ...process.env, CI: '1', EXPO_NO_INTERACTIVE: '1' },
   });
-  await new Promise((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+  } finally {
+    fs.closeSync(log);
+  }
+  const readiness = await waitForMetroReady(port, { ...options, child });
+  if (!readiness.ready) {
+    child.kill('SIGTERM');
+    throw new Error(`Metro did not become ready: ${readiness.reason}. Canary remains valid. Manual command: ${command.join(' ')}`);
+  }
   child.unref();
-  return { port, command, cwd: root, pid: child.pid, status: 'started' };
+  const result = {
+    schemaVersion: 1,
+    kind: 'prototype-metro-evidence',
+    port,
+    url: `http://127.0.0.1:${port}`,
+    command,
+    cwd: root,
+    pid: child.pid,
+    status: 'metro-ready',
+    previewStatus: 'statically validated + Metro ready',
+    canaryPackRevision: receipt.packRevision,
+    canaryValidatedAt: receipt.validatedAt,
+    readyAt: new Date().toISOString(),
+    startupDurationMs: readiness.durationMs,
+    logPath: path.relative(root, logPath).replace(/\\/g, '/'),
+  };
+  writeAtomic(path.join(root, METRO_EVIDENCE_PATH), result);
+  return result;
 }
 
 async function main(argv) {
@@ -82,4 +176,4 @@ async function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 
-module.exports = { patchTextPreservingEol, portAvailable, selectMetroPort, startPrototypeMetro };
+module.exports = { CANARY_RECEIPT_PATH, METRO_EVIDENCE_PATH, patchTextPreservingEol, portAvailable, probeMetroStatus, selectMetroPort, startPrototypeMetro, validateCanaryReceipt, waitForMetroReady };

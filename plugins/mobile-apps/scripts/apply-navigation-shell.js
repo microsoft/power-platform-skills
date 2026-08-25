@@ -35,7 +35,7 @@ function shellSource(contract, screenContract) {
         options={{
           title: ${JSON.stringify(destination.label)},
           tabBarAccessibilityLabel: ${JSON.stringify(destination.label)},
-          tabBarTestID: ${JSON.stringify(destination.testId)},
+          tabBarButtonTestID: ${JSON.stringify(destination.testId)},
           tabBarIcon: ({ color, size }) => <Ionicons name="${iconName(destination.iconIntent)}" color={color} size={size} />,
         }}
       />`).join('\n');

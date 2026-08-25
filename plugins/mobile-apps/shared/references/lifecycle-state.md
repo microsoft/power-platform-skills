@@ -22,6 +22,8 @@ local paths.
   "lastWorkflowJourneyHash": "<sha256>",
   "lastNavigationContractHash": "<sha256>",
   "lastNavigationShellHash": "<sha256>",
+  "lastPrototypeSemanticPlanHash": "<sha256-or-null>",
+  "lastPrototypeSemanticPreservationHash": "<sha256-or-null>",
   "lastVisualCompositionHash": "<sha256>",
   "lastRepositoryMappingHash": "<sha256>",
   "lastFixtureRevision": "<sha256>",
@@ -109,6 +111,10 @@ invalidates lifecycle readiness.
 `lastNavigationContractHash` hashes `.tmp/navigation-contract.json` and
 `lastNavigationShellHash` hashes `.mobile-app/navigation-shell.json`. Either
 changing without a new recorded validation blocks preview, debug, and deploy.
+`lastPrototypeSemanticPlanHash` hashes the compact planner response and
+`lastPrototypeSemanticPreservationHash` hashes its path-level final-bundle
+preservation report when those prototype PR1 artifacts exist. They remain null
+for workflows that do not use compact prototype planning.
 `lastVisualCompositionHash` hashes the canonical
 `visualCompositionIntent` projection from the Experience Contract.
 

@@ -1587,7 +1587,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   );
   const planner = fs.readFileSync(path.join(
     __dirname,
-    '../../agents/native-app-planner.md',
+    '../../agents/real-app-planner.md',
   ), 'utf8');
   assert.match(
     planner,

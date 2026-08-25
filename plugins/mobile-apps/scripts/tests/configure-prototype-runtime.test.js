@@ -14,7 +14,7 @@ function makeProject(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const files = {
     'package.json': JSON.stringify({ name: 'field-inspection', scripts: { dev: 'expo start', predev: 'npm run generate-schemas' } }, null, 2),
-    'app/_layout.tsx': `import { Slot } from 'expo-router';\nimport { PowerAppsProvider } from '@microsoft/power-apps-native-host';\nexport default function RootLayout() {\n  return <PowerAppsProvider><Slot /></PowerAppsProvider>;\n}\n`,
+    'app/_layout.tsx': `import { Slot } from 'expo-router';\nimport { PowerAppsProvider } from '@microsoft/power-apps-native-host';\nimport powerConfig from '../power.config.json';\nexport default function RootLayout() {\n  return <PowerAppsProvider powerConfig={powerConfig}><Slot /></PowerAppsProvider>;\n}\n`,
     'app/index.tsx': `import { Redirect } from 'expo-router';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function Index() {\n  const { isLoading, isSignedIn } = useAuth();\n  if (isLoading) return null;\n  return isSignedIn ? <Redirect href="/(app)/home" /> : <Redirect href="/login" />;\n}\n`,
     'app/(app)/_layout.tsx': `import { Redirect } from 'expo-router';\nimport { Stack } from 'expo-router/stack';\nimport { useAuth } from '@microsoft/power-apps-native-host';\nexport default function AppLayout() {\n  const { isSignedIn, isLoading } = useAuth();\n  if (!isLoading && !isSignedIn) {\n    return <Redirect href="/login" />;\n  }\n  return <Stack />;\n}\n`,
     'src/data/PrototypeDataProvider.tsx': `export function PrototypeDataProvider({ children }) { return children; }\n`,
@@ -43,7 +43,9 @@ test('enables a no-auth local prototype runtime idempotently', (t) => {
   assert.match(fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8'), /dataMode === 'prototype'/);
   assert.match(fs.readFileSync(path.join(root, 'app/(app)/_layout.tsx'), 'utf8'), /dataMode !== 'prototype'/);
   const rootLayout = fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8');
-  assert.match(rootLayout, /<PowerAppsProvider>[\s\S]*<DataModeProvider>[\s\S]*<Slot \/>[\s\S]*<\/DataModeProvider>[\s\S]*<\/PowerAppsProvider>/);
+  assert.match(rootLayout, /<PowerAppsProvider[\s\S]*<DataModeProvider>[\s\S]*<Slot \/>[\s\S]*<\/DataModeProvider>[\s\S]*<\/PowerAppsProvider>/);
+  assert.match(rootLayout, /powerConfig=\{dataMode === 'prototype' \? \{ \.\.\.powerConfig, environmentId: '' \} : powerConfig\}/);
+  assert.match(rootLayout, /import \{ dataMode \} from '\.\.\/src\/config\/dataMode';/);
   assert.match(rootLayout, /return <PrototypeDataProvider>\{children\}<\/PrototypeDataProvider>/);
   assert.doesNotMatch(rootLayout, /QueryClientProvider/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8')).databaseReferences, {});
@@ -75,6 +77,7 @@ test('configures a direct real app without requiring a prototype backup', (t) =>
   assert.equal(packageJson.scripts.predev, 'npm run generate-schemas');
   assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /dataverse/);
   assert.match(fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8'), /<PrototypeDataProvider>/);
+  assert.match(fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8'), /dataMode === 'prototype'.*: powerConfig/);
 });
 
 test('refreshes the reversible predev backup when prototype mode is re-entered', (t) => {

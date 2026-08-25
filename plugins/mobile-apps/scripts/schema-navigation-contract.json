@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Navigation Contract",
   "type": "object",
-  "required": ["schemaVersion", "experienceContractSha256", "workflowContractSha256", "screenGraphSha256", "model", "initialDestinationId", "destinationCount", "destinations", "flows", "globalRoutePolicy", "adaptivePresentation", "accessibility", "decision"],
+  "required": ["schemaVersion", "experienceContractSha256", "workflowContractSha256", "screenGraphSha256", "model", "initialDestinationId", "destinationCount", "destinations", "flows", "routingPolicy", "globalRoutePolicy", "adaptivePresentation", "accessibility", "decision"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
@@ -53,6 +53,22 @@
         },
         "additionalProperties": false
       }
+    },
+    "routingPolicy": {
+      "type": "object",
+      "required": ["primaryScreenId", "launchScreenId", "launchRoute", "launchRationale", "resumeScreenId", "resumeRoute", "resumeRoutePolicy", "resumeRationale", "keyFlowEntryScreenId"],
+      "properties": {
+        "primaryScreenId": { "type": "string", "minLength": 1 },
+        "launchScreenId": { "type": "string", "minLength": 1 },
+        "launchRoute": { "type": "string", "pattern": "^/" },
+        "launchRationale": { "type": "string", "minLength": 10 },
+        "resumeScreenId": { "type": ["string", "null"] },
+        "resumeRoute": { "type": ["string", "null"] },
+        "resumeRoutePolicy": { "enum": ["last-visited", "incomplete-flow-step", "home", "none"] },
+        "resumeRationale": { "type": "string", "minLength": 10 },
+        "keyFlowEntryScreenId": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
     },
     "globalRoutePolicy": {
       "type": "object",

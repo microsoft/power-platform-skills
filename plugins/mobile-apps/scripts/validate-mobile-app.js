@@ -31,6 +31,8 @@ const FINGERPRINT_ARTIFACTS = [
   '.tmp/experience-screen-contract.json',
   '.tmp/mobile-plan-execution-contract.json',
   '.tmp/prototype-domain-model.json',
+  '.tmp/prototype-semantic-plan.json',
+  '.tmp/prototype-semantic-preservation.json',
   '.tmp/screen-build-pack.json',
   'app.config.js',
   'babel.config.js',
@@ -287,6 +289,8 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
   if (!fs.existsSync(contextPath) || !fs.existsSync(journeyPath) || !fs.existsSync(navigationPath) || !fs.existsSync(navigationShellPath) || !fs.existsSync(experiencePath)) throw new Error('cannot record lifecycle validation without Context, Journey, Navigation, Navigation Shell, and Experience contracts');
   const experience = readJson(experiencePath, 'Experience contract');
   const mappingPath = path.join(projectRoot, '.tmp', 'dataverse-repository-mapping.json');
+  const semanticPlanPath = path.join(projectRoot, '.tmp', 'prototype-semantic-plan.json');
+  const semanticPreservationPath = path.join(projectRoot, '.tmp', 'prototype-semantic-preservation.json');
   const prototypeMapping = (model.operations || []).map((operation) => ({
     operation: operation.key,
     entity: operation.entity,
@@ -304,6 +308,8 @@ function recordLifecycleValidation(projectRoot, scope, screenId, checks) {
     lastWorkflowJourneyHash: sha256(fs.readFileSync(journeyPath)),
     lastNavigationContractHash: sha256(fs.readFileSync(navigationPath)),
     lastNavigationShellHash: sha256(fs.readFileSync(navigationShellPath)),
+    lastPrototypeSemanticPlanHash: fs.existsSync(semanticPlanPath) ? sha256(fs.readFileSync(semanticPlanPath)) : null,
+    lastPrototypeSemanticPreservationHash: fs.existsSync(semanticPreservationPath) ? sha256(fs.readFileSync(semanticPreservationPath)) : null,
     lastVisualCompositionHash: sha256(stableStringify(experience.visualCompositionIntent)),
     lastRepositoryMappingHash: fs.existsSync(mappingPath) ? sha256(fs.readFileSync(mappingPath)) : sha256(stableStringify(prototypeMapping)),
     lastFixtureRevision: sha256(stableStringify({ fixtures: model.fixtures || {}, fixtureScenarios: model.fixtureScenarios || [] })),

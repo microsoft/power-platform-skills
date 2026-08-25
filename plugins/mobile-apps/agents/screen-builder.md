@@ -39,7 +39,7 @@ read-only agent, consume only the supplied work order and require:
 - `constraints.ownership: single-screen-file`.
 
 The work order's screen purpose, presentation, regions, first viewport,
-context, signature component, header,
+context, semantic `productRole`, signature component, header,
 primary action, media, states, quality criteria, test IDs, data operations,
 dependencies, navigation, and forbidden defaults are binding. `design.recipe`
 is the binding token, type, shape, media, and signature-component recipe.
@@ -57,6 +57,13 @@ its disabled/hidden behavior and reason, and never enable Review, Confirm, or
 Finish before required progress is complete. Preserve continuity bindings
 across all routes. An on-demand camera opens behind explicit state and cannot
 replace the contracted task hierarchy or manual fallback.
+
+`productRole` cannot be reinterpreted from route or build order: a
+`primary-hub` remains Home, a `durable-destination` remains independently
+revisitable, and capability/flow roles remain under their contracted owner.
+Every capability binding keeps its supported job, domain operation,
+presentation, permission timing, unavailable/denied/failure/offline behavior,
+and primary-product flag.
 
 Do not read the aggregate build pack, `native-app-plan.md`, separate planning
 sidecars, `brand/design-system.md`, or broad reference Markdown in the normal
@@ -191,10 +198,6 @@ DONE
 {
   "schemaVersion": 1,
   "kind": "mobile-screen-artifact",
-Keep `layoutBudgets.stickySurfaceOrder` and
-`requiredFirstViewportRegions` exact. Error/destructive tokens are not brand
-or selection colors; consume the work order's semantic roles rather than raw
-palette values.
   "packRevision": "<screen_build_pack_revision>",
   "screenId": "<screen_id>",
   "route": "<work-order route>",
@@ -205,6 +208,11 @@ palette values.
 }
 ```
 ````
+
+Keep `layoutBudgets.stickySurfaceOrder` and
+`requiredFirstViewportRegions` exact. Error/destructive tokens are not brand
+or selection colors; consume the work order's semantic roles rather than raw
+palette values.
 
 The object has exactly those keys. Never return output paths, commands, diffs,
 summaries, or additional files. The foreground resolves the only writable

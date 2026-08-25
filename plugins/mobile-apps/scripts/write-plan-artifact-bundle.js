@@ -16,6 +16,11 @@ const TARGETS = {
   experienceFoundationContract: '.tmp/experience-foundation-contract.json',
   executionContract: '.tmp/mobile-plan-execution-contract.json',
 };
+const SUPPLEMENTAL_TARGETS = {
+  prototypeSemanticPlan: '.tmp/prototype-semantic-plan.json',
+  prototypeSemanticMap: '.tmp/prototype-semantic-map.json',
+  prototypeSemanticPreservation: '.tmp/prototype-semantic-preservation.json',
+};
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -94,7 +99,7 @@ function restoreStages(stages) {
   }
 }
 
-function writePlanArtifactBundle(projectRoot, bundle) {
+function writePlanArtifactBundle(projectRoot, bundle, supplementalArtifacts = {}) {
   const root = fs.realpathSync(path.resolve(projectRoot));
   const validation = validatePlanArtifactBundle(root, bundle);
   if (!validation.valid) throw new Error(`invalid plan artifact bundle: ${validation.errors.join('; ')}`);
@@ -104,6 +109,11 @@ function writePlanArtifactBundle(projectRoot, bundle) {
   try {
     for (const [key, relativePath] of activeTargets(bundle)) {
       stages.push(stageAtomic(safeTarget(root, relativePath), contentFor(bundle, key)));
+    }
+    for (const [key, value] of Object.entries(supplementalArtifacts)) {
+      const relativePath = SUPPLEMENTAL_TARGETS[key];
+      if (!relativePath) throw new Error(`unknown supplemental plan artifact: ${key}`);
+      stages.push(stageAtomic(safeTarget(root, relativePath), `${JSON.stringify(value, null, 2)}\n`));
     }
     for (const relativePath of inactiveDataTargets(bundle)) {
       const target = path.resolve(root, relativePath);
@@ -166,4 +176,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { writePlanArtifactBundle };
+module.exports = { SUPPLEMENTAL_TARGETS, writePlanArtifactBundle };

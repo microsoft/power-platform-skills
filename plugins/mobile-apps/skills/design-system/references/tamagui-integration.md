@@ -46,13 +46,22 @@ import { defaultConfig } from '@tamagui/config/v5';
 import { animations } from '@tamagui/config/v5-rn';
 
 type BrandColors = Partial<{
+  background: string;
   bg: string;
   surface: string;
+  surfaceElevated: string;
+  text: string;
+  textMuted: string;
   primary: string;
   accent: string;
+  accentText: string;
   accentSoft: string;
+  selection: string;
   mediaSurface: string;
   border: string;
+  warning: string;
+  error: string;
+  success: string;
   statusSuccess: string;
   statusWarning: string;
   statusDanger: string;
@@ -65,7 +74,21 @@ function withSemanticAliases(
 ) {
   return {
     ...theme,
-    surface0: brand.bg ?? theme.background,
+    background: brand.background ?? brand.bg ?? theme.background,
+    color: brand.text ?? theme.color,
+    backgroundHover: brand.surfaceElevated ?? theme.backgroundHover,
+    surface: brand.surface ?? theme.color2,
+    surfaceElevated: brand.surfaceElevated ?? theme.color3,
+    text: brand.text ?? theme.color,
+    textMuted: brand.textMuted ?? theme.color10,
+    accent: brand.accent ?? brand.primary ?? theme.blue10,
+    accentText: brand.accentText ?? theme.color1,
+    selection: brand.selection ?? brand.accentSoft ?? theme.blue3,
+    border: brand.border ?? theme.borderColor,
+    warning: brand.warning ?? brand.statusWarning ?? theme.yellow10,
+    error: brand.error ?? brand.statusDanger ?? theme.red10,
+    success: brand.success ?? brand.statusSuccess ?? theme.green10,
+    surface0: brand.background ?? brand.bg ?? theme.background,
     surface1: brand.surface ?? theme.color2,
     surface2: theme.color3,
     surface3: brand.border ?? theme.color4,

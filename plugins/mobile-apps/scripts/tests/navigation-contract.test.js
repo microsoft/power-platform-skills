@@ -98,6 +98,22 @@ test('single bounded capture utility remains an evidence-backed stack', () => {
   assert.equal(value.contract.destinations.length, 1);
 });
 
+test('bounded onboarding remains stack-only without invented Home or tabs', () => {
+  const brief = 'Guide a new user through welcome, profile setup, and confirmation once. The flow has a clear exit and no independently revisited destinations.';
+  const screens = [
+    screen('Welcome', 'primary', 'Understand the guided setup and begin.', { candidate: candidate() }, '/(app)/welcome'),
+    screen('Profile', 'key-flow', 'Enter the required profile details.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/welcome' }, '/(app)/profile'),
+    screen('Confirm', 'key-flow', 'Review and finish onboarding.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/profile' }, '/(app)/confirm'),
+  ];
+  const value = contracts(brief, screens);
+  assert.equal(value.contract.model, 'stack');
+  assert.equal(value.contract.destinations.length, 1);
+  assert.equal(value.contract.destinations[0].rootScreenId, 'Welcome');
+  assert.equal(value.contract.routingPolicy.launchScreenId, 'Welcome');
+  assert.equal(value.contract.routingPolicy.resumeRoutePolicy, 'none');
+  assert.equal(value.contract.destinations.some((destination) => /home/i.test(destination.label)), false);
+});
+
 test('navigation resolution is independent of domain adapters and overrides a coarse stack hint', () => {
   const brief = 'Let people revisit Home, Library, Progress, and Profile while lessons remain nested.';
   const screens = [

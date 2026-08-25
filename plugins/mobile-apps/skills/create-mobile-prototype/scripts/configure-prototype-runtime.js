@@ -69,15 +69,17 @@ function ensureImport(contents, importLine, anchor) {
   const anchorIndex = contents.indexOf(anchor);
   if (anchorIndex < 0) fail(`cannot patch import; anchor not found: ${anchor}`);
   const lineEnd = contents.indexOf('\n', anchorIndex);
-  return `${contents.slice(0, lineEnd + 1)}${importLine}\n${contents.slice(lineEnd + 1)}`;
+  const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  return `${contents.slice(0, lineEnd + 1)}${importLine}${newline}${contents.slice(lineEnd + 1)}`;
 }
 
 function patchIndex(contents) {
   contents = ensureImport(contents, "import { dataMode, prototypeEntryRoute } from '../src/config/dataMode';", "from '@microsoft/power-apps-native-host';");
   if (contents.includes('if (dataMode === \'prototype\')')) return contents;
-  const anchor = '  const { isLoading, isSignedIn } = useAuth();\n';
-  if (!contents.includes(anchor)) fail('app/index.tsx auth-state anchor not found');
-  return contents.replace(anchor, `${anchor}\n  if (dataMode === 'prototype') {\n    return <Redirect href={prototypeEntryRoute} />;\n  }\n`);
+  const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  const anchor = /^(\s*const \{ isLoading, isSignedIn \} = useAuth\(\);\r?\n)/m;
+  if (!anchor.test(contents)) fail('app/index.tsx auth-state anchor not found');
+  return contents.replace(anchor, `$1${newline}  if (dataMode === 'prototype') {${newline}    return <Redirect href={prototypeEntryRoute} />;${newline}  }${newline}`);
 }
 
 function patchAppLayout(contents) {
@@ -91,11 +93,16 @@ function patchAppLayout(contents) {
 function patchRootLayout(contents) {
   contents = ensureImport(contents, "import type { PropsWithChildren } from 'react';", "from '@microsoft/power-apps-native-host';");
   contents = ensureImport(contents, "import { PrototypeDataProvider } from '../src/data';", "from '@microsoft/power-apps-native-host';");
+  contents = ensureImport(contents, "import { dataMode } from '../src/config/dataMode';", "from '@microsoft/power-apps-native-host';");
+  // Remove this conditional when the host no longer treats a zero-GUID local prototype as auth-required.
+  contents = contents.replace(
+    'powerConfig={powerConfig}',
+    "powerConfig={dataMode === 'prototype' ? { ...powerConfig, environmentId: '' } : powerConfig}",
+  );
   contents = contents.replace(
     /function DataModeProvider\(\{ children \}: PropsWithChildren\) \{\n\s*return dataMode === 'prototype'\n\s*\? <PrototypeDataProvider>\{children\}<\/PrototypeDataProvider>\n\s*: <>\{children\}<\/>;\n\}/,
     "function DataModeProvider({ children }: PropsWithChildren) {\n  return <PrototypeDataProvider>{children}</PrototypeDataProvider>;\n}",
   );
-  if (!contents.includes("dataMode === 'prototype'")) contents = contents.replace("import { dataMode } from '../src/config/dataMode';\n", '');
   if (!contents.includes('function DataModeProvider(')) {
     const anchor = 'export default function RootLayout() {';
     if (!contents.includes(anchor)) fail('app/_layout.tsx RootLayout anchor not found');

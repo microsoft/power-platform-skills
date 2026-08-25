@@ -22,6 +22,8 @@ const { validateWorkflowJourney } = require('./validate-workflow-journey');
 const { navigationContractRevision } = require('./resolve-navigation-contract');
 const { validateNavigationContract } = require('./validate-navigation-contract');
 const { validateNavigationContinuity } = require('./validate-navigation-continuity');
+const { validateBuildPack: validateNativeDesignBuildPack } = require('./validate-native-prototype-design');
+const { validatePrototypeSemanticPlan } = require('./lib/prototype-semantic-plan');
 const {
   validateActionState,
   validateCapabilityComposition,
@@ -80,7 +82,13 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (pack.screenContractVersion !== 3) {
     issues.push({ rule: 'legacy-screen-contract', message: 'Screen build pack requires a schema-version-3 Experience Screen Contract. Re-plan before building.' });
   }
-  const sourceNames = ['confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract', 'contextEnrichment', 'workflowJourney', 'navigationContract', 'navigationShell', 'foundationContract', 'foundationRuntime', 'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract'];
+  const sourceNames = [
+    'confirmedBrief', 'packageManifest', 'experienceContract', 'screenContract',
+    'contextEnrichment', 'workflowJourney', 'navigationContract',
+    'navigationShell', 'foundationContract', 'foundationRuntime',
+    'designRecipe', 'tokens', 'domainModel', 'domainLayer', 'executionContract',
+    ...(pack.sourcePaths?.designManifest ? ['prototypeSemanticPlan', 'designManifest', 'signatureRegistry'] : []),
+  ];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -103,6 +111,16 @@ function validateScreenBuildPack(projectRoot, pack) {
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');
   const keyFlow = (pack.screens || []).find((screen) => screen.role === 'key-flow');
   if (!primary || !keyFlow) issues.push({ rule: 'missing-primary-or-key-flow', message: 'Screen build pack requires primary and key-flow screens.' });
+  const canary = pack.nativeCanary;
+  const verticalSlice = (pack.builderWaves || []).find((wave) => wave.id === canary?.waveId);
+  const approvedKeyFlowIds = pack.sourcePaths?.prototypeSemanticPlan
+    ? pack.productStructure?.keyFlowScreenIds || []
+    : (pack.screens || []).filter((screen) => screen.role === 'key-flow').map((screen) => screen.id);
+  if (!canary || canary.primaryScreenId !== primary?.id || !canary.keyFlowScreenIds?.length || !canary.keyFlowScreenIds.every((screenId) => approvedKeyFlowIds.includes(screenId))) {
+    issues.push({ rule: 'invalid-native-canary', message: 'Native canary must bind the permanent primary screen and approved key-flow screens.' });
+  }
+  if (!verticalSlice || stableStringify(verticalSlice.targets) !== stableStringify(canary?.screenIds || [])) issues.push({ rule: 'native-canary-wave-drift', message: 'Native canary screen IDs must exactly match the vertical-slice builder wave.' });
+  if ((canary?.supportingScreenIds || []).some((screenId) => canary.screenIds.includes(screenId)) || ![...(canary?.screenIds || []), ...(canary?.supportingScreenIds || [])].every((screenId) => (pack.screens || []).some((screen) => screen.id === screenId))) issues.push({ rule: 'native-canary-supporting-drift', message: 'Native canary and supporting screen sets must be disjoint and complete.' });
   if (!primary?.firstViewport?.regionIds?.length || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !primary?.dependencies || !Array.isArray(primary?.testIds)) {
     issues.push({ rule: 'incomplete-primary-screen', message: 'Primary build-pack screen requires viewport, action, states, dependencies, and test IDs.' });
   }
@@ -110,6 +128,46 @@ function validateScreenBuildPack(projectRoot, pack) {
     issues.push({ rule: 'invalid-shell-contract', message: 'Screen build pack requires route-owned safe areas plus root/back header modes.' });
   }
   if (!pack.context || !Array.isArray(pack.context.forbiddenInferences)) issues.push({ rule: 'missing-context-contract', message: 'Screen build pack requires context mode and forbidden inferences.' });
+  if (pack.sourcePaths?.prototypeSemanticPlan) {
+    try {
+      const semanticPlan = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.prototypeSemanticPlan), 'utf8'));
+      const experienceContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.experienceContract), 'utf8'));
+      const contextContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.contextEnrichment), 'utf8'));
+      const workflowJourney = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.workflowJourney), 'utf8'));
+      const executionPreflightPath = path.join(projectRoot, '.tmp', 'mobile-plan-execution-preflight.json');
+      const foundationContract = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.foundationContract), 'utf8'));
+      const semanticValidation = validatePrototypeSemanticPlan(semanticPlan, {
+        experienceContract,
+        contextContract,
+        workflowJourney,
+        executionPreflight: JSON.parse(fs.readFileSync(executionPreflightPath, 'utf8')),
+        foundationContract,
+      });
+      for (const error of semanticValidation.errors) issues.push({ rule: 'invalid-prototype-semantic-plan', message: error });
+      const expectedStructure = pack.productStructure;
+      const structure = semanticPlan.screens.productStructure;
+      if (!expectedStructure || expectedStructure.primaryScreenId !== structure.primaryScreenId
+        || expectedStructure.launchScreenId !== structure.launchRoute
+        || expectedStructure.resumeScreenId !== structure.resumeRoute
+        || stableStringify(expectedStructure.durableDestinationIds) !== stableStringify(structure.durableDestinationIds)
+        || stableStringify(expectedStructure.keyFlowScreenIds) !== stableStringify(structure.keyFlowScreenIds)
+        || stableStringify(expectedStructure.independentJobs) !== stableStringify(structure.independentJobs)
+        || stableStringify(expectedStructure.boundedFlows) !== stableStringify(structure.boundedFlows)) {
+        issues.push({ rule: 'product-structure-drift', message: 'Screen build pack product structure does not preserve the semantic plan.' });
+      }
+      if (stableStringify(pack.capabilityBindings.map(({ capability, execution, mode, fallbackStates, maxViewportShare, ...binding }) => binding)) !== stableStringify(semanticPlan.capabilitySelections)) {
+        issues.push({ rule: 'capability-binding-drift', message: 'Screen build pack capability bindings do not preserve the semantic plan.' });
+      }
+      const productRoleById = new Map(semanticPlan.screens.items.map((screen) => [screen.id, screen.productRole]));
+      for (const screen of pack.screens || []) if (screen.productRole !== productRoleById.get(screen.id)) issues.push({ rule: 'product-role-drift', message: `Screen ${screen.id} product role does not preserve the semantic plan.` });
+      for (const binding of pack.capabilityBindings || []) {
+        const owner = (pack.screens || []).find((screen) => screen.id === binding.owningScreenId);
+        if (!owner || !owner.capabilityComposition?.some((composition) => composition.capabilityId === binding.capabilityId)) issues.push({ rule: 'capability-owner-drift', message: `Capability ${binding.capabilityId} is absent from owning screen ${binding.owningScreenId}.` });
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-prototype-structure-authority', message: `Cannot validate prototype structure authority: ${error.message}` });
+    }
+  }
   for (const screen of pack.screens || []) {
     if (!['root', 'back', 'close', 'none'].includes(screen.headerMode) || pack.shell?.headerModes?.[screen.route] !== screen.headerMode) {
       issues.push({ rule: 'header-mode-drift', message: `Screen build pack header mode drift for ${screen.route || screen.id}.` });
@@ -285,6 +343,20 @@ function validateScreenBuildPack(projectRoot, pack) {
   }
   if (!pack.design?.tokensPath || !pack.design?.recipe || !Array.isArray(pack.design?.primitives) || !pack.design.primitives.length) {
     issues.push({ rule: 'missing-design-primitives', message: 'Screen build pack requires design tokens and foundation primitives.' });
+  }
+  if (pack.sourcePaths?.designManifest) {
+    try {
+      const registry = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.signatureRegistry), 'utf8'));
+      const manifest = JSON.parse(fs.readFileSync(path.join(projectRoot, pack.sourcePaths.designManifest), 'utf8'));
+      for (const designIssue of validateNativeDesignBuildPack(projectRoot, pack, pack.design.recipe, registry, manifest)) {
+        issues.push({ rule: designIssue.rule, message: `${designIssue.path}: ${designIssue.message}` });
+      }
+      if (pack.design.escapePolicy !== 'blocked-until-reviewed' || !pack.design.tokenSourceBindings || !Array.isArray(pack.design.signatureComponents) || !pack.design.signatureComponents.length) {
+        issues.push({ rule: 'incomplete-builder-design-authority', message: 'Automatic prototype build packs require token bindings, signature registry entries, and a fail-closed escape policy.' });
+      }
+    } catch (error) {
+      issues.push({ rule: 'invalid-native-design-authority', message: `Cannot validate native prototype design authority: ${error.message}` });
+    }
   }
   if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.domainModelPath !== '.tmp/prototype-domain-model.json' || pack.fixtures?.dataModule !== 'src/data/index.ts' || pack.fixtures?.mediaAdapter !== 'src/data/media.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey' || !Array.isArray(pack.fixtures?.journeyScenarios) || !pack.fixtures.journeyScenarios.length) {
     issues.push({ rule: 'missing-fixture-intent', message: 'Screen build pack requires fixture adapter, entities, and asset policy.' });

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Screen Build Pack",
   "type": "object",
-  "required": ["schemaVersion", "screenContractVersion", "revision", "uiContractFingerprint", "sources", "sourcePaths", "experience", "context", "journey", "design", "shell", "navigation", "execution", "fixtures", "screens", "builderWaves", "buildOrder", "invalidation"],
+  "required": ["schemaVersion", "screenContractVersion", "revision", "uiContractFingerprint", "sources", "sourcePaths", "experience", "context", "productStructure", "capabilityBindings", "nativeCanary", "journey", "design", "shell", "navigation", "execution", "fixtures", "screens", "builderWaves", "buildOrder", "invalidation"],
   "properties": {
     "schemaVersion": { "const": 2 },
     "screenContractVersion": { "const": 3 },
@@ -21,6 +21,21 @@
       "properties": {
         "mode": { "type": "string" },
         "forbiddenInferences": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "productStructure": { "type": ["object", "null"] },
+    "capabilityBindings": { "type": "array" },
+    "nativeCanary": {
+      "type": "object",
+      "required": ["waveId", "primaryScreenId", "keyFlowScreenIds", "screenIds", "outcome", "supportingScreenIds"],
+      "properties": {
+        "waveId": { "const": "vertical-slice" },
+        "primaryScreenId": { "type": "string" },
+        "keyFlowScreenIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+        "screenIds": { "type": "array", "minItems": 2, "items": { "type": "string" }, "uniqueItems": true },
+        "outcome": { "type": "string", "minLength": 10 },
+        "supportingScreenIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },
@@ -68,9 +83,10 @@
       "minItems": 2,
       "items": {
         "type": "object",
-        "required": ["id", "route", "file", "role", "routeParameters", "navigation", "headerMode", "header", "purpose", "presentation", "regions", "firstViewport", "context", "signatureComponent", "primaryAction", "media", "states", "qualityCriteria", "dependencies", "testIds", "forbiddenDefaults", "data", "journey", "actionState", "signatureComponents", "semanticColorRoles", "capabilityComposition", "layoutBudgets"],
+        "required": ["id", "route", "file", "role", "productRole", "routeParameters", "navigation", "headerMode", "header", "purpose", "presentation", "regions", "firstViewport", "context", "signatureComponent", "primaryAction", "media", "states", "qualityCriteria", "dependencies", "testIds", "forbiddenDefaults", "data", "journey", "actionState", "signatureComponents", "semanticColorRoles", "capabilityComposition", "layoutBudgets"],
         "properties": {
           "role": { "enum": ["primary", "key-flow", "supporting"] },
+          "productRole": { "enum": ["primary-hub", "durable-destination", "workflow-step", "detail", "capture-surface", "transient", "modal", "immersive-utility"] },
           "routeParameters": { "type": "array" },
           "navigation": { "type": "object", "required": ["kind", "intent"] },
           "headerMode": { "enum": ["root", "back", "close", "none"] },

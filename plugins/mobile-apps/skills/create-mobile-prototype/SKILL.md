@@ -93,8 +93,8 @@ Print one line before each long phase:
 -> [prototype 5/9] Generating the domain data layer and runtime shell...
 -> [prototype 6/9] Applying design, navigation, and shared foundations...
 -> [prototype 7/9] Compiling one immutable screen pack and skeletons...
--> [prototype 8/9] Building and validating screens in bounded waves...
--> [prototype 9/9] Recording statically validated lifecycle state...
+-> [prototype 8/9] Building Home and the complete native key-flow canary...
+-> [prototype 9/9] Probing Metro and recording truthful performance evidence...
 ```
 
 ## Workflow
@@ -104,6 +104,14 @@ Print one line before each long phase:
 Resolve `PROJECT_DIR`. Require `package.json`, `app.config.js`,
 `auth.config.json`, `tamagui.config.ts`, and `node_modules/expo`. Require Node
 22+ and npm 10+. Do not probe Power Platform or native build toolchains.
+
+After resolving the project, initialize performance evidence and keep a local
+integer `FOREGROUND_TOOL_CALLS` for commands/tools executed by this workflow:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase workflow --event start
+```
 
 Continue only for a fresh template or an explicitly confirmed resume of this
 same prototype. If dependencies are absent, stop and ask the user to run
@@ -160,6 +168,17 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-plan-execution-contract.j
 
 ### 3. Plan Neutral Product Semantics
 
+Compile the complete planner request once. The resulting JSON is the only
+normal-path planner input; pass its contents inline and do not ask the planner
+to read any file or invoke another agent:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase planning --event start
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-prototype-planner-request.js" \
+  --project-root "$PROJECT_DIR"
+```
+
 Invoke `mobile-app:native-app-planner` once in return-only mode with:
 
 - `workflow: create-mobile-prototype`;
@@ -172,52 +191,97 @@ Invoke `mobile-app:native-app-planner` once in return-only mode with:
 - any approved plan/design/reference inputs;
 - explicit prohibition on environment discovery and mutation.
 
-The planner returns one version-3 `mobile-plan-artifact-bundle`. Its artifacts
-must contain:
+The planner returns one raw `prototype-semantic-plan` JSON object under the
+256 KiB ceiling, with no status text or Markdown fence. It owns complete neutral
+domain semantics, realistic fixtures/scenarios, preliminary screen semantics,
+requirement/capability/connector bindings, assumptions, and warnings.
 
-- `nativeAppPlanMarkdown`;
-- `contextEnrichmentContract` copied from the validated foreground contract;
-- `workflowJourneyContract`, aligned to final screen IDs/actions without
-  changing its evidence-bound journey kind, stage order, guards, or signatures;
-- `navigationContract: null`; the planner supplies destination/flow evidence in
-  the preliminary Screen Graph, and the foreground deterministic resolver
-  replaces this null before bundle validation;
-- `prototypeDomainModel` with `mode: prototype-domain`;
-- `dataverseSchemaContract: null`;
-- schema-v3 `experienceScreenContract` whose operations name
-  `domainOperation`, repository, method, and hook;
-- `experienceFoundationContract`;
-- `executionContract`.
+Every screen item must preserve hierarchy, regions, first-viewport budget,
+purpose/outcome, action ID/label/placement/binding/double-tap policy, all runtime
+states and recovery, signature/test IDs, media role/aspect/coverage/fallback/alt
+text, operations, relationships, and failure behavior. It supplies semantic
+route segments and parent IDs, never final route or file paths.
 
-The Domain and Execution contracts must bind the canonical Experience and
-Context revisions. Journey, Screen, Foundation, and Visual Composition own UI
-hierarchy and progression; the Domain Model cannot select or flatten them. The
-Execution Contract also binds the Domain revision.
+`designIntent` must include `visualCharacter`, `informationHierarchy`,
+`density`, explicit platform-safe typography families, an original semantic
+palette, `shapeAndElevation`, `mediaStrategy`, implementation-complete
+`signatureComponents`, all native state treatments, `motionIntent`,
+complete focus/keyboard/safe-area `accessibilityIntent`, and hard `avoid`
+rules. Remote media also requires explicit source/licensing authorization and
+a connectivity rationale. Every Foundation Contract motif
+must have exactly one signature binding. `navigationIntent` must include the primary and durable
+destinations, revisit patterns, linear-versus-independent job evidence,
+tabs-stack recommendation, nested-screen tab visibility, and stack-only
+evidence when applicable.
 
-The domain model must include stable opaque IDs, real field types, explicit
-relationships, choice keys/labels, operation contracts, actors/UX permissions,
-offline intent, realistic fixtures, and loading/empty/error/offline scenarios.
-Do not return `Product 1`, table prefixes, generated service names, or generic
-CRUD inferred only from nouns.
+The response must not contain copied Context or Journey contracts, Markdown,
+hashes, final artifact wrappers, final Navigation, Dataverse/environment
+identity, output paths, commands, approval state, or mutation instructions.
+Use explicit foreground source references for primary Context and Experience
+signature values rather than repeating them. Do not return `Product 1`, table
+prefixes, generated service names, or generic CRUD inferred only from nouns.
 
-The foreground owns all writes:
+Write the exact first response bytes to `.tmp/planner-response-1.json`, then
+stage them through the transport gate:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" \
+node "${CLAUDE_SKILL_DIR}/../../scripts/stage-prototype-planner-response.js" \
   --project-root "$PROJECT_DIR" \
-  --bundle ".tmp/plan-artifact-bundle.json" \
-  --update-bundle
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-plan-artifact-bundle.js" \
-  --project-root "$PROJECT_DIR" \
-  --bundle "$PROJECT_DIR/.tmp/plan-artifact-bundle.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/write-plan-artifact-bundle.js" \
-  --project-root "$PROJECT_DIR" \
-  --bundle "$PROJECT_DIR/.tmp/plan-artifact-bundle.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
-  --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
-  --project-root "$PROJECT_DIR"
+  --response ".tmp/planner-response-1.json" \
+  --attempt 1
 ```
+
+The gate rejects invalid UTF-8, truncation, wrappers, unknown keys, copied final
+artifacts, Dataverse leakage, oversized transport, or invalid semantic
+references. It writes `.tmp/prototype-semantic-plan.json` and records only
+request/response hashes, byte sizes, attempt count, and error category. On that
+single failure, invoke the same planner once
+more with the original inline request, the invalid response, and only those
+errors. Stage the result as attempt 2. A second failure is terminal. Never
+manually construct, complete, or reconstruct the semantic plan or final bundle,
+and never invoke a second normal-path planner.
+
+Build the single repair input deterministically before that one repair call:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-prototype-planner-repair.js" \
+  --project-root "$PROJECT_DIR" \
+  --invalid-response ".tmp/planner-response-1.json"
+```
+
+Pass the complete `.tmp/prototype-planner-repair-request.json` contents inline
+to the same `mobile-app:native-app-planner`. Write its exact raw response bytes
+to `.tmp/planner-response-2.json`, then run the staging gate with `--attempt 2`.
+Do not add other context or reinterpret the reported errors.
+
+After semantic response validation, use exactly this order:
+
+```text
+compile draft bundle
+-> resolve Navigation from navigationIntent + preliminary Screen Graph
+-> render native-app-plan.md and compatibility sections
+-> validate path-level semantic preservation against the final bundle
+-> validate the complete v3 bundle
+-> atomically write all existing final artifacts
+```
+
+The finalizer enforces that order in one command:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/finalize-prototype-plan.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase planning --event end
+```
+
+The planner never emits the final Navigation Contract. The deterministic
+resolver compiles it from `navigationIntent` plus the preliminary Screen Graph.
+`render-native-prototype-plan.js` runs only after Navigation is final.
+`validate-prototype-semantic-preservation.js` writes path-specific findings to
+`.tmp/prototype-semantic-preservation.json` and blocks any generic fallback or
+dropped hierarchy, action, state, signature, media, operation, relationship,
+fixture, rationale, visual character, or navigation decision. The existing
+atomic bundle writer remains the only owner of final artifact persistence.
 
 Do not parse `native-app-plan.md` to recover machine facts. The Markdown is the
 human review surface; sidecars are execution authority.
@@ -283,14 +347,40 @@ the old app on failure, and removes the archive only after success:
 node "${CLAUDE_SKILL_DIR}/scripts/migrate-legacy-prototype.js" "$PROJECT_DIR"
 ```
 
-After template preparation, start neutral data layer generation and
-`/design-system` in
-parallel because both consume only approved immutable contracts and own
-disjoint files. Native/package/connector/layout/lifecycle mutations remain
-sequential. For a fresh app, the domain branch runs:
+After template preparation, start neutral data layer generation and the
+automatic design compiler in parallel because both consume only approved
+immutable contracts and own disjoint files. Do not invoke `/design-system` on
+the normal prompt-only path; that would load optional-mode instructions and
+references that the compiler does not need. The design branch
+must use the post-PR1 compiler path: no brand question, style/cost picker,
+gallery, Figma, screenshot, or optional reference library. It writes and
+validates the recipe, semantic tokens, Foundation primitives, and signature
+registry transactionally:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase design --event start
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-design-instruction-manifest.js" \
+  --project-root "$PROJECT_DIR" --mode automatic-native
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-native-prototype-design.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-native-prototype-design.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase design --event end
+```
+
+Explicit maker requests for brand-kit ingestion, Figma, screenshot matching,
+reskinning, galleries, or HTML preview continue through the corresponding
+optional `/design-system` mode. Native/package/connector/layout/lifecycle
+mutations remain sequential. For a fresh app, the domain branch runs:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase domain --event start
 node "${CLAUDE_SKILL_DIR}/scripts/gen-data-layer.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase domain --event end
 ```
 
 This writes models, repository interfaces, mock repositories, TanStack Query
@@ -318,10 +408,12 @@ paths.
 Apply every approved template-supported native capability sequentially through
 `/add-native`; never install unsupported native code or fake wrappers.
 
-Join the design-system branch here. Run `/design-system` unless `--no-design`. Even with `--no-design`, create
-app-specific semantic tokens and integrate them through the existing
+Join the automatic design branch here. `--no-design` suppresses optional visual
+review only; the compact recipe, app-specific semantic tokens, registry, and
+Foundation primitives remain required. Integrate them through the existing
 `PowerAppsProvider`; never add outer Tamagui or Query Client providers. Honor
-reference fidelity and materialize required media.
+reference fidelity and materialize required media. Invoke `/design-system`
+only when the maker explicitly selected one of its optional modes.
 
 Install only exact `executionContract.javascriptDependencies` through the
 repository's installation contract, one at a time, then type-check.
@@ -341,8 +433,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
   --project-root "$PROJECT_DIR"
 ```
 
-Create only the 2-5 foundation primitives named by the foundation contract and
-export them from `@/components`.
+Do not recreate Foundation or signature components here. The automatic design
+compiler owns exactly the components and exports recorded by
+`.mobile-app/prototype-design-manifest.json`.
 
 After navigation/foundation writes, pass every changed file to
 `validate-mobile-files.js --file <path>` and run type-check before pack
@@ -356,16 +449,20 @@ v3, Foundation, generated domain layer/fixture manifest, design recipe, and
 tokens all exist and validate:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-native-prototype-design.js" \
+  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --output ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-native-prototype-design.js" \
+  --project-root "$PROJECT_DIR" --require-build-pack
 ```
 
-The compiler writes only `.tmp/screen-build-pack.json`. For each screen,
-extract its matching compact work order in memory from that pack. Generate one typed
-skeleton per work order. Each skeleton imports only `ScreenShell`, approved
+The compiler writes only `.tmp/screen-build-pack.json`. Generate typed skeletons
+only for `nativeCanary.screenIds`; supporting-screen fan-out is the next
+iteration. Each canary skeleton imports only `ScreenShell`, approved
 foundation components, route APIs, and work-order-listed hooks/helpers from
 `@/data`. It must contain the literal header mode, route bindings, operation-ID
 anchors, and `// TODO: screen-builder fills JSX here`.
@@ -373,12 +470,24 @@ anchors, and `// TODO: screen-builder fills JSX here`.
 Never put fixture arrays, repository calls, generated service imports,
 `toExperienceRecord`, or a second provider in a skeleton.
 
-### 8. Build In Bounded Waves
+### 8. Build The Native Canary
 
-Use the pack's `builderWaves`. Run at most five screen builders concurrently.
+Prepare one aggregate in-memory dispatch from the pack. It contains the
+permanent primary destination plus the complete smallest critical flow and
+uses the same compact work-order/artifact protocol as later builders:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase canary --event start
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-native-canary.js" \
+  --project-root "$PROJECT_DIR" > "$CANARY_DISPATCH_PATH"
+```
+
+Run at most five screen builders concurrently for only the dispatch targets.
 Give each builder exactly one compact `screen_work_order`, the immutable
-`screen_build_pack_revision`, target, and input-file hash. Do not persist
-per-screen JSON/Markdown or give it the aggregate pack or plan.
+`screen_build_pack_revision`, target, and input-file hash. The dispatch file is
+ephemeral and must be removed after artifact persistence. Do not give a builder
+the aggregate pack, plan, optional design references, or supporting screens.
 
 Each builder is return-only. The foreground parses its single
 `mobile-screen-artifact`, then validates and writes only the authorized target:
@@ -399,15 +508,20 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
 ```
 
 After each wave, run the changed-file dispatcher with every file written in
-that wave, then type-check. Repair only the owning screen or shared foundation.
+the canary, then type-check. Repair only the owning screen or shared foundation.
 Maximum three repair cycles per failing scope; then stop with the exact blocker
-rather than weakening a contract.
+rather than weakening a contract. Do not dispatch `remaining-screens`.
 
-For the primary and key-flow screens, run the static composition, route,
-domain, shell, media, accessibility, contrast, and TypeScript gates. Native
-screenshot capture and native visual approval are deliberately out of scope.
+Validate the completed primary and key-flow sources as one native canary before
+Metro. This command rechecks source hashes, composition, routes, continuity,
+domain hooks, capability fallbacks, media, accessibility, design runtime, and
+TypeScript, then writes `.tmp/native-canary-validation.json`:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-native-canary.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase canary --event end
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope domain
@@ -453,15 +567,20 @@ After that vertical slice passes, start Metro early on an explicit available
 port without an interactive prompt:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase metro --event start
 node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
   --project-root "$PROJECT_DIR" \
   --preferred-port 8081
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase metro --event end
 ```
 
-Report the selected port and exact command as an interactive handoff, not as
-evidence of visual completion. Then continue bounded supporting-screen waves.
+Report the selected port and exact command only after Metro's HTTP health probe
+passes. Status is `statically validated + Metro ready`, not visual completion.
+Do not continue supporting-screen waves in this iteration.
 
-Run final gates through the dispatcher and specialized visual validators:
+Run final canary gates through the dispatcher and specialized visual validators:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
@@ -490,16 +609,35 @@ Confirm lifecycle state contains current `lastDomainModelHash`,
 `lastValidation` with `qualityStatus: statically-validated` and
 `nativeVisualEvidence: null`. Report the earlier Metro command/port.
 
+Record the final foreground command/tool count, close the workflow timing, and
+compile performance evidence. If Metro startup failed, still close the Metro
+phase and finalize; the evidence truthfully records the manual-command status.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action count \
+  --counter foregroundToolCalls --amount "$FOREGROUND_TOOL_CALLS"
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action mark --phase workflow --event end
+node "${CLAUDE_SKILL_DIR}/../../scripts/record-prototype-performance.js" \
+  --project-root "$PROJECT_DIR" --action finalize
+```
+
 Completion output must include:
 
 - project directory and prototype entry route;
 - domain entities/operations and fixture/scenario counts;
-- screens and critical flow;
+- built canary screens, deferred supporting screens, and critical flow;
 - native capabilities and blocked connector intentions;
 - static validation and type-check results;
-- status: `Statically validated prototype`;
+- status: `Statically validated + Metro ready vertical slice`, or
+  `Statically validated canary; manual Metro command required` when the health
+  probe did not pass;
 - explicit note that native screenshots were not captured and the prototype is
   not yet a `Visually complete prototype`;
+- performance evidence path plus planner bytes, loaded design bytes, model/tool
+  calls, repair count, phase durations, time to validated Home, and time to
+  Metro-ready key flow;
 - `dataMode: prototype` and confirmation that no environment was selected;
 - the exact next step: `/prototype-to-real-app --working-dir <PROJECT_DIR>`.
 

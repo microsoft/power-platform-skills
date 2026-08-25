@@ -3,7 +3,7 @@
 Human-readable connector policy. The foreground preflight uses the versioned
 `scripts/mobile-plan-preflight-catalog.json`; the final execution authority is
 `.tmp/mobile-plan-execution-contract.json → connectorOperations[]`. Used by
-`native-app-planner` and `setup-datamodel` to render and review those facts.
+`real-app-planner` and `setup-datamodel` to render and review those facts.
 
 ---
 

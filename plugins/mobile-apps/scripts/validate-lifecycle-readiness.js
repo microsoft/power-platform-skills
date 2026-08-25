@@ -31,6 +31,8 @@ function validateLifecycleReadiness(projectRoot, consumer) {
   const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
   const navigationPath = path.join(root, '.tmp', 'navigation-contract.json');
   const navigationShellPath = path.join(root, '.mobile-app', 'navigation-shell.json');
+  const semanticPlanPath = path.join(root, '.tmp', 'prototype-semantic-plan.json');
+  const semanticPreservationPath = path.join(root, '.tmp', 'prototype-semantic-preservation.json');
   const experiencePath = path.join(root, '.tmp', 'experience-contract.json');
   const pack = readJson(path.join(root, '.tmp', 'screen-build-pack.json'), 'screen build pack');
   const experience = readJson(experiencePath, 'Experience contract');
@@ -43,6 +45,8 @@ function validateLifecycleReadiness(projectRoot, consumer) {
   if (!fs.existsSync(journeyPath) || state.lastWorkflowJourneyHash !== sha256(fs.readFileSync(journeyPath))) errors.push('recorded Workflow Journey hash is stale');
   if (!fs.existsSync(navigationPath) || state.lastNavigationContractHash !== sha256(fs.readFileSync(navigationPath))) errors.push('recorded Navigation Contract hash is stale');
   if (!fs.existsSync(navigationShellPath) || state.lastNavigationShellHash !== sha256(fs.readFileSync(navigationShellPath))) errors.push('recorded Navigation Shell hash is stale');
+  if (fs.existsSync(semanticPlanPath) && state.lastPrototypeSemanticPlanHash !== sha256(fs.readFileSync(semanticPlanPath))) errors.push('recorded Prototype Semantic Plan hash is stale');
+  if (fs.existsSync(semanticPreservationPath) && state.lastPrototypeSemanticPreservationHash !== sha256(fs.readFileSync(semanticPreservationPath))) errors.push('recorded Prototype Semantic Preservation hash is stale');
   if (state.lastVisualCompositionHash !== sha256(stableStringify(experience.visualCompositionIntent))) errors.push('recorded Visual Composition hash is stale');
   if (state.dataMode === 'prototype' && state.lastValidation?.nativeVisualEvidence != null) errors.push('prototype static lifecycle readiness must not contain native visual evidence');
   if (consumer === 'deploy') {

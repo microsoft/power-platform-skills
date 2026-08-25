@@ -435,7 +435,7 @@ accessible direction directly from the contract.
 ## Notes
 
 - **Read-only with respect to source code.** This skill writes only `_design_vibe.html` and one line in `memory-bank.md`. It never touches the plan, TSX, configs, or generated services.
-- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `native-app-planner` Gate 4. No new dependencies.
+- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `real-app-planner` Gate 4. No new dependencies.
 - **Re-runnable.** Each run overwrites `_design_vibe.html`; memory bank entries accumulate so the design history is preserved.
 
 ## References

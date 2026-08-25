@@ -122,7 +122,7 @@ The primary key is usually returned even if not selected, but include it in `ord
 
 ## Cross-entity Reads
 
-The single source of truth for how a screen displays a column that lives on a **different entity** than the one it primarily fetches. Every other file in this repo (`agents/screen-builder.md`, `agents/screen-planner.md`, `agents/data-model-architect.md`, `agents/native-app-planner.md`, `skills/setup-datamodel/SKILL.md`, `skills/add-dataverse/SKILL.md`) references this section — do not duplicate the rule elsewhere.
+The single source of truth for how a screen displays a column that lives on a **different entity** than the one it primarily fetches. Every other file in this repo (`agents/screen-builder.md`, `agents/screen-planner.md`, `agents/data-model-architect.md`, `agents/real-app-planner.md`, `skills/setup-datamodel/SKILL.md`, `skills/add-dataverse/SKILL.md`) references this section — do not duplicate the rule elsewhere.
 
 ### When to apply
 

@@ -63,6 +63,21 @@ connector wiring.
     writes no Dataverse metadata and can later be converted in place with
     `/prototype-to-real-app`.
 
+    Prompt-only prototypes use compact semantic planning with explicit Home,
+    launch, resume, durable destinations, bounded flows, and capability
+    ownership. Automatic design is deterministic and loads no optional design
+    references or design model call. The first build milestone writes a real
+    native Home plus the complete critical-flow canary through the same
+    validated screen-artifact envelope used by later builders. Supporting
+    screens remain deferred. Metro is reported ready only after static gates,
+    TypeScript, a current canary receipt, and an HTTP health response.
+
+    Without captured native screenshots, completion is reported as
+    **statically validated + Metro ready**, not visually complete. Timing and
+    context evidence is written under `.tmp/` for planner bytes, loaded design
+    bytes, model/tool calls, repairs, phase duration, time to validated Home,
+    and time to Metro-ready key flow.
+
     The template includes this host package and the required Expo / React Native
     runtime dependencies. The skill updates the app in place as it designs and
     generates the mobile experience.
@@ -328,7 +343,8 @@ Example edit flows:
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Orchestrator — coordinates the data-model + screen-planner architects, plans native capabilities + connectors inline, runs 4 approval gates |
+| `native-app-planner` | Tool-free — returns one compact semantic plan for `/create-mobile-prototype`; final contracts, Navigation, and Markdown are deterministic foreground outputs |
+| `real-app-planner` | Return-only orchestrator — coordinates real/connector data and screen planning for `/create-mobile-app` while the foreground owns approval and persistence |
 | `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
 | `screen-planner` | Read-only — picks navigation pattern, designs per-screen specs |
 | `screen-builder` | Mutation — writes ONE TSX file per assigned screen, runs N in parallel |

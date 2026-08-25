@@ -1,0 +1,342 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Native Prototype Design Recipe",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "sourceBindings",
+    "rationale",
+    "visualCharacter",
+    "contentTone",
+    "informationHierarchy",
+    "firstViewportStrategy",
+    "typographyIntent",
+    "typography",
+    "colorBehavior",
+    "density",
+    "shapeAndElevation",
+    "navigationChrome",
+    "primaryActionTreatment",
+    "mediaStrategy",
+    "signatureComponents",
+    "foundationPrimitives",
+    "stateTreatment",
+    "motionIntent",
+    "accessibilityIntent",
+    "tokenContract",
+    "screens",
+    "avoid",
+    "hierarchy",
+    "actions",
+    "navigation",
+    "spacing",
+    "mediaTreatment",
+    "signatureComponent",
+    "forbiddenDefaults"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "native-prototype-design-recipe" },
+    "sourceBindings": {
+      "type": "object",
+      "required": ["semanticPlanSha256", "experienceContractSha256", "screenContractSha256", "foundationContractSha256", "navigationContractSha256", "domainModelSha256", "runtimeConfigScaffoldSha256", "designIntentPaths", "screenPaths", "navigationPaths", "domainPaths", "foundationPaths"],
+      "properties": {
+        "semanticPlanSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "screenContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "foundationContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "navigationContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "domainModelSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "runtimeConfigScaffoldSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "designIntentPaths": { "type": "object", "minProperties": 10, "additionalProperties": { "type": "string", "pattern": "^/" } },
+        "screenPaths": { "type": "object", "minProperties": 10, "additionalProperties": { "type": "string", "pattern": "^/" } },
+        "navigationPaths": { "type": "object", "minProperties": 5, "additionalProperties": { "type": "string", "pattern": "^/" } },
+        "domainPaths": { "type": "object", "minProperties": 3, "additionalProperties": { "type": "string", "pattern": "^/" } },
+        "foundationPaths": { "type": "object", "minProperties": 3, "additionalProperties": { "type": "string", "pattern": "^/" } }
+      },
+      "additionalProperties": false
+    },
+    "rationale": { "type": "string", "minLength": 10 },
+    "visualCharacter": { "type": "string", "minLength": 3 },
+    "contentTone": { "type": "string", "minLength": 3 },
+    "informationHierarchy": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+    "firstViewportStrategy": {
+      "type": "object",
+      "required": ["screenId", "focalPoint", "regionIds", "maxRegions", "nextContentVisible", "maxFeatureViewportShare", "primaryAction", "substantialRegionRationales"],
+      "properties": {
+        "screenId": { "type": "string" },
+        "focalPoint": { "type": "string" },
+        "regionIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+        "maxRegions": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "nextContentVisible": { "type": "boolean" },
+        "maxFeatureViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 },
+        "primaryAction": { "type": ["object", "null"] },
+        "substantialRegionRationales": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string", "minLength": 5 } }
+      },
+      "additionalProperties": false
+    },
+    "typographyIntent": {
+      "type": "object",
+      "required": ["character", "headingFamily", "bodyFamily", "monoFamily", "hierarchy", "dynamicTypeBehavior"],
+      "properties": {
+        "character": { "type": "string", "minLength": 3 },
+        "headingFamily": { "enum": ["platform-serif", "system-sans"] },
+        "bodyFamily": { "const": "system-sans" },
+        "monoFamily": { "const": "system-monospace" },
+        "hierarchy": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 3 } },
+        "dynamicTypeBehavior": { "type": "string", "minLength": 5 }
+      },
+      "additionalProperties": false
+    },
+    "typography": {
+      "type": "object",
+      "required": ["displayRole", "bodyRole", "runtimeStrategy", "headingFamily", "bodyFamily", "monoFamily", "rationale", "supportsDynamicType", "roles", "dynamicType"],
+      "properties": {
+        "displayRole": { "enum": ["editorial-display", "clear-emphasis"] },
+        "bodyRole": { "const": "accessible-system-body" },
+        "runtimeStrategy": { "enum": ["platform-safe-editorial", "system-native"] },
+        "headingFamily": { "type": "string" },
+        "bodyFamily": { "type": "string" },
+        "monoFamily": { "type": "string" },
+        "rationale": { "type": "string", "minLength": 10 },
+        "supportsDynamicType": { "const": true },
+        "roles": {
+          "type": "object",
+          "required": ["display", "screenTitle", "sectionTitle", "cardTitle", "body", "supporting", "label", "metadata", "button"],
+          "additionalProperties": { "type": "string", "pattern": "^\\$" }
+        },
+        "dynamicType": {
+          "type": "object",
+          "required": ["enabled", "maximumScale", "preserveLayout"],
+          "properties": { "enabled": { "const": true }, "maximumScale": { "type": "number", "minimum": 1.5 }, "preserveLayout": { "const": true } },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "colorBehavior": {
+      "type": "object",
+      "required": ["brandRole", "palette", "stateSemantics", "contrastIntent"],
+      "properties": {
+        "brandRole": { "type": "string", "minLength": 5 },
+        "palette": {
+          "type": "object",
+          "required": ["background", "surface", "surfaceElevated", "text", "textMuted", "accent", "accentText", "selection", "warning", "error", "success", "border"],
+          "additionalProperties": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+        },
+        "stateSemantics": { "type": "array", "minItems": 3, "items": { "type": "string", "minLength": 3 }, "uniqueItems": true },
+        "contrastIntent": { "type": "string", "minLength": 5 }
+      },
+      "additionalProperties": false
+    },
+    "density": {
+      "type": "object",
+      "required": ["mode", "spacingScale", "minimumControlSize"],
+      "properties": {
+        "mode": { "enum": ["sparse", "balanced", "dense"] },
+        "spacingScale": {
+          "type": "object",
+          "required": ["xs", "sm", "md", "lg", "xl"],
+          "properties": {
+            "xs": { "type": "integer", "minimum": 0 }, "sm": { "type": "integer", "minimum": 0 },
+            "md": { "type": "integer", "minimum": 0 }, "lg": { "type": "integer", "minimum": 0 },
+            "xl": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "minimumControlSize": { "type": "integer", "minimum": 44 }
+      },
+      "additionalProperties": false
+    },
+    "shapeAndElevation": {
+      "type": "object",
+      "required": ["shapeLanguage", "radiusScale", "elevationStrategy"],
+      "properties": {
+        "shapeLanguage": { "type": "string", "minLength": 5 },
+        "radiusScale": {
+          "type": "object",
+          "required": ["control", "container", "modal"],
+          "properties": {
+            "control": { "type": "integer", "minimum": 0, "maximum": 24 },
+            "container": { "type": "integer", "minimum": 0, "maximum": 24 },
+            "modal": { "type": "integer", "minimum": 0, "maximum": 32 }
+          },
+          "additionalProperties": false
+        },
+        "elevationStrategy": { "type": "string", "minLength": 5 }
+      },
+      "additionalProperties": false
+    },
+    "navigationChrome": {
+      "type": "object",
+      "required": ["model", "persistentDestinations", "tabBar", "headers", "stickyActions", "keyboardBehavior"],
+      "properties": {
+        "model": { "enum": ["tabs-stack", "stack", "drawer"] },
+        "initialDestinationId": { "type": "string" },
+        "destinations": { "type": "array", "minItems": 1 },
+        "flows": { "type": "array" },
+        "globalRoutePolicy": { "type": "object" },
+        "adaptivePresentation": { "type": "object" },
+        "accessibility": { "type": "object" },
+        "persistentDestinations": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+        "tabBar": {
+          "type": "object",
+          "required": ["visible", "safeArea", "states", "nestedVisibility"],
+          "properties": {
+            "visible": { "type": "boolean" }, "safeArea": { "const": true },
+            "states": { "const": ["selected", "unselected", "badge", "disabled", "overflow"] },
+            "nestedVisibility": { "type": "object", "additionalProperties": { "enum": ["visible", "covered-by-modal", "not-applicable"] } }
+          },
+          "additionalProperties": false
+        },
+        "headers": {
+          "type": "object",
+          "required": ["byScreen", "backAffordance", "contextualActions"],
+          "properties": { "byScreen": { "type": "object" }, "backAffordance": { "const": "platform-native-labelled" }, "contextualActions": { "const": "screen-contract-only" } },
+          "additionalProperties": false
+        },
+        "stickyActions": {
+          "type": "object",
+          "required": ["screenIds", "placement"],
+          "properties": { "screenIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "placement": { "const": "above-persistent-navigation-and-safe-area" } },
+          "additionalProperties": false
+        },
+        "keyboardBehavior": { "const": "avoid-inputs-and-preserve-reachable-actions" }
+      },
+      "additionalProperties": false
+    },
+    "primaryActionTreatment": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["id", "label", "placement", "binding", "doubleTapPolicy", "semanticRole", "visualTreatment"],
+        "properties": {
+          "id": { "type": "string" }, "label": { "type": "string" },
+          "placement": { "enum": ["inline", "sticky-bottom", "header", "floating"] },
+          "binding": { "type": "string" }, "doubleTapPolicy": { "enum": ["disable-while-pending", "idempotent", "not-applicable"] },
+          "destination": { "type": "string" }, "clearance": { "type": "object" },
+          "semanticRole": { "const": "primary-action" }, "visualTreatment": { "const": "filled-accent" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "mediaStrategy": {
+      "type": "object",
+      "required": ["role", "treatment", "accessibility", "licensingIntent", "connectivityRationale", "sourcePolicy", "offlineIntent", "screens"],
+      "properties": {
+        "role": { "type": "string", "minLength": 5 }, "treatment": { "type": "string", "minLength": 5 }, "accessibility": { "type": "string", "minLength": 5 },
+        "licensingIntent": { "enum": ["bundled-original", "approved-remote-source", "user-captured", "not-applicable"] },
+        "connectivityRationale": { "type": "string", "minLength": 10 },
+        "sourcePolicy": {
+          "type": "object",
+          "required": ["mode", "requiredFields", "requiresFallback"],
+          "properties": {
+            "mode": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
+            "requiredFields": { "type": "array", "items": { "enum": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }, "uniqueItems": true },
+            "requiresFallback": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "offlineIntent": {
+          "type": "object",
+          "required": ["connectivity", "requiredOperations", "pendingSyncBehavior", "resumeBehavior"],
+          "properties": {
+            "connectivity": { "enum": ["offline-required", "offline-preferred", "network-optional"] },
+            "requiredOperations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+            "pendingSyncBehavior": { "type": "string" }, "resumeBehavior": { "type": "string" }, "notes": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "screens": { "type": "object", "minProperties": 2, "additionalProperties": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "signatureComponents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["source", "kind", "purpose", "screenIds", "testId", "foundationMotifs", "requiredContent", "dataBindings", "variants", "states", "responsiveBehavior", "accessibilitySemantics", "tokenDependencies", "mediaDependencies", "componentId", "implementationName", "file", "eligibleScreens", "layoutPatterns", "foundationTestId", "sourceBinding"],
+        "properties": {
+          "source": { "enum": ["semantic", "experience-primary", "experience-foundation"] },
+          "kind": { "type": "string" }, "purpose": { "type": "string" }, "screenIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "testId": { "type": "string" }, "foundationMotifs": { "type": "array", "maxItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "requiredContent": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "dataBindings": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "variants": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "states": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "responsiveBehavior": { "type": "string" }, "accessibilitySemantics": { "type": "string" },
+          "tokenDependencies": { "type": "array", "minItems": 1, "items": { "enum": ["color", "typography", "spacing", "radius", "elevation"] }, "uniqueItems": true },
+          "mediaDependencies": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "componentId": { "type": "string" }, "implementationName": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+          "file": { "type": "string", "pattern": "^src/components/experience/[A-Z][A-Za-z0-9]*\\.tsx$" },
+          "eligibleScreens": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "layoutPatterns": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+          "foundationTestId": { "type": ["string", "null"] }, "sourceBinding": { "type": "string", "pattern": "^/designIntent/signatureComponents/" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "foundationPrimitives": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["motif", "component", "file", "testID", "signatureComponentId", "sourceBinding"],
+        "properties": {
+          "motif": { "type": "string" }, "component": { "type": "string" }, "file": { "type": "string" }, "testID": { "type": "string" },
+          "signatureComponentId": { "type": "string" }, "sourceBinding": { "type": "string", "pattern": "^/designIntent/signatureComponents/" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stateTreatment": {
+      "type": "object",
+      "required": ["loading", "empty", "error", "offline", "partialData", "success", "permissionDenied", "recovery"],
+      "properties": {
+        "loading": { "type": "string" }, "empty": { "type": "string" }, "error": { "type": "string" }, "offline": { "type": "string" },
+        "partialData": { "type": "string" }, "success": { "type": "string" }, "permissionDenied": { "type": "string" }, "recovery": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "motionIntent": {
+      "type": "object",
+      "required": ["principles", "reducedMotionBehavior"],
+      "properties": { "principles": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true }, "reducedMotionBehavior": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "accessibilityIntent": {
+      "type": "object",
+      "required": ["dynamicType", "screenReader", "focusOrder", "modalFocus", "touchTargets", "contrast", "keyboard", "safeArea"],
+      "properties": {
+        "dynamicType": { "type": "string" }, "screenReader": { "type": "string" }, "focusOrder": { "type": "string" }, "modalFocus": { "type": "string" },
+        "touchTargets": { "type": "string" }, "contrast": { "type": "string" }, "keyboard": { "type": "string" }, "safeArea": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tokenContract": {
+      "type": "object",
+      "required": ["colorRoles", "typographyRoles", "spacingRoles", "radiusRoles", "elevationRoles"],
+      "properties": {
+        "colorRoles": { "type": "array", "minItems": 10, "items": { "type": "string" }, "uniqueItems": true },
+        "typographyRoles": { "type": "array", "minItems": 9, "items": { "type": "string" }, "uniqueItems": true },
+        "spacingRoles": { "type": "array", "minItems": 5, "items": { "type": "string" }, "uniqueItems": true },
+        "radiusRoles": { "type": "array", "minItems": 3, "items": { "type": "string" }, "uniqueItems": true },
+        "elevationRoles": { "type": "array", "minItems": 2, "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "screens": { "type": "array", "minItems": 2, "items": { "type": "object" } },
+    "avoid": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+    "hierarchy": { "type": "object" },
+    "actions": { "type": "object" },
+    "navigation": { "type": "object" },
+    "spacing": { "type": "object" },
+    "mediaTreatment": { "type": "object" },
+    "signatureComponent": { "type": "object" },
+    "forbiddenDefaults": { "type": "object" }
+  },
+  "additionalProperties": false
+}
