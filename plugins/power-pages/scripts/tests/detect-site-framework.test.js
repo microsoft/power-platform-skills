@@ -201,6 +201,37 @@ test("returns null when package.json is malformed", () => {
   assert.equal(detectSiteFramework(root), null);
 });
 
+test("returns null when powerpages.config.json is malformed", () => {
+  const root = mkSite(path.join(mkTmp(), "site"), {
+    "@vitejs/plugin-react": "^4.3.0",
+  });
+  fs.writeFileSync(path.join(root, "powerpages.config.json"), "{ not valid json");
+  assert.equal(detectSiteFramework(root), null);
+});
+
+test("returns null when powerpages.config.json is a directory", () => {
+  const root = mkSite(
+    path.join(mkTmp(), "site"),
+    { "@vitejs/plugin-react": "^4.3.0" },
+    { config: false }
+  );
+  fs.mkdirSync(path.join(root, "powerpages.config.json"));
+  assert.equal(detectSiteFramework(root), null);
+});
+
+test("returns null when framework dependency values are not non-empty strings", () => {
+  for (const invalid of [null, "", "   ", false, 0, {}]) {
+    const root = mkSite(path.join(mkTmp(), "site"), {
+      "@vitejs/plugin-react": invalid,
+    });
+    assert.equal(
+      detectSiteFramework(root),
+      null,
+      `expected ${JSON.stringify(invalid)} to be rejected`
+    );
+  }
+});
+
 test("returns null when no recognized framework dependency is present", () => {
   // Includes the AngularJS 1.x trap: `angular` is NOT the Angular marker.
   const root = mkSite(path.join(mkTmp(), "site"), { angular: "^1.8.0", lodash: "^4.0.0" });

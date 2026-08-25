@@ -17,6 +17,9 @@ const path = require("node:path");
 // a child workspace identifies exactly one site.
 const CONFIG_MARKER = "powerpages.config.json";
 const DECLARATIVE_MARKER = ".powerpages-site";
+const MARKER_ABSENT = "absent";
+const MARKER_VALID = "valid";
+const MARKER_INVALID = "invalid";
 
 // Ordered marker list — the FIRST match wins, so order is load-bearing:
 //
@@ -49,6 +52,23 @@ function readJson(filePath) {
   }
 }
 
+// A code-site marker is trusted only when it is a regular file containing a
+// JSON object. `existsSync` alone also accepts directories, and malformed JSON
+// must stop attribution rather than allowing an enclosing/adjacent site to win.
+function configMarkerState(dir) {
+  const markerPath = path.join(dir, CONFIG_MARKER);
+  try {
+    const stat = fs.statSync(markerPath);
+    if (!stat.isFile()) return MARKER_INVALID;
+    const config = readJson(markerPath);
+    return config && typeof config === "object" && !Array.isArray(config)
+      ? MARKER_VALID
+      : MARKER_INVALID;
+  } catch (error) {
+    return error && error.code === "ENOENT" ? MARKER_ABSENT : MARKER_INVALID;
+  }
+}
+
 /**
  * Resolves the root of the Power Pages code site containing `startDir`.
  *
@@ -71,7 +91,9 @@ function readJson(filePath) {
 function findCodeSiteRoot(startDir) {
   let current = path.resolve(startDir);
   while (true) {
-    if (fs.existsSync(path.join(current, CONFIG_MARKER))) return current;
+    const markerState = configMarkerState(current);
+    if (markerState === MARKER_VALID) return current;
+    if (markerState === MARKER_INVALID) return null;
     // A nearer declarative site is the project under work. Continuing upward
     // could incorrectly attribute an enclosing code site's framework.
     if (fs.existsSync(path.join(current, DECLARATIVE_MARKER))) return null;
@@ -95,14 +117,15 @@ function findCodeSiteRoot(startDir) {
         continue;
       }
       const candidate = path.join(startDir, entry.name);
-      const isCodeSite = fs.existsSync(path.join(candidate, CONFIG_MARKER));
+      const markerState = configMarkerState(candidate);
+      const hasCodeMarker = markerState !== MARKER_ABSENT;
       const isDeclarativeSite = fs.existsSync(
         path.join(candidate, DECLARATIVE_MARKER)
       );
-      if (!isCodeSite && !isDeclarativeSite) continue;
+      if (!hasCodeMarker && !isDeclarativeSite) continue;
       siteCount += 1;
       if (siteCount > 1) return null;
-      childRoot = isCodeSite ? candidate : null;
+      childRoot = markerState === MARKER_VALID ? candidate : null;
     }
   } catch {
     return null;
@@ -144,9 +167,13 @@ function detectSiteFramework(startDir) {
       pkg.devDependencies && typeof pkg.devDependencies === "object" ? pkg.devDependencies : null
     );
 
-    const matches = FRAMEWORK_MARKERS.filter(([, marker]) =>
-      Object.prototype.hasOwnProperty.call(deps, marker)
-    ).map(([framework]) => framework);
+    const matches = FRAMEWORK_MARKERS.filter(([, marker]) => {
+      if (!Object.prototype.hasOwnProperty.call(deps, marker)) return false;
+      const declaredVersion = deps[marker];
+      return (
+        typeof declaredVersion === "string" && declaredVersion.trim().length > 0
+      );
+    }).map(([framework]) => framework);
     if (matches.includes("astro")) return "astro";
     return matches.length === 1 ? matches[0] : null;
   } catch {
