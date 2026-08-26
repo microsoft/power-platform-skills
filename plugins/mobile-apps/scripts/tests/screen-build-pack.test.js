@@ -218,5 +218,34 @@ test('rich Screen Contracts compile into the V3 validator-owned build-pack shape
   assert.deepEqual(pack.design.recipe.composition.requiredCardRecipes, ['FeatureCard', 'ProductCard', 'CategoryTile']);
   assert.equal(pack.screens.find((screen) => screen.id === 'Profile').navigation.role, 'global-utility');
   assert.equal(pack.screens.every((screen) => screen.presentation && screen.layoutBudgets && screen.semanticColorRoles), true);
+  assert.equal(pack.screens.every((screen) => screen.regions.every((region) => screen.testIds.includes(region.id))), true);
+  assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
+});
+
+test('rich build packs use structured routes instead of stale Markdown route annotations', (context) => {
+  const { root } = createRichProject(context);
+  const planPath = path.join(root, 'native-app-plan.md');
+  fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('/(app)/cart', '/(app)/cart?legacyFilter?'));
+  const pack = compileScreenBuildPack(root);
+  assert.equal(pack.screens.some((screen) => screen.route.includes('?legacyFilter?')), false);
+  assert.equal(pack.screens.some((screen) => screen.route === '/(app)/cart'), true);
+});
+
+test('rich design recipe preserves the largest approved per-screen focal budget', (context) => {
+  const { root } = createRichProject(context);
+  const screenPath = path.join(root, '.tmp', 'experience-screen-contract.json');
+  const contract = JSON.parse(fs.readFileSync(screenPath, 'utf8'));
+  contract.screens.find((screen) => screen.id === 'ProductsId').firstViewport.maxFeatureViewportShare = 0.5;
+  fs.writeFileSync(screenPath, `${JSON.stringify(contract, null, 2)}\n`);
+  const navigation = resolveNavigationContract(
+    passengerBrief,
+    JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-contract.json'), 'utf8')),
+    JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), 'utf8')),
+    contract,
+  );
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), `${JSON.stringify(navigation.contract, null, 2)}\n`);
+  fs.writeFileSync(screenPath, `${JSON.stringify(navigation.screenContract, null, 2)}\n`);
+  const pack = compileScreenBuildPack(root);
+  assert.equal(pack.design.recipe.hierarchy.maxFeatureViewportShare, 0.5);
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
 });

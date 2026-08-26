@@ -125,14 +125,16 @@ function ownerForScreen(screen, destinations, screenByRoute) {
 function applyNavigationContractToScreenGraph(screenContract, contract) {
   const destinationByScreen = new Map(contract.destinations.map((destination) => [destination.rootScreenId, destination]));
   const flowByScreen = new Map(contract.flows.flatMap((flow) => flow.screenIds.map((screenId) => [screenId, flow])));
-  return {
-    ...screenContract,
-    screens: screenContract.screens.map((screen) => {
+  const screens = screenContract.screens.map((screen) => {
       const destination = destinationByScreen.get(screen.id);
       const flow = flowByScreen.get(screen.id);
       if (destination) {
+        const file = destination.nestedScreenIds.length && screen.file.endsWith('.tsx') && !screen.file.endsWith('/index.tsx')
+          ? screen.file.replace(/\.tsx$/, '/index.tsx')
+          : screen.file;
         return {
           ...screen,
+          file,
           navigation: {
             ...screen.navigation,
             kind: contract.model === 'stack' ? 'stack-root' : 'tab-root',
@@ -171,7 +173,18 @@ function applyNavigationContractToScreenGraph(screenContract, contract) {
           deepLinkable: true,
         },
       };
-    }),
+    });
+  const primary = screens.find((screen) => screen.role === 'primary');
+  const keyFlow = screens.find((screen) => screen.role === 'key-flow');
+  return {
+    ...screenContract,
+    screens,
+    ...(screenContract.primaryScreen && primary
+      ? { primaryScreen: { ...screenContract.primaryScreen, route: primary.route, file: primary.file } }
+      : {}),
+    ...(screenContract.keyFlow && keyFlow
+      ? { keyFlow: { ...screenContract.keyFlow, route: keyFlow.route, file: keyFlow.file } }
+      : {}),
   };
 }
 

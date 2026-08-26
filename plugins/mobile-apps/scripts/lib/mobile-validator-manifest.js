@@ -19,6 +19,10 @@ function hasExtension(filePath, extensions) {
   return extensions.has(path.extname(filePath).toLowerCase());
 }
 
+function isAppRoute(filePath) {
+  return String(filePath).replace(/\\/g, '/').includes('/app/');
+}
+
 const VALIDATORS = [
   { script: 'validate-write-safety.js', appliesTo: () => true },
   { script: 'validate-protected-paths.js', appliesTo: () => true },
@@ -27,8 +31,8 @@ const VALIDATORS = [
   { script: 'validate-connector-first.js', appliesTo: (filePath) => hasExtension(filePath, SOURCE_EXTENSIONS) },
   { script: 'validate-dataverse-payload.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-dataverse-heavy-lists.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
-  { script: 'validate-navigation-idempotency.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
-  { script: 'validate-screen-quality.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
+  { script: 'validate-navigation-idempotency.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' && isAppRoute(filePath) },
+  { script: 'validate-screen-quality.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' && isAppRoute(filePath) },
   { script: 'validate-color-contrast.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },
 ];
 

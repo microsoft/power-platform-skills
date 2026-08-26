@@ -55,6 +55,8 @@ function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract
       category: null,
     };
     const rows = rowsByEntity.get(entity.logicalName) || [];
+    const entityHasMedia = Boolean(fields.imageField || fields.imageUrlField || fields.imageAssetKeyField);
+    if (!entityHasMedia) continue;
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       const key = assetKeyFor(entity, index);
@@ -62,9 +64,10 @@ function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract
       const category = fields.categoryField ? String(row[fields.categoryField] || '') : '';
       const recordId = String(row[entity.primaryKey]);
       const rawImage = fieldString(row, fields.imageField);
-      const imageAssetKey = fieldString(row, fields.imageAssetKeyField)
-        || (rawImage?.startsWith('asset://') ? rawImage : null)
-        || key;
+      const declaredAssetKey = fieldString(row, fields.imageAssetKeyField);
+      const imageAssetKey = declaredAssetKey?.startsWith('asset://')
+        ? declaredAssetKey
+        : (rawImage?.startsWith('asset://') ? rawImage : null) || key;
       assets[key] = {
         key,
         kind: 'local-illustration',
@@ -81,6 +84,10 @@ function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract
       };
     }
   }
+  const approvedHosts = [...new Set(Object.values(mediaRecords).flatMap((record) => {
+    if (!record.imageUrl) return [];
+    try { return [new URL(record.imageUrl).hostname]; } catch { return []; }
+  }))];
   return {
     schemaVersion: 1,
     generator: 'experience-view-model',
@@ -89,7 +96,7 @@ function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract
     fallbacks,
     media: {
       policy: mediaPolicy,
-      approvedHosts: mediaPolicy === 'remote-cdn-cached' ? ['images.unsplash.com'] : [],
+      approvedHosts: mediaPolicy === 'remote-cdn-cached' ? approvedHosts : [],
       fields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
       records: mediaRecords,
     },

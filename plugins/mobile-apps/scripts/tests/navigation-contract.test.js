@@ -131,6 +131,18 @@ test('two independently revisited durable destinations use tabs-stack and own ne
   assert.deepEqual(validateNavigationContract(value.contract, { experienceContract: value.experience, workflowJourney: value.workflow, screenContract: value.screenContract }).errors, []);
 });
 
+test('durable destinations with nested children use folder index route files', () => {
+  const value = contracts('Let people browse the Shop and inspect nested product details.', [
+    screen('Shop', 'primary', 'Browse the product catalog.', { candidate: candidate(), tabLabel: 'Shop' }),
+    screen('ProductDetail', 'key-flow', 'Inspect one product.', {
+      candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }),
+      parentRoute: '/(app)/shop',
+    }, '/(app)/shop/product/[productId]'),
+    profileScreen(),
+  ]);
+  assert.equal(value.screenContract.screens.find((item) => item.id === 'Shop').file, 'app/(app)/shop/index.tsx');
+});
+
 test('bounded onboarding remains stack-only without invented Home or tabs', () => {
   const brief = 'Guide a new user through welcome, profile setup, and confirmation once. The flow has a clear exit and no independently revisited destinations.';
   const screens = [

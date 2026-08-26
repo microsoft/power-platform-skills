@@ -134,12 +134,12 @@ function validateScreenContracts(markdown) {
             message: 'Screen Map file must be a project-relative app/*.tsx path: ' + file + '.',
           });
         }
-        if (normalizedRoute === '/(app)/home' && file === 'app/(app)/home.tsx') hasHome = true;
+        if (normalizedRoute === '/(app)/home' && ['app/(app)/home.tsx', 'app/(app)/home/index.tsx'].includes(file)) hasHome = true;
       }
       if (!hasHome) {
         issues.push({
           rule: 'missing-canonical-home',
-          message: 'Screen Map must include Home at /(app)/home backed by app/(app)/home.tsx.',
+          message: 'Screen Map must include Home at /(app)/home backed by app/(app)/home.tsx or app/(app)/home/index.tsx.',
         });
       }
     }

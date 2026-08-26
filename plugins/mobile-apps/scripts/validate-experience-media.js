@@ -22,6 +22,13 @@ function mediaRouteSources(projectRoot, pack) {
     if (fs.existsSync(filePath)) sources.push({ file: normalizePath(screen.file), content: fs.readFileSync(filePath, 'utf8') });
   }
   const foundationRoot = path.join(projectRoot, 'src', 'components', 'experience');
+  const sharedComponents = path.join(projectRoot, 'src', 'components', 'index.tsx');
+  if (fs.existsSync(sharedComponents)) {
+    sources.push({
+      file: path.relative(projectRoot, sharedComponents).replace(/\\/g, '/'),
+      content: fs.readFileSync(sharedComponents, 'utf8'),
+    });
+  }
   if (fs.existsSync(foundationRoot)) {
     for (const entry of fs.readdirSync(foundationRoot)) {
       if (!entry.endsWith('.tsx')) continue;

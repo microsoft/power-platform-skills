@@ -70,6 +70,42 @@ function prototypeManifestEntities(manifest) {
   }));
 }
 
+function prototypeDomain(projectRoot) {
+  const modelPath = path.join(projectRoot, '.tmp', 'prototype-domain-model.json');
+  if (!fs.existsSync(modelPath)) return null;
+  const model = readJson(modelPath);
+  if (model.mode !== 'prototype-domain' || !Array.isArray(model.entities) || !model.fixtures) return null;
+  const entities = model.entities.map((entity) => {
+    const fields = entity.fields.flatMap((field) => field.type === 'image'
+      ? [
+          { name: 'imageUrl', type: 'string', primaryName: false },
+          { name: 'imageAltText', type: 'string', primaryName: false },
+          { name: 'imageCacheKey', type: 'string', primaryName: false },
+          { name: 'imageAssetKey', type: 'string', primaryName: false },
+        ]
+      : [{
+          name: String(field.key),
+          type: normalizeType(field.type),
+          primaryName: field.key === entity.primaryNameField,
+        }]);
+    return {
+      logicalName: String(entity.key),
+      displayName: String(entity.displayName || entity.key),
+      serviceName: String(entity.key),
+      primaryKey: 'id',
+      fields,
+    };
+  });
+  const rowsByEntity = new Map(entities.map((entity) => [
+    entity.logicalName,
+    (model.fixtures[entity.logicalName] || []).map((row) => {
+      const image = row.image && typeof row.image === 'object' ? row.image : {};
+      return { ...row, ...image };
+    }),
+  ]));
+  return { entities, rowsByEntity };
+}
+
 function loadEntities(projectRoot) {
   const schemaPath = path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json');
   if (fs.existsSync(schemaPath)) {
@@ -112,8 +148,9 @@ function writeFile(projectRoot, relativePath, content) {
 
 function materializeExperienceViewModel(projectRoot) {
   const root = path.resolve(projectRoot);
-  const entities = loadEntities(root);
-  const rowsByEntity = loadRows(root, entities);
+  const prototype = prototypeDomain(root);
+  const entities = prototype?.entities || loadEntities(root);
+  const rowsByEntity = prototype?.rowsByEntity || loadRows(root, entities);
   const assetManifestPath = 'assets/experience/manifest.json';
   const assetManifest = buildExperienceAssetManifest(entities, rowsByEntity, loadExperienceContract(root));
   const viewModel = buildExperienceViewModel(entities, rowsByEntity, assetManifestPath, assetManifest);
@@ -141,4 +178,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { loadEntities, materializeExperienceViewModel, normalizedSchemaEntities };
+module.exports = { loadEntities, materializeExperienceViewModel, normalizedSchemaEntities, prototypeDomain };

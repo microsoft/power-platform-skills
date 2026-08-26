@@ -54,3 +54,47 @@ test('materializes schema-only local illustration fallbacks and a stable record 
   assert.match(adapter, /stable record ID mapping/);
   assert.doesNotMatch(adapter, /PRODUCT_COPY/);
 });
+
+test('materializes prototype-domain fixture media ahead of planning-only Dataverse schema', (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-prototype-view-model-'));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), JSON.stringify({
+    assetPolicy: { media: 'remote-cdn-cached' },
+  }));
+  fs.writeFileSync(path.join(root, '.tmp', 'dataverse-schema-contract.json'), JSON.stringify({
+    tables: [{ logicalName: 'cr_product', displayName: 'Product', columns: [] }],
+  }));
+  fs.writeFileSync(path.join(root, '.tmp', 'prototype-domain-model.json'), JSON.stringify({
+    mode: 'prototype-domain',
+    entities: [{
+      key: 'Product',
+      displayName: 'Product',
+      primaryNameField: 'name',
+      fields: [
+        { key: 'id', type: 'id' },
+        { key: 'name', type: 'text' },
+        { key: 'image', type: 'image' },
+      ],
+    }],
+    fixtures: {
+      Product: [{
+        id: 'product-1',
+        name: 'Travel adapter',
+        image: {
+          imageUrl: 'https://cdn.example.com/product-1.jpg',
+          imageAltText: 'Black travel adapter',
+          imageCacheKey: 'product-1-v1',
+          imageAssetKey: 'fallback-product-1',
+        },
+      }],
+    },
+  }));
+
+  const result = materializeExperienceViewModel(root);
+  assert.deepEqual(result.entities, ['Product']);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, result.assetManifestPath), 'utf8'));
+  assert.deepEqual(manifest.media.approvedHosts, ['cdn.example.com']);
+  assert.equal(manifest.media.records['Product:product-1'].imageUrl, 'https://cdn.example.com/product-1.jpg');
+  assert.match(manifest.media.records['Product:product-1'].imageAssetKey, /^asset:\/\/experience\//);
+});

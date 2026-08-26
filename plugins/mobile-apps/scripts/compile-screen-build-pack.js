@@ -101,7 +101,9 @@ function validateInputs(contract, screenContract, foundation, normalizedScreens)
   }
   const composition = primaryComposition(contract);
   const primary = screenContract.primaryScreen || normalizedScreens.find((screen) => screen.role === 'primary');
-  if (!primary || primary.route !== contract.primaryScreen.route || primary.file !== contract.primaryScreen.file || primary.compositionKind !== composition.compositionKind) {
+  const routeIndexEquivalent = primary?.route === contract.primaryScreen.route
+    && primary?.file === contract.primaryScreen.file.replace(/\.tsx$/, '/index.tsx');
+  if (!primary || primary.route !== contract.primaryScreen.route || (primary.file !== contract.primaryScreen.file && !routeIndexEquivalent) || primary.compositionKind !== composition.compositionKind) {
     throw new Error('Experience screen contract does not match the primary composition.');
   }
   const keyFlow = screenContract.keyFlow || normalizedScreens.find((screen) => screen.role === 'key-flow');
@@ -186,7 +188,7 @@ function cardRecipes() {
   ];
 }
 
-function designRecipe(contract, primary, navigation, foundation) {
+function designRecipe(contract, primary, navigation, foundation, screens = []) {
   const compositions = {
     'product-led-discovery': {
       id: 'product-discovery-home',
@@ -221,7 +223,10 @@ function designRecipe(contract, primary, navigation, foundation) {
     hierarchy: {
       focalPoint: primary.firstViewport?.focalPoint || contract.firstViewport.focalPoint,
       maxFirstViewportRegions: primary.firstViewport?.maxRegions || contract.firstViewport.regionOrder.length,
-      maxFeatureViewportShare: primary.firstViewport?.maxFeatureViewportShare || 0.4,
+      maxFeatureViewportShare: Math.max(
+        primary.firstViewport?.maxFeatureViewportShare || 0.4,
+        ...screens.map((screen) => screen.firstViewport?.maxFeatureViewportShare || 0),
+      ),
       nextContentVisible: primary.firstViewport?.nextContentVisible !== false,
     },
     actions: { primaryPlacement: primary.primaryAction?.placement || 'inline', maxPrimaryActionsPerState: 1 },
@@ -331,6 +336,10 @@ function enrichScreen(screen, basic, data, journey, contextContract) {
     signatureComponents,
     testIds: [...new Set([
       ...(screen.testIds || basic.testIds || []),
+      ...(screen.regions || []).map((region) => region.id),
+      ...contextEntries.map((entry) => entry.testId || `experience-context-${entry.id}`),
+      ...(primaryAction ? ['experience-primary-action'] : []),
+      ...(screen.firstViewport?.nextContentVisible ? ['experience-next-content'] : []),
       ...signatureComponents.map((component) => component.testId).filter(Boolean),
     ])],
     semanticColorRoles: semanticColorRoles(),
@@ -497,7 +506,8 @@ function compileScreenBuildPack(projectRoot) {
   ]) {
     if (!mergedScreens.some((candidate) => candidate.route === screen.route)) mergedScreens.push(screen);
   }
-  const screens = mergedScreens.map((screen) => {
+  const sourceScreens = richContract ? normalizedScreens : mergedScreens;
+  const screens = sourceScreens.map((screen) => {
     const basic = screenRecord(screen, primary, keyFlow, foundation, data, contract);
     const structured = normalizedScreens.find((candidate) => candidate.route === screen.route);
     if (!structured) return basic;
@@ -559,7 +569,7 @@ function compileScreenBuildPack(projectRoot) {
         testID: primitive.testID,
       })),
       ...(richContract ? {
-        recipe: designRecipe(contract, screens.find((screen) => screen.role === 'primary'), navigation, foundation),
+        recipe: designRecipe(contract, screens.find((screen) => screen.role === 'primary'), navigation, foundation, screens),
         signatureComponents: foundation.primitives.map((primitive) => ({ kind: primitive.motif, component: primitive.component, testId: primitive.testID })),
         tokenSourceBindings: { palette: 'brand/tokens.ts', typography: 'brand/tokens.ts', semantics: 'brand/design-system.md' },
         escapePolicy: { explicitOptionalModesOnly: true, industryPresetForbidden: true },
