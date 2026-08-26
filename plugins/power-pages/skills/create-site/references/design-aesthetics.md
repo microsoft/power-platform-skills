@@ -9,6 +9,13 @@ Design principles, typography, color, and motion guidance for Power Pages code s
 ### Typography
 Choose fonts that are beautiful, unique, and interesting. Load from Google Fonts.
 
+Typography must also support every configured writing script. Preserve the
+chosen brand character across script profiles, but do not force a Latin-only
+display font onto Arabic, Hebrew, Indic, CJK, or other scripts. Avoid fixed
+text heights, Latin-oriented letter spacing on cursive scripts, and hierarchy
+that depends on uppercase or italics. Use locale-appropriate quotation marks
+in translated content.
+
 **Never use:** Inter, Roboto, Open Sans, Lato, Arial, default system fonts
 
 **Recommended choices by mood:**
@@ -172,6 +179,13 @@ Refine the overall visual rhythm:
 - Use consistent spacing scale (e.g., 4, 8, 16, 24, 32, 48, 64, 96px)
 - Ensure visual hierarchy through size contrast (headings should be dramatically larger than body text)
 - Add container max-widths for readability (prose content at 65-75ch)
+- Use logical spacing, border, alignment, and inset properties so the same
+  design follows LTR and RTL without a second stylesheet
+- Test expanded and pseudo-opposite-direction content; buttons, tabs,
+  validation, and headings must wrap without clipping
+
+For complete mixed-content, asset, component, and exception rules, follow
+`${PLUGIN_ROOT}/references/bidirectional-design.md`.
 
 **Verify via `browser_snapshot`**
 
