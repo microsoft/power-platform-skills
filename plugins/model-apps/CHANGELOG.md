@@ -10,21 +10,28 @@ jobs-to-be-done surfaces checkable, adds plugin update notices, fixes four crash
 and corrects a smoke-eval assertion that could never pass live.
 
 ### Added
-- **`app.headerNavigationRefresh` — opt into the Wave 2 header and navigation
+- **`app.headerNavigationRefresh` — control the Wave 2 header and navigation
   refresh.** A **different** setting from `app.newLook`, and independent of it:
   `newLook` writes `NewLookAlwaysOn` (the new-look shell), this writes
   `HeaderAndNavigationRefresh` (the header/navigation redesign). Enabling one does
   not enable the other.
 
+  **The platform default is ON, not off.** Live-verified: the SDK defaults the app
+  artifact's `headerAndNavigationRefresh` to `true`, and pushing a **new** app
+  writes the setting to its ON value unprompted. So this field exists as much to
+  turn the feature **off** as on — and both values are honoured, because treating
+  `false` as "do nothing" would silently leave it enabled for an author who
+  explicitly asked for the classic header and navigation.
+
   Written through the SDK's dedicated `setHeaderAndNavigationRefresh` rather than a
   raw setting write, because the encoding is a trap: it is a Number **tri-state
   where ON is `'2'`, not `'1'`** — and `'1'` is *accepted by the API and then
-  silently fails to enable the feature*. Delegating means the plugin cannot get
-  that wrong.
+  silently fails to enable the feature*.
 
   Best-effort, like the new look: a tenant without the definition still gets a
-  fully working app, with a warning and `created.headerNavigationRefresh: false`,
-  never a silent success.
+  fully working app, with a warning and `created.headerNavigationRefresh:
+  "unknown"` — the honest answer, since on failure the row keeps whatever the
+  platform defaulted it to rather than the value that was requested.
 
 - **Form, dashboard and sitemap labels now honour the authoring language**
   ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).

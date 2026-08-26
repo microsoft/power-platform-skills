@@ -78,19 +78,25 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Best-effort:** this is a platform feature that rolls out by tenant. If the setting cannot be
   written the build still succeeds — the app is fully functional on the classic shell — but it warns
   and reports `created.newLook: false`, so a failure is never mistaken for success.
-- **`app.headerNavigationRefresh`** *(optional, default off)* — opt into the **Wave 2 header and
+- **`app.headerNavigationRefresh`** *(optional)* — control the **Wave 2 header and
   navigation refresh** (public preview) for this app.
+  **The platform default is ON, not off.** Live-verified: the SDK defaults the app artifact's
+  `headerAndNavigationRefresh` to `true` and pushing a **new** app writes the setting to its ON value
+  unprompted. So set this to `false` if you want the classic header and navigation — omitting it
+  leaves whatever the platform chose, which for a new app is on.
+  Both values are honoured: `true` writes ON, `false` actively writes OFF. Treating `false` as "do
+  nothing" would silently leave the feature on for an author who asked for it off.
   This is a **different setting from `app.newLook`** and the two are independent: `newLook` writes
   `NewLookAlwaysOn` (the new-look shell), while this writes `HeaderAndNavigationRefresh` (the header
-  and navigation redesign). Enabling one does **not** enable the other; set both if you want both.
+  and navigation redesign). Enabling one does **not** enable the other.
   Written through the SDK's dedicated API rather than a raw setting write, because the encoding is a
   trap: it is a Number **tri-state where ON is `'2'`, not `'1'`**, and writing `'1'` is *accepted by
   the API and then silently fails to enable the feature*. Delegating means the plugin cannot get it
   wrong.
-  **Best-effort**, exactly like `newLook`: a tenant without the setting definition still gets a fully
-  working app, with a warning and `created.headerNavigationRefresh: false` — never a silent success.
-  On success `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`, so
-  a fresh enable is distinguishable from a no-op re-run.
+  **Best-effort**, like `newLook`: a tenant without the setting definition still gets a fully working
+  app, with a warning and `created.headerNavigationRefresh: "unknown"` — never a silent success, and
+  never a claim about a value that was not written. On success
+  `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a

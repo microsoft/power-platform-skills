@@ -1787,22 +1787,32 @@ async function runSdkBuild(spec, opts = {}) {
   // build with the feature off.
   //
   // Same best-effort contract as the new look: this is a rolling-out preview, so a tenant without
-  // the definition gets a warning and `headerNavigationRefresh: false`, never a silent success and
-  // never a failed build. The SDK throws a plain Error (not an SdkError subclass) when the
-  // definition is absent, so this catches broadly on purpose.
-  if (has('app-shell') && spec.app && spec.app.headerNavigationRefresh === true && result.created.app) {
+  // the definition gets a warning and the real outcome, never a silent success and never a failed
+  // build. The SDK throws a plain Error (not an SdkError subclass) when the definition is absent, so
+  // this catches broadly on purpose.
+  //
+  // BOTH values are honoured, and that is not symmetry for its own sake. Live-verified: the SDK
+  // defaults the app artifact's `headerAndNavigationRefresh` to TRUE, and pushing a new app writes
+  // the setting to '2' (ON) unprompted. So the platform default is ON, not off — and treating
+  // `false` as "do nothing" would silently leave it ON for an author who explicitly asked for it to
+  // be off. `false` therefore has to be an active write of the OFF value, not a skip.
+  if (has('app-shell') && spec.app && typeof spec.app.headerNavigationRefresh === 'boolean' && result.created.app) {
+    const wanted = spec.app.headerNavigationRefresh;
     try {
-      const outcome = await provision.setHeaderAndNavigationRefresh(result.created.app, true);
+      const outcome = await provision.setHeaderAndNavigationRefresh(result.created.app, wanted);
       // AppSettingWriteOutcome is 'created' | 'updated' | 'unchanged' — all three mean the row now
-      // holds the ON value, so all three are success. Recorded verbatim so a caller can tell a
-      // fresh enable from a no-op re-run.
-      result.created.headerNavigationRefresh = true;
+      // holds the requested value, so all three are success. Recorded verbatim so a caller can tell
+      // a fresh write from a no-op re-run.
+      result.created.headerNavigationRefresh = wanted;
       result.created.headerNavigationRefreshOutcome = outcome;
     } catch (err) {
-      result.created.headerNavigationRefresh = false;
+      // Report what actually happened, NOT what was asked for. On failure the row keeps whatever it
+      // had — which for a newly created app is the SDK's ON default, so reporting `false` here would
+      // be as wrong as reporting success.
+      result.created.headerNavigationRefresh = 'unknown';
       const detail = (err && err.message) || String(err);
       if (typeof opts.warn === 'function') {
-        opts.warn(`could not enable the header and navigation refresh (${HEADER_NAV_SETTING}): ${detail} — the app is fully built and functional, but keeps the current header and navigation. This setting is a public-preview feature that rolls out by tenant.`);
+        opts.warn(`could not ${wanted ? 'enable' : 'disable'} the header and navigation refresh (${HEADER_NAV_SETTING}): ${detail} — the app is fully built and functional, but the header and navigation setting is whatever the platform defaulted it to. This setting is a public-preview feature that rolls out by tenant.`);
       }
     }
   }

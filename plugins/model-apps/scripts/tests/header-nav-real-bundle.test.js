@@ -110,3 +110,36 @@ test('REAL BUNDLE: a non-boolean is rejected rather than coerced', async () => {
   await ok.sdk.setHeaderAndNavigationRefresh(APP_ID, true);
   assert.strictEqual(settingValueOf(ok.writes), '2');
 });
+
+test('REAL BUNDLE: a NEW app gets the header/navigation refresh ON by default', async () => {
+  // The behaviour that made the plugin's original "opt-in, default off" documentation wrong, and
+  // that made a `headerNavigationRefresh: false` in an App Spec a silent no-op.
+  //
+  // Pushing a brand-new app writes the setting UNPROMPTED. So the platform default is ON, and an
+  // author who wants the classic header/navigation needs an ACTIVE off-write — which is why the
+  // build honours `false` instead of skipping it. If a future SDK flips this default, this test is
+  // what tells us before a user's app silently changes appearance.
+  const { sdk, writes } = sdkWithCapture();
+  const app = sdk.createArtifact('app', { name: 'Default App', uniqueName: 'cr_defaultapp' });
+  assert.strictEqual(app.headerAndNavigationRefresh, true,
+    'the SDK defaults the app artifact field to true');
+
+  await sdk.pushArtifact('app', app.id);
+  const setting = writes.find((w) => /appsetting/i.test(w.url) && w.body && typeof w.body.value === 'string');
+  assert.ok(setting, 'pushing a new app writes an app setting unprompted; urls: ' + JSON.stringify(writes.map((w) => w.url)));
+  assert.strictEqual(setting.value === undefined ? setting.body.value : setting.body.value, '2',
+    "the unprompted default write is the ON value '2'");
+});
+
+test('REAL BUNDLE: setting headerAndNavigationRefresh false on the app writes the OFF value', async () => {
+  // The opt-out path. '1' is OFF for this tri-state; if this ever wrote '2' or nothing, an author
+  // asking for the classic experience would silently get the new one.
+  const { sdk, writes } = sdkWithCapture();
+  const app = sdk.createArtifact('app', { name: 'Off App', uniqueName: 'cr_offapp', headerAndNavigationRefresh: false });
+  assert.strictEqual(app.headerAndNavigationRefresh, false, 'the explicit false survives onto the artifact');
+
+  await sdk.pushArtifact('app', app.id);
+  const setting = writes.find((w) => /appsetting/i.test(w.url) && w.body && typeof w.body.value === 'string');
+  assert.ok(setting, 'an app setting is still written');
+  assert.strictEqual(setting.body.value, '1', "OFF is '1' — and it must differ from the ON value");
+});

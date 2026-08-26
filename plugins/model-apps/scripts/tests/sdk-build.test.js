@@ -2670,17 +2670,36 @@ test('the header/navigation refresh is a DIFFERENT setting from the new look', a
   assert.strictEqual(rc.created.headerNavigationRefresh, true);
 });
 
-test('the header/navigation refresh is OPT-IN — absent or false calls nothing', async () => {
-  for (const value of [undefined, false]) {
+test('the header/navigation refresh honours BOTH values — false actively disables', async () => {
+  // NOT symmetry for its own sake. Live-verified: the SDK defaults the app artifact's
+  // `headerAndNavigationRefresh` to TRUE and pushing a new app writes '2' (ON) unprompted, so the
+  // platform default is ON. Treating `false` as "do nothing" would silently leave the feature ON for
+  // an author who explicitly asked for it off — the exact silent-disagreement class this build keeps
+  // having to fix. So `false` must be an ACTIVE write of the OFF value.
+  for (const value of [true, false]) {
     const { sdk } = mockSdk();
     const calls = [];
-    sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'created'; };
+    sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'updated'; };
     const spec = makeSpec();
-    if (value !== undefined) spec.app.headerNavigationRefresh = value;
+    spec.app.headerNavigationRefresh = value;
     const r = await runSdkBuild(spec, { sdk, apply: true });
     assert.ok(r.ok);
-    assert.deepStrictEqual(calls, [], `headerNavigationRefresh=${value} must make no call`);
+    assert.strictEqual(calls.length, 1, `headerNavigationRefresh=${value} must issue exactly one write`);
+    assert.strictEqual(calls[0].e, value, `the requested value ${value} must be passed through, not coerced`);
+    assert.strictEqual(r.created.headerNavigationRefresh, value);
   }
+});
+
+test('the header/navigation refresh is only touched when the author states a preference', async () => {
+  // Absent means "no opinion" — leave the platform default alone rather than fighting it.
+  const { sdk } = mockSdk();
+  const calls = [];
+  sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'created'; };
+  const spec = makeSpec();
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok);
+  assert.deepStrictEqual(calls, [], 'an absent headerNavigationRefresh must make no call');
+  assert.strictEqual(r.created.headerNavigationRefresh, undefined);
 });
 
 test('a failed header/navigation write does not fail the build, but is never reported as success', async () => {
@@ -2694,7 +2713,10 @@ test('a failed header/navigation write does not fail the build, but is never rep
 
   const r = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
   assert.ok(r.ok, 'a rolling-out preview setting must not fail an otherwise-good build');
-  assert.strictEqual(r.created.headerNavigationRefresh, false, 'reported as NOT enabled — never a silent success');
+  // 'unknown', NOT false. On failure the row keeps whatever the platform defaulted it to — which for
+  // a new app is ON — so reporting `false` would be as wrong as reporting success.
+  assert.strictEqual(r.created.headerNavigationRefresh, 'unknown',
+    'a failed write reports the truth (unknown), not the value that was asked for and not its opposite');
   assert.ok(
     warnings.some((w) => /header and navigation refresh/i.test(w) && /not available in this environment/.test(w)),
     'the real cause reaches the caller; got: ' + JSON.stringify(warnings)
