@@ -16,7 +16,8 @@ and corrects a smoke-eval assertion that could never pass live.
   `HeaderAndNavigationRefresh` (the header/navigation redesign). Enabling one does
   not enable the other.
 
-  **The platform default is ON, not off.** Live-verified: the SDK defaults the app
+  **The platform default is ON, not off.** Verified against the real vendored
+  bundle (offline, by capturing the writes a push issues): the SDK defaults the app
   artifact's `headerAndNavigationRefresh` to `true`, and pushing a **new** app
   writes the setting to its ON value unprompted. So this field exists as much to
   turn the feature **off** as on — and both values are honoured, because treating

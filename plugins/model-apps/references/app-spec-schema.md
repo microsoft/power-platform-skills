@@ -80,7 +80,8 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   and reports `created.newLook: false`, so a failure is never mistaken for success.
 - **`app.headerNavigationRefresh`** *(optional)* — control the **Wave 2 header and
   navigation refresh** (public preview) for this app.
-  **The platform default is ON, not off.** Live-verified: the SDK defaults the app artifact's
+  **The platform default is ON, not off.** Verified against the real vendored bundle (offline, by
+  capturing the writes a push issues): the SDK defaults the app artifact's
   `headerAndNavigationRefresh` to `true` and pushing a **new** app writes the setting to its ON value
   unprompted. So set this to `false` if you want the classic header and navigation — omitting it
   leaves whatever the platform chose, which for a new app is on.

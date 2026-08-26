@@ -1772,7 +1772,9 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
-  // 7b-iii. Wave 2 header + navigation refresh — opt-in via `app.headerNavigationRefresh`.
+  // 7b-iii. Wave 2 header + navigation refresh — stated via `app.headerNavigationRefresh`.
+  // Deliberately not called "opt-in": the platform default is ON (see below), so this field exists
+  // as much to turn the feature OFF as on. Absent means "no opinion" and touches nothing.
   //
   // DISTINCT from `newLook` above, and both can be set independently. `NewLookAlwaysOn` is the
   // new-look shell toggle; `HeaderAndNavigationRefresh` is the Wave 2 header/navigation redesign
@@ -1791,7 +1793,8 @@ async function runSdkBuild(spec, opts = {}) {
   // build. The SDK throws a plain Error (not an SdkError subclass) when the definition is absent, so
   // this catches broadly on purpose.
   //
-  // BOTH values are honoured, and that is not symmetry for its own sake. Live-verified: the SDK
+  // BOTH values are honoured, and that is not symmetry for its own sake. Verified against the real
+  // vendored bundle (offline, by capturing the writes a push issues): the SDK
   // defaults the app artifact's `headerAndNavigationRefresh` to TRUE, and pushing a new app writes
   // the setting to '2' (ON) unprompted. So the platform default is ON, not off — and treating
   // `false` as "do nothing" would silently leave it ON for an author who explicitly asked for it to
