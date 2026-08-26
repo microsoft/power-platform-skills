@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Dataverse Repository Mapping",
+  "type": "object",
+  "required": ["schemaVersion", "domainModelRevision", "dataverseManifestSha256", "entities", "operations"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "domainModelRevision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "dataverseManifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["domainEntity", "tableLogicalName", "entitySetName", "primaryIdAttribute", "service", "serviceModule", "fields"],
+        "properties": {
+          "domainEntity": { "type": "string" },
+          "tableLogicalName": { "type": "string" },
+          "entitySetName": { "type": ["string", "null"] },
+          "primaryIdAttribute": { "type": "string" },
+          "service": { "type": "string" },
+          "serviceModule": { "type": "string", "pattern": "^@/generated/services/" },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["domainField", "dataverseField", "transform", "required"],
+              "properties": {
+                "domainField": { "type": "string" },
+                "dataverseField": { "type": "string" },
+                "transform": { "enum": ["id", "text", "multiline-text", "boolean", "number", "money", "date", "date-time", "choice", "reference", "url", "email", "phone", "image-url"] },
+                "required": { "type": "boolean" },
+                "choiceMap": { "type": "object", "additionalProperties": { "type": ["string", "number"] } },
+                "defaultCurrencyCode": { "type": ["string", "null"], "pattern": "^[A-Z]{3}$" },
+                "altTextField": { "type": "string" },
+                "sourceColumn": { "type": "string" },
+                "writeField": { "type": ["string", "null"] },
+                "targetDomainEntity": { "type": "string" },
+                "targetEntitySetName": { "type": ["string", "null"] }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["domainOperation", "domainEntity", "repository", "method", "kind", "service", "serviceModule", "serviceMethod", "select", "filters", "sort", "pagination"],
+        "properties": {
+          "domainOperation": { "type": "string" },
+          "domainEntity": { "type": "string" },
+          "repository": { "type": "string" },
+          "method": { "type": "string" },
+          "kind": { "enum": ["list", "get", "create", "update", "delete"] },
+          "service": { "type": "string" },
+          "serviceModule": { "type": "string" },
+          "serviceMethod": { "enum": ["getAll", "get", "create", "update", "delete"] },
+          "select": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "filters": { "type": "object", "additionalProperties": { "type": "string" } },
+          "sort": { "type": "object", "additionalProperties": { "type": "string" } },
+          "pagination": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

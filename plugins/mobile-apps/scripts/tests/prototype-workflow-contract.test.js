@@ -15,6 +15,8 @@ test('prototype entry skills and executable helpers are present', () => {
   const expected = [
     'skills/create-mobile-prototype/SKILL.md',
     'skills/create-mobile-prototype/scripts/gen-mock-services.js',
+    'skills/create-mobile-prototype/scripts/gen-data-layer.js',
+    'skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js',
     'skills/create-mobile-prototype/scripts/configure-prototype-runtime.js',
     'skills/edit-plan/SKILL.md',
     'skills/prototype-to-real-app/SKILL.md',
@@ -22,6 +24,8 @@ test('prototype entry skills and executable helpers are present', () => {
     'skills/add-sample-data/scripts/prepare-prototype-seed-migration.js',
     'skills/sync-from-plan/SKILL.md',
     'scripts/cleanup-prototype-artifacts.js',
+    'scripts/reconcile-domain-dataverse.js',
+    'scripts/resolve-navigation-contract.js',
     'scripts/validate-datamodel-manifest.js',
     'scripts/validate-screen-contracts.js',
     'shared/references/lifecycle-state.md',
@@ -52,7 +56,10 @@ test('prototype creation uses the current planner and non-executable schema cont
   assert.match(skill, /Dataverse planning mode: prototype/);
   assert.match(skill, /planningMode.*prototype/);
   assert.match(skill, /executionEligible.*false/);
-  assert.match(skill, /gen-mock-services\.js/);
+  assert.match(skill, /gen-data-layer\.js/);
+  assert.match(skill, /prototype-domain-model\.json/);
+  assert.match(skill, /resolve-navigation-contract\.js/);
+  assert.match(skill, /@\/data/);
   assert.match(skill, /configure-prototype-runtime\.js[\s\S]*prototype/);
   assert.match(skill, /\.mobile-app\/state\.json/);
   assert.doesNotMatch(skill, /code-apps-native:/);
@@ -67,6 +74,9 @@ test('conversion rejects prototype approvals and commits through one target-mode
   assert.match(skill, /rebase-prototype-plan\.js/);
   assert.match(skill, /add-dataverse --skip-planning/);
   assert.match(skill, /cleanup-prototype-artifacts\.js/);
+  assert.match(skill, /reconcile-domain-dataverse\.js/);
+  assert.match(skill, /gen-dataverse-repositories\.js/);
+  assert.match(skill, /validate-ui-neutral-data-migration\.js/);
   assert.match(skill, /live-name-map\.json/);
   assert.match(skill, /dataverseManifestSha256/);
   assert.match(skill, /prepare-prototype-seed-migration\.js/);

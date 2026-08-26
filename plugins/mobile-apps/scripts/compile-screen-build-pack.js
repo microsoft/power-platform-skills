@@ -16,6 +16,7 @@ const {
   primaryComposition,
   validateExperienceContract,
 } = require('./experience-patterns');
+const { normalizeScreenContract } = require('./lib/experience-screen-contract');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -83,18 +84,18 @@ function identifier(value) {
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('') || 'Screen';
 }
 
-function validateInputs(contract, screenContract, foundation) {
+function validateInputs(contract, screenContract, foundation, normalizedScreens) {
   const issues = validateExperienceContract(contract);
   if (issues.length) throw new Error(`Experience contract is invalid: ${issues.join('; ')}`);
-  if (screenContract?.schemaVersion !== 1 || screenContract.experienceContractSha256 !== contractHash(contract)) {
+  if (![1, 2, 3].includes(screenContract?.schemaVersion) || screenContract.experienceContractSha256 !== contractHash(contract)) {
     throw new Error('Experience screen contract is missing or stale.');
   }
   const composition = primaryComposition(contract);
-  const primary = screenContract.primaryScreen;
+  const primary = screenContract.primaryScreen || normalizedScreens.find((screen) => screen.role === 'primary');
   if (!primary || primary.route !== contract.primaryScreen.route || primary.file !== contract.primaryScreen.file || primary.compositionKind !== composition.compositionKind) {
     throw new Error('Experience screen contract does not match the primary composition.');
   }
-  const keyFlow = screenContract.keyFlow;
+  const keyFlow = screenContract.keyFlow || normalizedScreens.find((screen) => screen.role === 'key-flow');
   if (!keyFlow || typeof keyFlow.route !== 'string' || keyFlow.route === primary.route || typeof keyFlow.file !== 'string' || typeof keyFlow.outcome !== 'string') {
     throw new Error('Experience screen contract requires a non-primary keyFlow.');
   }
@@ -179,6 +180,50 @@ function revisionForPack(pack) {
   return sha256(stableStringify(copy));
 }
 
+function uiContractProjection(pack) {
+  return {
+    productStructure: pack.productStructure,
+    capabilityBindings: pack.capabilityBindings,
+    journey: pack.journey,
+    shell: pack.shell,
+    navigation: pack.navigation,
+    design: {
+      hierarchy: pack.design?.recipe?.hierarchy,
+      actions: pack.design?.recipe?.actions,
+      navigation: pack.design?.recipe?.navigation,
+      signatureComponent: pack.design?.recipe?.signatureComponent,
+      primitives: pack.design?.primitives,
+      signatureComponents: pack.design?.signatureComponents,
+      tokenSourceBindings: pack.design?.tokenSourceBindings,
+      escapePolicy: pack.design?.escapePolicy,
+    },
+    screens: (pack.screens || []).map((screen) => ({
+      id: screen.id,
+      route: screen.route,
+      role: screen.role,
+      productRole: screen.productRole,
+      purpose: screen.purpose,
+      navigation: screen.navigation,
+      headerMode: screen.headerMode,
+      regions: screen.regions,
+      firstViewport: screen.firstViewport,
+      signatureComponent: screen.signatureComponent,
+      primaryAction: screen.primaryAction,
+      journey: screen.journey,
+      actionState: screen.actionState,
+      signatureComponents: screen.signatureComponents,
+      semanticColorRoles: screen.semanticColorRoles,
+      capabilityComposition: screen.capabilityComposition,
+      layoutBudgets: screen.layoutBudgets,
+      ux: screen.ux,
+    })),
+  };
+}
+
+function uiContractFingerprint(pack) {
+  return sha256(stableStringify(uiContractProjection(pack)));
+}
+
 function compileScreenBuildPack(projectRoot) {
   const root = path.resolve(projectRoot);
   const experiencePath = requiredFile(root, '.tmp/experience-contract.json', 'Experience contract');
@@ -190,11 +235,17 @@ function compileScreenBuildPack(projectRoot) {
   const contract = readJson(experiencePath, 'Experience contract');
   const screenContract = readJson(screenPath, 'Experience screen contract');
   const foundation = readJson(foundationPath, 'Experience foundation contract');
-  validateInputs(contract, screenContract, foundation);
   const data = dataIntent(root);
   const screenMap = parseScreenMap(fs.readFileSync(planPath, 'utf8'));
-  const primary = screenContract.primaryScreen;
-  const keyFlow = screenContract.keyFlow;
+  const normalizedScreens = normalizeScreenContract(
+    screenContract,
+    contract,
+    screenMap,
+    foundation.primitives.map((primitive) => primitive.component),
+  );
+  validateInputs(contract, screenContract, foundation, normalizedScreens);
+  const primary = screenContract.primaryScreen || normalizedScreens.find((screen) => screen.role === 'primary');
+  const keyFlow = screenContract.keyFlow || normalizedScreens.find((screen) => screen.role === 'key-flow');
   const mergedScreens = [...screenMap];
   for (const screen of [
     { id: 'Home', route: primary.route, file: primary.file },
@@ -202,7 +253,15 @@ function compileScreenBuildPack(projectRoot) {
   ]) {
     if (!mergedScreens.some((candidate) => candidate.route === screen.route)) mergedScreens.push(screen);
   }
-  const screens = mergedScreens.map((screen) => screenRecord(screen, primary, keyFlow, foundation, data, contract));
+  const screens = mergedScreens.map((screen) => {
+    const basic = screenRecord(screen, primary, keyFlow, foundation, data, contract);
+    const structured = normalizedScreens.find((candidate) => candidate.route === screen.route);
+    if (!structured) return basic;
+    return {
+      ...basic,
+      ux: structured,
+    };
+  });
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
   const sourcePaths = {
@@ -212,6 +271,12 @@ function compileScreenBuildPack(projectRoot) {
     designSystem: 'brand/design-system.md',
     tokens: 'brand/tokens.ts',
     dataIntent: data.path,
+    ...(fs.existsSync(path.join(root, '.tmp', 'workflow-journey-contract.json'))
+      ? { workflowJourney: '.tmp/workflow-journey-contract.json' }
+      : {}),
+    ...(fs.existsSync(path.join(root, '.tmp', 'navigation-contract.json'))
+      ? { navigationContract: '.tmp/navigation-contract.json' }
+      : {}),
   };
   const pack = {
     schemaVersion: 1,
@@ -221,6 +286,12 @@ function compileScreenBuildPack(projectRoot) {
       foundationContract: sha256(fs.readFileSync(foundationPath, 'utf8')),
       designRecipe: sha256(`${fs.readFileSync(designSystemPath, 'utf8')}\n${fs.readFileSync(tokensPath, 'utf8')}`),
       dataIntent: data.hash,
+      ...(sourcePaths.workflowJourney
+        ? { workflowJourney: sha256(fs.readFileSync(path.join(root, sourcePaths.workflowJourney), 'utf8')) }
+        : {}),
+      ...(sourcePaths.navigationContract
+        ? { navigationContract: sha256(fs.readFileSync(path.join(root, sourcePaths.navigationContract), 'utf8')) }
+        : {}),
     },
     sourcePaths,
     experience: {
@@ -251,11 +322,14 @@ function compileScreenBuildPack(projectRoot) {
       rootSafeAreaProviderOnly: true,
       headerModes: Object.fromEntries(screens.map((screen) => [screen.route, screen.headerMode])),
     },
-    navigation: {
-      initialRoute: primary.route,
-      keyFlowRoute: keyFlow.route,
-      routes: screens.map((screen) => screen.route),
-    },
+    journey: sourcePaths.workflowJourney ? readJson(path.join(root, sourcePaths.workflowJourney), 'Workflow journey') : null,
+    navigation: sourcePaths.navigationContract
+      ? readJson(path.join(root, sourcePaths.navigationContract), 'Navigation contract')
+      : {
+          initialRoute: primary.route,
+          keyFlowRoute: keyFlow.route,
+          routes: screens.map((screen) => screen.route),
+        },
     fixtures: {
       adapter: data.adapter,
       entities: data.entities,
@@ -286,6 +360,7 @@ function compileScreenBuildPack(projectRoot) {
       },
     },
   };
+  pack.uiContractFingerprint = uiContractFingerprint(pack);
   pack.revision = revisionForPack(pack);
   return pack;
 }
@@ -323,4 +398,12 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { compileScreenBuildPack, parseScreenMap, revisionForPack, sha256, stableStringify };
+module.exports = {
+  compileScreenBuildPack,
+  parseScreenMap,
+  revisionForPack,
+  sha256,
+  stableStringify,
+  uiContractFingerprint,
+  uiContractProjection,
+};

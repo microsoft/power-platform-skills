@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Prototype Domain Model",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "mode",
+    "experienceContractSha256",
+    "contextEnrichmentSha256",
+    "entities",
+    "relationships",
+    "choices",
+    "operations",
+    "actors",
+    "uxPermissions",
+    "offlineUxIntent",
+    "fixtureRequirements",
+    "mediaPolicy",
+    "fixtures",
+    "fixtureScenarios"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "prototype-domain" },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contextEnrichmentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/entity" }
+    },
+    "relationships": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/relationship" }
+    },
+    "choices": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/choice" }
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/operation" }
+    },
+    "actors": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/actor" }
+    },
+    "uxPermissions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/permission" }
+    },
+    "offlineUxIntent": {
+      "type": "object",
+      "required": ["connectivity", "requiredOperations"],
+      "properties": {
+        "connectivity": { "enum": ["offline-required", "offline-preferred", "network-optional"] },
+        "requiredOperations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "notes": { "type": "string" },
+        "pendingSyncBehavior": { "type": "string", "minLength": 5 },
+        "resumeBehavior": { "type": "string", "minLength": 5 }
+      },
+      "additionalProperties": false
+    },
+    "fixtureRequirements": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "$ref": "#/definitions/fixtureRequirement" }
+    },
+    "mediaPolicy": {
+      "type": "object",
+      "required": ["mode", "requiredFields", "requiresFallback"],
+      "properties": {
+        "mode": { "enum": ["local-first", "remote-cdn-cached", "remote-allowed", "not-applicable"] },
+        "requiredFields": { "type": "array", "items": { "enum": ["imageUrl", "imageAltText", "imageCacheKey", "imageAssetKey"] }, "uniqueItems": true },
+        "requiresFallback": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "fixtures": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "object" }
+      }
+    },
+    "fixtureScenarios": {
+      "type": "array",
+      "minItems": 4,
+      "items": { "$ref": "#/definitions/scenario" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "entity": {
+      "type": "object",
+      "required": ["key", "displayName", "displayPluralName", "description", "primaryNameField", "estimatedPrototypeRows", "fields"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "displayPluralName": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 8 },
+        "primaryNameField": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "estimatedPrototypeRows": { "type": "integer", "minimum": 0, "maximum": 50 },
+        "fields": { "type": "array", "minItems": 2, "items": { "$ref": "#/definitions/field" } }
+      },
+      "additionalProperties": false
+    },
+    "field": {
+      "type": "object",
+      "required": ["key", "displayName", "type", "required"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["id", "text", "multiline-text", "boolean", "whole-number", "decimal", "money", "date", "date-time", "choice", "multi-choice", "reference", "image", "file", "url", "email", "phone"] },
+        "required": { "type": "boolean" },
+        "maximumLength": { "type": "integer", "minimum": 1 },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "precision": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "choiceKey": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "referenceTarget": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "mediaIntent": { "enum": ["featured", "hero", "thumbnail", "gallery", "avatar", "document-preview", "supporting"] },
+        "dateSemantics": { "enum": ["created", "modified", "deadline", "scheduled", "range-start", "range-end", "date-only", "instant"] }
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": ["key", "parent", "child", "cardinality", "childField", "required"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "parent": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "child": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "cardinality": { "enum": ["one-to-many", "one-to-one"] },
+        "childField": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "required": { "type": "boolean" },
+        "deleteBehavior": { "enum": ["restrict", "cascade", "orphan"] }
+      },
+      "additionalProperties": false
+    },
+    "choice": {
+      "type": "object",
+      "required": ["key", "options"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "options": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["key", "label"],
+            "properties": {
+              "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "label": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "required": ["key", "entity", "kind", "repository", "method", "hook", "selectFields", "filterFields", "sortFields", "pagination"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "entity": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "kind": { "enum": ["list", "get", "create", "update", "delete"] },
+        "repository": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*Repository$" },
+        "method": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "hook": { "type": "string", "pattern": "^use[A-Z][A-Za-z0-9]*$" },
+        "selectFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "filterFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "sortFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "writeFields": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "failureStates": {
+          "type": "array",
+          "items": { "enum": ["empty", "error", "offline", "unavailable", "permission-denied", "conflict"] },
+          "uniqueItems": true
+        },
+        "pagination": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["bounded", "cursor", "none"] },
+            "pageSize": { "type": "integer", "minimum": 1, "maximum": 100 },
+            "maximumExpectedCount": { "type": "integer", "minimum": 0 },
+            "boundedReason": { "type": "string", "minLength": 5 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "actor": {
+      "type": "object",
+      "required": ["key", "displayName"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "displayName": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "permission": {
+      "type": "object",
+      "required": ["actor", "operation", "allowed"],
+      "properties": {
+        "actor": { "type": "string" },
+        "operation": { "type": "string" },
+        "allowed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "scenario": {
+      "type": "object",
+      "required": ["key", "state", "description"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "state": { "enum": ["populated", "loading", "empty", "error", "offline", "edge"] },
+        "description": { "type": "string", "minLength": 5 },
+        "entity": { "type": "string" },
+        "recordIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "fixtureRequirement": {
+      "type": "object",
+      "required": ["key", "state", "description"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "state": { "enum": ["populated", "loading", "empty", "error", "offline", "edge"] },
+        "description": { "type": "string", "minLength": 5 },
+        "entity": { "type": "string" },
+        "minimumRecords": { "type": "integer", "minimum": 0, "maximum": 50 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

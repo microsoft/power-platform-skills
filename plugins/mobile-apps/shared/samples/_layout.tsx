@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Stack } from 'expo-router'
+import { Stack } from 'expo-router/stack'
 import { StatusBar } from 'expo-status-bar'
 import { useColorScheme } from 'react-native'
 import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host'

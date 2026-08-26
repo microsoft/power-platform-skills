@@ -23,6 +23,10 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - The working directory
 - The plugin root
 - **Product experience contract path** — normally `<working_dir>/.tmp/experience-contract.json`; read its audience, primary job, interaction/entry mode, content model, and primary action before inferring entities. It is the product-scope source of truth, not an industry mapping table.
+- **Context enrichment contract path** — when supplied, read its evidence-bound
+  prototype fixture values and forbidden inferences. Context may enrich sample
+  records, but it must not create permanent entities, permissions, or
+  integrations.
 - **Normalized Dataverse foreground planning snapshot path (preferred)** — an absolute path to
   `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
 - **Planning evidence path (preferred)** — an absolute path to the deterministic
@@ -54,6 +58,13 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   `prototype` means a complete schema contract but zero environment
   resolution, authentication, metadata discovery, collision checks, or API
   calls. Prototype output exists only to generate local typed mocks.
+- **Neutral prototype boundary.** In `prototype` mode, also write
+  `<working_dir>/.tmp/prototype-domain-model.json` against
+  `${PLUGIN_ROOT}/scripts/schema-prototype-domain-model.json`. This neutral
+  contract owns the entity, field, relationship, operation, repository, hook,
+  fixture, and scenario names used by screens. It must not contain publisher
+  prefixes, Dataverse logical names, generated service names, or environment
+  identity.
 - **No automatic replacement.** This agent classifies schema as `Reuse`, `Extend`, `Create`, `Adapt` (create beside a conflicting object under a new name), `Defer` (leave out of this run), or `Unverified` (target metadata could not be read). Replacing an existing table/column requires a separately approved migration with dependency analysis and data movement; it is outside this workflow. A data-modelling conflict is never a blocker — it is an `Adapt` or a `Defer` with a recorded reason.
 - **Return a section, not a separate doc.** Output is a markdown `## Data Model` section the planner embeds verbatim.
 - **No JSON request bodies in the output.** Your `_dm_section.md` describes *what* to create (tables, columns, relationships) using the Mermaid ER + reuse/extend/create table + tier list. **Do NOT include POST body JSON** for `EntityDefinitions` or `RelationshipDefinitions` — `/add-dataverse` constructs those from its own canonical templates in [skills/add-dataverse/SKILL.md](../skills/add-dataverse/SKILL.md) Step 5b. JSON in your output is read as authoritative and will leak invented/wrong fields (e.g. `ReferencingAttribute` on a lookup) into the actual POST.
@@ -131,7 +142,31 @@ environment-free path:
   not replace the normal reconciliation taxonomy; they prevent downstream
   orchestrators from mistaking an environment-free contract for live target
   evidence.
-6. Return `DONE`. Prototype mode is intentional and is not itself a concern.
+6. Write `.tmp/prototype-domain-model.json`. Include:
+   - one opaque string ID field per entity and neutral PascalCase entity keys;
+   - typed fields, choices, and relationship targets;
+   - task-oriented operations naming the repository interface, method, and
+     exported hook that screens will consume;
+   - selected/filter/sort/write fields and bounded or cursor pagination;
+   - actors and UX permissions without claiming server authorization;
+   - realistic, relationship-complete fixtures with stable IDs;
+   - populated, loading, empty, error, offline, and brief-relevant edge
+     scenarios;
+   - local-first or explicitly approved cache-backed media with accessible alt
+     text and fallback identity;
+   - offline UX intent as product behavior, not a server sync claim.
+7. Validate it before returning:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/validate-prototype-domain-model.js" \
+     --project-root "<working_dir>"
+   ```
+
+   Repair unknown fields, duplicate hooks/repository methods, broken
+   references, unsafe pagination, generic numbered fixture copy, invalid
+   money/choice/media values, and reserved Dataverse metadata. Do not weaken
+   the validator or fall back to the Dataverse schema sidecar as screen data.
+8. Return `DONE`. Prototype mode is intentional and is not itself a concern.
 
 ## Snapshot-only fast path
 
@@ -700,7 +735,8 @@ endpoint has an empty block and that every relationship's FK path is visible.
 
 If any row is `Adapt` or `Defer`, write the evidence and reason into the section and finish with `DONE_WITH_CONCERNS` naming each one, so the user sees it at Gate 1 and can revise the design before `/add-dataverse` runs. Never return `BLOCKED` for a data-modelling conflict — that status is reserved for hard walls such as an unwritable working directory. If discovery was skipped (Step 1 or Step 2 failure), prepend the matching warning, mark every decision `Unverified`, and say the user should re-run with environment access for accurate reuse detection.
 
-After `_dm_section.md` and the normalized schema contract are written,
+After `_dm_section.md`, the normalized schema contract, and in prototype mode
+the validated neutral domain model are written,
 atomically update milestone
 `artifact-written` with `state: "completed"`, the final decision counts,
 elapsed time, and both artifact paths. On a hard failure, write
@@ -726,6 +762,6 @@ You MUST return your final message with one of these four status codes as the **
 
 After the status line and a blank line, write:
 
-> Data Model section written to `<working_dir>/_dm_section.md`; normalized contract written to `<working_dir>/.tmp/dataverse-schema-contract.json`. Summary: <N reuse, M extend, K create, A adapt, D defer, U unverified across T tiers>. ER diagram includes <list of entities>.
+> Data Model section written to `<working_dir>/_dm_section.md`; normalized contract written to `<working_dir>/.tmp/dataverse-schema-contract.json`; prototype mode also wrote and validated `<working_dir>/.tmp/prototype-domain-model.json`. Summary: <N reuse, M extend, K create, A adapt, D defer, U unverified across T tiers>. ER diagram includes <list of entities>.
 
 The planner reads the file and embeds the contents verbatim into `native-app-plan.md`.

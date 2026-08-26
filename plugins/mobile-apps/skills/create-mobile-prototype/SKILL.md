@@ -11,8 +11,9 @@ model: opus
 # Create Mobile Prototype
 
 Build a high-fidelity Power Apps mobile experience in a fresh installed Expo
-template without selecting a Power Platform environment. The app uses typed,
-in-memory CRUD services seeded from bundled JSON. It retains the normal
+template without selecting a Power Platform environment. The app uses a typed
+neutral domain model, repository interfaces, query hooks, and realistic local
+fixtures. It retains the normal
 `native-app-plan.md`, design system, navigation, native wrapper, screen-builder,
 and validation contracts so `/prototype-to-real-app` can later replace only the
 data/auth integration layer.
@@ -33,14 +34,20 @@ data/auth integration layer.
 - Do not run `npx power-apps`, `pac`, `az`, Dataverse HTTP calls, connection
   creation, app registration, or offline-profile mutation in this workflow.
 - Use `mobile-app:native-app-planner` with `Dataverse planning mode: prototype`.
-  The normalized schema contract is mandatory; do not derive executable mock
-  schema from free-form Markdown when the sidecar exists.
+  Keep its Markdown plan and normal section approval gates. Do not replace it
+  with a compact JSON-only planner or reconstruct the plan from a model
+  response.
+- The existing data-model architect also writes
+  `.tmp/prototype-domain-model.json`. That neutral sidecar is the executable
+  source for local entities, relationships, operations, repositories, hooks,
+  fixtures, and scenarios; the Dataverse schema sidecar remains a
+  non-executable persistence proposal.
 - The prototype schema contract is not approved target-environment evidence.
   It must contain `planningMode: "prototype"` and
   `executionEligible: false`.
-- Generate table mocks only under `src/generated/`. Screen code imports from
-  `@/generated/services`; it must not import seed JSON directly or call raw
-  HTTP APIs.
+- Generate prototype data only under `src/data/`. Screen code imports hooks
+  and domain types only from `@/data`; it must not import fixtures,
+  repositories, generated services, connector clients, or call raw HTTP APIs.
 - Planned external connectors receive explicit throw-stubs. Their screens may
   render, but an attempted connector operation must fail clearly until
   graduation.
@@ -153,6 +160,22 @@ question about the first user outcome, revise `brief.md`, and regenerate the
 contract. Never ask the user to select an industry or upload a visual input to
 obtain a product experience.
 
+Resolve the evidence-bounded prototype context and workflow journey before
+planning. These sidecars constrain fixture realism, staged actions, resume
+behavior, capability placement, and UX continuity; they do not replace the
+human-readable plan:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
+```
+
 When a screenshot or design intake is supplied, materialize and validate
 PROJECT_DIR/design-intake.md before the impact preview. Read
 skills/design-system/references/reference-intake.md and
@@ -188,7 +211,10 @@ Publisher prefix: cr (prototype placeholder only)
 Normalized Dataverse foreground planning snapshot: NOT SUPPLIED
 Dataverse planning evidence: NOT SUPPLIED
 Structured schema contract output: <PROJECT_DIR>/.tmp/dataverse-schema-contract.json
+Neutral prototype domain output: <PROJECT_DIR>/.tmp/prototype-domain-model.json
 Product experience contract: <PROJECT_DIR>/.tmp/experience-contract.json
+Context enrichment contract: <PROJECT_DIR>/.tmp/context-enrichment-contract.json
+Workflow journey contract: <PROJECT_DIR>/.tmp/workflow-journey-contract.json
 Design vibe opt-in: deferred (or skip when --no-design)
 Visual reference:
 - Sources: <validated local screenshot paths, or NOT SUPPLIED>
@@ -202,6 +228,9 @@ This is a mock-backed prototype. Run the normal approval gates and write the
 same native-app-plan.md used by real apps, but perform no environment or
 Dataverse discovery. The schema sidecar must be complete enough for typed local
 mocks and must be marked planningMode=prototype, executionEligible=false.
+The data-model architect must additionally write and validate the neutral
+prototype domain model. It names the stable repository interfaces and hooks
+that screens use in both prototype and Dataverse modes.
 External connector rows remain requirements; prototype generation will create
 throw-stubs at their expected service paths.
 Read and mirror the Product Experience Contract under `## Design` before
@@ -219,11 +248,16 @@ Before continuing, require all of:
 ```bash
 test -f "$PROJECT_DIR/native-app-plan.md"
 test -f "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
+test -f "$PROJECT_DIR/.tmp/prototype-domain-model.json"
 test -f "$PROJECT_DIR/.tmp/experience-contract.json"
+test -f "$PROJECT_DIR/.tmp/context-enrichment-contract.json"
+test -f "$PROJECT_DIR/.tmp/workflow-journey-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-foundation-contract.json"
 test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
 When `--from-plan` was supplied, do not silently replace approved Data Model,
@@ -252,70 +286,50 @@ path.
 
 Choose `PROTOTYPE_ENTRY_ROUTE` from the approved Screen Map: use the explicit
 initial/home route, otherwise the first tab/root route. Normalize the plan's
-`app/(app)/...tsx` file to an Expo href such as `/(app)/home`.
+`app/(app)/...tsx` file to an Expo href such as `/(app)/home`. Runtime
+configuration is deferred until Step 5 creates the repository provider.
 
-Then enable the reversible local runtime:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/scripts/configure-prototype-runtime.js" \
-  "$PROJECT_DIR" prototype "$PROTOTYPE_ENTRY_ROUTE"
-```
-
-This intentionally:
-
-- bypasses route-level auth only while `dataMode === 'prototype'`;
-- keeps `PowerAppsProvider` mounted for the same Tamagui/native host surface;
-- writes a zero-environment `power.config.json` with empty references;
-- writes a prototype-only empty `connectorSchemas.ts` so Metro resolves the
-  root import;
-- replaces `predev` with a local-mock message and records the original command
-  in `.mobile-app/runtime-backup.json` for graduation.
-
-Write `.mobile-app/state.json` per
-[`lifecycle-state.md`](../../shared/references/lifecycle-state.md) with
-`dataMode: "prototype"`, null environment/transition/hashes, and schema version
-1.
-
-Run the scaffold gate:
-
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
-
-### Step 5 - Generate Typed Mocks
+### Step 5 - Generate The Typed Domain Layer
 
 Run:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/gen-mock-services.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/scripts/migrate-legacy-prototype.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/scripts/gen-data-layer.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/scripts/configure-prototype-runtime.js" \
+  "$PROJECT_DIR" prototype "$PROTOTYPE_ENTRY_ROUTE"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-The generator reads `.tmp/dataverse-schema-contract.json` and writes:
+The generator reads `.tmp/prototype-domain-model.json` and writes:
 
-- one in-memory CRUD service and deterministic seed file per service-required
-  table;
-- one prototype schema per table;
-- connector throw-stubs from `## Connectors`;
-- `src/generated/services/index.ts`, `src/generated/index.ts`, and registries;
-- `assets/experience/manifest.json`, containing local illustration recipes and
-  entity fallbacks;
-- `src/generated/experience-view-model.ts`, the single stable-ID presentation
-  adapter shared by list, detail, and cart/save screens;
-- `src/generated/.prototype-manifest.json`, the exact cleanup inventory.
+- neutral TypeScript models and repository contracts;
+- realistic fixtures and fixture-state scenarios;
+- in-memory repository implementations;
+- TanStack Query hooks for approved operations;
+- a `PrototypeDataProvider` mounted inside the existing
+  `PowerAppsProvider`;
+- fail-closed Dataverse and connector adapter placeholders;
+- local/cache-backed media resolution and an exact generated-file manifest.
 
-It also reads `.tmp/experience-contract.json` first. Audience, primary job,
-interaction/entry mode, and content model select semantic seed copy; legacy domain keyword packs are used only when no experience contract exists. Do not
-accept warehouse, field-service, CRM, or generic numbered seed copy that
-contradicts the contract primary experience.
+The migrator is a no-op for a fresh project. On an explicitly resumed legacy
+prototype, it transactionally preserves edited fixtures and restores the old
+tree if domain validation fails.
 
-Inspect seed density before screen construction. Require related parent IDs,
-multiple workflow/choice states, past and future dates where relevant, edge
-states, and domain-readable labels. Generic numbered rows are a blocker for a
-recognized field-service, inventory, CRM, grocery/retail, or healthcare brief.
+Do not hand-edit generated domain files to hide a contract mismatch. Repair
+the approved neutral domain model, regenerate, and rerun validation.
 
-Do not hand-edit a generated service to hide a contract mismatch. Repair the
-approved structured contract or generator, regenerate, and rerun type-check.
+The runtime configuration intentionally bypasses route-level auth only while
+`dataMode === 'prototype'`, keeps `PowerAppsProvider` as the host and Query
+Client owner, mounts the repository provider beneath it, writes local
+configuration, and records the original package command for graduation.
+
+Write `.mobile-app/state.json` per
+[`lifecycle-state.md`](../../shared/references/lifecycle-state.md) with
+`dataMode: "prototype"`, null environment/transition/hashes, the current
+domain/repository/fixture revisions, and the current lifecycle schema version.
 
 ### Step 6 - Apply Native Capabilities And Design
 
@@ -347,10 +361,14 @@ an industry preset, or substitute remote imagery for an offline-required
 asset. The design-system output must name the Reference Contract, required
 motifs, forbidden drift, and signature components before builders run.
 
-Compile and validate the compact builder assembly sheet after design and mock
-intent are both available:
+Resolve the approved Markdown Screen Map into deterministic journey and
+navigation contracts, then compile the compact builder assembly sheet:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-contract.js" \
+  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --output ".tmp/screen-build-pack.json"
@@ -360,28 +378,36 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
 ```
 
 Do not launch skeleton or builder work when the pack is missing or stale.
-Re-run `gen-mock-services.js` once after this compile so the final deterministic
-seed manifest records the pack revision and uses its fixture/experience intent;
-then rerun `npm --prefix "$PROJECT_DIR" run type-check`.
+The resolver may normalize the existing screen sidecar, but it must not alter
+the approved Markdown plan or invent destinations. Re-run
+`npm --prefix "$PROJECT_DIR" run type-check`.
 
 ### Step 7 - Navigation, Shared Code, And Skeletons
 
-Reuse the current owning implementation in `/create-mobile-app`, in this order:
+Reuse the current owning implementation in `/create-mobile-app` for shared
+code, contract-selected foundation primitives, pack-derived dependencies, and
+typed skeletons. Apply the navigation shell from the resolved contract first:
 
-1. Step 10.7 generated-service snapshot, using the prototype services now on
-   disk.
-2. Step 10b navigation layout from the approved Screen Map.
-3. Step 10.8 app-specific shared code, contract-selected foundation primitives,
-  pack-derived screen dependencies/build order, and typed skeletons.
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
+  --project-root "$PROJECT_DIR"
+```
 
 Prototype-specific rules:
 
 - Keep the `dataMode !== 'prototype'` auth guard in
-  `app/(app)/_layout.tsx` when Step 10b rewrites only the return block.
-- Never let a screen-builder edit layout files, generated mocks, seed JSON,
+  `app/(app)/_layout.tsx`; the shell applicator preserves it.
+- Never let a screen-builder edit layout files, generated domain files,
+  fixtures,
   package files, lifecycle state, or the plan.
-- Skeleton service imports come from `@/generated/services` and use only the
-  generated methods/types on disk.
+- Skeleton data imports come only from `@/data` and use the exact hooks and
+  domain types named by the build pack.
 - Read `.tmp/experience-foundation-contract.json` before skeleton generation.
   Create each selected component under `src/components/experience/`, export it
   from the shared barrel, retain its exact motif testID, and use local/bundled
@@ -390,9 +416,9 @@ Prototype-specific rules:
 - Read `.tmp/screen-build-pack.json` before skeleton generation. Use its
   `screens`, dependencies, fixture adapter, foundation primitives, and build
   order as the execution source; Markdown remains for detailed service clauses.
-  Each skeleton imports `ScreenShell`, `toExperienceRecord`, and
-  `getExperienceAsset`; route branches use the pack's literal `headerMode` and
-  never introduce a second `SafeAreaView` or index-keyed presentation copy.
+  Each skeleton imports `ScreenShell` plus its approved `@/data` hooks; route
+  branches use the pack's literal `headerMode` and never introduce a second
+  `SafeAreaView`, fixture import, or index-keyed presentation copy.
 
 Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
@@ -404,11 +430,10 @@ status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
 ```text
 Data mode: prototype.
 screen_build_pack_path: PROJECT_DIR/.tmp/screen-build-pack.json
-Use only the typed services exported from @/generated/services. They are
-in-memory implementations with deterministic seed data and the same app-facing
-CRUD contract that graduation will preserve through adapters when necessary.
-Do not import *.seed.json, call Dataverse, call connectors directly, or weaken
-the approved domain-specific first viewport.
+Use only the typed domain hooks and types exported from @/data. The repository
+interfaces remain stable when graduation replaces mock adapters with
+Dataverse adapters. Do not import fixtures, repositories, generated services,
+raw connector clients, or weaken the approved domain-specific first viewport.
 Read PROJECT_DIR/.tmp/experience-contract.json and
 PROJECT_DIR/.tmp/experience-screen-contract.json before writing. For the
 primary screen, materialize the exact ordered `experience-region-*` anchors,
@@ -417,12 +442,12 @@ the entry mode with a dashboard, generic List, or CRUD trio.
 Read PROJECT_DIR/.tmp/experience-foundation-contract.json and import the exact
 selected primitives from `@/components/experience/<component>` rather than
 recreating their motifs inside the screen.
-Read PROJECT_DIR/.tmp/screen-build-pack.json, validate it, and use the matching
-screen entry/revision for purpose, first viewport, states, dependencies, test
-IDs, headerMode, and stable-ID view model. Convert service rows through
-`toExperienceRecord`; use its ID for detail/cart identity and pass its local
-asset recipe to `EntityImage`. Only an explicitly logged compatibility fallback
-may proceed without a pack.
+Read PROJECT_DIR/.tmp/workflow-journey-contract.json,
+PROJECT_DIR/.tmp/navigation-contract.json, and the matching build-pack screen.
+Preserve stage guards, action priority, continuity keys, destination
+ownership, first viewport, states, dependencies, test IDs, and header mode.
+Use canonical domain IDs and `resolveDomainMedia` from @/data. Missing or stale
+contracts are blockers; do not infer a fallback navigation or data shape.
 ```
 
 When design-intake.md exists, also include this Reference Contract in every
@@ -452,6 +477,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --proje
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-action-state.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-cross-screen-continuity.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-signature-components.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-capability-composition.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-semantic-color-usage.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-static-layout-budgets.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
 npm --prefix "$PROJECT_DIR" run type-check
@@ -554,10 +585,19 @@ Update `.mobile-app/state.json`:
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
 
-Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
-or crawl routes in a browser. Return the Metro URL/QR handoff and instruct the
-user to scan it with the Power Apps Developer app or a compatible custom
-development client that includes the native host; Expo Go is unsupported.
+Start Metro through the non-interactive launcher:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+It chooses an available port, probes Metro's status endpoint, records the
+ready URL and log path, and reports startup failures directly. Do not use a web
+runtime or crawl routes in a browser. Return the Metro URL/QR handoff and
+instruct the user to scan it with the Power Apps Developer app or a compatible
+custom development client that includes the native host; Expo Go is
+unsupported.
 
 ### Step 10.5 - Native Reference Evidence
 

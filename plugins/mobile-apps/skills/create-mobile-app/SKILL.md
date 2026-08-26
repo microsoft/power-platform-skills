@@ -1709,7 +1709,7 @@ BLOCKED: duplicate Expo route <route> from <file-a> and <file-b>. Use [id]/index
 For each entry in the Inner stacks list, create the folder if missing and write `app/(app)/<folder>/_layout.tsx` with this template:
 
 ```tsx
-import { Stack } from 'expo-router';
+import { Stack } from 'expo-router/stack';
 
 export default function <FolderName>Layout() {
   return (
@@ -1754,7 +1754,7 @@ For each tab, infer a Ionicons icon name from the screen name:
 
 **The Edit to apply:**
 
-Add `import { Tabs } from 'expo-router';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
+Add `import { Tabs } from 'expo-router/tabs';`, `import { Ionicons } from '@expo/vector-icons';`, and `import { useThemeTokens } from '@microsoft/power-apps-native-host';` to the import block if not already present. Inside `AppLayout`, after the auth state is read, add `const theme = useThemeTokens();`. Then replace:
 
 ```tsx
 return (

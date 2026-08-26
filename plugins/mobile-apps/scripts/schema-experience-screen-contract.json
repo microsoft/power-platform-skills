@@ -1,0 +1,385 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Experience Screen Contract",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["schemaVersion", "experienceContractSha256", "primaryScreen", "keyFlow"],
+      "properties": { "schemaVersion": { "const": 1 } }
+    },
+    {
+      "type": "object",
+      "required": ["schemaVersion", "experienceContractSha256", "primaryScreen", "keyFlow", "criticalFlow", "screens"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "primaryScreen": {
+          "type": "object",
+          "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "visualCompositionIntent", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
+          "properties": {
+            "route": { "type": "string", "pattern": "^/" },
+            "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
+            "compositionKind": { "type": "string", "minLength": 1 },
+            "userOutcome": { "type": "string", "minLength": 5 },
+            "focalPoint": { "type": "string", "minLength": 5 },
+            "regionOrder": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "primaryAction": { "type": "string", "minLength": 1 },
+            "contentDensity": { "enum": ["sparse", "balanced", "dense"] },
+            "visualCompositionIntent": { "type": "object" },
+            "signatureMotifs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "forbiddenDefaults": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "runtimeMarkers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          },
+          "additionalProperties": false
+        },
+        "keyFlow": { "type": "object", "required": ["route", "file", "outcome"] },
+        "criticalFlow": {
+          "type": "object",
+          "required": ["screenIds", "outcome"],
+          "properties": {
+            "screenIds": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+            "outcome": { "type": "string", "minLength": 5 }
+          },
+          "additionalProperties": false
+        },
+        "screens": { "type": "array", "minItems": 2, "items": { "$ref": "#/definitions/screen" } }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": ["schemaVersion", "experienceContractSha256", "primaryScreen", "keyFlow", "criticalFlow", "screens"],
+      "properties": {
+        "schemaVersion": { "const": 3 },
+        "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "primaryScreen": { "$ref": "#/definitions/primaryScreen" },
+        "keyFlow": { "type": "object", "required": ["route", "file", "outcome"] },
+        "criticalFlow": { "$ref": "#/definitions/criticalFlow" },
+        "screens": { "type": "array", "minItems": 2, "items": { "$ref": "#/definitions/screenV3" } }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "primaryScreen": {
+      "type": "object",
+      "required": ["route", "file", "compositionKind", "userOutcome", "focalPoint", "regionOrder", "primaryAction", "contentDensity", "visualCompositionIntent", "signatureMotifs", "forbiddenDefaults", "runtimeMarkers"],
+      "properties": {
+        "route": { "type": "string", "pattern": "^/" },
+        "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
+        "compositionKind": { "type": "string", "minLength": 1 },
+        "userOutcome": { "type": "string", "minLength": 5 },
+        "focalPoint": { "type": "string", "minLength": 5 },
+        "regionOrder": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "primaryAction": { "type": "string", "minLength": 1 },
+        "contentDensity": { "enum": ["sparse", "balanced", "dense"] },
+        "visualCompositionIntent": { "type": "object" },
+        "signatureMotifs": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "forbiddenDefaults": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "runtimeMarkers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "criticalFlow": {
+      "type": "object",
+      "required": ["screenIds", "outcome"],
+      "properties": {
+        "screenIds": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "outcome": { "type": "string", "minLength": 5 }
+      },
+      "additionalProperties": false
+    },
+    "screen": {
+      "type": "object",
+      "required": ["id", "route", "file", "role", "purpose", "presentation", "regions", "firstViewport", "header", "primaryAction", "media", "states", "qualityCriteria", "testIds", "dependencies", "data", "forbiddenDefaults"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "route": { "type": "string", "pattern": "^/" },
+        "file": { "type": "string", "pattern": "^app/.+\\.tsx$" },
+        "routeParameters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "source", "required"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "source": { "enum": ["path", "query"] },
+              "required": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "navigation": { "$ref": "#/definitions/navigation" },
+        "role": { "enum": ["primary", "key-flow", "supporting"] },
+        "productRole": { "enum": ["primary-hub", "durable-destination", "workflow-step", "detail", "capture-surface", "transient", "modal", "immersive-utility"] },
+        "purpose": { "type": "string", "minLength": 5 },
+        "presentation": {
+          "type": "object",
+          "required": ["pattern", "density", "hierarchy"],
+          "properties": {
+            "pattern": { "enum": ["editorial-hero", "image-card-grid", "image-list", "compact-list", "form", "timeline", "detail", "conversation", "summary", "capture", "guided-flow", "custom"] },
+            "density": { "enum": ["sparse", "balanced", "dense"] },
+            "hierarchy": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 } }
+          },
+          "additionalProperties": false
+        },
+        "regions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "priority", "viewport", "mediaRequired"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "kind": { "type": "string", "minLength": 1 },
+              "priority": { "enum": [1, 2, 3] },
+              "viewport": { "enum": ["first", "below-fold"] },
+              "mediaRequired": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "firstViewport": {
+          "type": "object",
+          "required": ["regionIds", "focalPoint", "maxRegions"],
+          "properties": {
+            "regionIds": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string" }, "uniqueItems": true },
+            "focalPoint": { "type": "string", "minLength": 5 },
+            "maxRegions": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "nextContentVisible": { "type": "boolean" },
+            "maxFeatureViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 }
+          },
+          "additionalProperties": false
+        },
+        "context": { "$ref": "#/definitions/screenContext" },
+        "signatureComponent": { "$ref": "#/definitions/signatureComponent" },
+        "header": {
+          "type": "object",
+          "required": ["mode", "title"],
+          "properties": { "mode": { "enum": ["root", "back", "close", "none"] }, "title": { "type": "string" } },
+          "additionalProperties": false
+        },
+        "primaryAction": {
+          "type": ["object", "null"],
+          "required": ["id", "label", "placement"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1 },
+            "label": { "type": "string", "minLength": 1 },
+            "placement": { "enum": ["inline", "sticky-bottom", "header", "floating"] },
+            "destination": { "type": "string" },
+            "binding": { "type": "string", "minLength": 1 },
+            "doubleTapPolicy": { "enum": ["disable-while-pending", "idempotent", "not-applicable"] },
+            "clearance": {
+              "type": "object",
+              "required": ["safeArea", "tabBar"],
+              "properties": {
+                "safeArea": { "const": true },
+                "tabBar": { "enum": ["above", "not-applicable"] }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "media": {
+          "type": "object",
+          "required": ["required", "role", "aspectRatio", "minCoverage", "fallback"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "role": { "type": "string", "minLength": 1 },
+            "aspectRatio": { "type": "string", "minLength": 3 },
+            "minCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
+            "fallback": { "enum": ["local-asset", "code-native-illustration", "text-only", "none"] }
+            ,"prominence": { "enum": ["none", "low", "medium", "high"] },
+            "altTextBinding": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        "states": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "qualityCriteria": { "type": "array", "minItems": 3, "items": { "type": "string", "minLength": 5 } },
+        "testIds": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "dependencies": {
+          "type": "object",
+          "required": ["foundation", "fixtures", "screens"],
+          "properties": {
+            "foundation": { "type": "array", "items": { "type": "string" } },
+            "fixtures": { "type": "array", "items": { "type": "string" } },
+            "screens": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "data": {
+          "type": "object",
+          "required": ["entities", "fixtureScenarios"],
+          "properties": {
+            "entities": { "type": "array", "items": { "type": "string" } },
+            "fixtureScenarios": { "type": "array", "items": { "type": "string" } },
+            "operations": { "type": "array", "items": { "$ref": "#/definitions/operation" } }
+          },
+          "additionalProperties": false
+        },
+        "forbiddenDefaults": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "screenV3": {
+      "allOf": [
+        { "$ref": "#/definitions/screen" },
+        {
+          "type": "object",
+          "required": ["routeParameters", "navigation", "context", "signatureComponent", "productRole", "data"],
+          "properties": {
+            "firstViewport": {
+              "type": "object",
+              "required": ["regionIds", "focalPoint", "maxRegions", "nextContentVisible", "maxFeatureViewportShare"]
+            },
+            "media": {
+              "type": "object",
+              "required": ["required", "role", "aspectRatio", "minCoverage", "fallback", "prominence"]
+            },
+            "data": {
+              "type": "object",
+              "required": ["entities", "fixtureScenarios", "operations"]
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "required": ["id", "kind", "entity", "domainOperation", "repository", "repositoryMethod", "hook", "routeBindings"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "kind": { "enum": ["list", "get", "create", "update", "delete", "related-list", "connector"] },
+        "entity": { "type": ["string", "null"] },
+        "domainOperation": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*Repository$" },
+        "repositoryMethod": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+        "hook": { "type": "string", "pattern": "^use[A-Z][A-Za-z0-9]*$" },
+        "select": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "filter": { "type": "array", "items": { "$ref": "#/definitions/filter" } },
+        "sort": { "type": "array", "items": { "$ref": "#/definitions/sort" } },
+        "pagination": { "$ref": "#/definitions/pagination" },
+        "routeBindings": { "type": "array", "items": { "$ref": "#/definitions/routeBinding" } },
+        "relationship": { "$ref": "#/definitions/relationshipBinding" },
+        "writeFields": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "idField": { "type": "string", "minLength": 1 },
+        "connectorOperationId": { "type": "string", "pattern": "^connector-[a-z0-9][a-z0-9-]*$" }
+        ,"failureStates": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "screenContext": {
+      "type": "object",
+      "required": ["entryIds", "placementIntent", "assumptions"],
+      "properties": {
+        "entryIds": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "uniqueItems": true },
+        "placementIntent": { "enum": ["primary-screen-context-rail", "inline-label", "supporting-section", "none"] },
+        "assumptions": { "type": "array", "items": { "type": "string", "minLength": 10 }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "signatureComponent": {
+      "type": "object",
+      "required": ["kind", "required", "testId"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 3 },
+        "required": { "type": "boolean" },
+        "testId": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "navigation": {
+      "type": "object",
+      "required": ["kind", "intent"],
+      "properties": {
+        "kind": { "enum": ["tab-root", "stack-root", "pushed", "modal"] },
+        "intent": { "enum": ["navigate", "push", "replace", "present"] },
+        "parentRoute": { "type": "string", "pattern": "^/" },
+        "tabLabel": { "type": "string", "minLength": 1 },
+        "destinationId": { "type": ["string", "null"] },
+        "role": { "enum": ["destination-root", "nested-detail", "flow-step", "modal-flow"] },
+        "presentation": { "enum": ["root", "nested-stack", "modal", "full-screen-modal"] },
+        "tabVisibility": { "enum": ["visible", "covered-by-modal", "not-applicable"] },
+        "backTarget": { "type": ["string", "null"] },
+        "completionTarget": { "type": ["string", "null"] },
+        "cancelTarget": { "type": ["string", "null"] },
+        "deepLinkable": { "type": "boolean" },
+        "candidate": {
+          "type": "object",
+          "required": ["hasStableRoot", "revisitedIndependently", "preservesOwnState", "crossSessionValue", "peerToOtherDestinations", "isNotAFlowStep", "isNotAnAction", "supportedByBriefOrSafeProductInference"],
+          "properties": {
+            "hasStableRoot": { "type": "boolean" },
+            "revisitedIndependently": { "type": "boolean" },
+            "preservesOwnState": { "type": "boolean" },
+            "crossSessionValue": { "type": "boolean" },
+            "peerToOtherDestinations": { "type": "boolean" },
+            "isNotAFlowStep": { "type": "boolean" },
+            "isNotAnAction": { "type": "boolean" },
+            "supportedByBriefOrSafeProductInference": { "type": "boolean" },
+            "badgeBinding": { "type": ["string", "null"] },
+            "iconIntent": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "filter": {
+      "type": "object",
+      "required": ["field", "operator"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "operator": { "enum": ["eq", "ne", "contains", "startswith", "endswith", "gt", "ge", "lt", "le", "in"] },
+        "value": {},
+        "valueFrom": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sort": {
+      "type": "object",
+      "required": ["field", "direction"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1 },
+        "direction": { "enum": ["asc", "desc"] }
+      },
+      "additionalProperties": false
+    },
+    "pagination": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["cursor", "bounded", "none"] },
+        "pageSize": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "cursorParameter": { "type": "string", "minLength": 1 },
+        "boundedReason": { "type": "string", "minLength": 5 },
+        "maximumExpectedCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "routeBinding": {
+      "type": "object",
+      "required": ["parameter", "target", "field"],
+      "properties": {
+        "parameter": { "type": "string", "minLength": 1 },
+        "target": { "enum": ["id", "filter", "relationship", "input"] },
+        "field": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "relationshipBinding": {
+      "type": "object",
+      "required": ["key", "sourceEntity", "targetEntity", "sourceField", "targetField", "readStrategy"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "sourceEntity": { "type": "string", "minLength": 1 },
+        "targetEntity": { "type": "string", "minLength": 1 },
+        "sourceField": { "type": "string", "minLength": 1 },
+        "targetField": { "type": "string", "minLength": 1 },
+        "readStrategy": { "enum": ["repository", "embedded", "external-projection-required"] },
+        "sourceRouteParameter": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

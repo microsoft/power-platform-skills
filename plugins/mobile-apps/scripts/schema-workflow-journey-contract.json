@@ -1,0 +1,218 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Workflow Journey Contract",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "experienceContractSha256",
+    "contextEnrichmentSha256",
+    "journeyId",
+    "journeyKind",
+    "primaryOutcome",
+    "entryPoints",
+    "resume",
+    "declaredStateFields",
+    "stages",
+    "completionGuards",
+    "actions",
+    "stateActions",
+    "signatureComponents",
+    "continuityKeys",
+    "scenarios",
+    "capabilityComposition"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contextEnrichmentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "journeyId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "journeyKind": {
+      "enum": [
+        "discovery-with-nested-flow",
+        "linear-resumable",
+        "capture-led-linear",
+        "progress-resumable",
+        "staged-choice",
+        "stateful-overview",
+        "durable-destinations"
+      ]
+    },
+    "primaryOutcome": { "type": "string", "minLength": 5 },
+    "entryPoints": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+    },
+    "resume": {
+      "type": "object",
+      "required": ["supported", "restoreLastCompletedStage", "restoreDraftData", "visibleOnPrimaryScreen"],
+      "properties": {
+        "supported": { "type": "boolean" },
+        "restoreLastCompletedStage": { "type": "boolean" },
+        "restoreDraftData": { "type": "boolean" },
+        "visibleOnPrimaryScreen": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "declaredStateFields": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(?:\\.[a-z][A-Za-z0-9]*)*$" }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "order", "screenIds", "completionRuleId", "evidence"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "order": { "type": "integer", "minimum": 1 },
+          "screenIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$" }
+          },
+          "completionRuleId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "evidence": {
+            "type": "object",
+            "required": ["text", "start", "end"],
+            "properties": {
+              "text": { "type": "string", "minLength": 1 },
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "completionGuards": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "expression", "referencedFields", "blockingMessage"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "expression": { "type": "string", "minLength": 3 },
+          "referencedFields": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(?:\\.[a-z][A-Za-z0-9]*)*$" }
+          },
+          "blockingMessage": { "type": "string", "minLength": 5 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "kind", "target", "stageId", "semanticRole"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["route", "domain-operation", "local"] },
+          "target": { "type": "string", "minLength": 1 },
+          "stageId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "semanticRole": { "enum": ["primary", "secondary", "destructive"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stateActions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["screenId", "state", "primaryAction", "guardId", "enabledActions", "disabledActions", "hiddenActions"],
+        "properties": {
+          "screenId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$" },
+          "state": { "enum": ["incomplete", "complete", "error", "offline"] },
+          "primaryAction": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "guardId": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]*$" },
+          "enabledActions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "disabledActions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+          "hiddenActions": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "signatureComponents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "placement", "requiredOnStageScreens", "requiredWhen", "testId", "semanticRole"],
+        "properties": {
+          "kind": { "enum": ["workflow-stepper", "resume-draft-module", "offline-status", "stage-progress"] },
+          "placement": { "type": "string", "minLength": 1 },
+          "requiredOnStageScreens": { "type": "boolean" },
+          "requiredWhen": { "type": ["string", "null"] },
+          "testId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "semanticRole": { "enum": ["progress", "resume", "status", "context"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "continuityKeys": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(?:\\.[a-z][A-Za-z0-9]*)*$" }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "actor", "currentSituation", "primaryRecordId", "displayReference", "locationName", "priorityStatus", "offlineState", "currentStageId", "completedStageCount", "requiredStageCount", "draftState", "completionBlockers", "continuityValues"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "actor": { "type": "string", "minLength": 1 },
+          "currentSituation": { "type": "string", "minLength": 5 },
+          "primaryRecordId": { "type": "string", "minLength": 1 },
+          "displayReference": { "type": "string", "minLength": 1 },
+          "locationName": { "type": ["string", "null"] },
+          "priorityStatus": { "type": "string", "minLength": 1 },
+          "offlineState": { "enum": ["online", "offline-ready", "saved-locally", "pending-sync"] },
+          "currentStageId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "completedStageCount": { "type": "integer", "minimum": 0 },
+          "requiredStageCount": { "type": "integer", "minimum": 1 },
+          "draftState": { "enum": ["not-applicable", "new", "saved-draft", "resumed"] },
+          "completionBlockers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "continuityValues": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "capabilityComposition": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["capability", "mode", "fallbackStates", "maxViewportShare"],
+        "properties": {
+          "capability": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "mode": { "enum": ["on-demand", "supporting", "primary"] },
+          "fallbackStates": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "enum": ["loading", "permission-denied", "unavailable", "offline", "manual-entry"] }
+          },
+          "maxViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

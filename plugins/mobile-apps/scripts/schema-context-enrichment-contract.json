@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Context Enrichment Contract",
+  "type": "object",
+  "required": ["schemaVersion", "experienceContractSha256", "contextMode", "displayContext", "ephemeralModel", "assumptions", "forbiddenInferences"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "contextMode": { "enum": ["none", "active-journey", "learning-progress", "availability-context", "active-assignment", "financial-period", "workspace-presence", "capture-session"] },
+    "displayContext": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "sampleValue", "valueType", "source", "placementIntent", "evidence", "assumption"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "label": { "type": "string", "minLength": 1 },
+          "sampleValue": { "type": "string", "minLength": 1 },
+          "valueType": { "enum": ["text", "status", "progress", "date-time"] },
+          "source": { "const": "inferred-prototype-fixture" },
+          "placementIntent": { "enum": ["primary-screen-context-rail", "inline-label", "supporting-section"] },
+          "evidence": {
+            "type": "object",
+            "required": ["signal", "text", "start", "end"],
+            "properties": {
+              "signal": { "type": "string", "minLength": 1 },
+              "text": { "type": "string", "minLength": 1 },
+              "start": { "type": "integer", "minimum": 0 },
+              "end": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          },
+          "assumption": { "type": "string", "minLength": 10 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "ephemeralModel": {
+      "type": ["object", "null"],
+      "required": ["key", "persistence", "fields"],
+      "properties": {
+        "key": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" },
+        "persistence": { "const": "prototype-session" },
+        "fields": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" }, "uniqueItems": true }
+      },
+      "additionalProperties": false
+    },
+    "assumptions": { "type": "array", "items": { "type": "string", "minLength": 10 }, "uniqueItems": true },
+    "forbiddenInferences": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 10 }, "uniqueItems": true }
+  },
+  "additionalProperties": false
+}

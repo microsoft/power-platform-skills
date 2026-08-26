@@ -1,4 +1,5 @@
-import { Redirect, Stack } from 'expo-router';
+import { Redirect } from 'expo-router';
+import { Stack } from 'expo-router/stack';
 import { useAuth } from '@microsoft/power-apps-native-host';
 
 /**

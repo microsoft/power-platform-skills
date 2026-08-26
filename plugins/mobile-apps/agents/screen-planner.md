@@ -50,6 +50,12 @@ The planner gives you:
 - Features the user listed
 - `<working_dir>/.tmp/experience-contract.json` — mandatory product experience
   contract created by `native-app-planner`
+- `<working_dir>/.tmp/workflow-journey-contract.json` — when present, the
+  foreground-derived source for staged actions, guards, resume behavior,
+  continuity keys, capability placement, and required workflow signatures
+- `<working_dir>/.tmp/prototype-domain-model.json` — in prototype mode, the
+  neutral source for entity fields, relationships, operation IDs, repository
+  methods, exported hooks, and fixture scenarios
 - **`phase`** — one of `graph` | `specs` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
 
 ## Two-phase mode (Gate 4 split — PREFERRED)
@@ -65,6 +71,22 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 **`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
 
 **Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time on Gate 4b (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
+
+**Journey and domain continuity.** When the workflow-journey sidecar exists,
+preserve its ordered stages and guards in the Screen Map, Navigation Contracts,
+and per-screen actions. A Review, Confirm, Submit, or Finish action must not be
+available before its declared guard passes. Carry every continuity key through
+the relevant route parameters and identify the owning durable destination for
+each nested or modal flow screen. Tabs and drawer entries are independently
+revisitable destinations, never workflow actions or transient steps.
+
+In prototype mode, bind every data-driven screen to exact operations from the
+neutral domain model. Name the exported `@/data` hook, selected/filter/sort/
+write fields, route bindings, relationship use, pagination mode, and fixture
+states. Do not ask builders to call repositories, fixtures, generated services,
+connectors, or raw HTTP. Loading, empty, error, offline, permission-denied,
+and capability-unavailable states must preserve the same hierarchy and recovery
+action as populated content.
 
 **The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
 

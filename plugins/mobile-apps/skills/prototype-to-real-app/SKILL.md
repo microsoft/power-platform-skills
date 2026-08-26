@@ -12,8 +12,9 @@ model: opus
 
 Convert an existing `/create-mobile-prototype` project in place. Preserve its
 approved product design, navigation, screens, and user-authored code while
-replacing mock data/auth integration with a selected Power Platform
-environment, live Dataverse schema, generated services, and real connectors.
+replacing mock repository/auth integration with a selected Power Platform
+environment, live Dataverse schema, generated repository adapters, and real
+connectors.
 
 ## Inputs
 
@@ -35,6 +36,10 @@ environment, live Dataverse schema, generated services, and real connectors.
   publisher prefix, solution, and a fresh live reconciliation are confirmed.
 - Do not mark state `dataverse` before real services replace every mock and
   `/sync-from-plan --target-data-mode dataverse` passes.
+- For neutral-domain prototypes, preserve
+  `.tmp/prototype-domain-model.json`, `src/data/model.ts`, repository
+  interfaces, hooks, screens, and navigation. Reconcile Dataverse behind those
+  interfaces; do not rewrite screens to generated service calls.
 - Do not delete a marker-bearing mock service merely to satisfy cleanup. First
   prove a real generated replacement exists and no app code imports the mock.
 - Do not allow child data/native/connector skills to rebuild screens. This
@@ -83,9 +88,25 @@ Require:
 test -f "$PROJECT_DIR/package.json"
 test -f "$PROJECT_DIR/app.config.js"
 test -f "$PROJECT_DIR/native-app-plan.md"
-test -f "$PROJECT_DIR/src/generated/.prototype-manifest.json"
 test -f "$PROJECT_DIR/.mobile-app/state.json"
 ```
+
+Require either the current neutral-domain markers:
+
+```bash
+test -f "$PROJECT_DIR/.tmp/prototype-domain-model.json"
+test -f "$PROJECT_DIR/.mobile-app/prototype-domain-manifest.json"
+test -f "$PROJECT_DIR/src/data/contracts.ts"
+test -f "$PROJECT_DIR/src/data/repositories/mockRepositories.ts"
+test -f "$PROJECT_DIR/src/data/repositories/dataverseRepositories.ts"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
+```
+
+or, for a confirmed legacy prototype only,
+`src/generated/.prototype-manifest.json`. Migrate that legacy prototype through
+`create-mobile-prototype/scripts/migrate-legacy-prototype.js` before continuing
+so conversion has one stable repository boundary.
 
 For a fresh conversion, also require the non-executable planner artifacts:
 
@@ -113,9 +134,11 @@ If the file is absent, stale, or incomplete, invoke:
 in prototype mode, then restart conversion. Do not discover weak screens only
 after attaching a real backend.
 
-Check that app code does not import `*.seed.json` directly. Record the current
-plan hash, prototype manifest, connector stubs, and generated service names for
-the later replacement audit.
+Check that screens import data only from `@/data` and never import fixtures,
+repositories, generated services, connectors, or seed JSON directly. Copy the
+current `.tmp/screen-build-pack.json` to
+`.tmp/pre-graduation-screen-build-pack.json` and record hashes of `app/`,
+navigation, shared UX components, and hooks for the unchanged-UI audit.
 
 ### Step 2 - Resolve And Confirm Environment
 
@@ -333,7 +356,32 @@ migration planner rejects any stale hash or environment mismatch.
 Run `npm run generate-schemas` and `npm run type-check`. Any missing manifest
 fact or compile error blocks conversion.
 
-Advance transition phase to `connectors`.
+Reconcile the neutral domain to the live manifest:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/reconcile-domain-dataverse.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Require `.tmp/dataverse-reconciliation-report.json` with `status: "ready"`
+and `.tmp/dataverse-repository-mapping.json`. Ambiguous entities or fields,
+unsupported media/file transforms, choice mismatches, missing services, and
+unsafe operations are blockers; resolve the approved mapping and rerun rather
+than guessing.
+
+Generate the real implementation behind the existing repository contracts:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/scripts/gen-dataverse-repositories.js" "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope domain
+npm --prefix "$PROJECT_DIR" run type-check
+```
+
+This may replace only
+`src/data/repositories/dataverseRepositories.ts`. It must not modify the
+domain model, hooks, screens, shared UX, or navigation. Advance transition
+phase to `connectors`.
 
 ### Step 6 - Replace Connector Stubs And Verify Native Wrappers
 
@@ -343,9 +391,10 @@ dataset/table, and schema-generation prompts. Use the exact API ID mapping from
 the connector reference; do not assume the prototype filename is the real
 connector ID.
 
-After each connector, verify a real generated service replaced or superseded
-the corresponding throw-stub. A planned connector that cannot be provisioned
-is blocking because leaving its stub would create a partly mocked real app.
+After each connector, place its calls behind the approved adapter under
+`src/data/repositories/` and verify the matching domain hook remains unchanged.
+A planned connector that cannot replace its fail-closed adapter is blocking
+because leaving it would create a partly mocked real app.
 
 Read `## Native Capabilities`. Existing prototype wrappers should already be
 valid. Invoke `/add-native <capability>` only when a wrapper is missing or the
@@ -383,36 +432,28 @@ Record inserted/existing/skipped counts and the migration-plan hash per table.
 
 Advance transition phase to `cleanup`.
 
-### Step 8 - Rebind Service Imports And Remove Prototype Runtime
+### Step 8 - Switch Repository Mode And Preserve The UI
 
-First run real schema generation and inspect the current generated service
-surface. Compare it with `src/generated/.prototype-manifest.json` and the real
-Dataverse manifest.
+Keep the neutral domain model, repository interfaces, query hooks, fixture
+scenarios, and `PrototypeDataProvider`. The provider is shared infrastructure
+despite its historical name; its repository factory switches adapters from
+the lifecycle data mode. Do not rebind screen imports.
 
-When real filenames/methods differ from the prototype contract, create a
-non-generated compatibility layer under `src/services/` or update app imports
-mechanically. Compatibility code may import only real generated services and
-models. It must not import prototype schemas, seed JSON, or mock registries.
-Add a focused `@/services` alias when needed.
+Verify every required Dataverse and connector adapter is real before switching
+mode. Mock repositories may remain for development scenarios, but no
+Dataverse-mode factory path may select them or a throw-stub.
 
-For every marker-bearing service/barrel left in the prototype manifest:
-
-1. Prove the corresponding real generated table/connector service exists.
-2. Prove app and non-generated source no longer import the mock file/export.
-3. Only then delete that exact orphan listed by the prototype manifest.
-
-Do not delete an un-replaced connector stub or table mock. It indicates an
-incomplete provisioning phase.
-
-Run the shared cleanup transaction:
+If an explicitly migrated legacy prototype still has
+`src/generated/.prototype-manifest.json`, run the existing cleanup transaction
+only for artifacts listed in that manifest after proving each replacement:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/cleanup-prototype-artifacts.js" \
   "$PROJECT_DIR"
 ```
 
-It removes seed files and generator-owned schemas, blocks on remaining mock
-markers, and removes `.prototype-manifest.json` only after a clean pass.
+Never delete `src/data/`, `.tmp/prototype-domain-model.json`, or the domain
+manifest during cleanup.
 
 Switch the reversible runtime shell:
 
@@ -431,7 +472,21 @@ Verify:
   is Dataverse;
 - `app/(app)/_layout.tsx` guards unauthenticated routes;
 - `power.config.json` contains real database/connection references;
-- no source references a prototype seed/schema/mock marker.
+- screens still import only `@/data`;
+- the Dataverse repository adapter is generated from the current mapping;
+- no Dataverse-mode path selects a prototype mock or connector throw-stub.
+
+Recompile the screen pack and prove the backend-only migration retained the UI
+contract:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-ui-neutral-data-migration.js" \
+  --project-root "$PROJECT_DIR" \
+  --before ".tmp/pre-graduation-screen-build-pack.json" \
+  --after ".tmp/screen-build-pack.json"
+```
 
 Advance transition phase to `sync`.
 

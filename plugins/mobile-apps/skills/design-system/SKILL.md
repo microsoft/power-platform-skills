@@ -45,16 +45,25 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 - Optional: `--add-theme <name>` — add named theme variant
 - Optional: `--history` / `--diff <ts>` / `--rollback <ts>` — version history
 
-## References — read before executing
+## References — load only for the selected mode
 
-- [`references/design-system-schema.md`](./references/design-system-schema.md) — schema for `brand/design-system.md`
-- [`references/preview-template.md`](./references/preview-template.md) — HTML template for gallery render
-- [`references/refresh-flow.md`](./references/refresh-flow.md) — single-dimension refresh logic
-- [`references/input-modes.md`](./references/input-modes.md) — how each input flag is processed
-- [`references/reference-intake.md`](./references/reference-intake.md) —
-  screenshot and design-intake processing
-- [`references/vibe/brand-examples.md`](./references/vibe/brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry)
-- [`references/vibe/style-picker.md`](./references/vibe/style-picker.md) — internal folded style picker
+For an orchestrated prompt-only native run with no explicit brand, screenshot,
+Figma, gallery, comparison, refresh, reskin, or theme request, read only
+[`automatic-native.md`](./automatic-native.md) before Sub-step 0. Do not preload
+the optional references below. The existing Product Experience Contract,
+Foundation Contract, approved Markdown plan, and screen contract remain
+authoritative; this is a context-loading optimization, not a new planner or
+design compiler.
+
+For other modes, load a reference only when its owning step requires it:
+
+- [`references/design-system-schema.md`](./references/design-system-schema.md) — when writing `brand/design-system.md`
+- [`references/preview-template.md`](./references/preview-template.md) — when rendering a gallery
+- [`references/refresh-flow.md`](./references/refresh-flow.md) — refresh, drift, history, diff, or rollback
+- [`references/input-modes.md`](./references/input-modes.md) — explicit brand/Figma/URL/sibling input
+- [`references/reference-intake.md`](./references/reference-intake.md) — screenshot or design-intake processing
+- [`references/vibe/brand-examples.md`](./references/vibe/brand-examples.md) — explicit brand-role comparison
+- [`references/vibe/style-picker.md`](./references/vibe/style-picker.md) — explicit style comparison only
 
 ---
 
