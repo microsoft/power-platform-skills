@@ -83,6 +83,73 @@ function literalTestId(openTag) {
   return openTag.match(/\btestID\s*=\s*["']([^"']+)["']/)?.[1] || null;
 }
 
+function matchingBraceEnd(source, openIndex) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+    } else if (char === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return source.length;
+}
+
+function actionHandlerSource(source, handlerName) {
+  const name = escapeRegExp(handlerName);
+  const functionMatch = new RegExp(`\\bfunction\\s+${name}\\s*\\(`).exec(source);
+  const assignmentMatch = new RegExp(`\\b(?:const|let)\\s+${name}\\s*=`).exec(source);
+  const match = functionMatch || assignmentMatch;
+  if (!match) return null;
+  let openBrace = -1;
+  if (functionMatch) {
+    openBrace = source.indexOf('{', match.index + match[0].length);
+  } else {
+    const arrow = source.indexOf('=>', match.index + match[0].length);
+    if (arrow < 0) return null;
+    openBrace = source.indexOf('{', arrow + 2);
+    const expressionEnd = source.slice(arrow + 2).search(/[;\n]/);
+    if (openBrace < 0 || (expressionEnd >= 0 && openBrace > arrow + 2 + expressionEnd)) {
+      const end = expressionEnd < 0 ? source.length : arrow + 2 + expressionEnd;
+      return source.slice(match.index, end);
+    }
+  }
+  if (openBrace < 0) return null;
+  return source.slice(match.index, matchingBraceEnd(source, openBrace));
+}
+
 function elementContains(outer, inner) {
   return outer.start <= inner.start && inner.end <= outer.end;
 }
@@ -243,7 +310,9 @@ function validateRelatedMediaBinding(source, screen, issues) {
 function validateAggregateFreshness(source, screen, issues) {
   const binding = screen.data?.runtimeBindings?.aggregateFreshness;
   if (binding?.requiredWhenRendered !== true) return;
-  const aggregateRendered = /<Badge\b|\b[A-Za-z_$][\w$]*(?:Badge|Count)\b|\b(?:cart|bag|basket|saved|selection|favorite|notification|message)[A-Za-z0-9_$]*\.length\b/i.test(source);
+  const aggregateRendered = typeof binding.testId === 'string'
+    ? source.includes(`testID="${binding.testId}"`) || source.includes(`testID='${binding.testId}'`)
+    : false;
   if (!aggregateRendered) return;
   const focusRefresh = /\buseFocusEffect\s*\(/.test(source)
     || /\baddListener\s*\(\s*['\"]focus['\"]/.test(source);
@@ -259,7 +328,7 @@ function validateStaticEngineeringRules(source, screen, elements, issues, option
   if (/\b(?:QueryClientProvider|new\s+QueryClient\s*\()/.test(source)) {
     issues.push({ rule: 'duplicate-query-client', message: `Screen ${label} must use the Query Client owned by PowerAppsProvider.` });
   }
-  if (/\bcr[a-z0-9]*_[a-z][a-z0-9_]*\b/i.test(source)) {
+  if (screen.data?.adapter === 'local' && /\bcr[a-z0-9]*_[a-z][a-z0-9_]*\b/i.test(source)) {
     issues.push({ rule: 'provisional-dataverse-identifier', message: `Screen ${label} contains a provisional Dataverse publisher-prefixed identifier.` });
   }
   for (const entity of screen.data?.entities || []) {
@@ -267,12 +336,6 @@ function validateStaticEngineeringRules(source, screen, elements, issues, option
     if (new RegExp(`\\b(?:const|let)\\s+(?:mock|sample|local|fallback)?${variable}\\s*=\\s*\\[\\s*\\{`, 'i').test(source)) {
       issues.push({ rule: 'screen-local-record-array', message: `Screen ${label} declares replacement ${entity} records instead of using its approved @/data hook.` });
     }
-  }
-  if (/\b(?:const|let)\s+(?:isAvailable|available|inStock|inventoryQuantity|stockCount)\s*=\s*(?:true|false|\d+|['"][^'"]+['"])/i.test(source)) {
-    issues.push({ rule: 'hard-coded-availability', message: `Screen ${label} hard-codes availability instead of deriving it from the canonical domain record.` });
-  }
-  if (/\b(?:const|let)\s+(?:cart|bag|basket|saved|selection|favorite|notification|message|item)[A-Za-z0-9_$]*(?:Count|Total)\s*=\s*\d+(?:\.\d+)?\b/i.test(source)) {
-    issues.push({ rule: 'hard-coded-aggregate', message: `Screen ${label} hard-codes a mutation-backed aggregate.` });
   }
   if (/(?:\:\s*any\b|\bas\s+(?:any\b|unknown\s+as\b)|<any>)/.test(source)) {
     issues.push({ rule: 'unsafe-type-escape', message: `Screen ${label} uses any or a broad unsafe cast.` });
@@ -538,6 +601,65 @@ function validateFirstViewportSource(source, screen, elements, issues) {
   }
 }
 
+function validateExecutableActions(source, screen, elements, issues) {
+  const label = screen.route || screen.id || '<unknown>';
+  const bindings = screen.actionBindings || [];
+  const byId = new Map(bindings.map((binding) => [binding.id, binding]));
+  for (const binding of bindings) {
+    const actionElement = elements.find((element) => literalTestId(element.openTag) === binding.testId);
+    if (!actionElement) {
+      issues.push({ rule: 'action-control-missing', message: `Screen ${label} does not render ${binding.testId} for action ${binding.id}.` });
+      continue;
+    }
+    const actionSource = source.slice(actionElement.start, actionElement.end);
+    if (!new RegExp(`\\b${escapeRegExp(binding.handlerName)}\\b`).test(actionSource)) {
+      issues.push({ rule: 'action-handler-not-wired', message: `Screen ${label} action ${binding.id} is not wired to ${binding.handlerName}.` });
+    }
+    const handlerSource = actionHandlerSource(source, binding.handlerName);
+    if (!handlerSource) issues.push({ rule: 'action-handler-missing', message: `Screen ${label} does not declare ${binding.handlerName}.` });
+    if ((binding.availability || []).length) {
+      const availabilityDeclaration = new RegExp(`(?:const|let)\\s+${escapeRegExp(binding.availabilityName)}\\s*=`).test(source);
+      if (!availabilityDeclaration) issues.push({ rule: 'action-availability-missing', message: `Screen ${label} does not declare ${binding.availabilityName}.` });
+      const disabledExpression = actionElement.openTag.match(/\bdisabled\s*=\s*\{([^}]*)\}/)?.[1] || '';
+      if (!new RegExp(`\\b${escapeRegExp(binding.availabilityName)}\\b`).test(disabledExpression)) issues.push({ rule: 'action-availability-not-wired', message: `Screen ${label} action ${binding.id} does not bind disabled to ${binding.availabilityName}.` });
+      for (const condition of binding.availability) {
+        if (condition.reason && !source.includes(condition.reason)) issues.push({ rule: 'action-disabled-reason-missing', message: `Screen ${label} action ${binding.id} does not render its disabled reason.` });
+      }
+    }
+    const executor = binding.executor || {};
+    const control = binding.controlHint || {};
+    if (control.iconName && !actionSource.includes(control.iconName)) issues.push({ rule: 'action-icon-not-rendered', message: `Screen ${label} action ${binding.id} does not render compiled icon ${control.iconName}.` });
+    if (control.labelMode === 'accessible-only' && !/\baccessibilityLabel\s*=\s*(?:["'][^"']+["']|\{[^}]+\})/.test(actionElement.openTag)) issues.push({ rule: 'action-accessible-label-missing', message: `Screen ${label} icon action ${binding.id} requires an accessibilityLabel.` });
+    if (control.badge) {
+      const valueName = control.badge.valueName;
+      if (!valueName || !new RegExp(`(?:const|let)\\s+${escapeRegExp(valueName)}\\s*=`).test(source)) issues.push({ rule: 'action-badge-value-missing', message: `Screen ${label} action ${binding.id} does not declare ${valueName || '<missing badge value>'}.` });
+      if (!valueName || !new RegExp(`\\b${escapeRegExp(valueName)}\\b`).test(actionSource)) issues.push({ rule: 'action-badge-not-rendered', message: `Screen ${label} action ${binding.id} does not render its compiled badge value.` });
+    }
+    if (executor.kind === 'route') {
+      const routerCall = new RegExp(`\\brouter\\.${escapeRegExp(executor.intent)}\\s*\\(`).test(handlerSource || '');
+      if (!routerCall || !(handlerSource || '').includes(executor.route)) issues.push({ rule: 'action-route-not-executed', message: `Screen ${label} action ${binding.id} does not execute ${executor.intent} to ${executor.route}.` });
+    }
+    if (['operation', 'connector'].includes(executor.kind)) {
+      if (executor.provider === 'generated-service') {
+        if (!executor.service || !executor.serviceMethod || !new RegExp(`\\b${escapeRegExp(executor.service)}\\.${escapeRegExp(executor.serviceMethod)}\\s*\\(`).test(handlerSource || '')) issues.push({ rule: 'action-service-not-executed', message: `Screen ${label} action ${binding.id} does not execute ${executor.service || '<missing service>'}.${executor.serviceMethod || '<missing method>'}.` });
+      } else {
+        if (!executor.hook || !new RegExp(`\\b${escapeRegExp(executor.hook)}\\s*\\(`).test(source)) issues.push({ rule: 'action-hook-missing', message: `Screen ${label} action ${binding.id} does not initialize ${executor.hook || '<missing hook>'}.` });
+        const expectedCall = executor.mode === 'query' ? /\.refetch\s*\(/ : /\.mutate(?:Async)?\s*\(/;
+        if (!expectedCall.test(handlerSource || '')) issues.push({ rule: 'action-operation-not-executed', message: `Screen ${label} action ${binding.id} does not execute its ${executor.mode || 'mutation'} hook.` });
+      }
+    }
+    if (executor.kind === 'native' && !new RegExp(`\\b${escapeRegExp(executor.command)}\\s*\\(`).test(handlerSource || '')) issues.push({ rule: 'action-native-command-missing', message: `Screen ${label} action ${binding.id} does not call native command ${executor.command}.` });
+    if (['local', 'host'].includes(executor.kind) && (!executor.commandName || !new RegExp(`\\b${escapeRegExp(executor.commandName)}\\s*\\(`).test(handlerSource || ''))) issues.push({ rule: 'action-command-not-executed', message: `Screen ${label} action ${binding.id} does not execute ${executor.commandName || '<missing command>'}.` });
+    if (executor.kind === 'sequence') {
+      for (const step of executor.steps || []) {
+        const stepBinding = byId.get(step);
+        if (!stepBinding) issues.push({ rule: 'action-sequence-step-unresolved', message: `Screen ${label} sequence ${binding.id} has no compiled same-screen binding for ${step}.` });
+        else if (!new RegExp(`\\b${escapeRegExp(stepBinding.handlerName)}\\b`).test(handlerSource || '')) issues.push({ rule: 'action-sequence-step-missing', message: `Screen ${label} sequence ${binding.id} does not reference ${stepBinding.handlerName}.` });
+      }
+    }
+  }
+}
+
 function validateScreenSourceContract(source, screen, options = {}) {
   const issues = [];
   if (typeof source !== 'string' || !screen) return issues;
@@ -549,6 +671,7 @@ function validateScreenSourceContract(source, screen, options = {}) {
   validateProfileAccess(source, screen, elements, issues, options);
   validateVisiblePrimaryAction(source, screen, elements, issues);
   validateFirstViewportSource(source, screen, elements, issues);
+  validateExecutableActions(source, screen, elements, issues);
   validateAvailabilityBinding(source, screen, elements, issues);
   validateRelatedMediaBinding(source, screen, issues);
   validateAggregateFreshness(source, screen, issues);
@@ -562,10 +685,12 @@ function validateScreenSourceContract(source, screen, options = {}) {
 }
 
 module.exports = {
+  actionHandlerSource,
   actionMarkerCandidates,
   jsxElements,
   regionMarkerCandidates,
   validateProfileAccess,
+  validateExecutableActions,
   validateStaticEngineeringRules,
   validateScreenSourceContract,
 };

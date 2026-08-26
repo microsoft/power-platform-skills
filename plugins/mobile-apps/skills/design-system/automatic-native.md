@@ -12,8 +12,10 @@ Read only:
 
 - `reference-ownership.json` already selected by the dispatcher;
 - `.tmp/experience-contract.json`;
+- `.tmp/context-enrichment-contract.json`;
 - `.tmp/experience-foundation-contract.json`;
 - `.tmp/experience-screen-contract.json`;
+- `.tmp/screen-action-contract.json`;
 - `.tmp/navigation-contract.json` when present;
 - `.tmp/design-content-projection.json` (required; generated after domain
   validation);

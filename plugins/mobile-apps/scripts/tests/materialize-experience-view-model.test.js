@@ -45,7 +45,7 @@ test('materializes schema-only local illustration fallbacks and a stable record 
   assert.deepEqual(manifest.fallbacks.cr_product, {
     keyPattern: 'asset://experience/cr_product/<record-id>',
     kind: 'local-illustration',
-    family: 'product',
+    family: 'generic',
     label: 'Product',
     category: null,
   });

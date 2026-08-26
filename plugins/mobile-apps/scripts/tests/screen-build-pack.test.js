@@ -112,13 +112,39 @@ function createRichProject(context) {
     criticalFlow: { screenIds: ['Home', 'ProductsId'], outcome: 'Inspect a product before adding it to the bag.' },
     screens: normalized,
   };
-  const contextContract = resolveContextEnrichment(passengerBrief, contract);
+  const contextHint = resolveContextEnrichment(passengerBrief, contract);
+  const contextEvidence = 'flight passengers';
+  const contextStart = passengerBrief.indexOf(contextEvidence);
+  const contextAssumption = 'Illustrative prototype-session context; no live external integration is claimed.';
+  const contextContract = {
+    ...contextHint,
+    decisionOwner: 'model',
+    contextMode: 'active-journey',
+    displayContext: [{
+      id: 'journey-reference', label: 'Journey', sampleValue: 'SK 421', valueType: 'text',
+      source: 'illustrative-session', placementIntent: 'primary-screen-context-rail',
+      evidence: { signal: 'journey', text: contextEvidence, start: contextStart, end: contextStart + contextEvidence.length },
+      assumption: contextAssumption,
+    }],
+    ephemeralModel: { key: 'SessionContext', persistence: 'prototype-session', fields: ['journeyReference'] },
+    assumptions: [contextAssumption],
+  };
   const journey = resolveWorkflowJourney(passengerBrief, contract, contextContract, { screenContract: preliminary });
   const navigation = resolveNavigationContract(passengerBrief, contract, journey, preliminary);
   fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), `${JSON.stringify(journey, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), `${JSON.stringify(navigation.contract, null, 2)}\n`);
   fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify(navigation.screenContract, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'screen-action-contract.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    kind: 'mobile-screen-actions',
+    decisionOwner: 'model',
+    actions: [
+      { id: 'primary-action', screenId: 'Home', label: 'Open product', semanticRole: 'primary', placement: 'inline', executor: { kind: 'route', target: 'ProductsId', intent: 'push' }, inputs: [] },
+      { id: 'complete-discover', screenId: 'Home', label: 'Finish browsing', semanticRole: 'secondary', placement: 'inline', executor: { kind: 'local', target: 'complete-discover' }, inputs: [] },
+      { id: 'add-selection', screenId: 'ProductsId', label: 'Add selection', semanticRole: 'primary', placement: 'inline', executor: { kind: 'local', target: 'add-selection' }, inputs: [{ target: 'itemId', source: { kind: 'record', path: 'id' } }] },
+    ],
+  }, null, 2)}\n`);
   return value;
 }
 
@@ -158,7 +184,7 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
   });
   const home = pack.screens.find((screen) => screen.role === 'primary');
   assert.ok(home.firstViewport.includes('ExperienceFeaturedProductMedia'));
-  assert.equal(home.primaryAction, 'Browse onboard products');
+  assert.equal(home.primaryAction, 'Browse available products');
   assert.deepEqual(home.states, ['loading', 'empty', 'error', 'offline']);
   assert.equal(home.headerMode, 'root');
   assert.deepEqual(home.data, {
@@ -216,6 +242,12 @@ test('rich Screen Contracts compile into the V3 validator-owned build-pack shape
   assert.deepEqual(pack.builderWaves.find((wave) => wave.id === 'native-canary').targets, ['Home', 'ProductsId']);
   assert.equal(pack.screens.find((screen) => screen.id === 'Profile').navigation.role, 'global-utility');
   assert.equal(pack.screens.every((screen) => screen.presentation && screen.layoutBudgets && screen.semanticColorRoles), true);
+  assert.deepEqual(pack.screens.find((screen) => screen.id === 'Home').context.entryIds, ['journey-reference']);
+  assert.equal(pack.screens.find((screen) => screen.id === 'Home').context.entries[0].sampleValue, 'SK 421');
+  assert.equal(pack.actionBindings.length, 3);
+  assert.equal(pack.screens.find((screen) => screen.id === 'Home').primaryAction.binding, 'primary-action');
+  assert.equal(pack.screens.find((screen) => screen.id === 'ProductsId').primaryAction.binding, 'add-selection');
+  assert.equal(pack.sources.actionContract, require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(root, '.tmp', 'screen-action-contract.json'))).digest('hex'));
   assert.deepEqual(pack.screens.find((screen) => screen.id === 'Home').compositionGuidance, {
     version: 1,
     source: 'deterministic-compiler',
@@ -231,4 +263,16 @@ test('rich Screen Contracts compile into the V3 validator-owned build-pack shape
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'schema-screen-build-pack.json'), 'utf8'));
   assert.deepEqual(validateJsonSchema(pack, schema), []);
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
+});
+
+test('model-owned Journey drift invalidates every dependent rich screen', (context) => {
+  const { root } = createRichProject(context);
+  const pack = compileScreenBuildPack(root);
+  const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
+  const journey = JSON.parse(fs.readFileSync(journeyPath, 'utf8'));
+  journey.primaryOutcome = `${journey.primaryOutcome} Updated.`;
+  fs.writeFileSync(journeyPath, `${JSON.stringify(journey, null, 2)}\n`);
+  const result = validateScreenBuildPack(root, pack);
+  assert.ok(result.issues.some((issue) => issue.rule === 'source-hash-drift' && issue.source === 'workflowJourney'));
+  assert.deepEqual(result.staleTargets.filter((target) => target.startsWith('screen:')).sort(), pack.screens.map((screen) => `screen:${screen.id}`).sort());
 });

@@ -38,7 +38,11 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
   records that every reuse/create/extend decision must be reconciled again by
   `/prototype-to-real-app` before any real metadata write.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
-- **`mode` (optional)** — one of `default` (full Steps 1–7, the original flow) or `cross-entity-audit` (the addendum pass spawned AFTER `screen-planner` returns; runs ONLY Step 6a + writes a `### Cross-entity Reads` addendum to `_dm_section.md`, skipping discovery and re-scoring). When omitted, treat as `default`.
+- **`mode` (optional)** — one of `default`, `cross-entity-audit`, or
+  `action-operation-gap`. The action-gap mode receives exact unresolved action
+  IDs/intents after screen specs and may add only the minimum neutral operation,
+  writable field, or relationship required to make those actions executable.
+  When omitted, treat as `default`.
 
 ## Hard Rules
 
@@ -100,6 +104,17 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 **`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 1 (or rolls it into the Gate 1 view if Gate 1 has not yet been presented).
 
+**`mode: action-operation-gap` short-circuit** — read the current Domain
+contract, action sidecar, and exact validator errors. Do not run discovery,
+rename anything, or reconsider entities unrelated to the named actions. Reuse
+an existing operation when its semantics and input fields fit. Otherwise add
+one model-owned neutral operation and only its necessary fields/relationship.
+For prototype mode, update `.tmp/prototype-domain-model.json` and its readable
+Data Model summary; for real mode, update the structured schema/service
+requirements consistently. Validate the changed contract and return. Never
+invent CartItem, Shipment, Inspection, Booking, or another conventional entity
+name merely because an action resembles a known app category.
+
 ---
 
 ## Planning-mode short circuits
@@ -137,7 +152,7 @@ environment-free path:
   Create, Adapt, or Defer.
 5. Write and normalize `.tmp/dataverse-schema-contract.json` with the same
   complete table/column/relationship/choice/key shape as `required` mode so
-  `gen-mock-services.js` can consume it. Add top-level
+  graduation can reconcile it against the selected environment. Add top-level
   `planningMode: "prototype"` and `executionEligible: false`. Those markers do
   not replace the normal reconciliation taxonomy; they prevent downstream
   orchestrators from mistaking an environment-free contract for live target
@@ -158,6 +173,15 @@ environment-free path:
    - local-first or explicitly approved cache-backed media with accessible alt
      text and fallback identity;
    - offline UX intent as product behavior, not a server sync claim.
+  Read provisional Context opportunities as fixture coverage hints only. When
+  an already-required entity naturally owns a useful situational field, include
+  realistic values for that field in its bounded fixtures. Do not add a table,
+  entity, relationship, or field solely to make a Context rail look richer, and
+  do not choose final Context labels or bindings; `native-app-planner` owns that
+  post-Domain decision.
+  This neutral contract is the sole fresh-prototype input to
+  `create-mobile-prototype/scripts/gen-data-layer.js`; the legacy
+  `gen-mock-services.js` path is migration compatibility only.
 7. Validate it before returning:
 
    ```bash

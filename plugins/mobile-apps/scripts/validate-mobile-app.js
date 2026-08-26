@@ -34,6 +34,8 @@ const FINGERPRINT_ARTIFACTS = [
   '.tmp/experience-contract.json',
   '.tmp/experience-foundation-contract.json',
   '.tmp/experience-screen-contract.json',
+  '.tmp/screen-action-contract.json',
+  '.tmp/generated-service-surface.json',
   '.tmp/mobile-plan-execution-contract.json',
   '.tmp/prototype-domain-model.json',
   '.tmp/screen-build-pack.json',

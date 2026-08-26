@@ -16,15 +16,27 @@ function contextEnrichmentRevision(contract) {
   return crypto.createHash('sha256').update(stableStringify(contract)).digest('hex');
 }
 
-function evidence(brief, pattern, signal) {
-  const match = pattern.exec(brief);
-  const text = match?.[0] || brief.slice(0, Math.min(brief.length, 120));
-  const start = match?.index || 0;
-  return { signal, text, start, end: start + text.length };
-}
+const OPPORTUNITY_PATTERNS = [
+  ['active-journey', 'journey', /\b(?:journey|trip|route|in[-\s]?flight|onboard|travel(?:ing)?)\b/i],
+  ['place-context', 'place', /\b(?:location|site|facility|venue|clinic|office|store|warehouse|gym|region|territory)\b/i],
+  ['time-context', 'time', /\b(?:appointment|schedule|shift|deadline|time slot|date|period|upcoming)\b/i],
+  ['identity-context', 'identity', /\b(?:accounts?|customers?|clients?|patients?|members?|passengers?|employees?|teams?|owners?|assignees?)\b/i],
+  ['progress-context', 'progress', /\b(?:progress|step|stage|lesson|workflow|draft|resume|continue|complete|submit|finish|confirm)\b/i],
+  ['fulfilment-context', 'fulfilment', /\b(?:delivery|pickup|fulfilment|receive|receiving|ship|shipment|transfer)\b/i],
+  ['scope-context', 'scope', /\b(?:workspace|portfolio|category|collection|department|project|course|conversation)\b/i],
+];
 
-function item(id, label, sampleValue, valueType, placementIntent, itemEvidence, assumption) {
-  return { id, label, sampleValue, valueType, source: 'inferred-prototype-fixture', placementIntent, evidence: itemEvidence, assumption };
+function contextOpportunities(brief) {
+  return OPPORTUNITY_PATTERNS.flatMap(([id, kind, pattern]) => {
+    const match = pattern.exec(brief);
+    if (!match) return [];
+    return [{
+      id,
+      kind,
+      confidence: 'candidate',
+      evidence: { signal: kind, text: match[0], start: match.index, end: match.index + match[0].length },
+    }];
+  });
 }
 
 function resolveContextEnrichment(briefText, experienceContract) {
@@ -33,60 +45,15 @@ function resolveContextEnrichment(briefText, experienceContract) {
   const base = {
     schemaVersion: 1,
     experienceContractSha256: contractHash(experienceContract),
+    decisionOwner: 'deterministic-hint',
     contextMode: 'none',
     displayContext: [],
     ephemeralModel: null,
     assumptions: [],
+    opportunities: contextOpportunities(brief),
     forbiddenInferences: ['Do not invent functionality, integrations, permissions, or persistent entities from illustrative context.'],
   };
-  const shared = (mode, key, fields, entries, assumptions, forbidden) => ({
-    ...base,
-    contextMode: mode,
-    displayContext: entries,
-    ephemeralModel: { key, persistence: 'prototype-session', fields },
-    assumptions,
-    forbiddenInferences: [...base.forbiddenInferences, ...forbidden],
-  });
-  if (experienceContract.primarySurface === 'product-led-discovery' && /\b(?:flight|in[-\s]?flight|onboard|passenger)\b/i.test(brief)) {
-    const proof = evidence(brief, /\b(?:flight|in[-\s]?flight|onboard|passenger)\b/i, 'active-journey');
-    const assumption = 'Journey values are illustrative session context and are not connected airline data.';
-    return shared('active-journey', 'JourneyContext', ['flightNumber', 'seatNumber', 'connectivity', 'fulfilmentMode'], [
-      item('flight-number', 'Flight', 'AI 184', 'text', 'primary-screen-context-rail', proof, assumption),
-      item('seat-number', 'Seat', '12A', 'text', 'primary-screen-context-rail', proof, assumption),
-      item('connectivity', 'Connectivity', 'Catalog available offline', 'status', 'primary-screen-context-rail', proof, assumption),
-      item('fulfilment-mode', 'Fulfilment', 'Delivery to your seat', 'status', 'primary-screen-context-rail', proof, assumption),
-    ], [assumption], [
-      'Do not claim live airline integration or real-time flight tracking.',
-      'Do not add booking, check-in, seat-management, or payment functionality.',
-      'Do not make JourneyContext a permanent Dataverse table without later evidence and approval.',
-    ]);
-  }
-  const configurations = {
-    'learning-journey': ['learning-progress', 'LearningContext', ['course', 'currentLesson', 'progress', 'nextMilestone'], [
-      ['course', 'Course', 'Mobile Foundations', 'text'], ['current-lesson', 'Current lesson', 'Lesson 4: Navigation', 'text'], ['progress', 'Progress', '60% complete', 'progress'], ['next-milestone', 'Next milestone', 'Complete the navigation exercise', 'status'],
-    ], /\b(?:learn|lesson|course|study)\b/i, 'learning-progress'],
-    'availability-led-discovery': ['availability-context', 'BookingContext', ['location', 'service', 'dateTime', 'availability'], [
-      ['location', 'Location', 'Downtown clinic', 'text'], ['service', 'Service', 'Follow-up consultation', 'text'], ['date-time', 'Date and time', 'Tuesday, 10:30 AM', 'date-time'], ['availability', 'Availability', '3 times available', 'status'],
-    ], /\b(?:book|appointment|schedule|reserve)\b/i, 'booking-context'],
-    'task-led-workflow': ['active-assignment', 'AssignmentContext', ['shift', 'assignment', 'site', 'offlineReadiness'], [
-      ['shift', 'Shift', 'Morning shift', 'text'], ['assignment', 'Assignment', 'Inspection route 04', 'text'], ['site', 'Site', 'North facility', 'text'], ['offline-readiness', 'Offline', 'Ready for field work', 'status'],
-    ], /\b(?:task|assignment|inspection|work order|shift)\b/i, 'assignment-context'],
-    'decision-led-overview': ['financial-period', 'FinancialContext', ['period', 'account', 'lastRefresh', 'privacyState'], [
-      ['period', 'Period', 'Current month', 'text'], ['account', 'Account', 'Primary account', 'text'], ['last-refresh', 'Last refresh', '8 minutes ago', 'status'], ['privacy-state', 'Privacy', 'Values hidden in app switcher', 'status'],
-    ], /\b(?:finance|balance|budget|spending|account)\b/i, 'financial-context'],
-    'conversation-led-inbox': ['workspace-presence', 'WorkspaceContext', ['workspace', 'unreadState', 'presence', 'activeConversation'], [
-      ['workspace', 'Workspace', 'Customer support', 'text'], ['unread-state', 'Unread', '4 conversations', 'status'], ['presence', 'Presence', 'Available', 'status'], ['active-conversation', 'Active', 'Delivery question', 'text'],
-    ], /\b(?:message|conversation|inbox|workspace)\b/i, 'workspace-context'],
-    'capture-led-utility': ['capture-session', 'CaptureContext', ['site', 'assignment', 'captureStatus', 'syncState'], [
-      ['site', 'Site', 'North facility', 'text'], ['assignment', 'Assignment', 'Safety inspection', 'text'], ['capture-status', 'Capture', '2 of 5 items complete', 'progress'], ['sync-state', 'Sync', 'Saved on device', 'status'],
-    ], /\b(?:capture|inspection|scan|photo|site)\b/i, 'capture-context'],
-  };
-  const configuration = configurations[experienceContract.primarySurface];
-  if (!configuration) return base;
-  const [mode, key, fields, values, pattern, signal] = configuration;
-  const proof = evidence(brief, pattern, signal);
-  const assumption = `${key} values are illustrative prototype-session context derived from the confirmed user situation.`;
-  return shared(mode, key, fields, values.map(([id, label, sampleValue, valueType]) => item(id, label, sampleValue, valueType, id === values[0][0] ? 'primary-screen-context-rail' : 'supporting-section', proof, assumption)), [assumption], [`Do not persist ${key} or claim a live external source without later evidence and approval.`]);
+  return base;
 }
 
 function parseArgs(argv) {
@@ -124,4 +91,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { contextEnrichmentRevision, resolveContextEnrichment, stableStringify };
+module.exports = { OPPORTUNITY_PATTERNS, contextEnrichmentRevision, contextOpportunities, resolveContextEnrichment, stableStringify };

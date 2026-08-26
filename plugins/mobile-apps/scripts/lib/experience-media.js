@@ -45,6 +45,7 @@ const APPROVED_CDN_MEDIA = {
 };
 
 const PALETTES = {
+  generic: { top: [232, 235, 234], bottom: [196, 205, 202], ink: [39, 55, 56], accent: [72, 126, 119], light: [248, 249, 247] },
   travel: { top: [221, 235, 236], bottom: [166, 204, 204], ink: [19, 54, 67], accent: [27, 126, 122], light: [242, 246, 241] },
   beauty: { top: [242, 225, 224], bottom: [213, 183, 197], ink: [75, 38, 57], accent: [178, 93, 126], light: [255, 244, 238] },
   watch: { top: [225, 226, 217], bottom: [179, 184, 169], ink: [28, 38, 42], accent: [150, 111, 54], light: [244, 240, 226] },
@@ -197,8 +198,15 @@ function drawProduct(pixels, width, height, palette) {
   fillCircle(pixels, width, height, width * 0.50, height * 0.50, height * 0.105, palette.accent, 0.88);
 }
 
-function createExperiencePng({ family = 'product', seed = 'experience', width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT } = {}) {
-  const normalizedFamily = Object.prototype.hasOwnProperty.call(PALETTES, family) ? family : 'product';
+function drawGeneric(pixels, width, height, palette) {
+  fillRoundedRect(pixels, width, height, width * 0.20, height * 0.24, width * 0.60, height * 0.52, 64, palette.light, 0.96);
+  fillCircle(pixels, width, height, width * 0.38, height * 0.48, height * 0.13, palette.accent, 0.78);
+  fillRoundedRect(pixels, width, height, width * 0.52, height * 0.37, width * 0.18, height * 0.26, 34, palette.ink, 0.82);
+  drawLine(pixels, width, height, width * 0.30, height * 0.67, width * 0.70, height * 0.67, 12, palette.ink, 0.58);
+}
+
+function createExperiencePng({ family = 'generic', seed = 'experience', width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT } = {}) {
+  const normalizedFamily = Object.prototype.hasOwnProperty.call(PALETTES, family) ? family : 'generic';
   const palette = PALETTES[normalizedFamily];
   const pixels = Buffer.alloc(width * height * 4);
   const seedByte = crypto.createHash('sha256').update(String(seed)).digest()[0];
@@ -218,7 +226,8 @@ function createExperiencePng({ family = 'product', seed = 'experience', width = 
 
   fillCircle(pixels, width, height, width * 0.16, height * 0.18, height * 0.24, palette.light, 0.28);
   fillCircle(pixels, width, height, width * 0.86, height * 0.78, height * 0.32, palette.accent, 0.16);
-  if (normalizedFamily === 'travel') drawTravel(pixels, width, height, palette);
+  if (normalizedFamily === 'generic') drawGeneric(pixels, width, height, palette);
+  else if (normalizedFamily === 'travel') drawTravel(pixels, width, height, palette);
   else if (normalizedFamily === 'beauty') drawBeauty(pixels, width, height, palette);
   else if (normalizedFamily === 'watch') drawWatch(pixels, width, height, palette);
   else drawProduct(pixels, width, height, palette);
@@ -298,7 +307,7 @@ function semanticMediaFamily(...values) {
   if (/\b(?:travel|luggage|suitcase|backpack|passport|organizer|adapter|journey|cabin|flight)\b|accessor/.test(semantic)) return 'travel';
   if (/\b(?:food|grocery|pantry|meal|drink|coffee|snack)\b/.test(semantic)) return 'food';
   if (/\b(?:health|wellness|fitness|exercise|meditation|yoga)\b/.test(semantic)) return 'wellness';
-  return 'product';
+  return 'generic';
 }
 
 function stableCandidateIndex(selector, length) {
@@ -319,7 +328,7 @@ function assetFileName(assetKey) {
     .replace(/^asset:\/\/experience\//, '')
     .replace(/[^A-Za-z0-9._-]+/g, '-');
   const withExtension = semanticPath.toLowerCase().endsWith('.png') ? semanticPath : `${semanticPath}.png`;
-  return withExtension || 'experience-product.png';
+  return withExtension || 'experience-generic.png';
 }
 
 function materializeExperienceAssets(projectRoot, manifest) {

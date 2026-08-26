@@ -37,7 +37,13 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
+- **Planning-artifact-only writes.** You MUST NOT create Dataverse tables, run
+  `npx power-apps add-data-source`, install npm packages, or write project source
+  code. You may write `native-app-plan.md`, planner scratch sections, and the
+  bounded `.tmp` planning contracts/receipts explicitly owned by this workflow,
+  including deterministic helper updates to those artifacts. Architects you
+  spawn have the same external/source mutation ban. Runtime and platform
+  mutation happens later in `/create-mobile-app` after approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Single human plan document.** Everything user-reviewed goes into
   `<working_dir>/native-app-plan.md`. Deterministic execution uses the
@@ -142,8 +148,8 @@ Carry each input into its owning planning step: native hints into `## Native Cap
 **Print before starting:**
 > "→ Extracting the product experience contract from the brief before data and screen planning…"
 
-The brief, not its industry label, owns the first product decision. Create or
-validate `<working_dir>/.tmp/experience-contract.json` with the schema at
+The brief, not its industry label, owns the first product decision. Create the
+provisional `<working_dir>/.tmp/experience-contract.json` with the schema at
 `${PLUGIN_ROOT}/scripts/schema-experience-contract.json` and the deterministic
 brief-first helper:
 
@@ -161,8 +167,14 @@ flight, travel, offline, or inventory vocabulary.
 
 If `brief.md` is not present, write the confirmed requirements verbatim to a
 temporary local brief file first. This is planning evidence, not a second
-human plan. Read the result and carry these fields verbatim through the rest of
-the workflow:
+human plan. The helper output is evidence-backed candidate guidance, not the
+final product decision. Read the brief and candidate together, then use model
+judgment to finalize the same small contract in place. Set
+`decisionOwner: "model"`. Do not retain a candidate when a different product
+interpretation better covers the user's jobs, and do not introduce an industry
+preset. Preserve exact prompt-evidence spans for every selected decision.
+
+Finalize:
 
 - `audience`, `primaryJob`, `interactionMode`, `contentModel`, and `entryMode`
 - `navigationModel` and canonical `primaryScreen`
@@ -176,6 +188,34 @@ into the contract and plan, then continue. For `low`, ask exactly one focused
 question: "What should a person accomplish first when they open the app?" Use
 the answer to revise the contract; do not show an industry picker or a long
 style questionnaire.
+
+Prepare `<working_dir>/.tmp/context-enrichment-contract.json` as Context intent,
+not final display data. If it is absent, run `resolve-context-enrichment.js`;
+that helper writes only generic evidence opportunities and no values. Keep
+`decisionOwner: "deterministic-hint"`, `contextMode: "none"`, empty
+`displayContext`, and no ephemeral model at this stage. The Domain architect
+may use the opportunities to include already-needed situational fields and
+realistic fixtures, but it must not add a persistent entity solely to decorate
+the app header. Model-owned labels, values, bindings, and selected/rejected
+opportunities are finalized only after Domain output exists in Step 3d.
+
+If `.tmp/workflow-journey-contract.json` is absent, run the compatibility
+resolver once. Keep its `decisionOwner: "deterministic-hint"`; its verb
+families are evidence candidates, not workflow authority. Model-owned stages,
+guards, resume behavior, signatures, capability composition, and scenarios are
+also finalized in Step 3d after final Context exists.
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-context-enrichment.js" \
+  --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/validate-workflow-journey.js" \
+  --project-root "<working_dir>"
+```
+
+Repair Experience or provisional Context once for local shape/evidence errors.
+Do not invent values to make the provisional contract look complete.
 
 When design-intake.md exists, read it before finalizing the contract. A
 directional reference refines the contract. High and strict-structural
@@ -222,6 +262,7 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 > Requirements: [paste $ARGUMENTS]
 > Wizard answers: [target users & device, aesthetic, features]
 > Product experience contract: [absolute `<working_dir>/.tmp/experience-contract.json`]
+> Context enrichment contract: [absolute `<working_dir>/.tmp/context-enrichment-contract.json`]
 > Target environment: use the foreground-resolved environment URL and tenant in `required` mode; NOT SUPPLIED in `prototype` or `connector-only` mode.
 > When planning-snapshot/evidence paths are supplied, do not read `power.config.json` or
 > call `scripts/resolve-environment.js`.
@@ -418,6 +459,68 @@ Follow [`shared/references/connector-planning.md`](${PLUGIN_ROOT}/shared/referen
 
 Store the confirmed connector list — you will pass it to `screen-planner` in Step 4.
 
+## Step 3d — Finalize Context and Journey after Domain output
+
+Wait for `data-model-architect` and apply the Step 2 status switch before this
+step. Context finalization must finish before writing the plan, entering Gate 1,
+or spawning either screen-planner phase.
+
+Read the final Domain output and the provisional Context opportunities. Use
+model judgment to rewrite `.tmp/context-enrichment-contract.json` with
+`decisionOwner: "model"`. The model owns all selected entries; shared code supplies none of their names or values:
+
+- choose `contextMode: "none"` when situational context does not improve the
+  first user outcome; otherwise select at most four display entries;
+- choose every ID, label, value type, placement, source, and sample value;
+- prefer an already-existing bounded Domain fixture when it truthfully provides
+  the value; use `source: "domain-fixture"` and an exact JSON pointer such as
+  `#/fixtures/<Entity>/<index>/<field>`;
+- the pointer must resolve to a scalar and `sampleValue` must exactly equal its
+  string value; never copy a nearby record or rewrite the fixture to satisfy a
+  preferred label;
+- if useful session context is supported by the brief but has no durable Domain
+  field, use explicit assumption-bound `illustrative-session` context instead
+  of adding a persistent entity solely for chrome;
+- use `prompt-explicit` or `connector` only with real evidence; connector
+  sources require an exact binding;
+- keep illustrative values in `prototype-session`, cite exact brief evidence,
+  and mark every opportunity selected or rejected.
+
+For prototype mode, run the deterministic binder after the model rewrite:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/finalize-context-from-domain.js" \
+  --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/validate-prototype-domain-model.js" \
+  --project-root "<working_dir>"
+```
+
+The binder chooses no fields or values. It hashes fixture-bearing Domain data,
+proves every JSON pointer and exact value, and restamps only the Domain's Context
+revision. On failure, make one Context-only repair; do not regenerate Domain.
+
+Required and connector-only modes have no prototype fixtures. Finalize Context
+after reading the schema/connector proposal, but do not emit `domain-fixture`
+sources or claim sample records that do not exist.
+
+Then finalize `.tmp/workflow-journey-contract.json` in place with
+`decisionOwner: "model"`. Choose stages, guards, resume behavior, signatures,
+capability composition, and scenarios from the final Context and actual Domain
+jobs. Screen IDs may remain semantic placeholders until graph finalization. Do
+not preserve Inspect, Confirm, Purchase, Approve, or another conventional stage
+unless the brief and Domain support it. Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-context-enrichment.js" \
+  --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/validate-workflow-journey.js" \
+  --project-root "<working_dir>"
+```
+
+If final Context remains invalid after one local repair, write a valid
+model-owned `none` contract, rerun the prototype binder when applicable, and
+record a concern. Do not reopen Experience or Domain.
+
 ## Step 4 — Assemble `native-app-plan.md`
 
 Write `<working_dir>/native-app-plan.md` with this structure. Use the architects' output verbatim for their sections. Leave `## Screens` empty for now — it is filled after Gate 3 approval (Step 5, screen-planner).
@@ -479,12 +582,13 @@ Gate 4a, Gate 4b, or a separate design/cross-entity approval. Complete their
 authoring work in sequence without user pauses:
 
 1. finish the neutral domain/schema proposal;
-2. record allowlisted native capabilities and fallbacks;
-3. record future connectors as non-executable proposals;
-4. generate the full Screen Graph, five-way product navigation roles,
+2. finalize Context from its fixtures and then finalize Journey;
+3. record allowlisted native capabilities and fallbacks;
+4. record future connectors as non-executable proposals;
+5. generate the full Screen Graph, five-way product navigation roles,
    per-screen specs, Foundation Contract, and complete critical flow;
-5. perform the cross-entity audit and include any addendum in the same draft;
-6. validate every written planning artifact.
+6. perform the cross-entity audit and include any addendum in the same draft;
+7. validate every written planning artifact.
 
 Leave `## Approval Status` pending and do not mint or finalize
 `.tmp/mobile-plan-status.json`. Return `DONE` when the complete draft is ready
@@ -519,7 +623,8 @@ Call `ExitPlanMode` to request approval.
   manifest builder. Continue to Gate 2.
 - **Rejected:** re-spawn `data-model-architect` with the user's feedback and
   the original planning-snapshot/evidence paths verbatim, regenerate that section, and
-  regenerate/normalize the structured sidecar, then re-enter plan mode. Loop
+  regenerate/normalize the structured sidecar. Rerun Step 3d so Context and
+  Journey are bound to the revised Domain before re-entering plan mode. Loop
   until approved; do not run discovery during a revision.
 
 ### Gate 2 — Native Capabilities + Connectors (combined)
@@ -589,6 +694,11 @@ Product experience contract:
 - Treat entryMode, primaryScreen, firstViewport region order, primary action,
   signature motifs, and forbidden defaults as immutable product constraints.
 
+Model-selected context:
+- Read `<working_dir>/.tmp/context-enrichment-contract.json`.
+- Preserve selected entry placement and assumptions; context does not create
+  screens, persistence, permissions, or integrations by itself.
+
 Reference fidelity:
 - Read design-intake.md when the approved Design section contains a Reference
   Contract.
@@ -643,6 +753,18 @@ Approved design: [paste ## Design section verbatim]
 Product experience contract: read `<working_dir>/.tmp/experience-contract.json`
 and the locked `.tmp/experience-screen-contract.json`. Preserve its primary
 composition, runtime markers, and forbidden defaults while expanding specs.
+Model-selected context: read
+`<working_dir>/.tmp/context-enrichment-contract.json` and bind selected entries
+only where their placement intent applies.
+Executable data authority:
+- Prototype mode: read `<working_dir>/.tmp/prototype-domain-model.json`; action
+  operation targets must use its exact operation keys.
+- Required mode: read `<working_dir>/.tmp/dataverse-schema-contract.json`;
+  action operation intents name an exact planned/adapted entity plus CRUD kind
+  and are resolved to generated services after mutation.
+- Connector-only or connector actions: read
+  `<working_dir>/.tmp/mobile-plan-execution-contract.json` when present and use
+  exact connector operation IDs.
 Approved connectors: [paste ## Connectors section verbatim]
 Reference fidelity: when the approved Design section contains a Reference
 Contract, read design-intake.md and list Reference materialization plus each
@@ -662,7 +784,36 @@ generic default preview here.
 Return per AGENTS.md rule #10.
 ```
 
-Wait for return; apply the Step 3.0 status switch. The planner appends specs + (optional) markdown screen-graph or HTML preview to `_screens_section.md` and `native-app-plan.md`.
+Wait for return; apply the Step 3.0 status switch. The planner appends specs and
+writes `.tmp/screen-action-contract.json`.
+
+Run the action validator before Gate 4b:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-screen-action-contract.js" \
+  --project-root "<working_dir>" \
+  --phase "<build in prototype mode; plan in required or connector-only mode>"
+```
+
+If it reports shape, route, capability, input, sequence, or primary-action
+errors, re-spawn `screen-planner` once with `phase: actions`, the exact complete
+validator output, and unchanged approved graph/spec/domain inputs. It may
+rewrite only the action sidecar.
+
+If it returns `NEEDS_CONTEXT: action-operation-gap`, dispatch
+`data-model-architect` once with `mode: action-operation-gap`, the exact action
+IDs and missing operation intents, plus the current approved Domain contract.
+That mode may add only the minimum neutral operation/field/relationship needed
+by those actions, preserving all existing names and behavior. In prototype
+mode, rerun only the Step 3d Context binder and Journey validation so fixture
+hashes cannot drift; preserve visible Context/Journey semantics unless an exact
+binding became invalid, in which case make one bounded Context/Journey repair.
+Then re-run `screen-planner phase: actions` and the validator. Do not rerun
+Experience, screen graph, screen specs, navigation, or unrelated Domain
+planning.
+
+After this bounded repair, any unresolved action is `BLOCKED: unresolved
+executable action <ids>`; never approve a visible enabled decorative action.
 
 #### Gate 4b — Screen Specs (visual + spec review)
 
@@ -831,7 +982,11 @@ deterministic shape:
     },
     "screenPlan": {
       "status": "approved",
-      "approvedAt": "<ISO timestamp>"
+      "approvedAt": "<ISO timestamp>",
+      "approvedExperienceContractSha256": "<sha256 of .tmp/experience-contract.json bytes>",
+      "approvedContextContractSha256": "<sha256 of .tmp/context-enrichment-contract.json bytes>",
+      "approvedJourneyContractSha256": "<sha256 of .tmp/workflow-journey-contract.json bytes>",
+      "approvedActionContractSha256": "<sha256 of .tmp/screen-action-contract.json bytes>"
     }
   },
   "approvedPlanSha256": "<sha256 of final native-app-plan.md bytes>",
@@ -919,6 +1074,16 @@ Next steps for the orchestrator:
 
 ## Tool Permissions
 
-You have `Bash` only to run read-only file/HTTP/helper checks such as `node scripts/resolve-environment.js <environment-id-or-url>` when needed for context. You MUST NOT run mutating Power Apps CLI commands such as `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive`, `npx power-apps add-data-source ...`, `npx power-apps add-flow --flow-id <flow-guid> --non-interactive`, `npx power-apps push --non-interactive`, `npm install`, or any other mutation command.
+You have `Bash` to run read-only discovery/validation and the deterministic
+planning helpers explicitly named in this workflow. Those helpers may write
+only the named local planning artifacts under `.tmp` plus planner scratch
+sections. You MUST NOT run mutating Power Apps CLI commands such as
+`npx power-apps init`, `npx power-apps add-data-source`, `npx power-apps
+add-flow`, `npx power-apps push`, `npm install`, or any other runtime, package,
+platform, environment, or external-service mutation command.
 
-You have `Write` only to create `native-app-plan.md`. You MUST NOT write any other file in the project.
+You have `Write` for `native-app-plan.md`, `_dm_section.md`,
+`_screens_section.md`, and the explicit `.tmp` planning contracts/approval
+receipts named above. You MUST NOT write app/runtime source, generated services,
+fixtures outside the approved prototype Domain contract, package files, or any
+other project artifact.

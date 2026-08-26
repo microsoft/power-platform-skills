@@ -15,6 +15,7 @@ const REQUIRED_ARTIFACTS = Object.freeze({
   screenContract: '.tmp/experience-screen-contract.json',
   foundationContract: '.tmp/experience-foundation-contract.json',
   prototypeDomainModel: '.tmp/prototype-domain-model.json',
+  screenActionContract: '.tmp/screen-action-contract.json',
 });
 
 function sha256(value) {

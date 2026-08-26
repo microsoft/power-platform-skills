@@ -286,14 +286,6 @@ function validatePrototypeDomainModel(model, context = {}) {
       }
     }
   }
-  const productRows = fixtures.Product || [];
-  const inventoryById = new Map(productRows.map((row) => [row.id, row.inventoryQuantity]));
-  for (const [index, item] of (fixtures.CartItem || []).entries()) {
-    if (typeof item.quantity === 'number' && item.quantity < 0) errors.push(`fixtures.CartItem[${index}].quantity cannot be negative`);
-    const inventory = inventoryById.get(item.productId);
-    if (Number.isFinite(inventory) && item.quantity > inventory) errors.push(`fixtures.CartItem[${index}].quantity exceeds product inventory`);
-  }
-
   const scenarios = Array.isArray(model?.fixtureScenarios) ? model.fixtureScenarios : [];
   if (!fixtureRequirements.length) errors.push('domainModel.fixtureRequirements must be non-empty');
   for (const [requirementIndex, requirement] of fixtureRequirements.entries()) {
@@ -321,9 +313,20 @@ function domainModelRevision(model) {
   return sha256(stableStringify(model));
 }
 
+function fixtureDataRevision(model) {
+  return sha256(stableStringify({
+    entities: model?.entities || [],
+    relationships: model?.relationships || [],
+    choices: model?.choices || [],
+    fixtures: model?.fixtures || {},
+    fixtureScenarios: model?.fixtureScenarios || [],
+  }));
+}
+
 module.exports = {
   DOMAIN_TYPES,
   domainModelRevision,
+  fixtureDataRevision,
   stableStringify,
   validatePrototypeDomainModel,
 };

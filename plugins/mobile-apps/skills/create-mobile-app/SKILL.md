@@ -663,8 +663,42 @@ Prompt:
 
 The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
 On every successful return, require `.tmp/experience-contract.json`,
+`.tmp/context-enrichment-contract.json`, `.tmp/workflow-journey-contract.json`,
 `.tmp/experience-screen-contract.json`, and
-`.tmp/experience-foundation-contract.json`. In `required` mode additionally
+`.tmp/experience-foundation-contract.json`, and
+`.tmp/screen-action-contract.json`. Require Experience and Context to report
+`decisionOwner: "model"` on Experience, Context, and Journey, then run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-action-contract.js" \
+  --project-root "$PROJECT_DIR" --phase plan
+node -e "const e=require(process.argv[1]); const c=require(process.argv[2]); const j=require(process.argv[3]); if(e.decisionOwner!=='model'||c.decisionOwner!=='model'||j.decisionOwner!=='model') process.exit(1)" \
+  "$PROJECT_DIR/.tmp/experience-contract.json" \
+  "$PROJECT_DIR/.tmp/context-enrichment-contract.json" \
+  "$PROJECT_DIR/.tmp/workflow-journey-contract.json"
+node -e '
+  const fs=require("node:fs"), crypto=require("node:crypto"), path=require("node:path");
+  const root=process.argv[1], receipt=require(path.join(root,".tmp/mobile-plan-status.json"));
+  const approved=receipt.approvals?.screenPlan || {};
+  const hash=(relative)=>crypto.createHash("sha256").update(fs.readFileSync(path.join(root,relative))).digest("hex");
+  const expected={
+    approvedExperienceContractSha256:hash(".tmp/experience-contract.json"),
+    approvedContextContractSha256:hash(".tmp/context-enrichment-contract.json"),
+    approvedJourneyContractSha256:hash(".tmp/workflow-journey-contract.json"),
+    approvedActionContractSha256:hash(".tmp/screen-action-contract.json"),
+  };
+  for(const [key,value] of Object.entries(expected)) if(approved[key]!==value) throw new Error(`screen-plan approval hash mismatch: ${key}`);
+' "$PROJECT_DIR"
+```
+
+An invalid Context gets one Context-only planner repair, then a model-owned
+`none` fallback with a concern. An invalid Action contract gets one
+`screen-planner phase: actions` repair. Do not reopen approved Experience,
+Domain, graph, or specs for local shape/reference errors. In `required` mode additionally
 require `.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`.
 If an expected artifact is missing, STOP as `BLOCKED`; this orchestrator must
 not synthesize it after the planner has returned.
@@ -682,8 +716,13 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
 
   Before either direct dispatch, read
-  `<working_dir>/.tmp/experience-contract.json`. Pass its absolute path to
-  `data-model-architect` and `screen-planner`; require the graph phase to
+  `<working_dir>/.tmp/experience-contract.json` and provisional Context
+  opportunities. Apply the same model-owned Experience finalization in
+  `native-app-planner.md` Step 1b, dispatch `data-model-architect`, then apply
+  Step 3d Context/Journey finalization against its completed schema or prototype
+  fixtures before dispatching `screen-planner`. Pass absolute Experience and
+  provisional Context paths to `data-model-architect`, then final Experience,
+  Context, and Journey paths to `screen-planner`; require the graph phase to
   write `<working_dir>/.tmp/experience-screen-contract.json`. The inline
   `## Design` section must mirror `### Product Experience Contract` before
   any screen graph is reviewed. Do not recreate industry inference, a
@@ -692,6 +731,12 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
    - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
    - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+
+  After `phase: specs`, require and validate
+  `.tmp/screen-action-contract.json --phase plan`. Use one `phase: actions`
+  retry for local errors. An unresolved operation intent may trigger one
+  bounded `data-model-architect mode: action-operation-gap` repair only; do not
+  regenerate the graph or specs.
 
   **MUST forward the Dataverse planning mode in the direct architect prompt.**
   In `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and
@@ -1871,10 +1916,16 @@ If the directory is empty (no data sources added yet), still write the section w
 
 ### Step 10.7b — Compile the screen build pack
 
-After the generated-service snapshot and before skeleton generation, compile
-the approved contracts into the single builder assembly sheet:
+After the generated-service snapshot and before skeleton generation, resolve
+the model-owned action intents against the collision-adjusted generated service
+surface, then compile the approved contracts into the builder assembly sheet:
 
 ```bash
+test -f "$PROJECT_DIR/.tmp/screen-action-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/snapshot-generated-service-surface.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-action-contract.js" \
+  --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --output ".tmp/screen-build-pack.json"
@@ -1885,7 +1936,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/materialize-experience-view-model.js" \
   --project-root "$PROJECT_DIR"
 ```
 
-Do not launch builders when compilation or validation fails. The compiler binds
+Do not launch builders when service/action resolution, compilation, or
+validation fails. A missing generated service or method is an action-local
+repair: update only the affected approved operation/service requirement, rerun
+the Dataverse/generated-services gate, snapshot, and action validator. Never
+silently emit an enabled TODO action and never rerun product/screen planning.
+The compiler binds
 experience, screen, foundation, design, and data-intent hashes; it records the
 Home/key-flow build order and screen dependency graph. Recompile after a
 relevant plan, design, foundation, or data change and use the validator's stale
@@ -2249,6 +2305,8 @@ After handling every builder status in the wave, run the **Screen-wave gate** be
 
 ```bash
 npx tsc --noEmit
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" \
+  --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 ```
 
 If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
@@ -2270,6 +2328,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-composition.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
 ```

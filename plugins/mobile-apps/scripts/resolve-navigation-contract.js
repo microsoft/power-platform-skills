@@ -221,10 +221,49 @@ function bindWorkflowJourneyToScreenGraph(workflowJourney, screenContract) {
 }
 
 function finalizeWorkflowJourney(brief, experience, contextContract, workflowJourney, screenContract, domainModel = null, sourceSchemaVersion = screenContract?.schemaVersion) {
-  if (contextContract && sourceSchemaVersion === 1) {
+  if (contextContract && sourceSchemaVersion === 1 && workflowJourney?.decisionOwner !== 'model') {
     return resolveWorkflowJourney(brief, experience, contextContract, { screenContract, domainModel });
   }
   return bindWorkflowJourneyToScreenGraph(workflowJourney, screenContract);
+}
+
+function applyActionContractToScreenGraph(screenContract, actionContract, navigationModel = 'stack') {
+  if (actionContract?.decisionOwner !== 'model' || !Array.isArray(actionContract.actions)) return screenContract;
+  const primaryByScreen = new Map();
+  for (const action of actionContract.actions.filter((candidate) => candidate.semanticRole === 'primary')) {
+    const actions = primaryByScreen.get(action.screenId) || [];
+    actions.push(action);
+    primaryByScreen.set(action.screenId, actions);
+  }
+  return {
+    ...screenContract,
+    screens: (screenContract.screens || []).map((screen) => {
+      const actions = primaryByScreen.get(screen.id) || [];
+      if (actions.length > 1) throw new Error(`screen ${screen.id} has ${actions.length} model-owned primary actions`);
+      if (!actions.length) return screen;
+      const action = actions[0];
+      const placement = ['inline', 'sticky-bottom', 'header', 'floating'].includes(action.placement)
+        ? action.placement
+        : 'inline';
+      const pending = action.pendingLabel || ['operation', 'connector', 'native', 'sequence'].includes(action.executor?.kind);
+      return {
+        ...screen,
+        primaryAction: {
+          id: action.id,
+          label: action.label,
+          placement,
+          binding: `action:${action.id}`,
+          doubleTapPolicy: pending ? 'disable-while-pending' : 'not-applicable',
+          ...(placement === 'sticky-bottom' ? {
+            clearance: {
+              safeArea: true,
+              tabBar: navigationModel === 'tabs-stack' ? 'above' : 'not-applicable',
+            },
+          } : {}),
+        },
+      };
+    }),
+  };
 }
 
 function withCriticalFlow(screenContract, workflowJourney) {
@@ -539,10 +578,13 @@ function main(argv) {
     const brief = fs.readFileSync(briefPath, 'utf8');
     const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
     const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
+    const actionPath = path.join(root, '.tmp', 'screen-action-contract.json');
     const contextContract = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
     const domainModel = fs.existsSync(domainPath) ? JSON.parse(fs.readFileSync(domainPath, 'utf8')) : null;
-    const workflow = finalizeWorkflowJourney(brief, experience, contextContract, rawWorkflow, screens, domainModel, sourceScreenSchemaVersion);
-    const finalizedScreens = withCriticalFlow(screens, workflow);
+    const actionContract = fs.existsSync(actionPath) ? JSON.parse(fs.readFileSync(actionPath, 'utf8')) : null;
+    const actionBoundScreens = applyActionContractToScreenGraph(screens, actionContract, experience.navigationModel);
+    const workflow = finalizeWorkflowJourney(brief, experience, contextContract, rawWorkflow, actionBoundScreens, domainModel, sourceScreenSchemaVersion);
+    const finalizedScreens = withCriticalFlow(actionBoundScreens, workflow);
     const workflowValidation = validateWorkflowJourney(workflow, {
       briefText: brief,
       experienceContract: experience,
@@ -574,6 +616,7 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
+  applyActionContractToScreenGraph,
   applyNavigationContractToScreenGraph,
   bindWorkflowJourneyToScreenGraph,
   finalizeWorkflowJourney,

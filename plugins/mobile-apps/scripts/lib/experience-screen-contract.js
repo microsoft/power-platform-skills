@@ -662,12 +662,6 @@ function validateV3Operations(screenContract, contract, context, errors) {
       }
       if (parent?.navigation?.kind !== 'tab-root') errors.push(`tabs-stack pushed screen ${screen.id} must resolve to an owning tab root`);
     }
-    if (contract.primarySurface === 'product-led-discovery') {
-      const labels = new Set(tabRoots.map((screen) => normalizedName(screen.navigation?.tabLabel)));
-      for (const required of ['shop', 'categories', 'bag']) {
-        if (!labels.has(required)) errors.push(`product-led tabs-stack navigation requires ${required} tab root`);
-      }
-    }
   } else if (contract && tabRoots.length) {
     errors.push(`navigation model ${navigationModel} cannot declare tab-root screens`);
   }

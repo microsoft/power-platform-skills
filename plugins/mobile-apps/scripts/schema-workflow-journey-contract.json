@@ -23,6 +23,7 @@
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "decisionOwner": { "enum": ["deterministic-hint", "model", "legacy"] },
     "experienceContractSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "contextEnrichmentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "journeyId": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },

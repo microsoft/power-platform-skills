@@ -448,9 +448,18 @@ below with local contract regeneration:
   `planningMode: "prototype"` / `executionEligible: false`. Under
   `--apply-plan`, reuse the already approved/hash-verified contract and do not
   spawn or gate the architect again. Then run
-  `skills/create-mobile-prototype/scripts/gen-mock-services.js`; its
-  regeneration contract must preserve compatible existing seed rows and emit
-  a report for added/removed/type-changed fields.
+  `skills/create-mobile-prototype/scripts/migrate-legacy-prototype.js`. Apply
+  `native-app-planner` Step 3d inline against the revised
+  `.tmp/prototype-domain-model.json`: make one bounded model pass over the
+  existing Context opportunities and final fixtures, preserve valid selections,
+  repair only stale fixture bindings/values, then run
+  `scripts/finalize-context-from-domain.js`, Context/Domain validation, and
+  Journey validation. Do not add a Domain entity solely for Context. Then run
+  `skills/create-mobile-prototype/scripts/gen-data-layer.js` and
+  `scripts/compile-design-content-projection.js`. This preserves compatible
+  existing fixture rows through the migration boundary and keeps edited
+  prototypes on the neutral AI-authored Domain contract instead of legacy
+  keyword-selected domain packs.
 2. Connector changes update/re-approve `## Connectors`, then rerun the same
   generator to add or remove explicit throw-stubs. Do not create a Power
   Platform connection in prototype mode.

@@ -162,10 +162,12 @@ question about the first user outcome, revise `brief.md`, and regenerate the
 contract. Never ask the user to select an industry or upload a visual input to
 obtain a product experience.
 
-Resolve the evidence-bounded prototype context and workflow journey before
-planning. These sidecars constrain fixture realism, staged actions, resume
-behavior, capability placement, and UX continuity; they do not replace the
-human-readable plan:
+Resolve provisional evidence-only context opportunities and a compatibility
+Journey before planning. These are hints for the native planner, not final
+domain decisions. The context helper never materializes flight, clinic,
+inspection, finance, or other domain values. The planner finalizes Experience
+before Domain, then finalizes Context from the completed Domain fixtures and
+finalizes Journey before Screen planning:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-context-enrichment.js" \
@@ -260,9 +262,22 @@ test -f "$PROJECT_DIR/.tmp/context-enrichment-contract.json"
 test -f "$PROJECT_DIR/.tmp/workflow-journey-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-foundation-contract.json"
+test -f "$PROJECT_DIR/.tmp/screen-action-contract.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/finalize-context-from-domain.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-context-enrichment.js" \
+  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
   --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-action-contract.js" \
+  --project-root "$PROJECT_DIR"
+node -e "const e=require(process.argv[1]); const c=require(process.argv[2]); const j=require(process.argv[3]); if(e.decisionOwner!=='model'||c.decisionOwner!=='model'||j.decisionOwner!=='model') process.exit(1)" \
+  "$PROJECT_DIR/.tmp/experience-contract.json" \
+  "$PROJECT_DIR/.tmp/context-enrichment-contract.json" \
+  "$PROJECT_DIR/.tmp/workflow-journey-contract.json"
 ```
 
 Finalize and validate the executable graph before approval. The resolver
@@ -276,6 +291,8 @@ missing optional bookkeeping.
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-contract.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-action-contract.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/prototype-plan-review.js" \
   --project-root "$PROJECT_DIR" --action draft
 ```
@@ -284,10 +301,13 @@ Present exactly one editable review from `native-app-plan.md` and the existing
 sidecars. Include product/audience/primary job, assumptions/confidence, journey
 and outcomes, Home/launch/resume/key flow, screen graph and five-way roles,
 navigation, compact logical data/fixture summary, capability placement and
-fallbacks, future connector proposals, design direction/signature components,
-build order, and preview status. Ask `Approve`, `Revise`, or `Cancel` once.
+fallbacks, future connector proposals, every visible action with its executor
+target and control hint, design direction/signature components, build order,
+and preview status. Ask `Approve`, `Revise`, or `Cancel` once.
 
-On `Revise`, edit only the named section, rerun dependent planning validation,
+On `Revise`, edit only the named section and rerun dependent planning
+validation. A Domain/fixture revision must rerun the post-Domain Context
+finalizer and Journey validation before any affected screen/action repair;
 resolve Navigation again when screen/jobs changed, and present the same
 consolidated review. On explicit approval run:
 

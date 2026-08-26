@@ -127,6 +127,37 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   Screen Contract and Domain layout decisions. Absence or a justified equivalent
   implementation is never `BLOCKED`, never triggers planner repair, and never
   permits benchmark-domain copy or an industry template.
+- **Executable action bindings are mandatory when present.** Read the matching
+  pack screen's `actionBindings`. For every binding, render the exact `testId`,
+  declare the exact `handlerName`, and wire the visible control to that handler.
+  Use only its resolved executor metadata:
+  - route actions call the declared router intent with the compiled route;
+  - `domain-hook` operation and connector actions call the compiled `@/data`
+    hook with exact input bindings and expose pending/failure state;
+  - `generated-service` operations import the exact compiled `serviceModule`,
+    call `service.serviceMethod`, check its non-throwing result, and expose
+    pending/failure state; never guess a service name after collision recovery;
+  - native actions call the planned wrapper command;
+  - local/host handlers call the exact compiled `commandName`; declare that
+    local command around the required state transition, or bind the host command
+    to the approved host API, without adding behavior beyond the named target;
+  - sequence actions invoke the listed primitive handlers in order and obey the
+    compiled failure policy.
+  When `availability` is non-empty, declare the exact compiled
+  `availabilityName`, evaluate the typed conditions, bind the control's
+  disabled state to it, and render the selected condition's reason near the
+  control. Do not infer availability from conventional field or status names.
+  When `controlHint.iconName` is present, render that exact Ionicons name. Keep
+  visible text unless `labelMode` is `accessible-only`; in that case the control
+  must use the Action label as its `accessibilityLabel`. When a compiled badge
+  is present, declare its exact `valueName` from the bound source and render it
+  as a non-color-only count/status on the same control. Do not synthesize a
+  badge value or run a separate count query for decoration.
+  Never render an action enabled when its handler or target is missing, and do
+  not substitute a familiar domain operation. For `stepper`, bind the selected
+  numeric field, step, commit policy, and static/dynamic bounds from the
+  contract. Quantity, dosage, counts, repetitions, scores, and estimates all
+  use the same mechanism; shared code assumes none of those domains.
 - **Canonical data identity is mandatory.** When the pack names
   `src/generated/experience-view-model.ts`, import
   `toExperienceRecord`, `getExperienceAsset`, and `resolveExperienceMedia` from
@@ -216,7 +247,10 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   below only when the neutral `@/data` boundary described above is absent.
   Never mix both boundaries in one screen, use `fetch`/`axios`, or call raw
   HTTP. The `## Generated Services` table in `native-app-plan.md` is
-  authoritative for this fallback. Resolution order:
+  authoritative for this fallback. The TODO compatibility path below applies
+  only to older/non-Action data reads. If a compiled `actionBinding` names a
+  generated service or method and it is absent, return `BLOCKED`; never emit an
+  enabled TODO action. Resolution order:
   1. **If your screen's spec service is in the `## Generated Services` table** — use the exact name + methods listed. Do not rename, do not guess casing.
   2. **If the table is missing entirely** (older plan, manual run) — fall back to `Glob src/generated/services/*.ts` yourself and proceed as before.
   3. **If your spec's service is NOT in the table** (or your fallback Glob doesn't find it) — the data source has not been generated yet. Write the screen with the expected import path from your spec and add `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` above the call. Do NOT invent a service or rename to something that does exist.
@@ -560,6 +594,9 @@ assigned task. Record the pack `revision` in your final summary. Only an
 explicitly logged compatibility fallback may read the plan without a pack.
 
 **Functional fields:**
+- **Action bindings** (when present in the build pack) — exact handler names,
+  test IDs, executor targets, inputs, control hints, pending labels, and failure
+  copy. These are executable authority and override prose action descriptions.
 - **Composition guidance** (when present in the matching build-pack screen) —
   apply the compiler-selected structural roles and interaction patterns before
   choosing JSX anatomy. Treat recipe names as recommendations and preserve
@@ -854,7 +891,11 @@ For each service you'll call, use `Grep` to find the method signature — do NOT
 Grep pattern="async <MethodName>" path="<working_dir>/src/generated/services/<Service>.ts" -A 10
 ```
 
-If the service file does not exist (neither in the plan table nor on disk), still write the screen with the correct expected import path and method shape from the plan. Add a `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` comment at the import. Do NOT rename the service to one that does exist — that hides the problem.
+If the service file does not exist (neither in the plan table nor on disk), an
+older/non-Action data read may still use the planned import plus
+`// TODO(connector-not-yet-added)`. A compiled executable action must instead
+return `BLOCKED [<screen_name>]: generated action service is missing`. Do NOT
+rename the service to one that does exist — that hides the problem.
 
 **If your screen will use any gesture from `react-native-gesture-handler`** (Recipes A or B in [`mobile-gesture-recipes.md`](${PLUGIN_ROOT}/shared/references/mobile-gesture-recipes.md)), verify `<GestureHandlerRootView>` wraps the app in `app/_layout.tsx`:
 

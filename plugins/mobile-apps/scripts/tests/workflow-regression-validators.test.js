@@ -157,6 +157,28 @@ test('incomplete progress cannot expose review or enable two primary actions', (
   assert.ok(rules.has('competing-primary-actions'));
 });
 
+test('a completed state may promote its selected action without changing its static semantic role', () => {
+  const pack = basePack();
+  pack.journey.actions.find((action) => action.id === 'advance-work').semanticRole = 'secondary';
+  assert.equal(validateActionState(pack).some((item) => item.rule === 'competing-primary-actions'), false);
+});
+
+test('every enabled Journey action requires a same-screen executable binding when Actions are compiled', () => {
+  const pack = basePack();
+  pack.sourcePaths = { actionContract: '.tmp/screen-action-contract.json' };
+  pack.actionBindings = [
+    { id: 'continue-work', screenId: 'Work' },
+    { id: 'advance-work', screenId: 'Work' },
+    { id: 'complete-review', screenId: 'Review' },
+    { id: 'finish-review', screenId: 'Review' },
+  ];
+  pack.screens.find((screen) => screen.id === 'Work').actionBindings = pack.actionBindings.filter((action) => action.screenId === 'Work');
+  pack.screens.find((screen) => screen.id === 'Review').actionBindings = pack.actionBindings.filter((action) => action.screenId === 'Review');
+  assert.equal(validateActionState(pack).some((item) => item.rule === 'journey-action-not-executable'), false);
+  pack.actionBindings = pack.actionBindings.filter((action) => action.id !== 'advance-work');
+  assert.ok(validateActionState(pack).some((item) => item.rule === 'journey-action-not-executable' && item.actionId === 'advance-work'));
+});
+
 test('completion and resume scenario progress must remain mathematically coherent', () => {
   const pack = basePack();
   const scenario = pack.journey.scenarios[0];
@@ -184,6 +206,18 @@ test('critical screens cannot drop a continuity key or route identity binding', 
   const rules = new Set(validateCrossScreenContinuity(pack).map((item) => item.rule));
   assert.ok(rules.has('missing-continuity-binding'));
   assert.ok(rules.has('unbound-route-identity'));
+});
+
+test('compiled operation action inputs can bind a required route identity', () => {
+  const pack = basePack();
+  const work = pack.screens.find((item) => item.id === 'Work');
+  work.routeParameters = [{ name: 'id', source: 'path', required: true }];
+  work.actionBindings = [{
+    id: 'load-work',
+    executor: { kind: 'operation', provider: 'domain-hook' },
+    inputs: [{ target: 'id', source: { kind: 'route', path: 'id' } }],
+  }];
+  assert.equal(validateCrossScreenContinuity(pack).some((item) => item.rule === 'unbound-route-identity'), false);
 });
 
 test('relationship-backed fixture aggregate counts must equal related rows', (context) => {

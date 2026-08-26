@@ -26,8 +26,10 @@ function project(context) {
     'prototype-domain-model.json': model,
     'design-content-projection.json': compileDesignContentProjection(model),
     'experience-contract.json': { schemaVersion: 1, primaryJob: 'Complete realistic work.' },
+    'context-enrichment-contract.json': { schemaVersion: 1, contextMode: 'none', displayContext: [] },
     'experience-foundation-contract.json': { schemaVersion: 1, primitives: [] },
     'experience-screen-contract.json': { schemaVersion: 2, screens: [] },
+    'screen-action-contract.json': { schemaVersion: 1, kind: 'mobile-screen-actions', decisionOwner: 'model', actions: [] },
     'navigation-contract.json': { schemaVersion: 1, model: 'stack' },
   };
   for (const [name, value] of Object.entries(artifacts)) {
@@ -39,8 +41,10 @@ function project(context) {
   ].map((relativePath) => evidenceEntry('plugin', relativePath, root));
   for (const relativePath of [
     '.tmp/experience-contract.json',
+    '.tmp/context-enrichment-contract.json',
     '.tmp/experience-foundation-contract.json',
     '.tmp/experience-screen-contract.json',
+    '.tmp/screen-action-contract.json',
     '.tmp/navigation-contract.json',
     '.tmp/design-content-projection.json',
   ]) filesRead.push(evidenceEntry('project', relativePath, root));

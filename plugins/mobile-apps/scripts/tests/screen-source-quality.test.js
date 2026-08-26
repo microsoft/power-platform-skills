@@ -132,3 +132,112 @@ test('sticky actions require calculated scroll, tab, and safe-area clearance', (
   const rules = new Set(validateScreenSourceContract(clipped, sticky).map((issue) => issue.rule));
   assert.ok(rules.has('sticky-content-clearance-missing'));
 });
+
+test('compiled route and operation actions require rendered controls and exact handlers', () => {
+  const actionScreen = screen({
+    actionBindings: [
+      { id: 'open-detail', testId: 'action-open-detail', handlerName: 'handleOpenDetail', executor: { kind: 'route', intent: 'push', route: '/(app)/items/detail' } },
+      { id: 'save-item', testId: 'action-save-item', handlerName: 'handleSaveItem', availabilityName: 'isSaveItemAvailable', availability: [{ reason: 'Complete the required value.' }], executor: { kind: 'operation', mode: 'mutation', hook: 'useSaveItem' } },
+    ],
+  });
+  const valid = [
+    'const saveItem = useSaveItem();',
+    'const isSaveItemAvailable = Boolean(name);',
+    'const handleOpenDetail = () => router.push("/(app)/items/detail");',
+    'const handleSaveItem = () => saveItem.mutate({ name: "Draft" });',
+    'return <YStack>',
+    '<Button testID="action-open-detail" onPress={handleOpenDetail}>Open</Button>',
+    '<Button testID="action-save-item" onPress={handleSaveItem} disabled={!isSaveItemAvailable}>Save</Button>',
+    '<Text>Complete the required value.</Text>',
+    '</YStack>;',
+  ].join('\n');
+  assert.deepEqual(validateScreenSourceContract(valid, actionScreen), []);
+
+  const decorative = 'return <YStack><Button testID="action-open-detail">Open</Button><Button testID="action-save-item">Save</Button></YStack>;';
+  const rules = new Set(validateScreenSourceContract(decorative, actionScreen).map((issue) => issue.rule));
+  assert.ok(rules.has('action-handler-not-wired'));
+  assert.ok(rules.has('action-handler-missing'));
+  assert.ok(rules.has('action-route-not-executed'));
+  assert.ok(rules.has('action-hook-missing'));
+  assert.ok(rules.has('action-operation-not-executed'));
+
+  const misplacedExecutors = [
+    'const saveItem = useSaveItem();',
+    'const isSaveItemAvailable = true;',
+    'const handleOpenDetail = () => {};',
+    'const handleSaveItem = () => {};',
+    'const runSomethingElse = () => { router.push("/(app)/items/detail"); saveItem.mutate({}); };',
+    'return <YStack>',
+    '<Button testID="action-open-detail" onPress={handleOpenDetail}>Open</Button>',
+    '<Button testID="action-save-item" onPress={handleSaveItem} disabled={!isSaveItemAvailable}>Save</Button>',
+    '<Text>Complete the required value.</Text>',
+    '</YStack>;',
+  ].join('\n');
+  const misplacedRules = new Set(validateScreenSourceContract(misplacedExecutors, actionScreen).map((issue) => issue.rule));
+  assert.ok(misplacedRules.has('action-route-not-executed'));
+  assert.ok(misplacedRules.has('action-operation-not-executed'));
+});
+
+test('compiled real-app actions require the collision-resolved generated service method', () => {
+  const actionScreen = screen({
+    actionBindings: [{
+      id: 'save-choice', testId: 'action-save-choice', handlerName: 'handleSaveChoice', availability: [],
+      executor: { kind: 'operation', provider: 'generated-service', service: 'Cr1_itemsv2Service', serviceMethod: 'create' },
+    }],
+  });
+  const valid = [
+    'const handleSaveChoice = async () => { const result = await Cr1_itemsv2Service.create({ cr1_name: name }); if (!result.success) throw new Error("Save failed"); };',
+    'return <Button testID="action-save-choice" onPress={handleSaveChoice}>Save choice</Button>;',
+  ].join('\n');
+  assert.deepEqual(validateScreenSourceContract(valid, actionScreen), []);
+  const guessed = valid.replace('Cr1_itemsv2Service.create', 'Cr1_itemsService.create');
+  assert.ok(validateScreenSourceContract(guessed, actionScreen).some((issue) => issue.rule === 'action-service-not-executed'));
+});
+
+test('compiled local and host actions require their exact commands inside each handler', () => {
+  const actionScreen = screen({
+    actionBindings: [
+      { id: 'select-mode', testId: 'action-select-mode', handlerName: 'handleSelectMode', availability: [], executor: { kind: 'local', commandName: 'executeSelectMode' } },
+      { id: 'sign-out', testId: 'action-sign-out', handlerName: 'handleSignOut', availability: [], executor: { kind: 'host', commandName: 'executeHostSignOut' } },
+    ],
+  });
+  const valid = [
+    'const executeSelectMode = () => setMode("compact");',
+    'const executeHostSignOut = signOut;',
+    'const handleSelectMode = () => executeSelectMode();',
+    'const handleSignOut = () => executeHostSignOut();',
+    'return <YStack><Button testID="action-select-mode" onPress={handleSelectMode}>Mode</Button><Button testID="action-sign-out" onPress={handleSignOut}>Sign out</Button></YStack>;',
+  ].join('\n');
+  assert.deepEqual(validateScreenSourceContract(valid, actionScreen), []);
+  const empty = valid.replace('const handleSignOut = () => executeHostSignOut();', 'const handleSignOut = () => {};');
+  assert.ok(validateScreenSourceContract(empty, actionScreen).some((issue) => issue.rule === 'action-command-not-executed'));
+});
+
+test('compiled icon actions require the exact icon, accessible label, and bound badge value', () => {
+  const actionScreen = screen({
+    actionBindings: [{
+      id: 'open-selection', testId: 'action-open-selection', handlerName: 'handleOpenSelection', availability: [],
+      executor: { kind: 'route', intent: 'push', route: '/(app)/selection' },
+      controlHint: {
+        kind: 'icon-button', iconName: 'bag-handle-outline', labelMode: 'accessible-only',
+        badge: { source: { kind: 'state', path: 'selectionCount' }, valueName: 'openSelectionBadgeValue' },
+      },
+    }],
+  });
+  const valid = [
+    'const openSelectionBadgeValue = selectionCount;',
+    'const handleOpenSelection = () => router.push("/(app)/selection");',
+    'return <Button testID="action-open-selection" accessibilityLabel="Open selection" onPress={handleOpenSelection}>',
+    '<Ionicons name="bag-handle-outline" /><Text>{openSelectionBadgeValue}</Text>',
+    '</Button>;',
+  ].join('\n');
+  assert.deepEqual(validateScreenSourceContract(valid, actionScreen), []);
+  const missing = valid
+    .replace(' accessibilityLabel="Open selection"', '')
+    .replace('bag-handle-outline', 'list-outline')
+    .replace('<Text>{openSelectionBadgeValue}</Text>', '');
+  const rules = new Set(validateScreenSourceContract(missing, actionScreen).map((issue) => issue.rule));
+  assert.ok(rules.has('action-icon-not-rendered'));
+  assert.ok(rules.has('action-accessible-label-missing'));
+  assert.ok(rules.has('action-badge-not-rendered'));
+});

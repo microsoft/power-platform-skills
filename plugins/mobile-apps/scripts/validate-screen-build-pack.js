@@ -36,7 +36,14 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (!/^[a-f0-9]{64}$/i.test(String(pack.revision || '')) || pack.revision !== revisionForPack(pack)) {
     issues.push({ rule: 'revision-drift', message: 'Screen build pack revision does not match its deterministic content.' });
   }
-  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent'];
+  const sourceNames = [
+    'experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent',
+    ...(pack.sources?.workflowJourney ? ['workflowJourney'] : []),
+    ...(pack.sources?.contextContract ? ['contextContract'] : []),
+    ...(pack.sources?.navigationContract ? ['navigationContract'] : []),
+    ...(pack.sources?.actionContract ? ['actionContract'] : []),
+    ...(pack.sources?.serviceSurface ? ['serviceSurface'] : []),
+  ];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -111,6 +118,17 @@ function validateScreenBuildPack(projectRoot, pack) {
     }
     if (!/^[a-f0-9]{64}$/i.test(String(pack.uiContractFingerprint || ''))) {
       issues.push({ rule: 'missing-ui-contract-fingerprint', message: 'Rich build packs require a UI contract fingerprint.' });
+    }
+    const actionIds = new Set();
+    for (const action of pack.actionBindings || []) {
+      if (!action?.id || actionIds.has(action.id)) issues.push({ rule: 'invalid-action-binding', message: `Build pack action binding is missing or duplicated: ${action?.id || '<missing>'}.` });
+      actionIds.add(action?.id);
+      const owner = (pack.screens || []).find((screen) => screen.id === action?.screenId);
+      if (!owner || !(owner.actionBindings || []).some((candidate) => candidate.id === action.id)) issues.push({ rule: 'action-binding-owner-missing', message: `Action ${action?.id || '<missing>'} has no matching screen owner.` });
+      if (!action?.handlerName || !action?.testId || !action?.executor?.kind) issues.push({ rule: 'invalid-action-binding', message: `Action ${action?.id || '<missing>'} lacks handler, test ID, or executor metadata.` });
+      if (action?.controlHint?.iconIntent && !action.controlHint.iconName) issues.push({ rule: 'invalid-action-binding', message: `Action ${action.id} lacks its resolved icon name.` });
+      if (action?.semanticRole === 'primary' && action?.controlHint?.labelMode === 'accessible-only') issues.push({ rule: 'invalid-action-binding', message: `Action ${action.id} hides a primary label.` });
+      if (action?.controlHint?.badge && (!action.controlHint.badge.valueName || !action.controlHint.badge.source)) issues.push({ rule: 'invalid-action-binding', message: `Action ${action.id} lacks compiled badge metadata.` });
     }
     for (const issue of [
       ...validateNavigationContinuity(pack),

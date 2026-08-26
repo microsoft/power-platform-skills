@@ -9,8 +9,10 @@ const { validateDesignContentProjection } = require('./compile-design-content-pr
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const REQUIRED_PROJECT_FILES = [
   '.tmp/experience-contract.json',
+  '.tmp/context-enrichment-contract.json',
   '.tmp/experience-foundation-contract.json',
   '.tmp/experience-screen-contract.json',
+  '.tmp/screen-action-contract.json',
   '.tmp/design-content-projection.json',
 ];
 const REQUIRED_PLUGIN_FILES = [

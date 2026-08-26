@@ -10,7 +10,7 @@ const { contractHash, deriveExperienceFromBrief, primaryComposition } = require(
 const { normalizeScreenContract } = require('../lib/experience-screen-contract');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
-const { resolveNavigationContract, withCriticalFlow } = require('../resolve-navigation-contract');
+const { applyActionContractToScreenGraph, resolveNavigationContract, withCriticalFlow } = require('../resolve-navigation-contract');
 const { validateNavigationContract } = require('../validate-navigation-contract');
 const { validateNavigationContinuity } = require('../validate-navigation-continuity');
 
@@ -269,6 +269,44 @@ test('foreground CLI finalizes planner-v1 Journey bindings and critical flow wit
   assert.ok(finalizedScreens.criticalFlow.screenIds.every((screenId) => screenIds.has(screenId)));
   assert.equal(finalizedScreens.criticalFlow.screenIds.includes('Home'), true);
   assert.equal(finalizedScreens.criticalFlow.screenIds.includes('InspectEquipment'), true);
+});
+
+test('model actions replace synthesized v1 primary action identities before Journey validation', () => {
+  const brief = 'Let passengers browse products and add one selected product to a local bag.';
+  const experience = deriveExperienceFromBrief(brief);
+  const v1 = {
+    schemaVersion: 1,
+    experienceContractSha256: contractHash(experience),
+    primaryScreen: { route: '/(app)/home', file: 'app/(app)/home.tsx', ...primaryComposition(experience) },
+    keyFlow: { route: '/(app)/products/[productId]', file: 'app/(app)/products/[productId].tsx', outcome: 'Review and add the selected product.' },
+    requiredScreens: [
+      { id: 'ProductDetail', route: '/(app)/products/[productId]', file: 'app/(app)/products/[productId].tsx', outcome: 'Review and add the selected product.' },
+      { id: 'Profile', route: '/(app)/profile', file: 'app/(app)/profile.tsx', outcome: 'Review profile.' },
+    ],
+  };
+  const normalized = { ...v1, schemaVersion: 2, screens: normalizeScreenContract(v1, experience, [], []) };
+  assert.equal(normalized.screens.find((item) => item.id === 'ProductDetail').primaryAction.id, 'productdetail-primary-action');
+  const actions = {
+    decisionOwner: 'model',
+    actions: [{
+      id: 'add-selected-product',
+      screenId: 'ProductDetail',
+      label: 'Add to bag',
+      semanticRole: 'primary',
+      placement: 'sticky-bottom',
+      executor: { kind: 'operation', target: 'addSelection', mode: 'mutation' },
+      pendingLabel: 'Adding',
+    }],
+  };
+  const result = applyActionContractToScreenGraph(normalized, actions, 'tabs-stack');
+  assert.deepEqual(result.screens.find((item) => item.id === 'ProductDetail').primaryAction, {
+    id: 'add-selected-product',
+    label: 'Add to bag',
+    placement: 'sticky-bottom',
+    binding: 'action:add-selected-product',
+    doubleTapPolicy: 'disable-while-pending',
+    clearance: { safeArea: true, tabBar: 'above' },
+  });
 });
 
 test('planner-v1 optional durable roles survive normalization without becoming required', () => {

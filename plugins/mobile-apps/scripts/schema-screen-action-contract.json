@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Power Apps Mobile Screen Action Contract",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "decisionOwner", "actions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "mobile-screen-actions" },
+    "decisionOwner": { "const": "model" },
+    "actions": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/action" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "action": {
+      "type": "object",
+      "required": ["id", "screenId", "label", "semanticRole", "placement", "executor", "inputs"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "screenId": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "semanticRole": { "enum": ["primary", "secondary", "destructive"] },
+        "placement": { "enum": ["inline", "sticky-bottom", "header", "row", "menu", "floating", "gesture"] },
+        "executor": { "$ref": "#/definitions/executor" },
+        "inputs": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/inputBinding" }
+        },
+        "availability": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/condition" }
+        },
+        "controlHint": { "$ref": "#/definitions/controlHint" },
+        "pendingLabel": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "failureMessage": { "type": "string", "minLength": 5, "maxLength": 220 }
+      },
+      "additionalProperties": false
+    },
+    "executor": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["route", "operation", "connector", "native", "local", "host", "sequence"] },
+        "target": { "type": "string", "minLength": 1 },
+        "intent": { "enum": ["navigate", "push", "replace", "present"] },
+        "mode": { "enum": ["query", "mutation"] },
+        "entity": { "type": "string", "minLength": 1 },
+        "operationKind": { "enum": ["list", "get", "create", "update", "delete"] },
+        "command": { "type": "string", "minLength": 1 },
+        "steps": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "uniqueItems": true },
+        "policy": { "enum": ["ordered-stop-on-error", "ordered-retry-safe"] }
+      },
+      "additionalProperties": false
+    },
+    "inputBinding": {
+      "type": "object",
+      "required": ["target", "source"],
+      "properties": {
+        "target": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/definitions/valueSource" }
+      },
+      "additionalProperties": false
+    },
+    "valueSource": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["record", "route", "form", "state", "context", "constant", "result", "field-constraint"] },
+        "path": { "type": "string", "minLength": 1 },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "controlHint": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["button", "icon-button", "stepper", "toggle", "picker", "swipe", "menu", "fab", "link"] },
+        "iconIntent": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "labelMode": { "enum": ["visible", "accessible-only"] },
+        "badge": { "$ref": "#/definitions/badgeHint" },
+        "field": { "type": "string", "minLength": 1 },
+        "step": { "type": "number", "exclusiveMinimum": 0 },
+        "commit": { "enum": ["immediate", "local-draft", "on-action"] },
+        "minimum": { "$ref": "#/definitions/valueSource" },
+        "maximum": { "$ref": "#/definitions/valueSource" }
+      },
+      "additionalProperties": false
+    },
+    "badgeHint": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": { "$ref": "#/definitions/valueSource" }
+      },
+      "additionalProperties": false
+    },
+    "condition": {
+      "type": "object",
+      "required": ["left", "operator", "reason"],
+      "properties": {
+        "left": { "$ref": "#/definitions/valueSource" },
+        "operator": { "enum": ["truthy", "falsy", "eq", "ne", "gt", "ge", "lt", "le", "in"] },
+        "right": { "$ref": "#/definitions/valueSource" },
+        "reason": { "type": "string", "minLength": 3, "maxLength": 180 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

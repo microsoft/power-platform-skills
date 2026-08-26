@@ -8,10 +8,11 @@ const { contextEnrichmentRevision } = require('./resolve-context-enrichment');
 const { workflowJourneyRevision } = require('./resolve-workflow-journey');
 
 const ROOT_KEYS = [
-  'schemaVersion', 'experienceContractSha256', 'contextEnrichmentSha256', 'journeyId', 'journeyKind',
+  'schemaVersion', 'decisionOwner', 'experienceContractSha256', 'contextEnrichmentSha256', 'journeyId', 'journeyKind',
   'primaryOutcome', 'entryPoints', 'resume', 'declaredStateFields', 'stages', 'completionGuards', 'actions',
   'stateActions', 'signatureComponents', 'continuityKeys', 'scenarios', 'capabilityComposition',
 ];
+const REQUIRED_ROOT_KEYS = ROOT_KEYS.filter((key) => key !== 'decisionOwner');
 const JOURNEY_KINDS = new Set([
   'discovery-with-nested-flow', 'linear-resumable', 'capture-led-linear', 'progress-resumable',
   'staged-choice', 'stateful-overview', 'durable-destinations',
@@ -41,8 +42,9 @@ function uniqueIds(items, label, errors) {
 
 function validateWorkflowJourney(contract, context = {}) {
   const errors = [];
-  exactKeys(contract, ROOT_KEYS, ROOT_KEYS, 'workflowJourney', errors);
+  exactKeys(contract, ROOT_KEYS, REQUIRED_ROOT_KEYS, 'workflowJourney', errors);
   if (contract?.schemaVersion !== 1) errors.push('workflowJourney.schemaVersion must be 1');
+  if (contract?.decisionOwner !== undefined && !['deterministic-hint', 'model', 'legacy'].includes(contract.decisionOwner)) errors.push('workflowJourney.decisionOwner is invalid');
   if (!JOURNEY_KINDS.has(contract?.journeyKind)) errors.push('workflowJourney.journeyKind is invalid');
   if (context.experienceContract && contract?.experienceContractSha256 !== contractHash(context.experienceContract)) errors.push('workflow journey does not match the Experience Contract');
   if (context.contextContract && contract?.contextEnrichmentSha256 !== contextEnrichmentRevision(context.contextContract)) errors.push('workflow journey does not match the Context Enrichment Contract');

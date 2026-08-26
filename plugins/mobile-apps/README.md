@@ -232,6 +232,22 @@ screens. Guidance names structural roles and useful recipe anatomy, not
 mandatory component imports; older plans and justified equivalent layouts keep
 the existing fallback and do not return to planning.
 
+Domain semantics remain model-owned throughout that flow. Deterministic helpers
+may identify evidence-backed Experience, Context, or Journey opportunities, but
+the planner finalizes Experience before Domain, finalizes Context after bounded
+fixtures or real schema/connector evidence exists, then finalizes Journey before
+screens. Fixture-backed Context uses validated JSON pointers and exact values;
+shared code never chooses the field or sample. The model chooses the entities, fields,
+operations, labels, screens, controls, and availability rules. A separate small
+Screen Action contract binds every visible action to a route, neutral Domain
+operation, connector, native capability, host command, local event, or bounded
+sequence. Compact controls may optionally carry a model-owned semantic icon and
+dynamic badge source; ordinary text actions need neither, and primary labels
+remain visible. The compiler generates exact handler metadata, resolves real-app
+operation intent against collision-adjusted generated service files, and the
+source validator rejects enabled controls that are not wired to their compiled
+executor.
+
 Connected image-led products use approved cached CDN media with bundled
 fallback; explicit offline media remains local-first. Native captures must be
 stable and free of `Refreshing...`, disconnected/error overlays, and host

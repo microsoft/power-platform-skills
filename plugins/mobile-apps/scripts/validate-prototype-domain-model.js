@@ -30,7 +30,7 @@ function main(argv) {
     const contextContract = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
     if (experience && !contextContract) throw new Error('context enrichment contract is missing');
     if (contextContract) {
-      const contextValidation = validateContextEnrichment(contextContract, { experienceContract: experience });
+      const contextValidation = validateContextEnrichment(contextContract, { experienceContract: experience, domainModel: model });
       if (!contextValidation.valid) throw new Error(contextValidation.errors.join('; '));
     }
     const result = validatePrototypeDomainModel(model, {

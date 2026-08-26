@@ -72,6 +72,7 @@
           "media": { "type": "object" },
           "journey": { "type": "object" },
           "actionState": { "type": "object" },
+          "actionBindings": { "type": "array" },
           "signatureComponents": { "type": "array" },
           "semanticColorRoles": { "type": "array" },
           "capabilityComposition": { "type": "array" },
@@ -111,6 +112,7 @@
     "builderWaves": { "type": "array", "minItems": 2 },
     "productStructure": { "type": "object" },
     "capabilityBindings": { "type": "array" },
+    "actionBindings": { "type": "array" },
     "uiContractFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "buildOrder": { "type": "array", "minItems": 3 },
     "invalidation": { "type": "object", "required": ["screenDependencies", "fixtureDependencies", "validatorDependencies"] }

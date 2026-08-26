@@ -115,7 +115,10 @@ test('edit-app routes graduation intent before ordinary edits', () => {
   assert.match(skill, /Convert, graduate, or make a prototype real/);
   assert.match(skill, /Invoke `\/prototype-to-real-app/);
   assert.match(skill, /Dataverse planning mode: prototype/);
-  assert.match(skill, /gen-mock-services\.js/);
+  assert.match(skill, /gen-data-layer\.js/);
+  assert.match(skill, /finalize-context-from-domain\.js/);
+  assert.match(skill, /compile-design-content-projection\.js/);
+  assert.ok(skill.indexOf('finalize-context-from-domain.js') < skill.indexOf('gen-data-layer.js'));
   assert.match(skill, /--apply-plan/);
   assert.match(skill, /approvedPlanSha256/);
 });
@@ -306,11 +309,55 @@ test('prototype uses one consolidated non-mutating approval before data or desig
   assert.match(skill, /prototype-plan-review\.js[\s\S]*--action draft/);
   assert.match(skill, /prototype-plan-review\.js[\s\S]*--action approve --response approve/);
   assert.match(skill, /mayAuthorizeExternalMutations: false/);
+  assert.match(skill, /screen-action-contract\.json/);
+  assert.match(skill, /validate-screen-action-contract\.js/);
+  assert.match(skill, /decisionOwner!=='model'/);
   assert.doesNotMatch(skill, /This is a mock-backed prototype\. Run the normal approval gates/);
   const approval = skill.indexOf('--action approve --response approve');
   const data = skill.indexOf('#### Step 5 - Generate The Typed Domain Layer');
   const design = skill.indexOf('#### Step 6a - Generate Automatic Or Optional Design');
   assert.ok(approval > 0 && data > approval && design > approval);
+});
+
+test('planner delegates domain semantics to model-owned Context and executable Actions', () => {
+  const planner = read('agents/native-app-planner.md');
+  const screenPlanner = read('agents/screen-planner.md');
+  const builder = read('agents/screen-builder.md');
+  assert.match(planner, /decisionOwner: "model"/);
+  assert.match(planner, /shared code supplies none of their names or[\s\S]*values/);
+  assert.match(screenPlanner, /Model-owned executable actions/);
+  assert.match(screenPlanner, /Shared code never invents cart,[\s\S]*domain semantics/);
+  assert.match(screenPlanner, /phase: actions/);
+  assert.match(screenPlanner, /Icon and badge hints are optional/);
+  assert.match(screenPlanner, /Never hide a primary action label/);
+  assert.match(builder, /Executable action bindings are mandatory/);
+  assert.match(builder, /Never render an action enabled when its handler or target is missing/);
+});
+
+test('planner finalizes fixture-backed Context after Domain and before screens', () => {
+  const planner = read('agents/native-app-planner.md');
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+  const domain = planner.indexOf('## Step 2 — Spawn `data-model-architect`');
+  const context = planner.indexOf('## Step 3d — Finalize Context and Journey after Domain output');
+  const plan = planner.indexOf('## Step 4 — Assemble `native-app-plan.md`');
+  const screens = planner.indexOf('### Step 5b — Spawn `screen-planner`');
+  assert.ok(domain > 0 && context > domain && plan > context && screens > plan);
+  assert.match(planner, /#\/fixtures\/<Entity>\/<index>\/<field>/);
+  assert.match(planner, /finalize-context-from-domain\.js/);
+  const finalize = prototype.indexOf('finalize-context-from-domain.js');
+  const validateDomain = prototype.indexOf('validate-prototype-domain-model.js', finalize);
+  assert.ok(finalize > 0 && validateDomain > finalize);
+});
+
+test('real creation resolves action intents against generated services before builders', () => {
+  const skill = read('skills/create-mobile-app/SKILL.md');
+  const snapshot = skill.indexOf('snapshot-generated-service-surface.js');
+  const actionValidation = skill.indexOf('validate-screen-action-contract.js', snapshot);
+  const compile = skill.indexOf('compile-screen-build-pack.js', actionValidation);
+  assert.ok(snapshot > 0 && actionValidation > snapshot && compile > actionValidation);
+  assert.match(skill, /--phase build/);
+  assert.match(skill, /Never[\s\S]*emit an enabled TODO action/);
+  assert.match(skill, /approvedActionContractSha256/);
 });
 
 test('prototype validates real content before design and reuses only unchanged final passes', () => {

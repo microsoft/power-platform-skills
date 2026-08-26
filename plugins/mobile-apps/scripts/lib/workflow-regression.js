@@ -37,6 +37,9 @@ function validateActionState(pack, options = {}) {
   const stageByScreen = new Map(stages.flatMap((stage) => stage.screenIds.map((screenId) => [screenId, stage])));
   const actions = new Map((pack.journey?.actions || []).map((action) => [action.id, action]));
   const guards = new Map((pack.journey?.completionGuards || []).map((guard) => [guard.id, guard]));
+  const executableBindings = pack.sourcePaths?.actionContract && Array.isArray(pack.actionBindings)
+    ? new Map(pack.actionBindings.map((binding) => [binding.id, binding]))
+    : null;
   for (const screen of screenSelection(pack, options.screenIds)) {
     const states = screen.actionState?.stateActions || [];
     const stateKeys = new Set();
@@ -46,12 +49,21 @@ function validateActionState(pack, options = {}) {
       if (!actions.has(state.primaryAction)) issues.push(issue('unknown-primary-action', `Screen ${screen.id} state ${state.state} references unknown primary action ${state.primaryAction}.`, { screenId: screen.id }));
       if (!(state.enabledActions || []).includes(state.primaryAction)) issues.push(issue('primary-action-not-enabled', `Screen ${screen.id} state ${state.state} does not enable its primary action.`, { screenId: screen.id }));
       if ((state.disabledActions || []).includes(state.primaryAction) || (state.hiddenActions || []).includes(state.primaryAction)) issues.push(issue('primary-action-conflict', `Screen ${screen.id} state ${state.state} disables or hides its primary action.`, { screenId: screen.id }));
+      if (executableBindings) {
+        for (const actionId of new Set([state.primaryAction, ...(state.enabledActions || [])])) {
+          const binding = executableBindings.get(actionId);
+          if (!binding || binding.screenId !== screen.id) issues.push(issue('journey-action-not-executable', `Screen ${screen.id} state ${state.state} enables Journey action ${actionId} without a same-screen executable binding.`, { screenId: screen.id, actionId }));
+        }
+      }
       if (state.guardId !== null && !guards.has(state.guardId)) issues.push(issue('unknown-action-guard', `Screen ${screen.id} state ${state.state} references unknown guard ${state.guardId}.`, { screenId: screen.id }));
-      const enabledPrimaryActions = (state.enabledActions || []).filter((actionId) => actions.get(actionId)?.semanticRole === 'primary');
-      if (enabledPrimaryActions.length !== 1) issues.push(issue('competing-primary-actions', `Screen ${screen.id} state ${state.state} enables ${enabledPrimaryActions.length} primary actions.`, { screenId: screen.id }));
+      const competingPrimaryActions = (state.enabledActions || []).filter((actionId) => (
+        actionId !== state.primaryAction && actions.get(actionId)?.semanticRole === 'primary'
+      ));
+      if (competingPrimaryActions.length) issues.push(issue('competing-primary-actions', `Screen ${screen.id} state ${state.state} enables competing primary actions ${competingPrimaryActions.join(', ')}.`, { screenId: screen.id }));
     }
     const incomplete = states.find((state) => state.state === 'incomplete');
-    if (incomplete && screen.primaryAction?.id && incomplete.primaryAction !== screen.primaryAction.id) issues.push(issue('competing-primary-actions', `Screen ${screen.id} has competing Screen and Journey primary actions.`, { screenId: screen.id }));
+    const hasExecutablePrimary = (screen.actionBindings || []).some((action) => action.semanticRole === 'primary');
+    if (incomplete && screen.primaryAction?.id && !hasExecutablePrimary && incomplete.primaryAction !== screen.primaryAction.id) issues.push(issue('competing-primary-actions', `Screen ${screen.id} has competing Screen and Journey primary actions.`, { screenId: screen.id }));
     const stage = stageByScreen.get(screen.id);
     if (stage && incomplete) {
       const blocked = new Set([...(incomplete.disabledActions || []), ...(incomplete.hiddenActions || [])]);
@@ -83,7 +95,15 @@ function validateCrossScreenContinuity(pack, options = {}) {
     const bindings = new Set((screen.journey?.continuityBindings || []).map((binding) => binding.key));
     for (const key of keys) if (!bindings.has(key)) issues.push(issue('missing-continuity-binding', `Screen ${screen.id} drops continuity key ${key}.`, { screenId: screen.id, key }));
     const requiredParameters = (screen.routeParameters || []).filter((parameter) => parameter.required).map((parameter) => parameter.name);
-    const routeBindings = new Set((screen.data?.operations || []).flatMap((operation) => operation.routeBindings || []).map((binding) => binding.parameter));
+    const operationActionBindings = (screen.actionBindings || [])
+      .filter((action) => action.executor?.kind === 'operation')
+      .flatMap((action) => action.inputs || [])
+      .filter((input) => input.source?.kind === 'route')
+      .map((input) => input.source.path);
+    const routeBindings = new Set([
+      ...(screen.data?.operations || []).flatMap((operation) => operation.routeBindings || []).map((binding) => binding.parameter),
+      ...operationActionBindings,
+    ]);
     for (const parameter of requiredParameters) if (!routeBindings.has(parameter)) issues.push(issue('unbound-route-identity', `Screen ${screen.id} route parameter ${parameter} is not bound to a repository operation.`, { screenId: screen.id }));
   }
   for (const scenario of pack.journey?.scenarios || []) {

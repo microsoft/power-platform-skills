@@ -286,6 +286,7 @@ function resolveWorkflowJourney(briefText, experienceContract, contextContract, 
   }];
   return {
     schemaVersion: 1,
+    decisionOwner: 'deterministic-hint',
     experienceContractSha256: contractHash(experienceContract),
     contextEnrichmentSha256: contextEnrichmentRevision(contextContract),
     journeyId: 'primary-job',

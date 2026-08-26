@@ -37,7 +37,7 @@ function illustrationFamily(value) {
   if (/travel|bag|accessor|journey|luggage/.test(semantic)) return 'travel';
   if (/food|grocery|pantry|drink|coffee/.test(semantic)) return 'food';
   if (/health|wellness|care|fitness/.test(semantic)) return 'wellness';
-  return 'product';
+  return 'generic';
 }
 
 function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract) {
@@ -75,7 +75,7 @@ function buildExperienceAssetManifest(entities, rowsByEntity, experienceContract
       mediaRecords[`${entity.logicalName}:${recordId}`] = {
         imageUrl: fieldString(row, fields.imageUrlField)
           || (rawImage && !rawImage.startsWith('asset://') ? rawImage : null),
-        imageAltText: fieldString(row, fields.imageAltTextField) || `${title} product image`,
+        imageAltText: fieldString(row, fields.imageAltTextField) || `${title} image`,
         imageCacheKey: fieldString(row, fields.imageCacheKeyField) || `experience:${entity.logicalName}:${recordId}`,
         imageAssetKey,
       };
@@ -208,7 +208,7 @@ export function toExperienceRecord(entity: string, record: Record<string, unknow
     category: adapter.categoryField ? stringValue(record[adapter.categoryField]) : null,
     availability: adapter.availabilityField ? stringValue(record[adapter.availabilityField]) : null,
     imageUrl,
-    imageAltText: (adapter.imageAltTextField ? stringValue(record[adapter.imageAltTextField]) : null) || \`\${stringValue(record[adapter.nameField]) || id} product image\`,
+    imageAltText: (adapter.imageAltTextField ? stringValue(record[adapter.imageAltTextField]) : null) || \`\${stringValue(record[adapter.nameField]) || id} image\`,
     imageCacheKey: (adapter.imageCacheKeyField ? stringValue(record[adapter.imageCacheKeyField]) : null) || \`experience:\${entity}:\${id}\`,
     imageAssetKey,
     assetKey: imageAssetKey,
@@ -221,7 +221,7 @@ export function getExperienceAsset(assetKey: string | null | undefined): Experie
   return EXPERIENCE_VIEW_MODEL.assets[assetKey] || {
     key: assetKey,
     kind: 'local-illustration',
-    family: 'product',
+    family: 'generic',
     label: 'Local illustration',
     category: null,
   };

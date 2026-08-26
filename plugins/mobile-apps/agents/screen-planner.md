@@ -31,6 +31,18 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
   `.tmp/experience-foundation-contract.json`; the scaffold owner creates these
   components before builders fan out. Do not promise a signature motif without
   a foundation owner.
+- **Model-owned executable actions.** In `phase: specs`, also write
+  `.tmp/screen-action-contract.json` against
+  `scripts/schema-screen-action-contract.json`. It is deliberately small and
+  contains only visible actions, executor targets, input bindings, and optional
+  control hints. AI owns every domain-specific action ID, label, operation,
+  route, field, capability, and local event. Shared code never invents cart,
+  shipment, inspection, booking, approval, or other domain semantics.
+  When a Workflow Journey exists, every `stateActions[].primaryAction` and each
+  action enabled in that state on the same screen must use the exact ID of a
+  same-screen executable Action entry. Do not rename a Journey action while
+  writing the Action sidecar; disabled or hidden future-screen actions remain
+  Journey references until their owning screen is active.
 - **Experience contract is the entry-flow source of truth.** Read
   `<working_dir>/.tmp/experience-contract.json` before selecting navigation,
   listing screens, or choosing a visual arrangement. Its `entryMode`, primary
@@ -56,7 +68,7 @@ The planner gives you:
 - `<working_dir>/.tmp/prototype-domain-model.json` — in prototype mode, the
   neutral source for entity fields, relationships, operation IDs, repository
   methods, exported hooks, and fixture scenarios
-- **`phase`** — one of `graph` | `specs` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
+- **`phase`** — one of `graph` | `specs` | `actions` | unset (back-compat = full run, equivalent to `specs` after an inline graph)
 
 ## Two-phase mode (Gate 4 split — PREFERRED)
 
@@ -65,12 +77,20 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 | `phase` | What you do | What you write | What you skip | Gate that follows |
 |---|---|---|---|---|
 | `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Product Experience Composition + Experience Foundation + Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions**, plus `.tmp/experience-screen-contract.json` and `.tmp/experience-foundation-contract.json` | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
-| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Read and preserve both experience sidecars; do NOT touch `_screens_section.md`. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
+| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` and write `.tmp/screen-action-contract.json`.** Read and preserve both experience sidecars; do NOT touch `_screens_section.md`. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
+| `actions` | Step 4b only | Rewrite `.tmp/screen-action-contract.json` from the locked graph/specs, exact Domain operations, and supplied validation errors. | Every graph, spec, plan, Domain, and preview write | Return to the action validator; no user gate unless behavior changes |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
 **`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
 
 **Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time on Gate 4b (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
+
+**Action-only repair is isolated.** In `phase: actions`, read the approved plan,
+Screen Contract, Domain contract, connector execution contract, capability
+composition, current action sidecar, and exact validator errors. Rewrite only
+the action sidecar. Do not add an entity, operation, screen, route, field,
+capability, or user-facing behavior; return `NEEDS_CONTEXT: action-operation-gap`
+when an executable target is genuinely absent.
 
 **Journey and domain continuity.** When the workflow-journey sidecar exists,
 preserve its ordered stages and guards in the Screen Map, Navigation Contracts,
@@ -647,6 +667,53 @@ For each screen the user adds, provide this compact shape:
 - **Refresh trigger** (override only) — List screens default to `useFocusEffect` (hard rule in screen-builder). Omit unless the screen needs a different refresh strategy (timer, websocket, manual-only).
 
 **Differentiation check (mandatory before writing the section):** read back your per-screen specs. If 3+ screens have identical domain decisions, row/hero overrides, and visual emphasis descriptions — the specs are too generic. Revise the domain decisions or Shared Conventions overrides until each screen has at least one layout decision that is domain-specific and different from its siblings. Do not fix this by adding repeated design boilerplate.
+
+### Step 4b — Write executable action hints
+
+After all per-screen specs and exact Domain operations are known, write
+`.tmp/screen-action-contract.json` with `decisionOwner: "model"`. Include every
+visible button, row action, gesture action, menu action, FAB, stepper commit,
+and final confirmation. Use only these generic executor kinds:
+
+- `route` — target a declared screen ID and navigation intent;
+- `operation` — target an exact neutral Domain operation key;
+- `connector` — target an exact approved connector operation ID;
+- `native` — target a capability planned on that screen plus a command;
+- `local` — target a model-owned client-state event;
+- `host` — target a platform/session command;
+- `sequence` — reference primitive action IDs with an ordered failure policy.
+
+Every primary and key-flow screen has exactly one executable primary action.
+Do not emit a visible action with an absent target. Bind operation inputs from
+record, route, form, state, context, constant, or prior-result sources.
+
+Use `controlHint` only when it improves the interaction. For a stepper, AI
+selects the numeric field and commit action; use field constraints for static
+minimum/maximum and a record/state binding for dynamic bounds. This supports
+quantities, received units, guest counts, dosage, repetitions, estimates, and
+other numeric interactions without naming a domain in shared code.
+
+Icon and badge hints are optional presentation decisions, not executable
+behavior. Use `iconIntent` only for a familiar compact header/menu/FAB utility
+such as profile, search, filter, scan, or a model-selected collection action.
+Keep `labelMode: visible` by default; `accessible-only` is allowed only when the
+icon is conventional and the full action label remains its accessibility name.
+Never hide a primary action label. Add a badge only when a real record, state,
+Context, or prior-result count already exists; bind that source exactly and do
+not invent or fetch a count solely for decoration. Ordinary text buttons need
+no icon or badge hint.
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-screen-action-contract.js" \
+  --project-root "<working_dir>"
+```
+
+Repair this sidecar once for shape/reference errors. If validation reports that
+a genuinely required Domain operation is missing, return
+`NEEDS_CONTEXT: action-operation-gap <action-id> requires <operation intent>`;
+do not invent an operation or rewrite unrelated screens.
 
 ---
 

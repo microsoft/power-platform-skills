@@ -25,6 +25,7 @@
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "decisionOwner": { "enum": ["deterministic-hint", "model", "legacy"] },
     "audience": { "enum": ["consumer", "employee", "mixed"] },
     "primaryJob": { "type": "string", "minLength": 10, "maxLength": 220 },
     "interactionMode": { "enum": ["discover", "browse", "operate", "decide", "create", "track", "communicate", "learn"] },

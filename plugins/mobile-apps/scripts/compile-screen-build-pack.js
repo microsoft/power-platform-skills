@@ -17,7 +17,9 @@ const {
   validateExperienceContract,
 } = require('./experience-patterns');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
+const { resolveIconName } = require('./lib/navigation-icons');
 const { buildRouteManifest, validateRouteManifest, writeAtomic: writeRouteManifestAtomic } = require('./route-manifest');
+const { validateScreenActionContract } = require('./validate-screen-action-contract');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -152,6 +154,113 @@ function chunks(values, size) {
   const result = [];
   for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
   return result;
+}
+
+function actionHandlerName(actionId) {
+  return `handle${identifier(actionId)}`;
+}
+
+function actionAvailabilityName(actionId) {
+  return `is${identifier(actionId)}Available`;
+}
+
+function actionCommandName(executor) {
+  if (!['local', 'host'].includes(executor?.kind)) return null;
+  return `execute${executor.kind === 'host' ? 'Host' : ''}${identifier(executor.target)}`;
+}
+
+function actionBadgeValueName(actionId) {
+  const name = identifier(actionId);
+  return `${name.charAt(0).toLowerCase()}${name.slice(1)}BadgeValue`;
+}
+
+function compileActionBindings(actions, screens, domainModel, screenContract, executionContract, serviceSurface = null) {
+  const screenById = new Map(screens.map((screen) => [screen.id, screen]));
+  const structuredOperations = (screenContract?.screens || []).flatMap((screen) => (screen.data?.operations || []).map((operation) => ({
+    ...operation,
+    key: operation.domainOperation || operation.id,
+    method: operation.repositoryMethod,
+  })));
+  const operationByKey = new Map([
+    ...structuredOperations.map((operation) => [operation.key, operation]),
+    ...(domainModel?.operations || []).map((operation) => [operation.key, operation]),
+  ]);
+  const connectorScreenOperations = new Map((screenContract?.screens || []).flatMap((screen) => (
+    (screen.data?.operations || [])
+      .filter((operation) => operation.kind === 'connector')
+      .map((operation) => [operation.connectorOperationId, operation])
+  )));
+  const connectorExecution = new Map((executionContract?.connectorOperations || []).map((operation) => [operation.id, operation]));
+  const serviceByEntity = new Map((serviceSurface?.entries || []).flatMap((entry) => (
+    [entry.entity, ...(entry.aliases || [])].map((entity) => [entity, entry])
+  )));
+  const methodByKind = { list: 'getAll', get: 'get', create: 'create', update: 'update', delete: 'delete' };
+  return (actions || []).map((action) => {
+    const executor = action.executor || {};
+    const targetScreen = executor.kind === 'route' ? screenById.get(executor.target) : null;
+    const operation = executor.kind === 'operation' ? operationByKey.get(executor.target) : null;
+    const generatedService = executor.kind === 'operation' && !operation ? serviceByEntity.get(executor.entity) : null;
+    const connectorOperation = executor.kind === 'connector' ? connectorScreenOperations.get(executor.target) : null;
+    return {
+      id: action.id,
+      label: action.label,
+      screenId: action.screenId,
+      semanticRole: action.semanticRole,
+      placement: action.placement,
+      testId: `action-${action.id}`,
+      handlerName: actionHandlerName(action.id),
+      availabilityName: actionAvailabilityName(action.id),
+      executor: {
+        ...executor,
+        ...(['local', 'host'].includes(executor.kind) ? { commandName: actionCommandName(executor) } : {}),
+        ...(targetScreen ? { route: targetScreen.route } : {}),
+        ...(operation ? {
+          provider: 'domain-hook',
+          operationKind: operation.kind,
+          entity: operation.entity,
+          repository: operation.repository,
+          repositoryMethod: operation.method,
+          hook: operation.hook,
+          writeFields: [...(operation.writeFields || [])],
+        } : {}),
+        ...(generatedService?.status === 'available' ? {
+          provider: 'generated-service',
+          operationKind: executor.operationKind,
+          entity: executor.entity,
+          service: generatedService.service,
+          serviceModule: generatedService.serviceModule,
+          serviceMethod: methodByKind[executor.operationKind],
+        } : {}),
+        ...(connectorOperation ? {
+          repository: connectorOperation.repository,
+          repositoryMethod: connectorOperation.repositoryMethod,
+          hook: connectorOperation.hook,
+          connectorExecutionId: connectorExecution.get(executor.target)?.id || executor.target,
+        } : {}),
+      },
+      inputs: (action.inputs || []).map((binding) => ({ ...binding, source: { ...binding.source } })),
+      availability: (action.availability || []).map((condition) => ({
+        ...condition,
+        left: { ...condition.left },
+        ...(condition.right ? { right: { ...condition.right } } : {}),
+      })),
+      ...(action.controlHint ? {
+        controlHint: {
+          ...action.controlHint,
+          ...(action.controlHint.iconIntent ? { iconName: resolveIconName(action.controlHint.iconIntent) } : {}),
+          ...(action.controlHint.badge ? {
+            badge: {
+              ...action.controlHint.badge,
+              source: { ...action.controlHint.badge.source },
+              valueName: actionBadgeValueName(action.id),
+            },
+          } : {}),
+        },
+      } : {}),
+      ...(action.pendingLabel ? { pendingLabel: action.pendingLabel } : {}),
+      ...(action.failureMessage ? { failureMessage: action.failureMessage } : {}),
+    };
+  });
 }
 
 function semanticColorRoles() {
@@ -357,7 +466,7 @@ function applicableStates(screen, journey) {
   return [...states];
 }
 
-function enrichScreen(screen, basic, data, journey, contextContract, contract) {
+function enrichScreen(screen, basic, data, journey, contextContract, contract, actionBindings = []) {
   const stage = (journey?.stages || []).find((item) => item.screenIds.includes(screen.id));
   const stateActions = (journey?.stateActions || []).filter((item) => item.screenId === screen.id);
   const guardedActions = stateActions
@@ -377,8 +486,20 @@ function enrichScreen(screen, basic, data, journey, contextContract, contract) {
     && !signatureComponents.some((component) => component.testId === screen.signatureComponent.testId)) {
     signatureComponents.push({ ...screen.signatureComponent, placement: 'screen-contract', semanticRole: 'signature' });
   }
-  const contextEntries = (contextContract?.displayContext || []).filter((entry) => (screen.context?.entryIds || []).includes(entry.id));
-  const primaryAction = screen.primaryAction ? { ...screen.primaryAction } : null;
+  const declaredContextIds = screen.context?.entryIds || [];
+  const primaryContextIds = screen.role === 'primary' && declaredContextIds.length === 0
+    ? (contextContract?.displayContext || [])
+      .filter((entry) => entry.placementIntent === 'primary-screen-context-rail')
+      .map((entry) => entry.id)
+    : [];
+  const contextEntryIds = declaredContextIds.length ? declaredContextIds : primaryContextIds;
+  const contextEntries = (contextContract?.displayContext || []).filter((entry) => contextEntryIds.includes(entry.id));
+  const primaryBinding = actionBindings.find((action) => action.semanticRole === 'primary');
+  const primaryAction = screen.primaryAction
+    ? { ...screen.primaryAction, ...(primaryBinding ? { id: primaryBinding.id, label: primaryBinding.label, binding: primaryBinding.id, placement: primaryBinding.placement } : {}) }
+    : primaryBinding
+      ? { id: primaryBinding.id, label: primaryBinding.label, binding: primaryBinding.id, placement: primaryBinding.placement }
+      : null;
   const firstRegionCount = screen.firstViewport?.regionIds?.length || 0;
   const mediaRequired = screen.media?.required === true;
   const enriched = {
@@ -395,6 +516,11 @@ function enrichScreen(screen, basic, data, journey, contextContract, contract) {
     },
     context: {
       ...screen.context,
+      entryIds: contextEntryIds,
+      placementIntent: contextEntries.length
+        ? (screen.context?.placementIntent === 'none' ? contextEntries[0].placementIntent : screen.context?.placementIntent || contextEntries[0].placementIntent)
+        : 'none',
+      assumptions: [...new Set([...(screen.context?.assumptions || []), ...contextEntries.map((entry) => entry.assumption)])],
       entries: contextEntries,
       forbiddenInferences: contextContract?.forbiddenInferences || [],
     },
@@ -431,6 +557,7 @@ function enrichScreen(screen, basic, data, journey, contextContract, contract) {
       continuityBindings: (journey?.continuityKeys || []).map((key) => ({ key, source: 'workflow-state' })),
     },
     actionState: { primaryActionId: primaryAction?.id || null, stateActions, guardedActions },
+    actionBindings,
     signatureComponents,
     testIds: [...new Set([
       ...(screen.testIds || basic.testIds || []),
@@ -521,6 +648,7 @@ function uiContractProjection(pack) {
   return {
     productStructure: pack.productStructure,
     capabilityBindings: pack.capabilityBindings,
+    actionBindings: pack.actionBindings,
     journey: pack.journey,
     shell: pack.shell,
     navigation: pack.navigation,
@@ -548,6 +676,7 @@ function uiContractProjection(pack) {
       primaryAction: screen.primaryAction,
       journey: screen.journey,
       actionState: screen.actionState,
+      actionBindings: screen.actionBindings,
       signatureComponents: screen.signatureComponents,
       semanticColorRoles: screen.semanticColorRoles,
       capabilityComposition: screen.capabilityComposition,
@@ -574,6 +703,8 @@ function compileScreenBuildPack(projectRoot) {
   const screenContract = readJson(screenPath, 'Experience screen contract');
   const foundation = readJson(foundationPath, 'Experience foundation contract');
   const data = dataIntent(root);
+  const domainModel = data.path === '.tmp/prototype-domain-model.json' ? readJson(path.join(root, data.path), 'Prototype domain model') : null;
+  const dataverseSchema = data.path === '.tmp/dataverse-schema-contract.json' ? readJson(path.join(root, data.path), 'Dataverse schema contract') : null;
   const screenMap = parseScreenMap(fs.readFileSync(planPath, 'utf8'));
   const normalizedScreens = normalizeScreenContract(
     screenContract,
@@ -596,10 +727,28 @@ function compileScreenBuildPack(projectRoot) {
   const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
   const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
   const navigationPath = path.join(root, '.tmp', 'navigation-contract.json');
+  const actionPath = path.join(root, '.tmp', 'screen-action-contract.json');
+  const executionPath = path.join(root, '.tmp', 'mobile-plan-execution-contract.json');
+  const serviceSurfacePath = path.join(root, '.tmp', 'generated-service-surface.json');
   const richContract = screenContract.schemaVersion >= 2 && fs.existsSync(journeyPath) && fs.existsSync(navigationPath);
   const contextContract = fs.existsSync(contextPath) ? readJson(contextPath, 'Context enrichment contract') : null;
   const journey = fs.existsSync(journeyPath) ? readJson(journeyPath, 'Workflow journey') : null;
   const navigation = fs.existsSync(navigationPath) ? readJson(navigationPath, 'Navigation contract') : null;
+  const actionContract = fs.existsSync(actionPath) ? readJson(actionPath, 'Screen action contract') : null;
+  const executionContract = fs.existsSync(executionPath) ? readJson(executionPath, 'Mobile plan execution contract') : null;
+  const serviceSurface = fs.existsSync(serviceSurfacePath) ? readJson(serviceSurfacePath, 'Generated service surface') : null;
+  if (actionContract) {
+    const actionValidation = validateScreenActionContract(actionContract, {
+      screenContract: { ...screenContract, screens: normalizedScreens },
+      domainModel,
+      executionContract,
+      serviceSurface,
+      dataverseSchema,
+      workflowJourney: journey,
+      phase: 'build',
+    });
+    if (!actionValidation.valid) throw new Error(`Screen action contract is invalid: ${actionValidation.errors.join('; ')}`);
+  }
   const mergedScreens = [...screenMap];
   for (const screen of [
     { id: 'Home', route: primary.route, file: primary.file },
@@ -607,11 +756,13 @@ function compileScreenBuildPack(projectRoot) {
   ]) {
     if (!mergedScreens.some((candidate) => candidate.route === screen.route)) mergedScreens.push(screen);
   }
+  const compiledActions = compileActionBindings(actionContract?.actions || [], normalizedScreens, domainModel, screenContract, executionContract, serviceSurface);
   const screens = mergedScreens.map((screen) => {
     const basic = screenRecord(screen, primary, keyFlow, foundation, data, contract);
     const structured = normalizedScreens.find((candidate) => candidate.route === screen.route);
     if (!structured) return basic;
-    return richContract ? enrichScreen(structured, basic, data, journey, contextContract, contract) : { ...basic, ux: structured };
+    const screenActions = compiledActions.filter((action) => action.screenId === structured.id);
+    return richContract ? enrichScreen(structured, basic, data, journey, contextContract, contract, screenActions) : { ...basic, ux: structured };
   });
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
@@ -625,9 +776,14 @@ function compileScreenBuildPack(projectRoot) {
     ...(fs.existsSync(path.join(root, '.tmp', 'workflow-journey-contract.json'))
       ? { workflowJourney: '.tmp/workflow-journey-contract.json' }
       : {}),
+    ...(fs.existsSync(path.join(root, '.tmp', 'context-enrichment-contract.json'))
+      ? { contextContract: '.tmp/context-enrichment-contract.json' }
+      : {}),
     ...(fs.existsSync(path.join(root, '.tmp', 'navigation-contract.json'))
       ? { navigationContract: '.tmp/navigation-contract.json' }
       : {}),
+    ...(actionContract ? { actionContract: '.tmp/screen-action-contract.json' } : {}),
+    ...(serviceSurface ? { serviceSurface: '.tmp/generated-service-surface.json' } : {}),
   };
   const pack = {
     schemaVersion: richContract ? 2 : 1,
@@ -641,8 +797,17 @@ function compileScreenBuildPack(projectRoot) {
       ...(sourcePaths.workflowJourney
         ? { workflowJourney: sha256(fs.readFileSync(path.join(root, sourcePaths.workflowJourney), 'utf8')) }
         : {}),
+      ...(sourcePaths.contextContract
+        ? { contextContract: sha256(fs.readFileSync(path.join(root, sourcePaths.contextContract), 'utf8')) }
+        : {}),
       ...(sourcePaths.navigationContract
         ? { navigationContract: sha256(fs.readFileSync(path.join(root, sourcePaths.navigationContract), 'utf8')) }
+        : {}),
+      ...(sourcePaths.actionContract
+        ? { actionContract: sha256(fs.readFileSync(path.join(root, sourcePaths.actionContract), 'utf8')) }
+        : {}),
+      ...(sourcePaths.serviceSurface
+        ? { serviceSurface: sha256(fs.readFileSync(path.join(root, sourcePaths.serviceSurface), 'utf8')) }
         : {}),
     },
     sourcePaths,
@@ -709,6 +874,7 @@ function compileScreenBuildPack(projectRoot) {
         criticalFlowScreenIds: [...criticalFlow.screenIds],
       },
       capabilityBindings: screens.flatMap((screen) => (screen.capabilityComposition || []).map((capability) => ({ screenId: screen.id, ...capability }))),
+      actionBindings: compiledActions,
       builderWaves: builderWaves(screens, criticalFlow, foundation),
     } : {}),
     buildOrder: [
@@ -719,12 +885,12 @@ function compileScreenBuildPack(projectRoot) {
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['screenContract', 'designRecipe', 'dataIntent']
-        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent']])),
+        ? ['screenContract', 'designRecipe', 'dataIntent', ...(sourcePaths.workflowJourney ? ['workflowJourney'] : []), ...(sourcePaths.contextContract ? ['contextContract'] : []), ...(sourcePaths.navigationContract ? ['navigationContract'] : []), ...(sourcePaths.actionContract ? ['actionContract'] : []), ...(sourcePaths.serviceSurface ? ['serviceSurface'] : [])]
+        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent', ...(sourcePaths.workflowJourney ? ['workflowJourney'] : []), ...(sourcePaths.contextContract ? ['contextContract'] : []), ...(sourcePaths.navigationContract ? ['navigationContract'] : []), ...(sourcePaths.actionContract ? ['actionContract'] : []), ...(sourcePaths.serviceSurface ? ['serviceSurface'] : [])]])),
       fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['experienceContract', 'dataIntent']])),
       validatorDependencies: {
         experience: ['experienceContract', 'screenContract', 'foundationContract'],
-        nativeVisual: ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe'],
+        nativeVisual: ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', ...(sourcePaths.workflowJourney ? ['workflowJourney'] : []), ...(sourcePaths.navigationContract ? ['navigationContract'] : []), ...(sourcePaths.actionContract ? ['actionContract'] : [])],
       },
     },
   };
@@ -774,6 +940,11 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   COMPOSITION_PROFILES,
+  actionBadgeValueName,
+  actionAvailabilityName,
+  actionCommandName,
+  actionHandlerName,
+  compileActionBindings,
   compileScreenBuildPack,
   deriveCompositionGuidance,
   parseScreenMap,

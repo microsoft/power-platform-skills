@@ -286,7 +286,7 @@ function experienceFromIntent(intent, profile, text) {
       entryMode: 'discovery',
       contentModel: ['products', 'categories', 'media', 'cart'],
       primarySurface: 'product-led-discovery',
-      primaryAction: 'Browse onboard products',
+      primaryAction: 'Browse available products',
       focalPoint: 'Featured products with clear category context and a visible cart action',
       signatureMotifs: ['featured-product-media', 'category-browse', 'cart-action'],
       forbiddenDefaults: ['dashboard-first-home', 'crud-triad', 'warehouse-operations', 'airline-operations', 'status-card-catalog'],
@@ -394,6 +394,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
   const contentSignals = semantic.contentModel.includes('products') ? ['product', 'category', 'cart', 'media'] : evidenceSignals;
   const contract = {
     schemaVersion: 1,
+    decisionOwner: 'deterministic-hint',
     audience: semantic.audience,
     primaryJob: semantic.primaryJob,
     interactionMode: semantic.interactionMode,
@@ -443,6 +444,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
 function validateExperienceContract(contract) {
   const issues = [];
   if (!contract || contract.schemaVersion !== 1) issues.push('schemaVersion must be 1');
+  if (contract?.decisionOwner !== undefined && !['deterministic-hint', 'model', 'legacy'].includes(contract.decisionOwner)) issues.push('decisionOwner is invalid');
   const enums = {
     audience: ['consumer', 'employee', 'mixed'],
     interactionMode: ['discover', 'browse', 'operate', 'decide', 'create', 'track', 'communicate', 'learn'],
