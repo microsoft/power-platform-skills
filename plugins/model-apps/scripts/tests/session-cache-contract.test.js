@@ -55,3 +55,32 @@ test('the changed-only flow does not read SDK artifacts across runs', () => {
       + 'read there would read a previous session\'s cache (issue #469). Delegate to buildModelApp instead.');
   }
 });
+
+test('the build engine never PUSHES an artifact kind it does not also fetch or create', () => {
+  // The residual half of #469, and the one the read-side guard above does not cover.
+  //
+  // `pushArtifact` reads the artifact through the same internal seam `getArtifact` uses, so a push
+  // of something cached by an EARLIER run hits ARTIFACT_CACHE_PREDATES_SESSION too — and separately
+  // trips ARTIFACT_LANGUAGE_MISMATCH once the plugin passes `languageCode`, because the stored
+  // artifact language would disagree with the pushing SDK.
+  //
+  // Both are currently unreachable only because every push is preceded, in the same run, by a fetch
+  // or a create. A future batch optimisation that pushed "known clean" artifacts without re-fetching
+  // would make both reachable, and no other test would notice: the whole suite runs in one session,
+  // so the failure appears on a user's SECOND build, not in CI.
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
+  const pushes = [...src.matchAll(/provision\.pushArtifact\(\s*'(\w+)'/g)].map((m) => m[1]);
+  assert.ok(pushes.length > 0, 'the scan found the pushArtifact calls it is meant to guard');
+
+  for (const kind of new Set(pushes)) {
+    const fetched = new RegExp(`provision\\.fetchArtifact\\(\\s*'${kind}'`).test(src);
+    const created = new RegExp(`provision\\.createArtifact\\(\\s*'${kind}'`).test(src)
+      // Forms are built through createFormShell rather than a direct createArtifact, because the
+      // adapter's createDefault serializes authored tabs before minting ids and throws.
+      || (kind === 'form' && /createFormShell\(/.test(src));
+    assert.ok(fetched || created,
+      `'${kind}' is PUSHED but never fetched or created in the same engine — a second build would `
+      + 'hit ARTIFACT_CACHE_PREDATES_SESSION, and a non-default --language-code would additionally '
+      + 'hit ARTIFACT_LANGUAGE_MISMATCH (see issue #469)');
+  }
+});
