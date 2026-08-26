@@ -25,7 +25,7 @@ function validateScreenBuildPack(projectRoot, pack) {
   if (!/^[a-f0-9]{64}$/i.test(String(pack.revision || '')) || pack.revision !== revisionForPack(pack)) {
     issues.push({ rule: 'revision-drift', message: 'Screen build pack revision does not match its deterministic content.' });
   }
-  const sourceNames = ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent'];
+  const sourceNames = ['plan', 'experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent'];
   for (const source of sourceNames) {
     if (!/^[a-f0-9]{64}$/i.test(String(pack.sources?.[source] || ''))) {
       issues.push({ rule: 'missing-source-hash', message: `Screen build pack is missing ${source} hash.` });
@@ -46,15 +46,51 @@ function validateScreenBuildPack(projectRoot, pack) {
     }
   }
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');
-  const keyFlow = (pack.screens || []).find((screen) => screen.role === 'key-flow');
-  if (!primary || !keyFlow) issues.push({ rule: 'missing-primary-or-key-flow', message: 'Screen build pack requires primary and key-flow screens.' });
+  const keyFlowRoutes = pack.navigation?.keyFlowRoutes || (pack.navigation?.keyFlowRoute ? [pack.navigation.keyFlowRoute] : []);
+  const screenByRoute = new Map((pack.screens || []).map((screen) => [screen.route, screen]));
+  const keyFlowScreens = keyFlowRoutes.map((route) => screenByRoute.get(route));
+  const profile = (pack.screens || []).find((screen) => screen.role === 'profile');
+  if (!primary || !keyFlowRoutes.length || keyFlowScreens.some((screen) => !screen || screen.role !== 'key-flow') || pack.navigation?.keyFlowRoute !== keyFlowRoutes[0]) {
+    issues.push({ rule: 'missing-primary-or-key-flow', message: 'Screen build pack requires Home plus an ordered non-empty key-flow route sequence.' });
+  }
+  if (!profile || profile.route !== '/(app)/profile' || profile.file !== 'app/(app)/profile.tsx' || !(pack.navigation?.routes || []).includes(profile.route) || pack.navigation?.profileRoute !== profile.route) {
+    issues.push({ rule: 'missing-or-unreachable-profile', message: 'Screen build pack requires a reachable Profile screen at /(app)/profile.' });
+  }
   if (!primary?.firstViewport?.length || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !Array.isArray(primary?.dependencies) || !Array.isArray(primary?.testIds)) {
     issues.push({ rule: 'incomplete-primary-screen', message: 'Primary build-pack screen requires viewport, action, states, dependencies, and test IDs.' });
   }
-  if (pack.shell?.safeAreaOwner !== 'screen' || pack.shell?.rootSafeAreaProviderOnly !== true || !pack.shell?.headerModes || primary?.headerMode !== 'root' || keyFlow?.headerMode !== 'back') {
+  if (pack.shell?.safeAreaOwner !== 'screen' || pack.shell?.rootSafeAreaProviderOnly !== true || !pack.shell?.headerModes || primary?.headerMode !== 'root' || keyFlowScreens.some((screen) => screen?.headerMode !== 'back') || profile?.headerMode !== 'root') {
     issues.push({ rule: 'invalid-shell-contract', message: 'Screen build pack requires route-owned safe areas plus root/back header modes.' });
   }
+  if (!['tabs-stack', 'stack', 'modal-flow', 'drawer', 'other'].includes(pack.navigation?.model)) {
+    issues.push({ rule: 'invalid-navigation-model', message: 'Screen build pack requires the resolved experience navigation model.' });
+  }
+  if (!['approved-screen-plan', 'experience-contract'].includes(pack.navigation?.modelSource)) {
+    issues.push({ rule: 'invalid-navigation-source', message: 'Screen build pack must identify the approved source of its navigation model.' });
+  }
+  const canaryIds = pack.execution?.canary?.screenIds || [];
+  const canaryRoutes = pack.execution?.canary?.routes || [];
+  const expectedCanaryIds = [primary?.id, ...keyFlowScreens.map((screen) => screen?.id)];
+  const expectedCanaryRoutes = [primary?.route, ...keyFlowRoutes];
+  if (pack.execution?.metroAfterCanary !== true
+    || canaryIds.length !== expectedCanaryIds.length
+    || canaryRoutes.length !== expectedCanaryRoutes.length
+    || canaryIds.some((screenId, index) => screenId !== expectedCanaryIds[index])
+    || canaryRoutes.some((route, index) => route !== expectedCanaryRoutes[index])) {
+    issues.push({ rule: 'invalid-native-canary', message: 'Screen build pack canary must contain Home followed by every ordered key-flow screen.' });
+  }
+  const supportingIds = (pack.execution?.supportingWaves || []).flatMap((wave) => wave?.screenIds || []);
+  const expectedSupportingIds = (pack.screens || []).filter((screen) => !['primary', 'key-flow'].includes(screen.role)).map((screen) => screen.id);
+  if ((pack.execution?.supportingWaves || []).some((wave) => !Number.isInteger(wave?.wave) || !Array.isArray(wave?.routes) || (wave.screenIds || []).length > 5)
+    || supportingIds.length !== new Set(supportingIds).size
+    || expectedSupportingIds.some((screenId) => !supportingIds.includes(screenId))
+    || supportingIds.some((screenId) => !expectedSupportingIds.includes(screenId))) {
+    issues.push({ rule: 'invalid-supporting-waves', message: 'Supporting waves must cover each non-canary screen exactly once with at most five screens per wave.' });
+  }
   for (const screen of pack.screens || []) {
+    if (typeof screen.presentation !== 'string' || !Object.hasOwn(screen, 'nativeIntent') || (screen.nativeIntent !== null && typeof screen.nativeIntent !== 'string')) {
+      issues.push({ rule: 'screen-intent-missing', message: `Screen build pack requires presentation and native capability intent for ${screen.route || screen.id}.` });
+    }
     if (!['root', 'back', 'close', 'none'].includes(screen.headerMode) || pack.shell?.headerModes?.[screen.route] !== screen.headerMode) {
       issues.push({ rule: 'header-mode-drift', message: `Screen build pack header mode drift for ${screen.route || screen.id}.` });
     }

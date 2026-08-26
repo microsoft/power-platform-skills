@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateExperienceContract } = require('./experience-patterns');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const { keyFlowSteps } = require('./compile-screen-build-pack');
 
 function parseArgs(argv) {
   const args = {};
@@ -119,11 +120,21 @@ function validate(projectRoot, manifest) {
   if (keyFlow && manifest.keyFlowRoute !== keyFlow.route) {
     issues.push({ rule: 'key-flow-route-drift', message: 'Visual review manifest does not target the contract key-flow route.' });
   }
+  const keyFlowRoutes = keyFlowSteps(keyFlow).map((screen) => screen.route);
+  const manifestKeyFlowRoutes = Array.isArray(manifest.keyFlowRoutes) && manifest.keyFlowRoutes.length
+    ? manifest.keyFlowRoutes
+    : manifest.keyFlowRoute ? [manifest.keyFlowRoute] : [];
+  if (keyFlow && JSON.stringify(manifestKeyFlowRoutes) !== JSON.stringify(keyFlowRoutes)) {
+    issues.push({ rule: 'key-flow-routes-drift', message: 'Visual review manifest does not target every ordered contract key-flow route.' });
+  }
   if (buildPack && buildPack.navigation?.initialRoute !== contract.primaryScreen.route) {
     issues.push({ rule: 'build-pack-primary-route-drift', message: 'Screen build pack initialRoute does not match the experience primary route.' });
   }
   if (buildPack && keyFlow && buildPack.navigation?.keyFlowRoute !== keyFlow.route) {
     issues.push({ rule: 'build-pack-key-flow-drift', message: 'Screen build pack keyFlowRoute does not match the experience screen contract.' });
+  }
+  if (buildPack && keyFlow && JSON.stringify(buildPack.navigation?.keyFlowRoutes || []) !== JSON.stringify(keyFlowRoutes)) {
+    issues.push({ rule: 'build-pack-key-flow-routes-drift', message: 'Screen build pack keyFlowRoutes do not match the ordered experience screen contract.' });
   }
   const captures = Array.isArray(manifest.captureMatrix) ? manifest.captureMatrix : [];
   const captureIds = new Set(captures.map((capture) => String(capture?.captureId || '').trim()).filter(Boolean));
@@ -134,7 +145,10 @@ function validate(projectRoot, manifest) {
   }
   const reviewRoutes = [
     { id: 'primary', route: contract.primaryScreen.route },
-    ...(keyFlow ? [{ id: 'key-flow', route: keyFlow.route }] : []),
+    ...keyFlowRoutes.map((route, index) => ({
+      id: keyFlowRoutes.length === 1 ? 'key-flow' : `key-flow-${index + 1}`,
+      route,
+    })),
   ];
   for (const reviewRoute of reviewRoutes) {
     if (!captures.some((capture) => captureMatches(capture, reviewRoute.route, false, projectRoot))) {

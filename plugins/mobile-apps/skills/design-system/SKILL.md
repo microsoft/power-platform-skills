@@ -45,24 +45,48 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 - Optional: `--add-theme <name>` — add named theme variant
 - Optional: `--history` / `--diff <ts>` / `--rollback <ts>` — version history
 
-## References — read before executing
+## Mode-owned reference loading
 
-- [`references/design-system-schema.md`](./references/design-system-schema.md) — schema for `brand/design-system.md`
-- [`references/preview-template.md`](./references/preview-template.md) — HTML template for gallery render
-- [`references/refresh-flow.md`](./references/refresh-flow.md) — single-dimension refresh logic
-- [`references/input-modes.md`](./references/input-modes.md) — how each input flag is processed
-- [`references/reference-intake.md`](./references/reference-intake.md) —
-  screenshot and design-intake processing
-- [`references/vibe/brand-examples.md`](./references/vibe/brand-examples.md) — real-world brand examples (Uber, Linear, Intercom, Sentry)
-- [`references/vibe/style-picker.md`](./references/vibe/style-picker.md) — internal folded style picker
+Do not read the whole reference tree. Select the mode from explicit inputs,
+then run the context helper before opening a reference:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-design-context.js" \
+  --project-root "<working_dir>" \
+  --mode "<automatic|brand|reference|full|refresh|figma|code-app|canvas-app|power-pages|design-spec>" \
+  --model-calls 1
+```
+
+Read exactly the returned `referenceFiles`. The normal orchestrated
+prompt-only path uses `automatic`; it reads only the design-system schema and
+preview template. It must not read input extractors, reference intake, brand
+examples, style picker, named directions, or other vibe files. Universal
+quality rules stay in this SKILL and therefore remain active.
+
+Mode ownership:
+
+| Input | Mode |
+|---|---|
+| No explicit visual/brand input | `automatic` |
+| Brand doc, logo, URL, stylesheet, or free-text brand note | `brand` |
+| Screenshot or design intake | `reference` |
+| Explicit direction comparison/full design | `full` |
+| `--refresh` / `--reskin` | `refresh` / `full` |
+| Figma, code app, canvas app, Power Pages, design spec | matching named mode |
+
+If the user later opts into full comparison, regenerate the manifest with
+`full` before reading style-picker references. At completion, rerun the helper
+with the actual model-call count: this `/design-system` invocation counts as
+one, plus each nested design `Task` actually dispatched. Keep
+`.tmp/design-execution-evidence.json` with the generated project; it records
+mode, exact files, exact bytes, and model calls.
 
 ---
 
 ## Reference-contract mode
 
 When --from-screenshot or --design-intake is supplied, read
-references/reference-intake.md and
-shared/references/reference-fidelity.md before normal brand input handling.
+the `reference` mode allowlist before normal brand input handling.
 
 1. Materialize or validate PROJECT_DIR/design-intake.md.
 2. Read native-app-plan.md when it exists. Its Reference Contract and the
@@ -177,7 +201,8 @@ brand input, cost picker, or style picker is required.
 below. Users who explicitly supplied brand input, requested a reskin, or asked
 to compare directions can choose the cost/style options.
 
-Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
+Ask user for optional brand input. In explicit brand mode, follow the
+manifest-listed `references/input-modes.md` processing details.
 
 ```
 You're building {{app_name}} — an app for {{primary_job}}.

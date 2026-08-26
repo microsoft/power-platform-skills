@@ -20,6 +20,7 @@ const {
   validateExperienceContract,
 } = require('./experience-patterns');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const { keyFlowSteps } = require('./compile-screen-build-pack');
 
 function normalize(value) {
   return String(value || '').trim();
@@ -97,6 +98,12 @@ function validateScreenContract(contract, screenContract, issues) {
   const keyFlow = screenContract.keyFlow;
   if (!keyFlow || typeof keyFlow.route !== 'string' || !keyFlow.route.startsWith('/') || keyFlow.route === contract.primaryScreen.route || typeof keyFlow.file !== 'string' || !/^app\/.+\.tsx$/i.test(keyFlow.file) || typeof keyFlow.outcome !== 'string' || keyFlow.outcome.trim().length < 5) {
     issues.push({ rule: 'missing-key-flow-contract', message: 'Experience screen contract requires a non-primary keyFlow route, file, and outcome.' });
+  } else {
+    const steps = keyFlowSteps(keyFlow);
+    const routes = new Set();
+    if (!steps.length || steps[0].route !== keyFlow.route || steps[0].file !== keyFlow.file || steps.some((step) => typeof step.route !== 'string' || !step.route.startsWith('/') || step.route === contract.primaryScreen.route || typeof step.file !== 'string' || !/^app\/.+\.tsx$/i.test(step.file) || typeof step.outcome !== 'string' || step.outcome.trim().length < 5 || routes.has(step.route) || !routes.add(step.route))) {
+      issues.push({ rule: 'invalid-key-flow-sequence', message: 'keyFlow.screens must be an ordered set of unique non-primary route/file/outcome entries beginning at keyFlow.route.' });
+    }
   }
   const fields = [
     ['route', contract.primaryScreen.route],
@@ -227,7 +234,8 @@ function validateBuildPackAgreement(projectRoot, contract, screenContract, issue
     issues.push({ rule: 'invalid-screen-build-pack', message: `Screen build pack validation failed: ${validation.issues.map((issue) => issue.rule).join(', ')}.` });
     return;
   }
-  if (pack.experience?.entryMode !== contract.entryMode || pack.experience?.primarySurface !== contract.primarySurface || pack.navigation?.initialRoute !== contract.primaryScreen.route || pack.navigation?.keyFlowRoute !== screenContract?.keyFlow?.route) {
+  const expectedKeyFlowRoutes = keyFlowSteps(screenContract?.keyFlow).map((screen) => screen.route);
+  if (pack.experience?.entryMode !== contract.entryMode || pack.experience?.primarySurface !== contract.primarySurface || pack.navigation?.initialRoute !== contract.primaryScreen.route || pack.navigation?.keyFlowRoute !== screenContract?.keyFlow?.route || JSON.stringify(pack.navigation?.keyFlowRoutes || []) !== JSON.stringify(expectedKeyFlowRoutes)) {
     issues.push({ rule: 'screen-build-pack-drift', message: 'Screen build pack does not match the experience contract or key flow.' });
   }
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');

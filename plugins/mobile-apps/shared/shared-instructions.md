@@ -30,6 +30,14 @@ If the bank doesn't exist yet, the owning creation skill copies the template
 `/create-mobile-app` does so after `npx power-apps init`; `/create-mobile-prototype`
 does so after fresh-template preparation and before mock generation.
 
+## Host Capability Adapter
+
+**[host-capability-adapter.md](./references/host-capability-adapter.md)**
+
+Use this protocol whenever question, plan-mode, nested-task, write, shell, or
+progress capabilities differ across hosts. Missing specialist tools hand work
+back to the foreground; they are not app-project filesystem failures.
+
 ---
 
 ## Preferred Environment

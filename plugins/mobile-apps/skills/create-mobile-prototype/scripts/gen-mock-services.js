@@ -200,32 +200,58 @@ function normalizeType(rawType) {
   return 'string';
 }
 
-function normalizeContractTable(table) {
+function recordRepair(repairs, field, from, to, reason) {
+  repairs.push({ field, from: from ?? null, to: to ?? null, reason });
+}
+
+function normalizeContractTable(table, tableIndex, repairs) {
   if (!table || !table.logicalName) fail('schema contract contains a table without logicalName');
-  const decision = String(table.plannedDecision || table.decision || '').toLowerCase();
+  const tablePath = `tables[${tableIndex}]`;
+  const rawDecision = String(table.plannedDecision || table.decision || '');
+  const decision = rawDecision.toLowerCase();
+  if (rawDecision && rawDecision !== decision) recordRepair(repairs, `${tablePath}.plannedDecision`, rawDecision, decision, 'Normalized harmless decision casing.');
   if (decision === 'defer' || table.serviceRequired === false) return null;
 
-  const logicalName = String(table.logicalName);
-  const fields = (table.columns || [])
+  const logicalName = String(table.logicalName).trim();
+  if (logicalName !== table.logicalName) recordRepair(repairs, `${tablePath}.logicalName`, table.logicalName, logicalName, 'Trimmed identifier whitespace without changing identity.');
+  const rawColumns = Array.isArray(table.columns) ? table.columns : [];
+  if (!Array.isArray(table.columns)) recordRepair(repairs, `${tablePath}.columns`, table.columns, [], 'Defaulted an omitted optional column list for compatibility.');
+  const fields = rawColumns
     .filter((column) => String(column.plannedDecision || column.decision || '').toLowerCase() !== 'defer')
-    .map((column) => ({
-      name: String(column.logicalName || ''),
-      displayName: String(column.displayName || column.logicalName || ''),
-      type: normalizeType(column.type || column.attributeType),
-      rawType: String(column.type || column.attributeType || 'string'),
-      required: /required/i.test(String(column.requiredLevel || '')),
-      lookupTarget: column.lookupTarget || column.target || null,
-      options: Array.isArray(column.options) ? column.options : [],
-      primaryName: column.primaryName === true,
-    }))
-    .filter((column) => column.name);
+    .map((column, columnIndex) => {
+      const columnPath = `${tablePath}.columns[${columnIndex}]`;
+      if (!column?.logicalName) fail(`${columnPath} is missing logicalName; cannot preserve field identity`);
+      const name = String(column.logicalName).trim();
+      const rawType = String(column.type || column.attributeType || 'string');
+      if (!column.type && !column.attributeType) recordRepair(repairs, `${columnPath}.type`, null, 'string', 'Defaulted an omitted scalar type for compatibility.');
+      if (!Array.isArray(column.options)) recordRepair(repairs, `${columnPath}.options`, column.options, [], 'Defaulted an omitted optional choices list.');
+      return {
+        name,
+        displayName: String(column.displayName || name),
+        type: normalizeType(rawType),
+        rawType,
+        required: /required/i.test(String(column.requiredLevel || '')),
+        lookupTarget: column.lookupTarget || column.target || null,
+        options: Array.isArray(column.options) ? column.options : [],
+        primaryName: column.primaryName === true,
+        sourcePath: columnPath,
+      };
+    });
+
+  const displayName = String(table.displayName || logicalName);
+  if (!table.displayName) recordRepair(repairs, `${tablePath}.displayName`, null, displayName, 'Derived a display fallback from the stable logical name.');
+  const primaryKey = String(table.primaryIdAttribute || `${logicalName}id`);
+  if (!table.primaryIdAttribute) recordRepair(repairs, `${tablePath}.primaryIdAttribute`, null, primaryKey, 'Derived the conventional prototype primary key.');
+  const dependencyTier = Number.isInteger(table.dependencyTier) ? table.dependencyTier : 0;
+  if (!Number.isInteger(table.dependencyTier)) recordRepair(repairs, `${tablePath}.dependencyTier`, table.dependencyTier, dependencyTier, 'Defaulted an omitted dependency tier.');
 
   return {
     logicalName,
-    displayName: String(table.displayName || logicalName),
+    displayName,
     serviceName: serviceIdentifier(logicalName),
-    primaryKey: String(table.primaryIdAttribute || `${logicalName}id`),
-    dependencyTier: Number.isInteger(table.dependencyTier) ? table.dependencyTier : 0,
+    primaryKey,
+    dependencyTier,
+    sourcePath: tablePath,
     fields,
   };
 }
@@ -271,16 +297,18 @@ function loadEntities(projectDir, planText) {
   if (fs.existsSync(contractPath)) {
     const contract = readJson(contractPath);
     if (!Array.isArray(contract.tables)) fail('schema contract must contain a tables array');
-    const entities = contract.tables.map(normalizeContractTable).filter(Boolean);
+    const repairs = [];
+    const entities = contract.tables.map((table, index) => normalizeContractTable(table, index, repairs)).filter(Boolean);
     if (!entities.length) fail('schema contract contains no service-required tables');
-    return { entities, source: '.tmp/dataverse-schema-contract.json' };
+    reconcileEntityRelationships(entities, repairs);
+    return { entities, source: '.tmp/dataverse-schema-contract.json', repairs };
   }
 
   const entities = parseLegacyEntities(planText);
   if (!entities.length) {
     fail('no entities found; create .tmp/dataverse-schema-contract.json during planning or use the legacy entity-block format');
   }
-  return { entities, source: 'native-app-plan.md (legacy fallback)' };
+  return { entities, source: 'native-app-plan.md (legacy fallback)', repairs: [] };
 }
 
 function connectorServiceName(apiName) {
@@ -323,7 +351,15 @@ function domainPack(contextText) {
 }
 
 function experiencePack(contract) {
-  const copy = EXPERIENCE_COPY[contract.entryMode] || EXPERIENCE_COPY.onboarding;
+  const sourceCopy = EXPERIENCE_COPY[contract.entryMode] || EXPERIENCE_COPY.onboarding;
+  const explicitOffline = contract.assetPolicy?.connectivity === 'offline-preferred';
+  const copy = explicitOffline || contract.entryMode !== 'workflow'
+    ? sourceCopy
+    : {
+        ...sourceCopy,
+        titles: sourceCopy.titles.map((title) => title === 'Saved progress' ? 'Recent progress' : title),
+        notes: sourceCopy.notes.map((note) => note === 'Progress is saved locally' ? 'Progress is ready to review' : note),
+      };
   const subject = Array.isArray(contract.contentModel) && contract.contentModel.length
     ? contract.contentModel[0]
     : 'item';
@@ -347,12 +383,15 @@ function experiencePack(contract) {
     && contract.primarySurface === 'task-led-workflow'
     && /\b(?:warehouse|bins?|cycle count|receiving)\b/.test(evidenceText);
   if (contract.primarySurface === 'product-led-discovery') {
+    const availabilityNote = contract.assetPolicy?.connectivity === 'offline-preferred'
+      ? 'Product details remain available offline'
+      : 'Product details are ready to review';
     return {
       titles: ['Travel organizer', 'Hydration essentials kit', 'Skin care set', 'Classic travel watch', 'Comfort accessories pack', 'Beauty refresh kit', 'Everyday carry pouch', 'Gift-ready watch strap'],
       people: audiencePeople,
       locations: ['Featured for this journey', 'Travel essentials', 'Beauty picks', 'Saved for later'],
       categories: ['Travel accessories', 'Beauty', 'Watches', 'Essentials'],
-      notes: ['Available to add to cart', 'Bundled for easy browsing', 'Product details are available offline', 'A useful travel companion'],
+      notes: ['Available to add to cart', 'Bundled for easy browsing', availabilityNote, 'A useful travel companion'],
       statuses: ['Available', 'Featured', 'Popular', 'Limited'],
       priorities: ['Featured', 'Recommended', 'Popular', 'Saved'],
       primaryJob,
@@ -400,13 +439,33 @@ function resolveLookupTarget(field, entities) {
   if (field.lookupTarget) {
     const target = String(field.lookupTarget).toLowerCase();
     const exact = entities.find((entity) => entity.logicalName.toLowerCase() === target);
-    if (exact) return exact;
+    return exact || null;
   }
   const compact = field.name.toLowerCase().replace(/^_/, '').replace(/_value$/, '').replace(/id$/, '').replace(/_/g, '');
   return entities.find((entity) => {
     const logical = entity.logicalName.toLowerCase().replace(/_/g, '');
     return compact === logical || compact.endsWith(logical) || logical.endsWith(compact);
   }) || null;
+}
+
+function reconcileEntityRelationships(entities, repairs) {
+  for (const entity of entities) {
+    for (const field of entity.fields) {
+      if (field.type !== 'lookup') continue;
+      const target = resolveLookupTarget(field, entities);
+      if (!target) fail(`${field.sourcePath || `${entity.logicalName}.${field.name}`} has an unresolved lookup relationship`);
+      if (field.lookupTarget !== target.logicalName) {
+        recordRepair(
+          repairs,
+          `${field.sourcePath || `${entity.logicalName}.${field.name}`}.lookupTarget`,
+          field.lookupTarget,
+          target.logicalName,
+          field.lookupTarget ? 'Normalized lookup target casing.' : 'Resolved one unambiguous lookup target from the field identity.',
+        );
+        field.lookupTarget = target.logicalName;
+      }
+    }
+  }
 }
 
 function textValue(field, entity, index, pack) {
@@ -720,7 +779,7 @@ function main() {
   if (!screenBuildPack) {
     console.warn('prototype-mocks: compatibility fallback: screen build pack unavailable; using experience contract directly.');
   }
-  const { entities, source } = loadEntities(projectDir, planText);
+  const { entities, source, repairs } = loadEntities(projectDir, planText);
   const connectors = parseConnectors(planText);
   const duplicate = entities.find((entity, index) => entities.findIndex((candidate) => candidate.logicalName === entity.logicalName) !== index);
   if (duplicate) fail(`duplicate table logicalName in schema contract: ${duplicate.logicalName}`);
@@ -770,6 +829,7 @@ function main() {
     screenBuildPackRevision: screenBuildPack?.revision || null,
     assetManifest: assetManifestPath,
     viewModel: 'src/generated/experience-view-model.ts',
+    repairs,
     tables: seedMerge.tableReports,
     removedGeneratedFiles,
   }, null, 2)}\n`);
@@ -807,6 +867,7 @@ function main() {
 
   console.log(`prototype-mocks: generated ${entities.length} table service(s) and ${connectors.length} connector stub(s)`);
   console.log(`prototype-mocks: schema source ${source}`);
+  if (repairs.length) console.warn(`prototype-mocks: applied ${repairs.length} safe contract normalization(s); see .tmp/prototype-seed-regeneration.json`);
 }
 
 if (require.main === module) main();
@@ -817,4 +878,6 @@ module.exports = {
   generateSeeds,
   loadExperienceContract,
   loadScreenBuildPack,
+  normalizeContractTable,
+  reconcileEntityRelationships,
 };

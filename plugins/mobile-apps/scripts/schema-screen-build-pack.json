@@ -2,13 +2,13 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Power Apps Mobile Screen Build Pack",
   "type": "object",
-  "required": ["schemaVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "fixtures", "screens", "buildOrder", "invalidation"],
+  "required": ["schemaVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "fixtures", "screens", "execution", "buildOrder", "invalidation"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "sources": {
       "type": "object",
-      "required": ["experienceContract", "screenContract", "foundationContract", "designRecipe", "dataIntent"],
+      "required": ["plan", "experienceContract", "screenContract", "foundationContract", "designRecipe", "dataIntent"],
       "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
     },
     "sourcePaths": { "type": "object" },
@@ -23,7 +23,19 @@
         "headerModes": { "type": "object" }
       }
     },
-    "navigation": { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes"] },
+    "navigation": {
+      "type": "object",
+      "required": ["model", "modelSource", "initialRoute", "keyFlowRoute", "keyFlowRoutes", "profileRoute", "routes"],
+      "properties": {
+        "model": { "enum": ["tabs-stack", "stack", "modal-flow", "drawer", "other"] },
+        "modelSource": { "enum": ["approved-screen-plan", "experience-contract"] },
+        "initialRoute": { "type": "string", "pattern": "^/" },
+        "keyFlowRoute": { "type": "string", "pattern": "^/" },
+        "keyFlowRoutes": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^/" }, "uniqueItems": true },
+        "profileRoute": { "const": "/(app)/profile" },
+        "routes": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "uniqueItems": true }
+      }
+    },
     "fixtures": {
       "type": "object",
       "required": ["adapter", "entities", "assetPolicy", "assetManifest", "viewModel", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
@@ -42,8 +54,13 @@
       "minItems": 2,
       "items": {
         "type": "object",
-        "required": ["id", "route", "file", "role", "headerMode", "data"],
+        "required": ["id", "route", "file", "role", "presentation", "nativeIntent", "headerMode", "data"],
         "properties": {
+          "role": { "enum": ["primary", "key-flow", "profile", "supporting"] },
+          "navigationRole": { "type": "string" },
+          "archetype": { "type": ["string", "null"] },
+          "presentation": { "type": "string" },
+          "nativeIntent": { "type": ["string", "null"] },
           "headerMode": { "enum": ["root", "back", "close", "none"] },
           "data": {
             "type": "object",
@@ -57,6 +74,22 @@
             }
           }
         }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["canary", "supportingWaves", "metroAfterCanary"],
+      "properties": {
+        "canary": {
+          "type": "object",
+          "required": ["screenIds", "routes"],
+          "properties": {
+            "screenIds": { "type": "array", "minItems": 2, "items": { "type": "string" }, "uniqueItems": true },
+            "routes": { "type": "array", "minItems": 2, "items": { "type": "string", "pattern": "^/" }, "uniqueItems": true }
+          }
+        },
+        "supportingWaves": { "type": "array" },
+        "metroAfterCanary": { "const": true }
       }
     },
     "buildOrder": { "type": "array", "minItems": 3 },

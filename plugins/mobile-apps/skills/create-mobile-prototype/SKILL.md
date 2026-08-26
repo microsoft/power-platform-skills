@@ -176,6 +176,20 @@ details where they conflict; normal briefs keep the contract source as `brief`.
 
 ### Step 3 - Plan In Prototype Mode
 
+Read `shared/references/host-capability-adapter.md`. If nested `Task` dispatch
+is unavailable, or the planner returns
+`NEEDS_CONTEXT: host-capability-handoff:<capabilities>`, continue in the
+foreground from the same brief and artifacts. Read the planner and architect
+instructions directly, produce the same files, and run the same validators.
+Do not classify the host limitation as a project filesystem failure.
+
+When plan mode is unavailable, show the same single consolidated prototype
+review in ordinary chat and require an explicit `approve` response. When the
+structured question tool is unavailable, ask the one allowed focused question
+in ordinary chat. A read-only specialist returns proposed content for the
+foreground to write. Lack of background tasks makes builder waves sequential;
+it does not change their pack entries, artifact shape, or quality gates.
+
 Spawn `mobile-app:native-app-planner` with:
 
 ```text
@@ -198,10 +212,13 @@ Visual reference:
   navigation silhouette, required motifs, and forbidden drift; use original
   copy and licensed local assets.
 
-This is a mock-backed prototype. Run the normal approval gates and write the
-same native-app-plan.md used by real apps, but perform no environment or
-Dataverse discovery. The schema sidecar must be complete enough for typed local
-mocks and must be marked planningMode=prototype, executionEligible=false.
+This is a mock-backed prototype. Write the same complete editable
+native-app-plan.md used by real apps, but perform no environment or Dataverse
+discovery. Ask for one consolidated final review covering product/screens,
+logical data, native capabilities, and future connector intent. Do not pause at
+the real-app section gates. Prototype approval never authorizes external
+mutation. The schema sidecar must be complete enough for typed local mocks and
+must be marked planningMode=prototype, executionEligible=false.
 External connector rows remain requirements; prototype generation will create
 throw-stubs at their expected service paths.
 Read and mirror the Product Experience Contract under `## Design` before
@@ -211,8 +228,10 @@ or force a List/Detail/Form flow unless the contract requires those shells.
 ```
 
 Parse the agent's literal first line using the status protocol in
-`AGENTS.md`. Retry `NEEDS_CONTEXT` at most twice, surface
-`DONE_WITH_CONCERNS`, and stop on `BLOCKED` or a malformed status.
+`AGENTS.md`. Handle `NEEDS_CONTEXT: host-capability-handoff:` immediately in
+the foreground without counting it as a retry. Retry other `NEEDS_CONTEXT`
+returns at most twice, surface `DONE_WITH_CONCERNS`, and stop on a genuine
+`BLOCKED` or malformed status.
 
 Before continuing, require all of:
 
@@ -225,6 +244,20 @@ test -f "$PROJECT_DIR/.tmp/experience-foundation-contract.json"
 test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
 ```
+
+Render the local maker control surface after approval:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-prototype-workspace.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Open `_prototype_workspace.html` once and report its path. It is derived from
+the existing plan and sidecars, never a planning authority or native UX
+evidence. Editable fields export `prototype-review.json`; apply requested
+changes through the existing plan/edit workflow, then rerender. Refresh this
+same file after screen-build-pack compilation, every builder wave, final
+validation, and each Metro ready/failed state transition.
 
 When `--from-plan` was supplied, do not silently replace approved Data Model,
 Native Capabilities, Connectors, Product Experience Contract / Design, Screen Map, Navigation
@@ -282,13 +315,36 @@ Run the scaffold gate:
 npm --prefix "$PROJECT_DIR" run type-check
 ```
 
-### Step 5 - Generate Typed Mocks
+### Steps 5-6a - Generate Runtime Data And Design Foundations
+
+The approved `.tmp/dataverse-schema-contract.json`, representative content,
+media needs, screen graph, and state expectations must exist before either
+lane starts. Design never starts from the brief alone.
+
+When the host supports independent tasks, run these two disjoint lanes in
+parallel:
+
+- **Data lane:** Step 5 generates only `src/generated/` and
+  `assets/experience/`.
+- **Design lane:** Step 6a generates only `brand/`, an optional
+  `_design_preview.html`, and `.tmp/design-execution-evidence.json`.
+
+Neither lane may edit navigation, plan, lifecycle state, or the other lane's
+files. If background tasks are unavailable, run data then design in the
+foreground with the same inputs and outputs. Sequential fallback changes only
+scheduling, not artifacts or validation.
+
+Join only after both lanes succeed. Require the prototype manifest, experience
+asset manifest, design spec, tokens, and design execution evidence. Then apply
+tokens, native wrappers, and run the shared TypeScript gate. Do not run a
+project-wide typecheck while either lane is still writing.
+
+#### Step 5 - Generate Typed Mocks
 
 Run:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/gen-mock-services.js" "$PROJECT_DIR"
-npm --prefix "$PROJECT_DIR" run type-check
 ```
 
 The generator reads `.tmp/dataverse-schema-contract.json` and writes:
@@ -317,7 +373,30 @@ recognized field-service, inventory, CRM, grocery/retail, or healthcare brief.
 Do not hand-edit a generated service to hide a contract mismatch. Repair the
 approved structured contract or generator, regenerate, and rerun type-check.
 
-### Step 6 - Apply Native Capabilities And Design
+#### Non-blocking internal repair boundary
+
+Do not ask the maker to resolve harmless bookkeeping. The existing generator
+may normalize only an unambiguous affected field: casing, surrounding
+whitespace, omitted optional arrays, conventional prototype primary IDs,
+display-name fallbacks, and a unique case-insensitive lookup target. Record
+every normalization in `.tmp/prototype-seed-regeneration.json`, surface its
+count as a warning, and continue without regenerating the plan.
+
+Keep a visible warning and continue when a non-critical ambiguity leaves the
+approved requirements, routes, relationships, and source compilable. Return to
+the owning plan section only for a semantic change. Block when continuing
+would cause an unauthorized external mutation, lose an explicit requirement,
+leave a lookup/relationship unresolved, require an unsupported mandatory
+native capability with no accepted fallback, or leave source uncompilable
+after the bounded local repair pass. Never repair those cases by dropping a
+screen, operation, capability, media requirement, or product job.
+
+#### Step 6a - Generate Automatic Design
+
+Run `/design-system` in its lane as described below. It consumes the approved
+logical data/content intent, not generated repository source.
+
+### Step 6 - Join Lanes, Apply Native Capabilities And Design
 
 For every approved `## Native Capabilities` row, execute `/add-native`
 sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
@@ -334,10 +413,15 @@ Require `/design-system` to read `$PROJECT_DIR/.tmp/experience-contract.json`
 before choosing tokens. Its automatic direction comes from visual character,
 audience, interaction/entry mode, focal point, motifs, and density; it must
 write `## Product Experience Primitives` in `brand/design-system.md` and must
-not fall back to an inspection or industry preset.
+not fall back to an inspection or industry preset. Normal prompt-only mode
+must record `.tmp/design-execution-evidence.json` with `mode: automatic`, its
+exact reference files/bytes, and the actual design model-call count. Reject an
+automatic manifest that includes an input extractor, reference-intake, style
+picker, brand example, or named vibe direction.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
-`/create-mobile-app` brand-token integration contract, then type-check.
+`/create-mobile-app` brand-token integration contract after both lanes join,
+then type-check once.
 
 When design-intake.md exists, run design-system in reference-contract mode.
 Pass the intake path and require it to read the approved native-app-plan.md.
@@ -398,8 +482,21 @@ Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
 ### Step 8 - Build Screens
 
-Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
-status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
+Read `.tmp/screen-build-pack.json → execution`. Build the `canary` first:
+permanent Home followed by every ordered screen required to complete the
+sidecar-selected key flow. A one-screen flow still produces a two-screen
+canary; a multi-step receiving, inspection, booking, checkout, or onboarding
+flow includes all required steps through completion. Use the same screen work
+order and artifact envelope for canary and supporting screens.
+
+Probe `Task` once before dispatch. When `mobile-app:screen-builder` is
+available, spawn only the canary builders in the first wave. If the host cannot
+dispatch the configured builder, use the foreground fallback: process one
+canary screen at a time from the same pack entry, fill only that screen's
+existing typed skeleton, and run the identical validators. Never invent a
+different inline screen contract or skip a required canary screen.
+
+Every builder or foreground work order must include:
 
 ```text
 Data mode: prototype.
@@ -441,6 +538,46 @@ retail.
 Run the screen-wave TypeScript gate after every wave. Group failures by root
 cause and cap retries at two per screen.
 
+After the canary wave, run these focused gates before Metro:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
+npm --prefix "$PROJECT_DIR" run type-check
+```
+
+Do not start Metro unless Home and every declared key-flow screen are real TSX
+and every canary gate passes. Immediately before launch or reuse, prepare the
+local session:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/manage-prototype-metro.js" \
+  --project-root "$PROJECT_DIR" \
+  --action prepare
+```
+
+For `action: verify-reuse`, read the recorded terminal once. Reuse it only when
+its current output still contains a compatible `Metro waiting on` or `Logs for
+your project` banner with no later fatal error. Otherwise rerun `prepare` with
+`--ignore-existing` and start its exact `command` asynchronously from
+`PROJECT_DIR`.
+
+After a new terminal reports the ready banner, record its terminal ID, port,
+and native URL with `--action ready`. Metadata is not health evidence by
+itself; the foreground banner check is mandatory and direct HTTP probes are
+forbidden. If launch exits or never reports readiness, call `--action failed`,
+preserve the project, and report the helper's exact `manualCommand`. Do not
+rerun planning or design.
+
+Once the canary is Metro-ready, build `execution.supportingWaves` in order.
+Screens within one wave may run in parallel; waves run sequentially and each
+must pass TypeScript before the next begins. This includes Profile, which must
+be complete and reachable before final completion. Rerender
+`_prototype_workspace.html` after each wave so screen build status remains
+current.
+
 ### Step 9 - Final Validation
 
 Run in this order from `PROJECT_DIR`:
@@ -479,8 +616,8 @@ result must also be recorded. Missing native coverage is a concern, not a
 passing visual match.
 
 For every prototype, once a real device/capture environment is available,
-capture the primary screen and sidecar-declared `keyFlow` at normal and large
-text. The generic manifest must include both routes, screenshot paths or
+capture the primary screen and every sidecar-declared key-flow route at normal
+and large text. The generic manifest must include all routes, screenshot paths or
 non-testID capture IDs, iOS/Android platform/device metadata, and evidence-backed checks for hierarchy/focal point,
 task fit, realistic content, primary action, motifs, forbidden drift, contrast,
 touch targets, safe areas, keyboard behavior (or reasoned N/A), offline state,
@@ -503,8 +640,17 @@ workflow or its agents. Pass explicit files, not directories:
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
   --project-root "$PROJECT_DIR" \
+  --phase final \
+  --manifest ".tmp/mobile-validation-manifest.json" \
+  --skip-unchanged \
   --file <changed-file> [--file <changed-file> ...]
 ```
+
+The dispatcher may skip this duplicate final pass only when the `final`
+fingerprint matches a previous passing entry. The fingerprint includes exact
+file bytes, validator identities, and approved JavaScript dependencies. Any
+relevant change forces the validators to run again; never generalize this into
+skipping validation after edits.
 
 ### Step 9.6 - Automated Design Refinement (LLM Polish)
 
@@ -540,7 +686,7 @@ pattern. Re-run the relevant static gates after refinement.
 After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.
 
-### Step 10 - Record State And Start Metro
+### Step 10 - Record State And Report Metro
 
 Update `.mobile-app/state.json`:
 
@@ -552,12 +698,16 @@ Update `.mobile-app/state.json`:
 - `lastSyncAt`: current ISO timestamp
 
 Append a memory-bank entry with generated tables, planned connector stubs,
-native capabilities, screens, validation result, and preview path.
+native capabilities, screens, validation result, maker workspace path, and
+preview path.
 
-Start Metro with `npx expo start` from `PROJECT_DIR`. Do not use a web runtime
-or crawl routes in a browser. Return the Metro URL/QR handoff and instruct the
-user to scan it with the Power Apps Developer app or a compatible custom
 development client that includes the native host; Expo Go is unsupported.
+Reuse the healthy Metro terminal started after the canary. Do not start a
+second process or re-probe the port. Return the terminal ID, port, native
+URL/QR handoff, exact launch command, and
+`.mobile-app/metro-session.json` status. Instruct the user to scan it with the
+Power Apps Developer app or a compatible custom development client that
+includes the native host; Expo Go is unsupported.
 
 ### Step 10.5 - Native Reference Evidence
 

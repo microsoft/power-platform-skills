@@ -670,9 +670,13 @@ If an expected artifact is missing, STOP as `BLOCKED`; this orchestrator must
 not synthesize it after the planner has returned.
 If the receipt is missing, STOP as `BLOCKED`; this orchestrator must not synthesize it after the planner has returned.
 
-#### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
+#### 3.0a — Inline-gate fallback (planner unavailable or host-capability handoff)
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs the four gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
+Follow `shared/references/host-capability-adapter.md`. When preflight fails, the
+planner returns `NEEDS_CONTEXT: host-capability-handoff:<capabilities>`, or an
+older planner returns `BLOCKED: tool surface missing <…>`, the orchestrator
+runs the gates inline. Do not re-spawn the planner in the same host. Print
+**once**:
 
 > "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
 

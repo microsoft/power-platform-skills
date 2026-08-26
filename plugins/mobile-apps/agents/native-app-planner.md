@@ -88,7 +88,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 ## Step 0 — Tool-surface preflight (MANDATORY — first thing you do)
 
-Before reading anything or drafting any plan content, verify your invocation context actually has the tools you need to drive approval gates and spawn architects. **If any are missing, return `BLOCKED` immediately** — do NOT draft a plan that the orchestrator cannot then gate.
+Read `${PLUGIN_ROOT}/shared/references/host-capability-adapter.md`. Inspect the
+capabilities advertised by the host before drafting. Do not call a nonexistent
+tool merely to probe it.
 
 Required tool surface:
 - `Task` — spawn `data-model-architect` and `screen-planner`
@@ -98,15 +100,17 @@ Required tool surface:
 - `Bash` / `Grep` / `Glob` — working-dir checks and legacy discovery only;
   never use them for Dataverse discovery when planning-snapshot/evidence paths are supplied
 
-**Detection:** attempt a no-op call to `Task` (e.g. spawn nothing, just check the tool exists). If the host raises `tool not available`, `unknown tool`, or any equivalent before you can dispatch, you are running in a degraded shell. Same check for `EnterPlanMode` and `AskUserQuestion`.
-
-**On missing tools, return as your final message** (literal first line):
+**On missing planner-owned tools, return a foreground handoff** (literal first
+line):
 
 ```
-BLOCKED: tool surface missing <comma-separated tool names>. Re-spawn from a context with Task + EnterPlanMode + ExitPlanMode + AskUserQuestion + Read + Write + Bash. Do NOT draft a plan from this context — the orchestrator cannot run the four gates without these tools, and a draft without gates wastes tokens.
+NEEDS_CONTEXT: host-capability-handoff:<comma-separated-capabilities>
 ```
 
-The orchestrator's Step 3 has a documented inline-gate fallback for exactly this case (it owns the right tool surface itself). Returning `BLOCKED` here is the correct handoff — do not silently degrade to "write a draft plan and hope someone gates it later."
+The foreground orchestrator owns the fallback. This status must not mention a
+project filesystem failure. If you can read but not write, include the proposed
+section content after the status so the foreground can persist it. Only return
+`BLOCKED` after a real foreground-owned prerequisite or file operation fails.
 
 ## Step 1 — Read Inputs and Decide Scope
 
@@ -170,6 +174,13 @@ the workflow:
   and `contentDensity`
 - two to five `signatureMotifs` and all `forbiddenDefaults`
 - `visualCharacter`, `confidence`, and stated assumptions
+
+Treat `assetPolicy.connectivity` as authoritative. `offline-preferred` requires
+direct connectivity evidence in the brief; field, scanner, capture, flight,
+passenger, warehouse, inspection, technician, site, and task vocabulary do not
+establish offline capability. For `network-optional`, retain unavailable/retry
+recovery but do not add offline-readiness, cached-data, queued-write,
+pending-sync, or saved-on-device product promises.
 
 For `confidence: high`, continue silently. For `medium`, write the assumptions
 into the contract and plan, then continue. For `low`, ask exactly one focused
@@ -470,7 +481,36 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 - Date: <today>
 ```
 
-## Step 5 — Four Approval Gates
+## Prototype consolidated-review override
+
+When `Dataverse planning mode: prototype`, produce the complete editable
+`native-app-plan.md`, schema sidecar, experience screen/foundation contracts,
+native capability matrix, connector proposals, screen graph, per-screen specs,
+assumptions, build order, and preview status before asking for approval. Do not
+enter Gate 1, Gate 2, Gate 4a, or Gate 4b separately. Those sections remain
+internal authoring checkpoints and must still pass their deterministic
+validators.
+
+Present exactly one final plan-mode review containing:
+
+1. product, audience, primary job, assumptions, and confidence;
+2. journey, Home/launch/resume/key-flow decisions, screen graph, and purposes;
+3. compact logical data model and representative fixture summary;
+4. native capabilities with placement and fallbacks;
+5. future connector intent clearly marked as non-executable;
+6. design direction, signature components, build order, and preview status.
+
+Approval accepts all four prototype sections together and must never authorize
+external mutation. Use one approval timestamp for `dataModel`,
+`nativeCapabilities`, `connectors`, and `screenPlan` in
+`.tmp/mobile-plan-status.json`. On rejection, revise only the named affected
+section, rerun its dependent validation, and present the consolidated review
+again; never regenerate unrelated approved product decisions.
+
+The individual gates below apply only to `required` and `connector-only` real
+app planning unless a prototype caller explicitly requests full review mode.
+
+## Step 5 — Approval Gates
 
 Enter plan mode four times. **Each gate is independent.** A rejection on one gate means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 
@@ -853,7 +893,7 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | All 4 gates passed cleanly, plan written, no caveats | `DONE` |
+| `DONE` | The applicable real-app gates or one consolidated prototype review passed cleanly, plan written, no caveats | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Plan written and gates approved, but a sub-architect returned `DONE_WITH_CONCERNS` you propagated, or the user approved with explicit reservations | `DONE_WITH_CONCERNS: data-model-architect could not verify contact reuse, screen-planner used Tamagui default tokens` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more information after the single focused experience-contract clarification has been asked | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
 | `BLOCKED: <reason>` | Hit a hard wall — sub-architect returned `BLOCKED`, plan file cannot be written, user rejected the same gate 3 times in a row, or any pre-condition (working dir, plugin root) is missing. The orchestrator MUST escalate, never silently retry | `BLOCKED: data-model-architect returned BLOCKED: cannot write _dm_section.md` |

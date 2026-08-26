@@ -22,9 +22,13 @@ test('prototype entry skills and executable helpers are present', () => {
     'skills/add-sample-data/scripts/prepare-prototype-seed-migration.js',
     'skills/sync-from-plan/SKILL.md',
     'scripts/cleanup-prototype-artifacts.js',
+    'scripts/manage-prototype-metro.js',
+    'scripts/render-prototype-workspace.js',
+    'scripts/prepare-design-context.js',
     'scripts/validate-datamodel-manifest.js',
     'scripts/validate-screen-contracts.js',
     'shared/references/lifecycle-state.md',
+    'shared/references/host-capability-adapter.md',
   ];
   for (const relativePath of expected) {
     assert.equal(fs.existsSync(path.join(pluginRoot, relativePath)), true, `${relativePath} must exist`);
@@ -97,6 +101,92 @@ test('planning agents explicitly support environment-free prototype mode', () =>
   }
   assert.match(architect, /zero environment/);
   assert.match(planner, /Prototype plans are not execution approvals/);
+  assert.match(planner, /Prototype consolidated-review override/);
+  assert.match(planner, /Present exactly one final plan-mode review/);
+  assert.match(planner, /must never authorize[\s\S]*external mutation/);
+});
+
+test('prototype workflow uses one consolidated editable review', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /one consolidated final review/);
+  assert.match(skill, /Do not pause at[\s\S]*real-app section gates/);
+  assert.match(skill, /Prototype approval never authorizes external[\s\S]*mutation/);
+});
+
+test('host capability gaps hand work to the foreground without filesystem blame', () => {
+  const adapter = read('shared/references/host-capability-adapter.md');
+  const planner = read('agents/native-app-planner.md');
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+  const realApp = read('skills/create-mobile-app/SKILL.md');
+  assert.match(adapter, /NEEDS_CONTEXT: host-capability-handoff/);
+  assert.match(adapter, /not an app-project failure/);
+  assert.match(adapter, /same immutable screen-build-pack entry/);
+  assert.match(planner, /NEEDS_CONTEXT: host-capability-handoff/);
+  assert.doesNotMatch(planner, /BLOCKED: tool surface missing <comma-separated tool names>/);
+  assert.match(prototype, /host-capability-handoff/);
+  assert.match(prototype, /ordinary chat[\s\S]*explicit `approve`/);
+  assert.match(realApp, /host-capability handoff/);
+});
+
+test('prototype probes Metro immediately before launch and records truthful reuse evidence', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /manage-prototype-metro\.js[\s\S]*--action prepare/);
+  assert.match(skill, /action: verify-reuse[\s\S]*Metro waiting on/);
+  assert.match(skill, /Metadata is not health evidence/);
+  assert.match(skill, /--action failed[\s\S]*manualCommand/);
+  assert.doesNotMatch(skill, /node -e 'const net=require\("net"\)/);
+});
+
+test('prototype maintains one derived editable maker workspace through every phase', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /render-prototype-workspace\.js/);
+  assert.match(skill, /_prototype_workspace\.html/);
+  assert.match(skill, /never a planning authority or native UX[\s\S]*evidence/);
+  assert.match(skill, /prototype-review\.json/);
+  assert.match(skill, /after screen-build-pack compilation, every builder wave, final[\s\S]*validation, and each Metro ready\/failed state transition/);
+});
+
+test('automatic prototype design records a compact mode-owned reference set', () => {
+  const designSystem = read('skills/design-system/SKILL.md');
+  const prototype = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(designSystem, /Mode-owned reference loading/);
+  assert.match(designSystem, /prepare-design-context\.js/);
+  assert.match(designSystem, /Read exactly the returned `referenceFiles`/);
+  assert.match(designSystem, /prompt-only path uses `automatic`/);
+  assert.doesNotMatch(designSystem, /## References — read before executing/);
+  assert.match(prototype, /design-execution-evidence\.json/);
+  assert.match(prototype, /Reject an[\s\S]*automatic manifest[\s\S]*style[\s\S]*picker/);
+});
+
+test('runtime data and design use a disjoint parallel boundary with one validated join', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /approved `\.tmp\/dataverse-schema-contract\.json`[\s\S]*before either[\s\S]*lane starts/);
+  assert.match(skill, /Data lane:[\s\S]*`src\/generated\/`[\s\S]*`assets\/experience\/`/);
+  assert.match(skill, /Design lane:[\s\S]*`brand\/`[\s\S]*design-execution-evidence\.json/);
+  assert.match(skill, /Sequential fallback changes only[\s\S]*scheduling, not artifacts or validation/);
+  assert.match(skill, /Join only after both lanes succeed/);
+  assert.match(skill, /Do not run a[\s\S]*typecheck while either lane is still writing/);
+});
+
+test('prototype repair policy continues harmless bookkeeping and blocks semantic loss', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /Non-blocking internal repair boundary/);
+  assert.match(skill, /casing, surrounding[\s\S]*omitted optional arrays[\s\S]*prototype primary IDs/);
+  assert.match(skill, /prototype-seed-regeneration\.json/);
+  assert.match(skill, /continue without regenerating the plan/);
+  assert.match(skill, /unauthorized external mutation[\s\S]*lose an explicit requirement[\s\S]*lookup\/relationship unresolved/);
+  assert.match(skill, /Never repair[\s\S]*dropping a[\s\S]*product job/);
+});
+
+test('prototype builds the complete ordered key flow before Metro', () => {
+  const screenPlanner = read('agents/screen-planner.md');
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(screenPlanner, /ordered[\s\S]*`keyFlow\.screens`/);
+  assert.match(screenPlanner, /Include every required step through completion/);
+  assert.match(screenPlanner, /Omit[\s\S]*`screens` for a true one-screen key flow/);
+  assert.match(skill, /permanent Home followed by every ordered screen/);
+  assert.match(skill, /Do not start Metro unless Home and every declared key-flow screen are real TSX/);
+  assert.match(skill, /capture the primary screen and every sidecar-declared key-flow route/);
 });
 
 test('edit-app routes graduation intent before ordinary edits', () => {
@@ -229,7 +319,7 @@ test('brief-derived experience contract drives planning without a reference inpu
   assert.match(prototype, /experience-foundation-contract\.json/);
   assert.match(prototype, /compile-screen-build-pack\.js/);
   assert.match(prototype, /screen_build_pack_path/);
-  assert.match(prototype, /sidecar-declared `keyFlow`/);
+  assert.match(prototype, /every sidecar-declared key-flow route/);
   assert.match(realApp, /Experience direction: contract-first/);
   assert.match(realApp, /Materialize experience foundation primitives/);
   assert.match(realApp, /Compile the screen build pack/);

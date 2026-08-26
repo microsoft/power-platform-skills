@@ -25,6 +25,8 @@ invocations. Treat it as the human-readable record of what has been done;
 | Created | _<ISO date>_ |
 | Metro terminal id | _<background-shell id from Step 12 — `/debug-app` reads this terminal's output for symptom-driven native debugging only. If empty/dead, re-launch with `cd <working_dir> && npm run dev` and update this field._ |
 | Metro launch command | _e.g. `cd <working_dir> && npm run dev`_ |
+| Metro port / native URL | _recorded after the foreground terminal reports a ready banner_ |
+| Metro session manifest | _.mobile-app/metro-session.json; metadata suggests reuse but terminal output confirms health_ |
 
 ## Power Platform context
 

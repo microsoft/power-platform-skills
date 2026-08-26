@@ -140,10 +140,15 @@ Write this data into `.tmp/experience-screen-contract.json` in graph mode,
 including `schemaVersion: 1`, a SHA-256 of the exact serialized experience
 contract as `experienceContractSha256`, the canonical primary route/file, the
 full primary composition, runtime anchors, each planned screen's route and
-archetype, and a `keyFlow` object. `keyFlow` must name one non-primary route,
-file, and outcome that exercises the contract's main task after Home. In specs
-mode, read the existing sidecar and return `BLOCKED` if it does not match the
-current contract.
+archetype, and a `keyFlow` object. `keyFlow.route`, `file`, and `outcome` name
+the first non-primary route that enters the contract's main task after Home.
+When completing that outcome requires additional screens, add an ordered
+`keyFlow.screens` array of `{ route, file, outcome }` entries beginning with
+the same route/file. Include every required step through completion; do not
+collapse a receiving, inspection, booking, checkout, onboarding, or other
+multi-step outcome into its first screen merely to keep the canary small. Omit
+`screens` for a true one-screen key flow. In specs mode, read the existing
+sidecar and return `BLOCKED` if it does not match the current contract.
 
 In graph mode, create the companion foundation manifest before listing screens:
 
@@ -192,15 +197,20 @@ pattern that makes the first user outcome immediate:
 | Pattern | When to use |
 |---|---|
 | **Stack** (Expo Router default) | `capture`, `workflow`, `onboarding`, or `detail-first` entry; 1–3 focused destinations; linear progress |
-| **Tabs** | `overview`, `inbox`, or `feed` with 3–5 genuinely equal destinations |
+| **Tabs** | A permanent primary destination plus at least two independently revisited durable jobs; keep nested details in each destination stack |
 | **Drawer** | 5+ destinations, or admin-style apps with deep navigation. See `shared/samples/_layout-drawer.tsx` for file pattern. |
-| **Tabs + Stack** | The contract explicitly calls for several peer roots with nested context, not merely because entities exist |
+| **Tabs + Stack** | Multiple ongoing records, queues, drafts, histories, categories, inboxes, saved items, or other durable jobs need persistent switching plus nested context |
 | **Modal flow** | Short decision or capture flow where the contract calls for a contained step sequence |
 
 Never select Tabs + Stack simply because the data model has multiple entities.
 Never add a tab just to expose a List screen. The contract's `navigationModel`
 is the default; document any deliberate implementation mapping only when Expo
 Router requires it.
+
+Use stack-only only when the entire product is one bounded linear or immersive
+flow. Record why persistent destinations are unnecessary, how users exit and
+return, and why no independently revisited durable job exists. Profile remains
+reachable outside that flow without becoming a transactional step.
 
 ## Step 2 — List Screens
 
@@ -323,6 +333,15 @@ Then design only the screens needed for the contract's primary job and its
 supporting outcomes. List, Detail, and Form are implementation shells, not a
 default product flow:
 
+- Map every explicit user job to a durable destination, nested/detail screen,
+  bounded-flow step, or a named region with a grouping rationale.
+- Combine jobs only when they share record context and preserve independent
+  entry, hierarchy, actions, states, and accessibility.
+- A scanner or camera is an entry mechanism supporting a job, not the product
+  structure, unless the brief explicitly describes one immersive utility.
+- Do not use a universal screen minimum or maximum. Choose the smallest coherent
+  graph that covers every explicit job.
+
 - Add a **List** when users genuinely need to compare or browse a collection.
 - Add a **Detail** when a selected object needs a focused decision or action.
 - Add a **Form** when the job requires structured capture or editing.
@@ -352,7 +371,18 @@ Examples:
 
 **Authenticated Dataverse identity rule:** when app identity links through `systemuser`, require `SystemusersService` in the data-source/service plan and record the profile table's planned `systemuser` lookup logical column. Resolve the access-token `oid` with `SystemusersService.getAll({ filter: "azureactivedirectoryobjectid eq <oid> and isdisabled eq false", top: 2 })`. The screen-builder must open the generated profile model and use the exact declared read property corresponding to that lookup column (for example `_new_systemuserid_value` for `new_systemuserid`). Never put generic placeholders such as `_lookup_value` or `_systemuserlookup_value` in a concrete filter, and do not use relationship traversal (`lookupNavigation/azureactivedirectoryobjectid`).
 
-Keep total screen count tight — under 8 for v0 unless the requirements explicitly demand more. The user can iterate later.
+Keep the graph coherent and reviewable. Screen count follows explicit job
+coverage and justified grouping rather than a global cap.
+
+### Offline evidence boundary
+
+Visible offline-first UX requires direct brief evidence such as `offline`,
+`limited connectivity`, `no network`, `disconnected operation`, `save on
+device`, or `sync later`. `field`, `scanner`, `capture`, `flight`, `passenger`,
+`warehouse`, `inspection`, `technician`, `site`, and `task` are not evidence by
+themselves. For `assetPolicy.connectivity: network-optional`, keep ordinary
+unavailable/retry/recovery states but do not promise cached records, queued
+writes, pending sync, saved-on-device completion, or offline readiness.
 
 ### Sign-out placement rule
 
@@ -500,7 +530,7 @@ For each screen the user adds, provide this compact shape:
 - **Domain layout decisions:** (answer the 3 questions above — required)
 - **Experience composition** (REQUIRED on the contract primary screen only) — user outcome, composition kind, focal point, exact ordered first-viewport regions, visible primary action, signature motifs, forbidden defaults, and the required `experience-*` runtime anchors. Other screens omit this field unless they materialize a required signature motif.
 - **Foundation primitives** (REQUIRED on the contract primary screen and any screen that materializes a signature motif) — exact component/import names from `.tmp/experience-foundation-contract.json`; components are created by Step 10.8 before builders run. Do not replace them with local cards, rows, or duplicated markup.
-- **Key-flow ownership** (REQUIRED on the primary screen and selected key-flow screen) — identify the sidecar `keyFlow` route/outcome, the primary action that reaches it, and any required state handoff. Native QA reviews both routes at normal and large text.
+- **Key-flow ownership** (REQUIRED on the primary screen and every ordered key-flow screen) — identify the sidecar `keyFlow` entry route/outcome, each screen's sequence position, the primary action that reaches or advances it, and required state handoff through completion. Native QA reviews the primary route and every declared key-flow route at normal and large text.
 - **Row style override** (List screens only, omit if Shared Conventions default applies): one of the row styles from the guide above, not "generic cards"
 - **Hero type override** (Detail screens only, omit if Shared Conventions default applies): one of the hero types from the guide above
 - **Operational pattern** (workflow screens only): one of `home-dashboard`, `assignment-dashboard`, `walkaround-stepper`, `wizard-progress-stepper`, `floating-action-menu`, `scan-geofence-gate`, `severity-filtered-queue`, `dispatch-signoff-queue`, `audit-timeline`. Use `home-dashboard` only when the experience contract has `entryMode: overview` and does not forbid it. Omit an operational pattern when the contract's composition itself is sufficient. Use `floating-action-menu` when a screen has 2-5 related quick actions behind one Create/New trigger; list the trigger label, menu item labels/icons, and route/action for each item.

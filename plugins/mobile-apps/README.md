@@ -205,6 +205,33 @@ builds the same production-quality screens, and starts Metro without requiring
 Microsoft sign-in. Planned external connectors are visible throw-stubs, so an
 unsupported interaction fails clearly instead of silently succeeding.
 
+Prototype planning uses one consolidated editable review for product/screens,
+logical data, native capabilities, and future connector intent. The approved
+Markdown plan remains the human source of truth; `_prototype_workspace.html`
+is a local control surface showing phase, screen, validation, and Metro state.
+It can export review edits, but it is neither a second planning contract nor
+native visual evidence.
+
+After approval, typed local data and the automatic native design foundation
+may run in parallel because their write sets are disjoint. The compact
+`.tmp/screen-build-pack.json` then binds the approved plan, screen-local data,
+navigation, Profile, native capability placement, and ordered key flow. The
+workflow builds Home plus every screen required to complete that key flow,
+runs route/UX/TypeScript gates, and only then starts Metro. Independent
+supporting screens follow in bounded waves.
+
+Offline behavior is evidence-gated: scanner, flight, field, warehouse, and
+inspection language alone do not create cached-record, queued-write, or sync
+promises. Explicit offline or limited-connectivity requirements retain local
+draft, recovery, media, and pending-sync behavior. Every prototype includes a
+reachable local Profile surface without inventing remote identity storage.
+
+Metro readiness means the foreground terminal reported a compatible ready
+banner. Metadata alone is never treated as health evidence. When native
+screenshots are unavailable, completion is reported as statically validated
+and Metro-ready, not visually complete. See
+[`docs/prototype-ux-pipeline.md`](docs/prototype-ux-pipeline.md).
+
 When the model and UX are approved:
 
 ```text
@@ -298,7 +325,7 @@ Example edit flows:
 | Command | Status | Description |
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/create-mobile-prototype` | ✅ v0 | Prototype orchestrator — starts from the same fresh installed template, runs environment-free approval gates, writes a non-executable structured data contract, generates deterministic local CRUD services/seed data and connector throw-stubs, builds polished screens, and starts Metro without Power Platform provisioning. |
+| `/create-mobile-prototype` | ✅ v0 | Local-first prototype orchestrator — one consolidated editable plan review, non-executable logical schema, deterministic linked fixtures and connector throw-stubs, automatic native design, compact screen build pack, Home + complete key-flow canary before Metro, supporting waves, and truthful native-evidence handoff without Power Platform provisioning. |
 | `/prototype-to-real-app` | ✅ v0 | Resumable in-place graduation — binds a prototype to a selected environment, rebases placeholder publisher names, live-reconciles and applies Dataverse, replaces connector stubs, optionally reuses seed scenarios, proves all mocks are gone, restores auth/runtime, and commits Dataverse state after one final sync. |
 | `/sync-from-plan` | ✅ v0 | Reconciles an existing prototype or real app from `native-app-plan.md`; refreshes service/field bindings, routes, shared code, affected screens, quality gates, preview, and lifecycle hashes. Conversion uses its target-mode gate to commit `dataverse`. |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |

@@ -57,3 +57,25 @@ test('rejects missing large-text capture and motif review', (context) => {
   assert.ok(rules.has('missing-large-text-capture'));
   assert.ok(rules.has('missing-experience-check'));
 });
+
+test('multi-step key flows require native evidence for every ordered route', (context) => {
+  const { projectRoot, contract, keyFlow } = projectWithContract(context);
+  keyFlow.screens = [
+    { route: keyFlow.route, file: keyFlow.file, outcome: 'Review the captured receipt.' },
+    { route: '/(app)/capture/confirm', file: 'app/(app)/capture/confirm.tsx', outcome: 'Confirm and submit the receipt.' },
+  ];
+  fs.writeFileSync(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify({ schemaVersion: 1, keyFlow }, null, 2)}\n`);
+  const manifest = passingManifest(contract, keyFlow);
+  manifest.keyFlowRoutes = keyFlow.screens.map((screen) => screen.route);
+  const scopes = ['primary', 'key-flow-1', 'key-flow-2'];
+  for (const check of manifest.checks) check.scopes = scopes;
+  manifest.captureMatrix.push(
+    { route: '/(app)/capture/confirm', fontScale: 1, status: 'pass', captureId: 'normal-confirm', platform: 'android', device: 'Pixel 8' },
+    { route: '/(app)/capture/confirm', fontScale: 1.4, status: 'pass', captureId: 'large-confirm', platform: 'android', device: 'Pixel 8' },
+  );
+  assert.deepEqual(validate(projectRoot, manifest), []);
+
+  manifest.captureMatrix.pop();
+  const issues = validate(projectRoot, manifest);
+  assert.ok(issues.some((issue) => issue.rule === 'missing-large-text-capture' && issue.route === '/(app)/capture/confirm'));
+});

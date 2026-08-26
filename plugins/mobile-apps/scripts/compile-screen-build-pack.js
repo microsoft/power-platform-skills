@@ -62,6 +62,12 @@ function parseScreenMap(markdown) {
   const routeIndex = headers.indexOf('route');
   const fileIndex = headers.indexOf('file');
   const screenIndex = headers.indexOf('screen');
+  const navigationIndex = headers.findIndex((header) => ['nav role', 'navigation role', 'navigation'].includes(header));
+  const archetypeIndex = headers.indexOf('archetype');
+  const presentationIndex = headers.indexOf('presentation');
+  const purposeIndex = headers.indexOf('purpose');
+  const dataIndex = headers.findIndex((header) => ['data', 'data source', 'data sources'].includes(header));
+  const nativeIndex = headers.findIndex((header) => ['native', 'native caps', 'native capabilities'].includes(header));
   if (routeIndex < 0 || fileIndex < 0 || screenIndex < 0) return [];
   return table.slice(2)
     .filter((line) => !/^\|(?:\s*:?-{3,}:?\s*\|)+$/.test(line))
@@ -71,8 +77,31 @@ function parseScreenMap(markdown) {
       id: cells[screenIndex] || '',
       route: cells[routeIndex] || '',
       file: cells[fileIndex] || '',
+      navigationRole: navigationIndex >= 0 ? cells[navigationIndex] || '' : '',
+      archetype: archetypeIndex >= 0 ? cells[archetypeIndex] || '' : '',
+      presentation: presentationIndex >= 0 ? cells[presentationIndex] || '' : '',
+      purpose: purposeIndex >= 0 ? cells[purposeIndex] || '' : '',
+      dataIntent: dataIndex >= 0 ? cells[dataIndex] || '' : '',
+      nativeIntent: nativeIndex >= 0 ? cells[nativeIndex] || '' : '',
     }))
     .filter((screen) => screen.id && screen.route && screen.file);
+}
+
+function parseNavigationModel(markdown, fallback) {
+  const lines = String(markdown || '').split(/\r?\n/);
+  const index = lines.findIndex((line) => line.trim().toLowerCase() === '### navigation pattern');
+  if (index < 0) return { model: fallback, source: 'experience-contract' };
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor].trim();
+    if (/^#{1,3}\s+/.test(line)) break;
+    if (!line) continue;
+    const normalized = line.replace(/[*_`]/g, '').toLowerCase();
+    if (/\btabs?(?:\s*\+\s*stack)?\b/.test(normalized)) return { model: 'tabs-stack', source: 'approved-screen-plan' };
+    if (/\bdrawer\b/.test(normalized)) return { model: 'drawer', source: 'approved-screen-plan' };
+    if (/\bmodal(?:\s+flow)?\b/.test(normalized)) return { model: 'modal-flow', source: 'approved-screen-plan' };
+    if (/\bstack\b/.test(normalized)) return { model: 'stack', source: 'approved-screen-plan' };
+  }
+  return { model: fallback, source: 'experience-contract' };
 }
 
 function identifier(value) {
@@ -81,6 +110,18 @@ function identifier(value) {
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean);
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('') || 'Screen';
+}
+
+function keyFlowSteps(keyFlow) {
+  if (!keyFlow) return [];
+  const declared = Array.isArray(keyFlow.screens) && keyFlow.screens.length
+    ? keyFlow.screens
+    : [keyFlow];
+  return declared.map((screen, index) => ({
+    route: screen?.route || (index === 0 ? keyFlow.route : null),
+    file: screen?.file || (index === 0 ? keyFlow.file : null),
+    outcome: screen?.outcome || (index === 0 ? keyFlow.outcome : null),
+  }));
 }
 
 function validateInputs(contract, screenContract, foundation) {
@@ -97,6 +138,17 @@ function validateInputs(contract, screenContract, foundation) {
   const keyFlow = screenContract.keyFlow;
   if (!keyFlow || typeof keyFlow.route !== 'string' || keyFlow.route === primary.route || typeof keyFlow.file !== 'string' || typeof keyFlow.outcome !== 'string') {
     throw new Error('Experience screen contract requires a non-primary keyFlow.');
+  }
+  const steps = keyFlowSteps(keyFlow);
+  if (!steps.length || steps[0].route !== keyFlow.route || steps[0].file !== keyFlow.file) {
+    throw new Error('Experience keyFlow screens must begin with the declared route and file.');
+  }
+  const routes = new Set();
+  for (const step of steps) {
+    if (typeof step.route !== 'string' || !step.route.startsWith('/') || step.route === primary.route || typeof step.file !== 'string' || !/^app\/.+\.tsx$/i.test(step.file) || typeof step.outcome !== 'string' || step.outcome.trim().length < 5 || routes.has(step.route)) {
+      throw new Error('Experience keyFlow screens require unique non-primary routes, app/*.tsx files, and user-facing outcomes.');
+    }
+    routes.add(step.route);
   }
   const expectedFoundation = foundationContract(contract);
   if (foundation?.schemaVersion !== 1 || foundation.experienceContractSha256 !== expectedFoundation.experienceContractSha256) {
@@ -117,9 +169,17 @@ function dataIntent(projectRoot) {
   if (fs.existsSync(schemaPath)) {
     const schema = readJson(schemaPath, 'Data intent');
     const tables = Array.isArray(schema.tables) ? schema.tables : [];
+    const entityContracts = tables
+      .filter((table) => table.serviceRequired !== false && table.logicalName)
+      .map((table) => ({
+        logicalName: table.logicalName,
+        displayName: table.displayName || table.logicalName,
+        serviceName: table.serviceName || `${identifier(table.logicalName)}Service`,
+      }));
     return {
       adapter: schema.planningMode === 'prototype' ? 'local' : 'dataverse',
-      entities: tables.filter((table) => table.serviceRequired !== false && table.logicalName).map((table) => table.displayName || table.logicalName),
+      entities: entityContracts.map((entity) => entity.displayName),
+      entityContracts,
       path: '.tmp/dataverse-schema-contract.json',
       hash: sha256(fs.readFileSync(schemaPath, 'utf8')),
     };
@@ -129,6 +189,11 @@ function dataIntent(projectRoot) {
     return {
       adapter: 'local',
       entities: Array.isArray(manifest.tables) ? manifest.tables : [],
+      entityContracts: (Array.isArray(manifest.tables) ? manifest.tables : []).map((logicalName) => ({
+        logicalName,
+        displayName: logicalName,
+        serviceName: `${identifier(logicalName)}Service`,
+      })),
       path: 'src/generated/.prototype-manifest.json',
       hash: sha256(fs.readFileSync(prototypePath, 'utf8')),
     };
@@ -136,35 +201,62 @@ function dataIntent(projectRoot) {
   throw new Error('Data intent is missing: expected .tmp/dataverse-schema-contract.json or src/generated/.prototype-manifest.json.');
 }
 
-function screenRecord(screen, primary, keyFlow, foundation, data, contract) {
+function normalizedIdentity(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function screenEntities(screen, data, isPrimary, isProfile) {
+  if (isProfile) return [];
+  const source = normalizedIdentity(`${screen.id} ${screen.purpose} ${screen.dataIntent}`);
+  const matches = (data.entityContracts || []).filter((entity) => [
+    entity.logicalName,
+    entity.displayName,
+    entity.serviceName,
+  ].some((candidate) => source.includes(normalizedIdentity(candidate))));
+  if (matches.length) return matches.map((entity) => entity.displayName);
+  return isPrimary ? data.entities : [];
+}
+
+function screenRecord(screen, primary, keyFlow, keyFlowByRoute, foundation, data, contract) {
   const isPrimary = screen.route === primary.route;
-  const isKeyFlow = screen.route === keyFlow.route;
+  const keyFlowStep = keyFlowByRoute.get(screen.route);
+  const isKeyFlow = Boolean(keyFlowStep);
+  const isProfile = screen.route === '/(app)/profile' || screen.file === 'app/(app)/profile.tsx' || String(screen.id).toLowerCase() === 'profile';
   const foundationComponents = foundation.primitives.map((primitive) => primitive.component);
+  const entities = screenEntities(screen, data, isPrimary, isProfile);
   return {
-    id: isPrimary ? 'Home' : isKeyFlow ? identifier(keyFlow.route) : identifier(screen.id),
+    id: isPrimary ? 'Home' : isProfile ? 'Profile' : isKeyFlow ? identifier(keyFlowStep.route) : identifier(screen.id),
     route: screen.route,
     file: screen.file,
-    role: isPrimary ? 'primary' : isKeyFlow ? 'key-flow' : 'supporting',
-    headerMode: isPrimary ? 'root' : 'back',
-    purpose: isPrimary ? contract.primaryJob : isKeyFlow ? keyFlow.outcome : `Support ${contract.primaryJob.toLowerCase()}`,
+    role: isPrimary ? 'primary' : isProfile ? 'profile' : isKeyFlow ? 'key-flow' : 'supporting',
+    navigationRole: screen.navigationRole || (isPrimary || isProfile ? 'persistent-destination' : 'nested'),
+    archetype: screen.archetype || null,
+    presentation: screen.presentation || 'default',
+    nativeIntent: /^(?:—|-|none)$/i.test(screen.nativeIntent) ? null : screen.nativeIntent || null,
+    headerMode: isPrimary || isProfile ? 'root' : 'back',
+    purpose: isPrimary
+      ? contract.primaryJob
+      : screen.purpose || (isProfile ? 'Review app-specific profile context and sign out.' : isKeyFlow ? keyFlowStep.outcome || keyFlow.outcome : `Support ${contract.primaryJob.toLowerCase()}`),
     firstViewport: isPrimary
       ? [...contract.firstViewport.regionOrder.map((region) => `experience-region-${region}`), ...foundationComponents]
       : [],
     primaryAction: isPrimary ? contract.firstViewport.primaryAction : null,
     states: ['loading', 'empty', 'error', 'offline'],
     dependencies: isPrimary
-      ? [...foundation.primitives.map((primitive) => primitive.file), ...data.entities.map((entity) => `fixture:${entity}`)]
+      ? [...foundation.primitives.map((primitive) => primitive.file), ...entities.map((entity) => `fixture:${entity}`)]
       : isKeyFlow
         ? [`screen:${primary.route}`, ...foundation.primitives.map((primitive) => primitive.file)]
         : [],
     testIds: isPrimary
       ? primary.runtimeMarkers
+      : isProfile
+        ? ['screen-profile', 'profile-sign-out']
       : isKeyFlow
         ? ['experience-key-flow']
         : [],
     data: {
       adapter: data.adapter,
-      entities: data.entities,
+      entities,
       viewModel: 'src/generated/experience-view-model.ts',
       recordIdentity: 'stable-primary-key',
       mediaPolicy: contract.assetPolicy.media,
@@ -177,6 +269,12 @@ function revisionForPack(pack) {
   const copy = { ...pack };
   delete copy.revision;
   return sha256(stableStringify(copy));
+}
+
+function chunk(values, size) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) chunks.push(values.slice(index, index + size));
+  return chunks;
 }
 
 function compileScreenBuildPack(projectRoot) {
@@ -192,20 +290,27 @@ function compileScreenBuildPack(projectRoot) {
   const foundation = readJson(foundationPath, 'Experience foundation contract');
   validateInputs(contract, screenContract, foundation);
   const data = dataIntent(root);
-  const screenMap = parseScreenMap(fs.readFileSync(planPath, 'utf8'));
+  const planMarkdown = fs.readFileSync(planPath, 'utf8');
+  const screenMap = parseScreenMap(planMarkdown);
+  const navigation = parseNavigationModel(planMarkdown, contract.navigationModel);
   const primary = screenContract.primaryScreen;
   const keyFlow = screenContract.keyFlow;
+  const keyFlowSequence = keyFlowSteps(keyFlow);
+  const keyFlowByRoute = new Map(keyFlowSequence.map((screen) => [screen.route, screen]));
   const mergedScreens = [...screenMap];
-  for (const screen of [
-    { id: 'Home', route: primary.route, file: primary.file },
-    { id: identifier(keyFlow.route), route: keyFlow.route, file: keyFlow.file },
-  ]) {
+  for (const screen of [{ id: 'Home', route: primary.route, file: primary.file }, ...keyFlowSequence.map((step) => ({ id: identifier(step.route), ...step }))]) {
     if (!mergedScreens.some((candidate) => candidate.route === screen.route)) mergedScreens.push(screen);
   }
-  const screens = mergedScreens.map((screen) => screenRecord(screen, primary, keyFlow, foundation, data, contract));
+  const screens = mergedScreens.map((screen) => screenRecord(screen, primary, keyFlow, keyFlowByRoute, foundation, data, contract));
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
-  const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
+  const screenByRoute = new Map(screens.map((screen) => [screen.route, screen]));
+  const keyFlowScreens = keyFlowSequence.map((step) => screenByRoute.get(step.route));
+  if (keyFlowScreens.some((screen) => !screen || screen.role !== 'key-flow')) throw new Error('Every keyFlow step must compile to a key-flow screen.');
+  const profileScreen = screens.find((screen) => screen.role === 'profile');
+  if (!profileScreen) throw new Error('Screen Map requires a reachable Profile screen at /(app)/profile.');
+  const supportingScreens = screens.filter((screen) => !['primary', 'key-flow'].includes(screen.role));
   const sourcePaths = {
+    plan: 'native-app-plan.md',
     experienceContract: '.tmp/experience-contract.json',
     screenContract: '.tmp/experience-screen-contract.json',
     foundationContract: '.tmp/experience-foundation-contract.json',
@@ -216,6 +321,7 @@ function compileScreenBuildPack(projectRoot) {
   const pack = {
     schemaVersion: 1,
     sources: {
+      plan: sha256(fs.readFileSync(planPath, 'utf8')),
       experienceContract: sha256(fs.readFileSync(experiencePath, 'utf8')),
       screenContract: sha256(fs.readFileSync(screenPath, 'utf8')),
       foundationContract: sha256(fs.readFileSync(foundationPath, 'utf8')),
@@ -252,8 +358,12 @@ function compileScreenBuildPack(projectRoot) {
       headerModes: Object.fromEntries(screens.map((screen) => [screen.route, screen.headerMode])),
     },
     navigation: {
+      model: navigation.model,
+      modelSource: navigation.source,
       initialRoute: primary.route,
       keyFlowRoute: keyFlow.route,
+      keyFlowRoutes: keyFlowSequence.map((screen) => screen.route),
+      profileRoute: profileScreen.route,
       routes: screens.map((screen) => screen.route),
     },
     fixtures: {
@@ -269,16 +379,33 @@ function compileScreenBuildPack(projectRoot) {
       mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
     },
     screens,
+    execution: {
+      canary: {
+        screenIds: [primaryScreen.id, ...keyFlowScreens.map((screen) => screen.id)],
+        routes: [primaryScreen.route, ...keyFlowScreens.map((screen) => screen.route)],
+      },
+      supportingWaves: chunk(supportingScreens, 5).map((wave, index) => ({
+        wave: index + 1,
+        screenIds: wave.map((screen) => screen.id),
+        routes: wave.map((screen) => screen.route),
+      })),
+      metroAfterCanary: true,
+    },
     buildOrder: [
       ...foundation.primitives.map((primitive) => ({ kind: 'foundation', id: primitive.component, file: primitive.file, dependsOn: [] })),
       { kind: 'screen', id: primaryScreen.id, route: primaryScreen.route, dependsOn: foundation.primitives.map((primitive) => primitive.component) },
-      { kind: 'screen', id: keyFlowScreen.id, route: keyFlowScreen.route, dependsOn: [primaryScreen.id, ...foundation.primitives.map((primitive) => primitive.component)] },
+      ...keyFlowScreens.map((screen, index) => ({
+        kind: 'screen',
+        id: screen.id,
+        route: screen.route,
+        dependsOn: [index === 0 ? primaryScreen.id : keyFlowScreens[index - 1].id, ...foundation.primitives.map((primitive) => primitive.component)],
+      })),
       ...screens.filter((screen) => !['primary', 'key-flow'].includes(screen.role)).map((screen) => ({ kind: 'screen', id: screen.id, route: screen.route, dependsOn: [primaryScreen.id] })),
     ],
     invalidation: {
       screenDependencies: Object.fromEntries(screens.map((screen) => [screen.id, screen.role === 'supporting'
-        ? ['screenContract', 'designRecipe', 'dataIntent']
-        : ['experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent']])),
+        ? ['plan', 'screenContract', 'designRecipe', 'dataIntent']
+        : ['plan', 'experienceContract', 'screenContract', 'foundationContract', 'designRecipe', 'dataIntent']])),
       fixtureDependencies: Object.fromEntries(data.entities.map((entity) => [entity, ['experienceContract', 'dataIntent']])),
       validatorDependencies: {
         experience: ['experienceContract', 'screenContract', 'foundationContract'],
@@ -323,4 +450,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { compileScreenBuildPack, parseScreenMap, revisionForPack, sha256, stableStringify };
+module.exports = { chunk, compileScreenBuildPack, keyFlowSteps, parseNavigationModel, parseScreenMap, revisionForPack, sha256, stableStringify };

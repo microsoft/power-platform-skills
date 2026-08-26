@@ -8,6 +8,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { VALIDATORS, isTextFile } = require('./lib/mobile-validator-manifest');
 
@@ -15,7 +16,7 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--file <path> [--file <path> ...] | --all-source) [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--file <path> [--file <path> ...] | --all-source) [--approved-js-dependency <name>@<exact-version> ...] [--phase <name> --manifest <path> --skip-unchanged]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and non-generated src/.',
@@ -39,7 +40,10 @@ function parseArgs(argv) {
     allSource: false,
     approvedJsDependencies: [],
     errors: [],
+    manifest: null,
+    phase: 'default',
     projectRoot: null,
+    skipUnchanged: false,
     targets: [],
   };
 
@@ -61,6 +65,14 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--all-source') {
       parsed.allSource = true;
+    } else if (arg === '--phase') {
+      parsed.phase = argv[index + 1];
+      index += 1;
+    } else if (arg === '--manifest') {
+      parsed.manifest = argv[index + 1];
+      index += 1;
+    } else if (arg === '--skip-unchanged') {
+      parsed.skipUnchanged = true;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     } else {
@@ -70,6 +82,44 @@ function parseArgs(argv) {
   }
 
   return parsed;
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function validationFingerprint(files, projectRoot, approvedJsDependencies, phase) {
+  const input = {
+    phase,
+    validators: VALIDATORS.map((validator) => validator.script),
+    approvedJsDependencies: approvedJsDependencies
+      .map((dependency) => `${dependency.name}@${dependency.version}`)
+      .sort(),
+    files: [...files].sort().map((filePath) => ({
+      path: path.relative(projectRoot, filePath).split(path.sep).join('/'),
+      sha256: sha256(fs.readFileSync(filePath)),
+    })),
+  };
+  return sha256(JSON.stringify(input));
+}
+
+function readManifest(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return { schemaVersion: 1, phases: {} };
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return value?.schemaVersion === 1 && value.phases && typeof value.phases === 'object'
+      ? value
+      : { schemaVersion: 1, phases: {} };
+  } catch {
+    return { schemaVersion: 1, phases: {} };
+  }
+}
+
+function writeManifest(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
+  fs.renameSync(temporaryPath, filePath);
 }
 
 function collectSourceFiles(projectRoot) {
@@ -131,7 +181,10 @@ function main(argv) {
     approvedJsDependencies,
     errors,
     help,
+    manifest: manifestArg,
+    phase,
     projectRoot: projectRootArg,
+    skipUnchanged,
     targets,
   } = parseArgs(argv);
   if (help) {
@@ -193,6 +246,18 @@ function main(argv) {
     files.add(targetPath);
   }
 
+  const manifestPath = manifestArg ? path.resolve(projectRoot, manifestArg) : null;
+  if (manifestPath && !isWithinRoot(manifestPath, projectRoot)) {
+    process.stderr.write(`BLOCKED: validation manifest is outside the mobile project root: ${manifestPath}\n`);
+    return 2;
+  }
+  const fingerprint = validationFingerprint(files, projectRoot, approvedJsDependencies, phase);
+  const manifest = readManifest(manifestPath);
+  if (skipUnchanged && manifest.phases?.[phase]?.status === 'passed' && manifest.phases[phase].fingerprint === fingerprint) {
+    process.stdout.write(`Mobile validation skipped for phase ${phase}: ${files.size} file(s) are unchanged since the last passing fingerprint.\n`);
+    return 0;
+  }
+
   let binaryFiles = 0;
   for (const filePath of files) {
     const textFile = isTextFile(filePath);
@@ -220,6 +285,15 @@ function main(argv) {
   }
 
   if (blocked) return 2;
+  if (manifestPath) {
+    manifest.phases[phase] = {
+      status: 'passed',
+      fingerprint,
+      files: [...files].sort().map((filePath) => path.relative(projectRoot, filePath).split(path.sep).join('/')),
+      validatedAt: new Date().toISOString(),
+    };
+    writeManifest(manifestPath, manifest);
+  }
   const binarySummary = binaryFiles > 0 ? `; ${binaryFiles} binary file path(s) checked` : '';
   process.stdout.write(`Mobile validation passed for ${files.size} file(s)${binarySummary}.\n`);
   return 0;
@@ -235,4 +309,7 @@ module.exports = {
   main,
   parseArgs,
   parseApprovedJsDependency,
+  readManifest,
+  validationFingerprint,
+  writeManifest,
 };

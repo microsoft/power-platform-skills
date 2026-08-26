@@ -158,22 +158,23 @@ const RULES = [
 // RULES registry below remains a low-confidence fallback for terse briefs.
 const SEMANTIC_SIGNALS = {
   consumer: [/\b(?:consumers?|customers?|passengers?|travelers?|shoppers?|members?|patients?|learners?)\b/i],
-  employee: [/\b(?:employee|staff|technician|operator|manager|agent|dispatcher|team)\b/i],
+  employee: [/\b(?:employee|staff|technician|operator|manager|agent|dispatcher|team|auditor|inspector|logistician)s?\b/i],
   commerce: [/\b(?:sell|selling|shop|shopping|buy|purchase|add to cart|checkout)\b/i],
   product: [/\b(?:product|products|item|items|inventory|accessor(?:y|ies)|beauty|watch|watches|catalog|services?|options?|choices?)\b/i],
   category: [/\b(?:category|categories|accessor(?:y|ies)|beauty|watch|watches|collection)\b/i],
   cart: [/\b(?:cart|basket|add to cart|checkout|purchase)\b/i],
-  media: [/\b(?:image|images|photo|photos|media|showcase|showcasing|visual)\b/i],
+  media: [/\b(?:image|images|photo|photos|photograph|photographs|media|showcase|showcasing|visual)\b/i],
   creator: [/\b(?:creator|create content|publish|publishing|post|posts|article|articles|video|videos|followers?)\b/i],
   discovery: [/\b(?:browse|browsing|discover|explore|showcase|showcasing|compare|find)\b/i],
   booking: [/\b(?:book|booking|schedule|appointment|reserve|reservation|availability|time slot)\b/i],
   learning: [/\b(?:learn|learning|lesson|course|study|curriculum|quiz|practice)\b/i],
   communication: [/\b(?:message|messages|chat|inbox|conversation|reply|notify)\b/i],
   finance: [/\b(?:balance|budget|spend|spending|income|expense|finance|financial|cash flow)\b/i],
-  operation: [/\b(?:complete|inspection|inspect|repair|maintain|maintenance|dispatch|approve|assignment|assignments|work order|checklist|task|warehouse|cycle count|receiving|bin|bins)\b/i],
+  operation: [/\b(?:complete|audit|auditing|inspection|inspect|repair|repairs|maintain|maintenance|maintining|maintence|maintennce|dispatch|approve|assignment|assignments|work order|checklist|task|warehouse|cycle count|receive|received|receiving|shipment|shipments|damaged|quantities|batch|expiry|bin|bins)\b/i],
   capture: [/\b(?:scan|capture|photograph|photo|receipt|barcode|qr|upload|submit evidence|record a measurement)\b/i],
   tracking: [/\b(?:track|tracking|progress|history|status|monitor|goal)\b/i],
-  offline: [/\b(?:in[-\s]?flight|onboard|offline|no connection|airplane mode|disconnected)\b/i],
+  portfolio: [/\b(?:records?|issues?|on\s*going|upcoming|warranty|warranties|ownership|updates?)\b/i],
+  offline: [/\b(?:offline|limited connectivity|intermittent connectivity|no (?:internet|network|connection)|works? without (?:an? )?(?:internet|network|connection)|disconnected (?:operation|work|mode)|save(?:d)? on (?:the )?device|sync later|airplane mode)\b/i],
   cachedCdn: [/\b(?:cdn|cache-backed|cached\s+(?:cdn|image|media)|device\s+cache|remote-cdn-cached)\b/i],
   clean: [/\b(?:clean|minimal|simple|calm|refined)\b/i],
 };
@@ -246,7 +247,7 @@ function chooseSemanticIntent(profile) {
     { id: 'content', score: score({ creator: 4, media: 2, consumer: 1, discovery: 1 }), evidence: ['creator', 'media', 'consumer', 'discovery'] },
     { id: 'finance', score: score({ finance: 4, tracking: 1, consumer: 1 }), evidence: ['finance', 'tracking', 'consumer'] },
     { id: 'operation', score: score({ operation: 4, employee: 2, tracking: 1 }), evidence: ['operation', 'employee', 'tracking'] },
-    { id: 'tracking', score: score({ tracking: 3, consumer: 1, employee: 1 }), evidence: ['tracking', 'consumer', 'employee'] },
+    { id: 'tracking', score: score({ tracking: 3, portfolio: 4, consumer: 1, employee: 1 }), evidence: ['tracking', 'portfolio', 'consumer', 'employee'] },
   ].sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
   return { winner: candidates[0], runnerUp: candidates[1] };
 }
@@ -303,7 +304,7 @@ function experienceFromIntent(intent, profile, text) {
       audience: 'employee', primaryJob: 'Complete the next piece of work.', interactionMode: 'operate', entryMode: 'workflow', contentModel: ['tasks', 'records', 'locations'], primarySurface: 'task-led-workflow', primaryAction: 'Start the next task', focalPoint: 'The next task and its completion state', signatureMotifs: ['next-step-progress', 'action-state'], forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'hidden-primary-action'], visualCharacter: 'confident-utility', navigationModel: 'stack', evidence: ['operation', 'employee', 'tracking'],
     },
     tracking: {
-      audience: signalCount(profile, 'employee') && !signalCount(profile, 'consumer') ? 'employee' : 'mixed', primaryJob: 'Understand current progress and update it.', interactionMode: 'track', entryMode: 'overview', contentModel: ['records'], primarySurface: 'decision-led-overview', primaryAction: 'Update progress', focalPoint: 'The most useful current progress signal', signatureMotifs: ['signal-summary', 'priority-callout'], forbiddenDefaults: ['crud-triad', 'unprioritized-metrics'], visualCharacter: 'minimal-refined', navigationModel: 'tabs-stack', evidence: ['tracking', 'consumer', 'employee'],
+      audience: signalCount(profile, 'employee') && !signalCount(profile, 'consumer') ? 'employee' : 'mixed', primaryJob: 'Understand current progress and update it.', interactionMode: 'track', entryMode: 'overview', contentModel: ['records'], primarySurface: 'decision-led-overview', primaryAction: 'Update progress', focalPoint: 'The most useful current progress signal', signatureMotifs: ['signal-summary', 'priority-callout'], forbiddenDefaults: ['crud-triad', 'unprioritized-metrics'], visualCharacter: 'minimal-refined', navigationModel: 'tabs-stack', evidence: ['tracking', 'portfolio', 'consumer', 'employee'],
     },
     capture: {
       audience: signalCount(profile, 'consumer') && !signalCount(profile, 'employee') ? 'consumer' : 'mixed', primaryJob: 'Capture information and continue.', interactionMode: 'create', entryMode: 'capture', contentModel: ['records', 'media'], primarySurface: 'capture-led-utility', primaryAction: 'Capture and continue', focalPoint: 'The capture surface and the next safe action', signatureMotifs: ['capture-frame', 'manual-fallback'], forbiddenDefaults: ['dashboard-first-home', 'crud-triad', 'secondary-capture-action'], visualCharacter: 'confident-utility', navigationModel: 'stack', evidence: ['capture', 'consumer', 'employee'],
@@ -312,14 +313,17 @@ function experienceFromIntent(intent, profile, text) {
   const selected = byIntent[intent] || {
     audience: signalCount(profile, 'consumer') ? 'consumer' : signalCount(profile, 'employee') ? 'employee' : 'mixed', primaryJob: 'Understand the product and take the first useful action.', interactionMode: 'create', entryMode: 'onboarding', contentModel: ['records'], primarySurface: 'guided-onboarding', primaryAction: 'Start the guided flow', focalPoint: 'The clearest first step for the user', signatureMotifs: ['guided-start', 'value-preview'], forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'premature-tab-bar'], visualCharacter: 'warm-friendly', navigationModel: 'stack', evidence: [],
   };
-  const explicitCachedCdn = signalCount(profile, 'cachedCdn') > 0 && selected.contentModel.includes('media');
+  const contentModel = signalCount(profile, 'media') > 0
+    ? unique([...selected.contentModel, 'media'])
+    : selected.contentModel;
+  const explicitCachedCdn = signalCount(profile, 'cachedCdn') > 0 && contentModel.includes('media');
   const assetPolicy = {
     connectivity: signalCount(profile, 'offline') ? 'offline-preferred' : 'network-optional',
     media: explicitCachedCdn
       ? 'remote-cdn-cached'
-      : signalCount(profile, 'offline') && selected.contentModel.includes('media') ? 'local-first' : selected.contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
+      : signalCount(profile, 'offline') && contentModel.includes('media') ? 'local-first' : contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
   };
-  return { ...selected, assetPolicy, text };
+  return { ...selected, contentModel, assetPolicy, text };
 }
 
 function normalizeMediaPolicy(value) {

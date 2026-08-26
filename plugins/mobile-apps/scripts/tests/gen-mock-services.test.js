@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const { experiencePack } = require('../../skills/create-mobile-prototype/scripts/gen-mock-services');
+
 const script = path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-prototype', 'scripts', 'gen-mock-services.js');
 
 function makeProject(t, files) {
@@ -124,6 +126,54 @@ _None - this app uses local data only._
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /legacy fallback/);
   assert.equal(fs.existsSync(path.join(root, 'src/generated/services/Cr_taskService.ts')), true);
+});
+
+test('network-optional workflow fixtures do not invent local-save behavior', () => {
+  const base = {
+    entryMode: 'workflow',
+    audience: 'employee',
+    primaryJob: 'Complete the next maintenance task.',
+    contentModel: ['tasks', 'records'],
+    promptEvidence: {},
+  };
+  const networkOptional = experiencePack({ ...base, assetPolicy: { connectivity: 'network-optional', media: 'not-applicable' } });
+  assert.equal(networkOptional.notes.some((note) => /saved locally|offline|sync/i.test(note)), false);
+  assert.equal(networkOptional.titles.includes('Saved progress'), false);
+
+  const offline = experiencePack({ ...base, assetPolicy: { connectivity: 'offline-preferred', media: 'not-applicable' } });
+  assert.equal(offline.notes.includes('Progress is saved locally'), true);
+});
+
+test('safe schema normalization is visible while unresolved relationships fail closed', (t) => {
+  const root = makeProject(t, {
+    'native-app-plan.md': '## Data Model\n\nApproved.\n\n## Connectors\n\nNone\n',
+    '.tmp/dataverse-schema-contract.json': JSON.stringify({
+      tables: [{
+        logicalName: ' cr_task ',
+        plannedDecision: 'CREATE',
+        columns: [{ logicalName: 'cr_name', primaryName: true }],
+      }],
+    }),
+  });
+  const result = run(root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /safe contract normalization/);
+  const report = JSON.parse(fs.readFileSync(path.join(root, '.tmp/prototype-seed-regeneration.json'), 'utf8'));
+  assert.ok(report.repairs.some((repair) => repair.field === 'tables[0].logicalName'));
+  assert.ok(report.repairs.some((repair) => repair.field === 'tables[0].primaryIdAttribute'));
+
+  fs.writeFileSync(path.join(root, '.tmp/dataverse-schema-contract.json'), JSON.stringify({
+    tables: [{
+      logicalName: 'cr_task',
+      columns: [
+        { logicalName: 'cr_name', type: 'string', primaryName: true },
+        { logicalName: 'cr_ownerid', type: 'lookup', lookupTarget: 'cr_missing' },
+      ],
+    }],
+  }));
+  const invalid = run(root);
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /unresolved lookup relationship/);
 });
 
 test('materializes local illustration recipes and preserves a product identity through cart data', (t) => {
