@@ -93,3 +93,42 @@ test('empty and undefined input labels do not satisfy accessibility naming', () 
     assert.ok(validateScreenSourceContract(source, screen()).some((issue) => issue.rule === 'input-label-missing'));
   }
 });
+
+test('durable roots materialize labeled Profile access when Profile is not a destination', () => {
+  const navigationContract = {
+    globalRoutePolicy: {
+      profileAccess: 'header-action',
+      profileRoute: '/(app)/profile',
+    },
+  };
+  const durable = screen({ navigation: { role: 'durable-destination' } });
+  const valid = '<ScreenShell headerMode="root" title="Assets" rightAction={<Button accessibilityLabel="Open Profile" onPress={() => router.push("/(app)/profile")} />}><YStack /></ScreenShell>';
+  assert.equal(validateScreenSourceContract(valid, durable, { navigationContract }).some((issue) => issue.rule === 'profile-header-action-missing'), false);
+
+  const missing = '<ScreenShell headerMode="root" title="Assets"><YStack /></ScreenShell>';
+  assert.ok(validateScreenSourceContract(missing, durable, { navigationContract }).some((issue) => issue.rule === 'profile-header-action-missing'));
+});
+
+test('sticky actions require calculated scroll, tab, and safe-area clearance', () => {
+  const sticky = screen({
+    primaryAction: {
+      id: 'save-asset',
+      label: 'Save asset',
+      placement: 'sticky-bottom',
+      clearance: { safeArea: true, tabBar: 'above' },
+    },
+    testIds: ['save-asset'],
+  });
+  const valid = [
+    'const contentBottomInset = useBottomActionClearance({ actionHeight: 72, tabBarHeight: 64, spacing: 16 });',
+    'return <ScreenShell scroll={false}>',
+    '<ScrollView contentContainerStyle={{ paddingBottom: contentBottomInset }}><Text>Last record</Text></ScrollView>',
+    '<BottomActionBar safeArea tabBarClearance="above"><Button testID="save-asset">Save asset</Button></BottomActionBar>',
+    '</ScreenShell>;',
+  ].join('\n');
+  assert.deepEqual(validateScreenSourceContract(valid, sticky), []);
+
+  const clipped = '<ScreenShell scroll={false}><ScrollView><Text>Last record</Text></ScrollView><BottomActionBar safeArea tabBarClearance="above"><Button testID="save-asset">Save asset</Button></BottomActionBar></ScreenShell>';
+  const rules = new Set(validateScreenSourceContract(clipped, sticky).map((issue) => issue.rule));
+  assert.ok(rules.has('sticky-content-clearance-missing'));
+});

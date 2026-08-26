@@ -46,7 +46,7 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   human plan or a source
   for free-form Markdown parsing. No HTML or other per-domain plan files.
   Mermaid for diagrams.
-- **Per-section approval gates.** You enter plan mode four times — once per section. A rejection on any section means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
+- **Approval ownership depends on mode.** `required` and `connector-only` real-app planning keep the per-section gates below. In `prototype`, produce the complete editable plan and all planning sidecars without entering section gates; the foreground orchestrator owns one consolidated local review through `prototype-plan-review.js`. Prototype approval never authorizes external mutation.
 - **Sequential then parallel.** Spawn `data-model-architect` first (alone). Plan native capabilities and connectors inline. Only then spawn `screen-planner` — it needs the connector list to write correct per-screen service references.
 - **Dataverse planning forwarding is verbatim.** Pass the planning mode to every
   default-mode `data-model-architect` dispatch and revision. In `required`,
@@ -472,6 +472,28 @@ Write `<working_dir>/native-app-plan.md` with this structure. Use the architects
 
 ## Step 5 — Four Approval Gates
 
+### Prototype consolidated-draft override
+
+When Dataverse planning mode is `prototype`, do not enter Gate 1, Gate 2,
+Gate 4a, Gate 4b, or a separate design/cross-entity approval. Complete their
+authoring work in sequence without user pauses:
+
+1. finish the neutral domain/schema proposal;
+2. record allowlisted native capabilities and fallbacks;
+3. record future connectors as non-executable proposals;
+4. generate the full Screen Graph, five-way product navigation roles,
+   per-screen specs, Foundation Contract, and complete critical flow;
+5. perform the cross-entity audit and include any addendum in the same draft;
+6. validate every written planning artifact.
+
+Leave `## Approval Status` pending and do not mint or finalize
+`.tmp/mobile-plan-status.json`. Return `DONE` when the complete draft is ready
+for the foreground's one consolidated review. Revisions after that review edit
+only the named affected section and rerun dependent deterministic validation;
+they never restart discovery or regenerate unrelated product decisions.
+
+The individual approval gates below apply only to real-app planning modes.
+
 Enter plan mode four times. **Each gate is independent.** A rejection on one gate means revise that section only and re-enter plan mode for it. Do not move on until each section is explicitly approved.
 
 ### Gate 1 — Data Model
@@ -779,6 +801,11 @@ In `prototype` mode, verify after normalization that the contract still has
 `planningMode: "prototype"` and `executionEligible: false`; restore those
 top-level markers deterministically if normalization removed extension fields.
 
+In `prototype` mode, stop receipt work here. Do not create or finalize
+`.tmp/mobile-plan-status.json`; the foreground resolves Navigation and then
+uses `prototype-plan-review.js` for the single consolidated local review. Continue
+to Step 7 with a complete draft status.
+
 The gate-owning planner must now finalize the pre-existing
 `<working_dir>/.tmp/mobile-plan-status.json` receipt from the approved
 screen/hook/identity/lookup service requirements. The receipt has this
@@ -853,7 +880,7 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 
 | Code | When to use | Example first line |
 |---|---|---|
-| `DONE` | All 4 gates passed cleanly, plan written, no caveats | `DONE` |
+| `DONE` | Applicable real-app gates passed, or the complete prototype draft and sidecars are ready for foreground consolidated review | `DONE` |
 | `DONE_WITH_CONCERNS: <comma-separated concerns>` | Plan written and gates approved, but a sub-architect returned `DONE_WITH_CONCERNS` you propagated, or the user approved with explicit reservations | `DONE_WITH_CONCERNS: data-model-architect could not verify contact reuse, screen-planner used Tamagui default tokens` |
 | `NEEDS_CONTEXT: <what is missing>` | Cannot complete the plan without more information after the single focused experience-contract clarification has been asked | `NEEDS_CONTEXT: data-model-architect returned NEEDS_CONTEXT, requirements brief lacks entity nouns` |
 | `BLOCKED: <reason>` | Hit a hard wall — sub-architect returned `BLOCKED`, plan file cannot be written, user rejected the same gate 3 times in a row, or any pre-condition (working dir, plugin root) is missing. The orchestrator MUST escalate, never silently retry | `BLOCKED: data-model-architect returned BLOCKED: cannot write _dm_section.md` |
@@ -867,11 +894,11 @@ You MUST return your final message to `/create-mobile-app` with one of these fou
 ### Summary content (after the status line and a blank line)
 
 ```
-Plan approved.
+<Plan approved. | Prototype plan draft ready for consolidated review.>
 
 Plan document: <absolute path to native-app-plan.md>
 Dataverse schema contract: <absolute path, or "not applicable">
-Mobile plan approval receipt: <absolute path, or "not applicable">
+Mobile plan approval receipt: <absolute path, or "pending foreground consolidated review">
 
 Sections approved:
   ✓ Data model      — <N tables: M reuse, K extend, L create>

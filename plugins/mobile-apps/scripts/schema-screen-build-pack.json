@@ -4,7 +4,8 @@
   "type": "object",
   "required": ["schemaVersion", "revision", "sources", "sourcePaths", "experience", "design", "shell", "navigation", "fixtures", "screens", "buildOrder", "invalidation"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "enum": [1, 2] },
+    "screenContractVersion": { "type": "integer", "minimum": 2, "maximum": 3 },
     "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "sources": {
       "type": "object",
@@ -13,7 +14,18 @@
     },
     "sourcePaths": { "type": "object" },
     "experience": { "type": "object", "required": ["audience", "primaryJob", "entryMode", "primarySurface", "forbiddenDefaults"] },
-    "design": { "type": "object", "required": ["tokensPath", "primitives"] },
+    "design": {
+      "type": "object",
+      "required": ["tokensPath", "primitives"],
+      "properties": {
+        "tokensPath": { "type": "string" },
+        "primitives": { "type": "array" },
+        "recipe": { "type": "object" },
+        "signatureComponents": { "type": "array" },
+        "tokenSourceBindings": { "type": "object" },
+        "escapePolicy": { "type": "object" }
+      }
+    },
     "shell": {
       "type": "object",
       "required": ["safeAreaOwner", "rootSafeAreaProviderOnly", "headerModes"],
@@ -45,6 +57,20 @@
         "required": ["id", "route", "file", "role", "headerMode", "data"],
         "properties": {
           "headerMode": { "enum": ["root", "back", "close", "none"] },
+          "productRole": { "type": "string" },
+          "navigation": { "type": "object" },
+          "presentation": { "type": "object" },
+          "regions": { "type": "array" },
+          "firstViewport": { "type": ["array", "object"] },
+          "primaryAction": { "type": ["string", "object", "null"] },
+          "media": { "type": "object" },
+          "journey": { "type": "object" },
+          "actionState": { "type": "object" },
+          "signatureComponents": { "type": "array" },
+          "semanticColorRoles": { "type": "array" },
+          "capabilityComposition": { "type": "array" },
+          "layoutBudgets": { "type": "object" },
+          "contractSource": { "type": "string" },
           "data": {
             "type": "object",
             "required": ["adapter", "entities", "viewModel", "recordIdentity", "mediaPolicy", "mediaFields"],
@@ -59,8 +85,28 @@
         }
       }
     },
+    "builderWaves": { "type": "array", "minItems": 2 },
+    "productStructure": { "type": "object" },
+    "capabilityBindings": { "type": "array" },
+    "uiContractFingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "buildOrder": { "type": "array", "minItems": 3 },
     "invalidation": { "type": "object", "required": ["screenDependencies", "fixtureDependencies", "validatorDependencies"] }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": 2 } } },
+      "then": {
+        "required": ["screenContractVersion", "productStructure", "capabilityBindings", "builderWaves", "uiContractFingerprint"],
+        "properties": {
+          "design": { "required": ["tokensPath", "primitives", "recipe", "signatureComponents", "tokenSourceBindings", "escapePolicy"] },
+          "screens": {
+            "items": {
+              "required": ["productRole", "navigation", "presentation", "regions", "firstViewport", "media", "journey", "actionState", "signatureComponents", "semanticColorRoles", "capabilityComposition", "layoutBudgets", "contractSource"]
+            }
+          }
+        }
+      }
+    }
+  ]
 }

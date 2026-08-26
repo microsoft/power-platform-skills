@@ -422,6 +422,22 @@ function validateStickyAction(source, screen, elements, issues) {
       message: `Screen ${label} must keep BottomActionBar above the owning tab bar.`,
     });
   }
+  const clearanceBinding = source.match(/const\s+([A-Za-z_$][\w$]*)\s*=\s*useBottomActionClearance\s*\(/)?.[1];
+  if (!clearanceBinding) {
+    issues.push({
+      rule: 'sticky-content-clearance-missing',
+      message: `Screen ${label} must derive scroll clearance with useBottomActionClearance (action + tabs + safe area + spacing).`,
+    });
+  } else {
+    const binding = escapeRegExp(clearanceBinding);
+    const contentPadding = new RegExp(`(?:paddingBottom\\s*:\\s*${binding}|pb\\s*=\\s*\\{\\s*${binding}\\s*\\})`).test(source);
+    if (!contentPadding) {
+      issues.push({
+        rule: 'sticky-scroll-padding-missing',
+        message: `Screen ${label} must apply ${clearanceBinding} to scroll content bottom padding so the final item clears action, tabs, and safe area.`,
+      });
+    }
+  }
   const scrollViews = elements.filter((element) => element.name === 'ScrollView');
   if (bars.every((bar) => scrollViews.some((scroll) => elementContains(scroll, bar)))) {
     issues.push({
@@ -442,6 +458,23 @@ function validateStickyAction(source, screen, elements, issues) {
     issues.push({
       rule: 'sticky-action-content-drift',
       message: `Screen ${label} has a BottomActionBar, but the contracted ${screen.primaryAction.label} action is not evidenced inside it.`,
+    });
+  }
+}
+
+function validateProfileAccess(source, screen, elements, issues, options) {
+  const policy = options.navigationContract?.globalRoutePolicy;
+  if (policy?.profileAccess !== 'header-action' || screen.navigation?.role !== 'durable-destination') return;
+  const label = screen.route || screen.id || '<unknown>';
+  const shell = elements.find((element) => element.name === 'ScreenShell');
+  const hasRightAction = Boolean(shell && /\brightAction\s*=/.test(shell.openTag));
+  const hasProfileRoute = source.includes(policy.profileRoute || '/(app)/profile');
+  const hasAccessibleLabel = /(?:accessibilityLabel|aria-label)\s*=\s*["'][^"']*profile[^"']*["']/i.test(source)
+    || />\s*Profile\s*</i.test(source);
+  if (!hasRightAction || !hasProfileRoute || !hasAccessibleLabel) {
+    issues.push({
+      rule: 'profile-header-action-missing',
+      message: `Durable root ${label} must expose a labeled ScreenShell rightAction to ${policy.profileRoute || '/(app)/profile'}.`,
     });
   }
 }
@@ -513,6 +546,7 @@ function validateScreenSourceContract(source, screen, options = {}) {
   validateStaticEngineeringRules(source, screen, elements, issues, options);
   validateContextRendering(source, screen, elements, issues);
   validateStickyAction(source, screen, elements, issues);
+  validateProfileAccess(source, screen, elements, issues, options);
   validateVisiblePrimaryAction(source, screen, elements, issues);
   validateFirstViewportSource(source, screen, elements, issues);
   validateAvailabilityBinding(source, screen, elements, issues);
@@ -531,6 +565,7 @@ module.exports = {
   actionMarkerCandidates,
   jsxElements,
   regionMarkerCandidates,
+  validateProfileAccess,
   validateStaticEngineeringRules,
   validateScreenSourceContract,
 };

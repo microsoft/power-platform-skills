@@ -608,8 +608,12 @@ function validateV3Operations(screenContract, contract, context, errors) {
     }
     if (new Set(parameterNames).size !== parameterNames.length) errors.push(`screens[${screenIndex}].routeParameters names must be unique`);
     const declared = new Map((screen.routeParameters || []).map((parameter) => [parameter.name, parameter]));
-    for (const parameter of pathParameters(screen.route)) {
+    const dynamicPathParameters = new Set(pathParameters(screen.route));
+    for (const parameter of dynamicPathParameters) {
       if (declared.get(parameter)?.source !== 'path' || declared.get(parameter)?.required !== true) errors.push(`screens[${screenIndex}] path parameter ${parameter} must be declared as a required path parameter`);
+    }
+    for (const parameter of screen.routeParameters || []) {
+      if (parameter?.source === 'path' && !dynamicPathParameters.has(parameter.name)) errors.push(`screens[${screenIndex}] declared path parameter ${parameter.name} is absent from route ${screen.route}`);
     }
     if (!Array.isArray(screen.data?.operations)) {
       errors.push(`screens[${screenIndex}].data.operations must be an array in schema version 3`);
@@ -635,7 +639,7 @@ function validateV3Operations(screenContract, contract, context, errors) {
   if (duplicates.length) errors.push(`operation ids must be unique: ${[...new Set(duplicates)].join(', ')}`);
   const navigationModel = context.navigationContract?.model || contract?.navigationModel;
   if (['tabs-stack', 'drawer'].includes(navigationModel)) {
-    if (navigationModel === 'tabs-stack' && (tabRoots.length < 3 || tabRoots.length > 5)) errors.push('tabs-stack navigation requires 3-5 declared tab-root screens');
+    if (navigationModel === 'tabs-stack' && (tabRoots.length < 2 || tabRoots.length > 5)) errors.push('tabs-stack navigation requires 2-5 declared tab-root screens');
     if (navigationModel === 'drawer' && tabRoots.length <= 5) errors.push('drawer navigation requires more than five declared destination roots');
     const primary = screenContract.screens.find((screen) => screen.role === 'primary');
     if (primary?.navigation?.kind !== 'tab-root') errors.push('tabs-stack primary screen must be a tab root');

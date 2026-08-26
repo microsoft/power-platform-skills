@@ -33,6 +33,17 @@ function screen(id, role, purpose, navigation = {}, route = `/(app)/${id.toLower
   return { id, role, purpose, route, file: `app/(app)/${id.toLowerCase()}.tsx`, routeParameters: [], header: { mode: role === 'primary' ? 'root' : 'back', title: id }, navigation: { kind: role === 'primary' ? 'stack-root' : 'pushed', intent: role === 'primary' ? 'replace' : 'push', ...navigation } };
 }
 
+function profileScreen() {
+  return screen('Profile', 'supporting', 'Review account context, preferences, help, and sign out.', {
+    candidate: candidate({
+      hasStableRoot: false,
+      revisitedIndependently: false,
+      peerToOtherDestinations: false,
+      supportedByBriefOrSafeProductInference: false,
+    }),
+  }, '/(app)/profile');
+}
+
 function contracts(brief, screens, stages = []) {
   const experience = deriveExperienceFromBrief(brief);
   const context = resolveContextEnrichment(brief, experience);
@@ -51,6 +62,7 @@ test('multi-record resumable work resolves durable peers to tabs and keeps captu
     screen('Drafts', 'supporting', 'Resume saved offline drafts.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Drafts' }),
     screen('Capture', 'key-flow', 'Capture evidence for the active record.', { kind: 'modal', candidate: candidate({ revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false, isNotAnAction: false }), parentRoute: '/(app)/records' }),
     screen('Review', 'supporting', 'Review the current task before completion.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/records' }),
+    profileScreen(),
   ];
   const value = contracts(brief, screens, [{ id: 'capture', label: 'Capture', order: 1, screenIds: ['Capture'], completionRuleId: 'stage-capture-complete' }, { id: 'review', label: 'Review', order: 2, screenIds: ['Review'], completionRuleId: 'stage-review-complete' }]);
   assert.equal(value.contract.model, 'tabs-stack');
@@ -58,6 +70,8 @@ test('multi-record resumable work resolves durable peers to tabs and keeps captu
   assert.equal(value.contract.destinations.some((item) => /Capture|Review/.test(item.label)), false);
   assert.equal(value.contract.flows.find((flow) => flow.screenIds.includes('Capture')).presentation, 'full-screen-modal');
   assert.equal(value.screenContract.screens.find((item) => item.id === 'Capture').navigation.destinationId, 'records');
+  assert.equal(value.screenContract.screens.find((item) => item.id === 'Profile').navigation.role, 'global-utility');
+  assert.deepEqual(value.contract.globalRoutePolicy.profileReachableFromDestinationIds, ['home', 'records', 'drafts']);
   assert.deepEqual(validateNavigationContract(value.contract, { experienceContract: value.experience, workflowJourney: value.workflow, screenContract: value.screenContract }).errors, []);
 });
 
@@ -70,6 +84,7 @@ test('multiple roles and records cannot be locked to stack by an active capture 
     screen('History', 'supporting', 'Revisit completed work independently.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'History' }),
     screen('Capture', 'key-flow', 'Capture evidence for one assignment.', { kind: 'modal', parentRoute: '/(app)/assignments', candidate: candidate({ revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false, isNotAnAction: false }) }),
     screen('Review', 'supporting', 'Review the active assignment before completion.', { parentRoute: '/(app)/assignments', candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }) }),
+    profileScreen(),
   ];
   const value = contracts(brief, screens, [
     { id: 'capture', label: 'Capture', order: 1, screenIds: ['Capture'], completionRuleId: 'stage-capture-complete' },
@@ -90,20 +105,38 @@ test('single bounded capture utility remains an evidence-backed stack', () => {
   const screens = [
     screen('Capture', 'primary', 'Scan one item and continue.', { candidate: candidate() }, '/(app)/capture'),
     screen('Review', 'key-flow', 'Review the captured item.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/capture' }, '/(app)/review'),
+    profileScreen(),
   ];
   const value = contracts(brief, screens);
   assert.equal(value.contract.model, 'stack');
-  assert.match(value.contract.decision.stackOnlyReason, /Fewer than three durable peer destinations/);
+  assert.match(value.contract.decision.stackOnlyReason, /Fewer than two durable peer destinations/);
   assert.ok(value.contract.decision.stackOnlyEvidence.length > 0);
   assert.equal(value.contract.destinations.length, 1);
+});
+
+test('two independently revisited durable destinations use tabs-stack and own nested details', () => {
+  const brief = 'Let people browse the Shop and repeatedly review their saved Bag while product details remain nested.';
+  const screens = [
+    screen('Shop', 'primary', 'Browse and revisit the product catalog.', { candidate: candidate(), tabLabel: 'Shop' }),
+    screen('Bag', 'supporting', 'Review and revisit saved bag items.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Bag' }),
+    screen('ProductDetail', 'key-flow', 'Inspect one product before adding it.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/shop' }, '/(app)/shop/product/[productId]'),
+    profileScreen(),
+  ];
+  const value = contracts(brief, screens);
+  assert.equal(value.contract.model, 'tabs-stack');
+  assert.deepEqual(value.contract.destinations.map((item) => item.label), ['Shop', 'Bag']);
+  assert.equal(value.screenContract.screens.find((item) => item.id === 'ProductDetail').navigation.destinationId, 'shop');
+  assert.equal(value.screenContract.screens.find((item) => item.id === 'ProductDetail').navigation.tabVisibility, 'visible');
+  assert.deepEqual(validateNavigationContract(value.contract, { experienceContract: value.experience, workflowJourney: value.workflow, screenContract: value.screenContract }).errors, []);
 });
 
 test('bounded onboarding remains stack-only without invented Home or tabs', () => {
   const brief = 'Guide a new user through welcome, profile setup, and confirmation once. The flow has a clear exit and no independently revisited destinations.';
   const screens = [
     screen('Welcome', 'primary', 'Understand the guided setup and begin.', { candidate: candidate() }, '/(app)/welcome'),
-    screen('Profile', 'key-flow', 'Enter the required profile details.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/welcome' }, '/(app)/profile'),
-    screen('Confirm', 'key-flow', 'Review and finish onboarding.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/profile' }, '/(app)/confirm'),
+    screen('SetupProfile', 'key-flow', 'Enter the required profile details.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/welcome' }, '/(app)/onboarding/profile'),
+    screen('Confirm', 'key-flow', 'Review and finish onboarding.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/onboarding/profile' }, '/(app)/confirm'),
+    profileScreen(),
   ];
   const value = contracts(brief, screens);
   assert.equal(value.contract.model, 'stack');
@@ -121,6 +154,7 @@ test('navigation resolution is independent of domain adapters and overrides a co
     screen('Library', 'supporting', 'Browse and revisit the learning library.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Library' }),
     screen('Progress', 'supporting', 'Understand progress across sessions.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Progress' }),
     screen('Lesson', 'key-flow', 'Complete the current lesson.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/library' }),
+    profileScreen(),
   ];
   const value = contracts(brief, screens);
   value.experience.navigationModel = 'stack';
@@ -136,6 +170,7 @@ test('validation rejects action destinations and unowned screens', () => {
   const value = contracts('Open Home and saved Drafts, then submit current work.', [
     screen('Home', 'primary', 'Open current state.', { candidate: candidate() }),
     screen('Drafts', 'supporting', 'Resume saved drafts.', { kind: 'stack-root', candidate: candidate() }),
+    profileScreen(),
   ]);
   value.contract.destinations[0].label = 'Submit';
   value.contract.flows = [];
@@ -152,6 +187,7 @@ test('continuity rejects ordinary details that lose tabs or destination ownershi
     screen('Records', 'supporting', 'Find ongoing records.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Records' }),
     screen('Drafts', 'supporting', 'Resume saved drafts.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Drafts' }),
     screen('RecordDetail', 'key-flow', 'Inspect one record.', { parentRoute: '/(app)/records' }, '/(app)/records/[id]'),
+    profileScreen(),
   ];
   const value = contracts(brief, screens);
   const pack = { navigation: value.contract, journey: value.workflow, screens: value.screenContract.screens };
@@ -173,6 +209,7 @@ test('foreground CLI attaches Navigation and the aligned Screen Graph to a stage
     screen('Home', 'primary', 'Understand current work.', { candidate: candidate(), tabLabel: 'Home' }),
     screen('Records', 'supporting', 'Find ongoing records.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Records' }),
     screen('Drafts', 'supporting', 'Resume saved drafts.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Drafts' }),
+    profileScreen(),
   ];
   const value = contracts(brief, screens);
   fs.writeFileSync(path.join(root, 'brief.md'), brief);

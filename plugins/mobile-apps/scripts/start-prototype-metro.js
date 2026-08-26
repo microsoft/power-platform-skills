@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { validateRouteManifest } = require('./route-manifest');
 
 const METRO_EVIDENCE_PATH = '.tmp/prototype-metro-evidence.json';
 
@@ -65,11 +66,33 @@ function writeAtomic(filePath, value) {
   }
 }
 
+function validateCanaryReadiness(projectRoot, options = {}) {
+  const root = fs.realpathSync(path.resolve(projectRoot));
+  const pack = JSON.parse(fs.readFileSync(path.resolve(root, options.packPath || '.tmp/screen-build-pack.json'), 'utf8'));
+  const manifest = JSON.parse(fs.readFileSync(path.resolve(root, options.routeManifestPath || '.tmp/route-manifest.json'), 'utf8'));
+  const errors = validateRouteManifest(manifest, pack);
+  if (errors.length) throw new Error(`route manifest is invalid: ${errors.join('; ')}`);
+  const canary = (pack.builderWaves || []).find((wave) => wave.id === 'native-canary' && wave.kind === 'screen');
+  if (!canary?.targets?.length) throw new Error('screen build pack has no native-canary wave');
+  for (const screenId of canary.targets) {
+    const screen = (pack.screens || []).find((candidate) => candidate.id === screenId);
+    const route = manifest.routes.find((candidate) => candidate.id === screenId);
+    if (!screen || !route) throw new Error(`native canary screen is missing: ${screenId}`);
+    if (!['type-safe', 'available-in-metro', 'reviewed'].includes(route.buildStatus)) throw new Error(`native canary screen ${screenId} is not type-safe`);
+    const sourcePath = path.resolve(root, screen.file);
+    if (!sourcePath.startsWith(`${root}${path.sep}`) || !fs.existsSync(sourcePath)) throw new Error(`native canary source is missing: ${screen.file}`);
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    if (/TODO:\s*screen-builder fills JSX here|return\s+null\s*;/.test(source)) throw new Error(`native canary screen ${screenId} is still a skeleton`);
+  }
+  return { packRevision: pack.revision, screenIds: [...canary.targets] };
+}
+
 async function startPrototypeMetro(projectRoot, options = {}) {
   const root = fs.realpathSync(path.resolve(projectRoot));
+  const canary = options.requireCanary ? validateCanaryReadiness(root, options) : null;
   const port = await selectMetroPort(options.preferredPort || 8081, options.maximumPort || (options.preferredPort || 8081) + 20);
   const command = ['npm', '--prefix', root, 'run', 'dev', '--', '--port', String(port), '--non-interactive'];
-  if (options.planOnly) return { port, command, cwd: root, status: 'planned' };
+  if (options.planOnly) return { port, command, cwd: root, status: 'planned', canary };
   const logPath = path.join(root, '.tmp', 'prototype-metro.log');
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const log = fs.openSync(logPath, 'a');
@@ -105,6 +128,7 @@ async function startPrototypeMetro(projectRoot, options = {}) {
     previewStatus: 'Metro ready',
     readyAt: new Date().toISOString(),
     startupDurationMs: readiness.durationMs,
+    canary,
     logPath: path.relative(root, logPath).replace(/\\/g, '/'),
   };
   writeAtomic(path.join(root, METRO_EVIDENCE_PATH), result);
@@ -117,6 +141,7 @@ async function main(argv) {
     if (argv[index] === '--project-root') args.projectRoot = argv[++index];
     else if (argv[index] === '--preferred-port') args.preferredPort = Number(argv[++index]);
     else if (argv[index] === '--plan-only') args.planOnly = true;
+    else if (argv[index] === '--require-canary') args.requireCanary = true;
     else if (argv[index] === '--patch-file') args.patchFile = argv[++index];
     else if (argv[index] === '--search') args.search = argv[++index];
     else if (argv[index] === '--replacement') args.replacement = argv[++index];
@@ -148,4 +173,4 @@ async function main(argv) {
 
 if (require.main === module) main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 
-module.exports = { METRO_EVIDENCE_PATH, patchTextPreservingEol, portAvailable, probeMetroStatus, selectMetroPort, startPrototypeMetro, waitForMetroReady };
+module.exports = { METRO_EVIDENCE_PATH, patchTextPreservingEol, portAvailable, probeMetroStatus, selectMetroPort, startPrototypeMetro, validateCanaryReadiness, waitForMetroReady };

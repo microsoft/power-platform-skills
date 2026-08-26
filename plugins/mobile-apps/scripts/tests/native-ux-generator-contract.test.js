@@ -39,12 +39,16 @@ test('explicit CDN media and category context remain policy-driven planning inpu
 
 test('design-system records brand role and source without recoloring product brands', () => {
   const designSystem = read('skills/design-system/SKILL.md');
+  const automatic = read('skills/design-system/automatic-native.md');
+  const optional = read('skills/design-system/optional-modes.md');
   const schema = read('skills/design-system/references/design-system-schema.md');
-  assert.match(designSystem, /resolve-brand-context\.js/);
-  assert.match(designSystem, /product brand sold[\s\S]*cannot recolor the[\s\S]*host app/i);
-  assert.match(designSystem, /Brand role: \{\{brand-context\.brandRole\}\}/);
-  assert.match(designSystem, /Brand source: \{\{brand-context\.brandSource\}\}/);
-  assert.match(designSystem, /protected[-\s]mark/i);
+  assert.match(designSystem, /automatic-native\.md/);
+  assert.match(designSystem, /optional-modes\.md/);
+  assert.doesNotMatch(designSystem, /resolve-brand-context\.js/);
+  assert.match(optional, /resolve-brand-context\.js/);
+  assert.match(optional, /product or\s+integration[\s\S]*does not recolor the host app/i);
+  assert.match(optional, /protected|official colors|marks/i);
+  assert.match(automatic, /named organization[\s\S]*app owner/i);
   assert.match(schema, /Brand role: \{\{app-brand \| product-brand \| integration \| unknown\}\}/);
   assert.match(schema, /Brand source: \{\{supplied \| explicit \| inferred \| none\}\}/);
 });

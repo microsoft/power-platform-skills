@@ -72,14 +72,18 @@
     },
     "globalRoutePolicy": {
       "type": "object",
-      "required": ["homeReturnRequired", "deepLinksRestoreOwningDestination", "tabReselectBehavior", "backBehavior", "unknownRouteBehavior", "logoutDestination"],
+      "required": ["homeReturnRequired", "deepLinksRestoreOwningDestination", "tabReselectBehavior", "backBehavior", "unknownRouteBehavior", "logoutDestination", "profileScreenId", "profileRoute", "profileAccess", "profileReachableFromDestinationIds"],
       "properties": {
         "homeReturnRequired": { "type": "boolean" },
         "deepLinksRestoreOwningDestination": { "const": true },
         "tabReselectBehavior": { "enum": ["pop-owner-stack-to-root", "not-applicable"] },
         "backBehavior": { "const": "nearest-stack-then-system" },
         "unknownRouteBehavior": { "const": "safe-root" },
-        "logoutDestination": { "const": "/login" }
+        "logoutDestination": { "const": "/login" },
+        "profileScreenId": { "type": "string", "minLength": 1 },
+        "profileRoute": { "const": "/(app)/profile" },
+        "profileAccess": { "enum": ["destination", "header-action", "settings-destination"] },
+        "profileReachableFromDestinationIds": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "uniqueItems": true }
       },
       "additionalProperties": false
     },

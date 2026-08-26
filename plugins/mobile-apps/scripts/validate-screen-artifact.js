@@ -167,6 +167,7 @@ function validateSource(source, screen, pack, projectRoot, errors) {
   }
   for (const issue of validateScreenSourceContract(source, screen, {
     minimumControlSize: pack.design?.recipe?.spacing?.minimumControlSize || 44,
+    navigationContract: pack.navigation,
   })) {
     errors.push(`artifact source ${issue.rule}: ${issue.message}`);
   }

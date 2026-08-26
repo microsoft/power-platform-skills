@@ -54,7 +54,7 @@ test('brief-only contracts choose entry mode without a visual reference', () => 
   }
 });
 
-test('passenger shopping briefs resolve to local-first product discovery, not operations', () => {
+test('passenger shopping briefs resolve to cached product discovery, not operations', () => {
   const variants = [
     passengerShoppingBrief,
     'Let passengers shop in-flight for travel accessories, beauty products, and watches. Keep the product browse screen clean and accessible.',
@@ -68,7 +68,7 @@ test('passenger shopping briefs resolve to local-first product discovery, not op
     assert.equal(contract.entryMode, 'discovery');
     assert.equal(contract.primarySurface, 'product-led-discovery');
     assert.deepEqual(contract.contentModel, ['products', 'categories', 'media', 'cart']);
-    assert.deepEqual(contract.assetPolicy, { connectivity: 'network-optional', media: 'local-first' });
+    assert.deepEqual(contract.assetPolicy, { connectivity: 'network-optional', media: 'remote-cdn-cached' });
     assert.equal(contract.navigationModel, 'stack');
     assert.equal(contract.signatureMotifs.includes('cart-action'), true);
     assert.equal(contract.forbiddenDefaults.includes('warehouse-operations'), true);
@@ -105,6 +105,7 @@ test('exact UX benchmark briefs preserve distinct product-appropriate Home contr
   assert.equal(receiving.primarySurface, 'task-led-workflow');
   assert.equal(receiving.assetPolicy.connectivity, 'offline-preferred');
   assert.equal(receiving.assetPolicy.media, 'local-first');
+  assert.equal(receiving.promptEvidence.assetPolicy.some((span) => span.signal === 'offline'), true);
   assert.notEqual(receiving.primarySurface, 'capture-led-utility');
 
   for (const contract of [passenger, gym, assets, receiving]) {
@@ -113,7 +114,13 @@ test('exact UX benchmark briefs preserve distinct product-appropriate Home contr
   }
 });
 
-test('an explicit CDN-cached media decision overrides the inferred local-first media policy', () => {
+test('offline-preferred connectivity requires explicit prompt evidence', () => {
+  const contract = deriveExperienceFromBrief(passengerShoppingBrief);
+  contract.assetPolicy.connectivity = 'offline-preferred';
+  assert.match(validateExperienceContract(contract).join('\n'), /requires explicit offline prompt evidence/);
+});
+
+test('an explicit CDN-cached media decision preserves the inferred connected media policy', () => {
   const contract = deriveExperienceFromBrief(passengerShoppingBrief, { mediaPolicy: 'remote-cdn-cached' });
   assert.deepEqual(contract.assetPolicy, { connectivity: 'network-optional', media: 'remote-cdn-cached' });
   assert.equal(contract.assumptions.includes('Use the explicitly selected remote-cdn-cached media policy.'), true);
@@ -281,7 +288,7 @@ test('experience validator binds contract, plan, screen sidecar, and built ancho
 test('local-first product foundations reject remote media URLs', (context) => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'experience-local-media-'));
   context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
-  const contract = deriveExperienceFromBrief(passengerShoppingBrief);
+  const contract = deriveExperienceFromBrief(`${passengerShoppingBrief}\nThis catalog must work offline with no network.`);
   const composition = primaryComposition(contract);
   const foundation = foundationContract(contract);
   fs.mkdirSync(path.join(projectRoot, '.tmp'), { recursive: true });
@@ -355,8 +362,7 @@ test('shopping and warehouse contracts produce distinct seed content and media p
 
   assert.match(shopRow.name, /Travel organizer|Hydration essentials kit|Skin care set|Classic travel watch/);
   assert.match(shopRow.status, /Available|Featured|Popular|Limited/);
-  assert.match(shopRow.image, /^asset:\/\/experience\//);
-  assert.doesNotMatch(shopRow.image, /^https?:\/\//);
+  assert.match(shopRow.image, /^https:\/\/images\.unsplash\.com\//);
   assert.match(warehouseRow.name, /Bin A-14|Receiving Dock 3|Aisle 7|Returns hold/);
   assert.match(warehouseRow.status, /Assigned|Scanning|Needs recount|Complete/);
   assert.notEqual(shopRow.name, warehouseRow.name);

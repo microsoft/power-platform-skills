@@ -11,16 +11,16 @@ function validateNavigationContinuity(pack) {
   const screens = new Map((pack.screens || []).map((screen) => [screen.id, screen]));
   for (const destination of destinations.values()) {
     const root = screens.get(destination.rootScreenId);
-    if (!root || root.navigation?.destinationId !== destination.id || root.navigation?.role !== 'destination-root') issues.push({ rule: 'destination-root-drift', screenId: destination.rootScreenId, message: `Destination ${destination.id} root does not match the Screen Contract.` });
+    if (!root || root.navigation?.destinationId !== destination.id || !['durable-destination', 'destination-root'].includes(root.navigation?.role)) issues.push({ rule: 'destination-root-drift', screenId: destination.rootScreenId, message: `Destination ${destination.id} root does not match the Screen Contract.` });
     if (pack.navigation.model === 'tabs-stack' && (!destination.label || !destination.iconIntent || !destination.testId)) issues.push({ rule: 'tab-accessibility-missing', screenId: destination.rootScreenId, message: `Destination ${destination.id} lacks label, icon, or test ID.` });
   }
   for (const screen of screens.values()) {
     const destinationId = screen.navigation?.destinationId;
     if (!destinations.has(destinationId)) issues.push({ rule: 'screen-owner-missing', screenId: screen.id, message: `Screen ${screen.id} has no valid destination owner.` });
-    if (screen.navigation?.role === 'destination-root') continue;
+    if (['durable-destination', 'destination-root'].includes(screen.navigation?.role)) continue;
     const flow = flowByScreen.get(screen.id);
     if (!flow || flow.ownerDestinationId !== destinationId) issues.push({ rule: 'flow-owner-drift', screenId: screen.id, message: `Screen ${screen.id} flow owner does not match its destination.` });
-    if (screen.navigation?.role === 'modal-flow') {
+    if (['immersive-modal', 'modal-flow'].includes(screen.navigation?.role)) {
       if (screen.navigation.tabVisibility !== 'covered-by-modal' || !screen.navigation.cancelTarget || !screen.navigation.completionTarget) issues.push({ rule: 'modal-return-policy-missing', screenId: screen.id, message: `Modal screen ${screen.id} lacks covered-tab and return targets.` });
     } else if (pack.navigation.model === 'tabs-stack' && screen.navigation?.tabVisibility !== 'visible') {
       issues.push({ rule: 'ordinary-detail-hides-tabs', screenId: screen.id, message: `Ordinary nested screen ${screen.id} unexpectedly hides persistent navigation.` });
@@ -33,6 +33,12 @@ function validateNavigationContinuity(pack) {
     if (owners.size > 1) issues.push({ rule: 'journey-stage-owner-drift', message: `Journey stage ${stage.id} crosses destination owners.` });
   }
   if (pack.navigation?.globalRoutePolicy?.homeReturnRequired && !destinations.has(pack.navigation.initialDestinationId)) issues.push({ rule: 'global-home-return-missing', message: 'Navigation requires a global return but initial destination is unavailable.' });
+  const profilePolicy = pack.navigation?.globalRoutePolicy;
+  const profile = screens.get(profilePolicy?.profileScreenId);
+  if (!profile || profile.route !== profilePolicy.profileRoute) issues.push({ rule: 'profile-route-missing', message: 'Profile route is absent from the Screen Contract.' });
+  for (const destinationId of destinations.keys()) {
+    if (!(profilePolicy?.profileReachableFromDestinationIds || []).includes(destinationId)) issues.push({ rule: 'profile-unreachable', message: `Profile is not reachable from ${destinationId}.` });
+  }
   return issues;
 }
 

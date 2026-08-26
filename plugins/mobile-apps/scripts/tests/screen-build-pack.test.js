@@ -8,8 +8,12 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { compileScreenBuildPack } = require('../compile-screen-build-pack');
+const { compileScreenBuildPack, parseScreenMap } = require('../compile-screen-build-pack');
 const { deriveExperienceFromBrief, foundationContract, primaryComposition } = require('../experience-patterns');
+const { normalizeScreenContract } = require('../lib/experience-screen-contract');
+const { resolveContextEnrichment } = require('../resolve-context-enrichment');
+const { resolveNavigationContract } = require('../resolve-navigation-contract');
+const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
 const { validateScreenBuildPack } = require('../validate-screen-build-pack');
 
 const passengerBrief = [
@@ -62,6 +66,61 @@ function createProject(context) {
   return { root, contract };
 }
 
+function createRichProject(context) {
+  const value = createProject(context);
+  const { root, contract } = value;
+  const planPath = path.join(root, 'native-app-plan.md');
+  fs.appendFileSync(planPath, '\n| Profile | /(app)/profile | app/(app)/profile.tsx |\n');
+  const foundation = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-foundation-contract.json'), 'utf8'));
+  const legacy = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'));
+  const normalized = normalizeScreenContract(
+    legacy,
+    contract,
+    parseScreenMap(fs.readFileSync(planPath, 'utf8')),
+    foundation.primitives.map((primitive) => primitive.component),
+  ).map((screen) => {
+    const durable = ['Home', 'Cart'].includes(screen.id);
+    const profile = screen.id === 'Profile';
+    return {
+      ...screen,
+      contractSource: 'structured',
+      routeParameters: [],
+      productRole: durable ? 'durable-destination' : profile ? 'global-utility' : 'nested-detail',
+      navigation: durable
+        ? { kind: 'stack-root', intent: 'navigate', candidate: {
+            hasStableRoot: true, revisitedIndependently: true, preservesOwnState: true,
+            crossSessionValue: screen.id === 'Cart', peerToOtherDestinations: true,
+            isNotAFlowStep: true, isNotAnAction: true,
+            supportedByBriefOrSafeProductInference: true, badgeBinding: null,
+            iconIntent: screen.id === 'Home' ? 'home' : 'bag',
+          } }
+        : { kind: 'pushed', intent: 'push', parentRoute: '/(app)/home', candidate: {
+            hasStableRoot: false, revisitedIndependently: false, preservesOwnState: false,
+            crossSessionValue: false, peerToOtherDestinations: false,
+            isNotAFlowStep: !profile, isNotAnAction: true,
+            supportedByBriefOrSafeProductInference: false, badgeBinding: null,
+            iconIntent: profile ? 'profile' : 'browse',
+          } },
+      data: { ...screen.data, operations: [] },
+      ...(profile ? { header: { mode: 'root', title: 'Profile' } } : {}),
+    };
+  });
+  const preliminary = {
+    ...legacy,
+    schemaVersion: 2,
+    criticalFlow: { screenIds: ['Home', 'ProductsId'], outcome: 'Inspect a product before adding it to the bag.' },
+    screens: normalized,
+  };
+  const contextContract = resolveContextEnrichment(passengerBrief, contract);
+  const journey = resolveWorkflowJourney(passengerBrief, contract, contextContract, { screenContract: preliminary });
+  const navigation = resolveNavigationContract(passengerBrief, contract, journey, preliminary);
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), `${JSON.stringify(contextContract, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), `${JSON.stringify(journey, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'navigation-contract.json'), `${JSON.stringify(navigation.contract, null, 2)}\n`);
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify(navigation.screenContract, null, 2)}\n`);
+  return value;
+}
+
 test('fails clearly when a canonical source is missing', (context) => {
   const { root } = createProject(context);
   fs.rmSync(path.join(root, 'brand', 'tokens.ts'));
@@ -77,12 +136,12 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
   assert.deepEqual(pack.fixtures, {
     adapter: 'local',
     entities: ['Product', 'Category', 'Cart item'],
-    assetPolicy: 'local-first',
+    assetPolicy: 'remote-cdn-cached',
     dataIntentPath: '.tmp/dataverse-schema-contract.json',
     assetManifest: 'assets/experience/manifest.json',
     viewModel: 'src/generated/experience-view-model.ts',
     recordIdentity: 'stable-primary-key',
-    mediaPolicy: 'local-first',
+    mediaPolicy: 'remote-cdn-cached',
     mediaManifest: 'assets/experience/manifest.json',
     mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
   });
@@ -106,7 +165,7 @@ test('compiles a passenger discovery build pack from canonical contracts', (cont
     entities: ['Product', 'Category', 'Cart item'],
     viewModel: 'src/generated/experience-view-model.ts',
     recordIdentity: 'stable-primary-key',
-    mediaPolicy: 'local-first',
+    mediaPolicy: 'remote-cdn-cached',
     mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
   });
   assert.ok(home.dependencies.includes('fixture:Product'));
@@ -140,4 +199,21 @@ test('prototype mock generation records the consumed pack revision', (context) =
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'src', 'generated', '.prototype-manifest.json'), 'utf8'));
   assert.equal(manifest.screenBuildPackRevision, pack.revision);
   assert.equal(manifest.experienceContractSource, '.tmp/screen-build-pack.json#experience');
+});
+
+test('rich Screen Contracts compile into the V3 validator-owned build-pack shape', (context) => {
+  const { root } = createRichProject(context);
+  const pack = compileScreenBuildPack(root);
+  assert.equal(pack.schemaVersion, 2);
+  assert.equal(pack.screenContractVersion, 2);
+  assert.equal(pack.navigation.model, 'tabs-stack');
+  assert.deepEqual(pack.navigation.globalRoutePolicy.profileReachableFromDestinationIds, ['home', 'cart']);
+  assert.deepEqual(pack.design.recipe.cardRecipes.map((recipe) => recipe.id), [
+    'FeatureCard', 'ProductCard', 'RecordRow', 'ResumeCard', 'CategoryTile', 'StatusSummary',
+  ]);
+  assert.deepEqual(pack.builderWaves.map((wave) => wave.id), ['foundations', 'native-canary', 'supporting-1']);
+  assert.deepEqual(pack.builderWaves.find((wave) => wave.id === 'native-canary').targets, ['Home', 'ProductsId']);
+  assert.equal(pack.screens.find((screen) => screen.id === 'Profile').navigation.role, 'global-utility');
+  assert.equal(pack.screens.every((screen) => screen.presentation && screen.layoutBudgets && screen.semanticColorRoles), true);
+  assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
 });

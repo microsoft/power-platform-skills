@@ -7,6 +7,7 @@ const path = require('node:path');
 const { contractHash } = require('./experience-patterns');
 const { parseScreenMap } = require('./compile-screen-build-pack');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
+const { inferIconIntent } = require('./lib/navigation-icons');
 const { stableStringify } = require('./resolve-context-enrichment');
 const { workflowJourneyRevision } = require('./resolve-workflow-journey');
 
@@ -77,16 +78,32 @@ function destinationLabel(screen) {
   return String(screen.navigation?.tabLabel || screen.header?.title || screen.id).replace(/([a-z])([A-Z])/g, '$1 $2').trim();
 }
 
-function iconIntent(label) {
-  const value = label.toLowerCase();
-  if (/home|today|overview/.test(value)) return 'home';
-  if (/draft|saved/.test(value)) return 'draft';
-  if (/inbox|message|conversation/.test(value)) return 'inbox';
-  if (/history|activity/.test(value)) return 'history';
-  if (/profile|account/.test(value)) return 'person';
-  if (/setting|preference/.test(value)) return 'settings';
-  if (/library|catalog|shop|browse/.test(value)) return 'browse';
-  return 'list';
+function isProfileScreen(screen) {
+  return screen?.route === '/(app)/profile'
+    || screen?.file === 'app/(app)/profile.tsx'
+    || String(screen?.id || '').toLowerCase() === 'profile';
+}
+
+function navigationRole(screen, { destination = false, stage = null, presentation = null } = {}) {
+  if (destination) return 'durable-destination';
+  if (isProfileScreen(screen) || screen?.productRole === 'global-utility') return 'global-utility';
+  if (presentation === 'full-screen-modal'
+    || ['capture-surface', 'immersive-utility', 'immersive-modal'].includes(screen?.productRole)) return 'immersive-modal';
+  if (stage || ['workflow-step', 'bounded-flow-step'].includes(screen?.productRole)) return 'bounded-flow-step';
+  return 'nested-detail';
+}
+
+function profilePolicy(screens, destinations) {
+  const profiles = screens.filter(isProfileScreen);
+  if (profiles.length !== 1) throw new Error(`screen graph requires exactly one Profile screen; found ${profiles.length}`);
+  const profile = profiles[0];
+  const destination = destinations.find((item) => item.rootScreenId === profile.id);
+  return {
+    profileScreenId: profile.id,
+    profileRoute: profile.route,
+    profileAccess: destination ? 'destination' : 'header-action',
+    profileReachableFromDestinationIds: destinations.map((item) => item.id),
+  };
 }
 
 function ownerForScreen(screen, destinations, screenByRoute) {
@@ -122,7 +139,7 @@ function applyNavigationContractToScreenGraph(screenContract, contract) {
             intent: contract.model === 'stack' ? 'replace' : 'navigate',
             ...(contract.model === 'stack' ? {} : { tabLabel: destination.label }),
             destinationId: destination.id,
-            role: 'destination-root',
+            role: 'durable-destination',
             presentation: 'root',
             tabVisibility: contract.model === 'stack' ? 'not-applicable' : 'visible',
             backTarget: null,
@@ -142,7 +159,10 @@ function applyNavigationContractToScreenGraph(screenContract, contract) {
           intent: modal ? 'present' : 'push',
           parentRoute: screen.navigation?.parentRoute || owner.route,
           destinationId: owner.id,
-          role: modal ? 'modal-flow' : ((contract.flows.find((item) => item.id === flow?.id)?.id || '').includes('journey') ? 'flow-step' : 'nested-detail'),
+          role: navigationRole(screen, {
+            stage: (contract.flows.find((item) => item.id === flow?.id)?.id || '').includes('journey') ? {} : null,
+            presentation: flow?.presentation,
+          }),
           presentation: flow?.presentation || 'nested-stack',
           tabVisibility: flow?.tabVisibility || (contract.model === 'stack' ? 'not-applicable' : 'visible'),
           backTarget: modal ? 'owner-root' : 'nearest-stack',
@@ -248,6 +268,7 @@ function resolveNavigationFromIntent(experienceContract, workflowJourney, prelim
       backBehavior: 'nearest-stack-then-system',
       unknownRouteBehavior: 'safe-root',
       logoutDestination: '/login',
+      ...profilePolicy(screens, destinations),
     },
     adaptivePresentation: {
       compact: model === 'tabs-stack' ? 'bottom-tabs' : model,
@@ -285,7 +306,7 @@ function resolveNavigationContract(briefText, experienceContract, workflowJourne
   const durable = candidates.filter((candidate) => isDurable(candidate.evidence));
   if (!durable.some((candidate) => candidate.screen.id === primary.id)) durable.unshift(candidates.find((candidate) => candidate.screen.id === primary.id));
   const uniqueDurable = [...new Map(durable.filter(Boolean).map((candidate) => [candidate.screen.id, candidate])).values()];
-  const model = uniqueDurable.length > 5 ? 'drawer' : uniqueDurable.length >= 3 ? 'tabs-stack' : 'stack';
+  const model = uniqueDurable.length > 5 ? 'drawer' : uniqueDurable.length >= 2 ? 'tabs-stack' : 'stack';
   const destinations = uniqueDurable.map(({ screen, evidence }, index) => {
     const label = destinationLabel(screen);
     return {
@@ -295,7 +316,7 @@ function resolveNavigationContract(briefText, experienceContract, workflowJourne
       order: index + 1,
       rootScreenId: screen.id,
       route: screen.route,
-      iconIntent: screen.navigation?.candidate?.iconIntent || iconIntent(label),
+      iconIntent: screen.navigation?.candidate?.iconIntent || inferIconIntent(`${label} ${screen.purpose || ''}`),
       durabilityEvidence: Object.entries(evidence).filter(([, value]) => value === true).map(([key]) => key),
       independentJob: true,
       statePolicy: 'preserve',
@@ -352,6 +373,7 @@ function resolveNavigationContract(briefText, experienceContract, workflowJourne
       backBehavior: 'nearest-stack-then-system',
       unknownRouteBehavior: 'safe-root',
       logoutDestination: '/login',
+      ...profilePolicy(screens, destinations),
     },
     adaptivePresentation: {
       compact: model === 'tabs-stack' ? 'bottom-tabs' : model,
@@ -367,8 +389,8 @@ function resolveNavigationContract(briefText, experienceContract, workflowJourne
         `${destinations.length} durable destination${destinations.length === 1 ? '' : 's'} survived action/flow filtering`,
         `${nonRoots.length} screen${nonRoots.length === 1 ? '' : 's'} remain nested or temporary flows`,
       ],
-      rejectedAlternatives: [model === 'stack' ? 'tabs-stack: fewer than three durable peers' : 'stack: durable peer destinations require persistent switching'],
-      stackOnlyReason: model === 'stack' ? 'Fewer than three durable peer destinations remain after action and workflow-step filtering.' : null,
+      rejectedAlternatives: [model === 'stack' ? 'tabs-stack: fewer than two durable peers' : 'stack: durable peer destinations require persistent switching'],
+      stackOnlyReason: model === 'stack' ? 'Fewer than two durable peer destinations remain after action and workflow-step filtering.' : null,
       stackOnlyEvidence: model === 'stack' ? [
         `${destinations.length} durable destination${destinations.length === 1 ? '' : 's'}`,
         `${nonRoots.length} nested or temporary flow screen${nonRoots.length === 1 ? '' : 's'}`,
@@ -448,7 +470,10 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   applyNavigationContractToScreenGraph,
+  isProfileScreen,
+  navigationRole,
   navigationContractRevision,
+  profilePolicy,
   resolveNavigationContract,
   resolveNavigationFromIntent,
   screenGraphRevision,

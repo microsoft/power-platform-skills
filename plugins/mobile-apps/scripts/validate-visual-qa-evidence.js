@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { validate: validateExperienceVisualEvidence } = require('./validate-experience-visual-evidence');
+const { isCleanNativeCapture, validateNativeCaptureCleanliness } = require('./lib/native-capture-evidence');
 
 const STRICT_FIDELITIES = new Set(['high', 'strict-structural']);
 const PASS_VALUES = new Set(['pass', 'passed']);
@@ -73,6 +74,7 @@ function passingHomeCapture(captures, platform, largeText, manifestPath) {
     && normalize(capture.platform) === platform
     && (largeText ? isLargeText(capture) : !isLargeText(capture))
     && isPass(rowResult(capture))
+    && isCleanNativeCapture(capture)
     && hasCaptureEvidence(capture, manifestPath)
   ));
 }
@@ -94,6 +96,11 @@ function validateVisualQaEvidence(manifest, fidelity, manifestPath) {
   if (!captures.length) {
     issues.push({ rule: 'missing-capture-matrix', message: 'High/strict reference fidelity requires native captureMatrix evidence.' });
   }
+  captures.forEach((capture, index) => {
+    for (const message of validateNativeCaptureCleanliness(capture, `captureMatrix[${index}]`)) {
+      issues.push({ rule: 'unclean-native-capture', message });
+    }
+  });
   for (const platform of ['ios', 'android']) {
     if (!passingHomeCapture(captures, platform, false, manifestPath)) {
       issues.push({

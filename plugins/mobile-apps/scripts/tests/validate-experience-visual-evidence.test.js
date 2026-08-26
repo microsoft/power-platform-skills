@@ -25,8 +25,20 @@ function projectWithContract(context) {
 }
 
 function passingManifest(contract, keyFlow) {
+  const capture = (route, screenId, fontScale, captureId, platform, device) => ({
+    route,
+    screenId,
+    fontScale,
+    status: 'pass',
+    captureId,
+    platform,
+    device,
+    dimensions: { width: platform === 'ios' ? 390 : 412, height: platform === 'ios' ? 844 : 915 },
+    captureState: 'stable',
+    cleanliness: { metroOverlay: 'absent', developmentErrorOverlay: 'absent', hostDebugChrome: 'absent' },
+  });
   const scopes = ['primary', 'key-flow'];
-  const checks = ['focalPoint', 'regionOrder', 'primaryAction', 'taskFit', 'contentRealism', 'signatureMotifs', 'forbiddenDefaults', 'contrast', 'touchTargets', 'safeAreas', 'offlineState', 'screenReaderOrder', 'responsiveLayout', 'localizedContent']
+  const checks = ['focalPoint', 'regionOrder', 'primaryAction', 'taskFit', 'contentRealism', 'signatureMotifs', 'forbiddenDefaults', 'contrast', 'touchTargets', 'safeAreas', 'headerOwnership', 'mediaFallback', 'cardListDensity', 'contentCrop', 'bottomClearance', 'offlineState', 'screenReaderOrder', 'responsiveLayout', 'localizedContent']
     .map((id) => ({ id, status: 'pass', scopes, evidence: [`native review for ${id}`], captureIds: ['normal-home', 'normal-key-flow'] }));
   checks.push({ id: 'keyboard', status: 'not-applicable', scopes, evidence: ['Capture flow has no text entry in this review.'], captureIds: ['normal-home', 'normal-key-flow'], reason: 'No keyboard-triggering control is present in the approved key flow.' });
   return {
@@ -34,10 +46,10 @@ function passingManifest(contract, keyFlow) {
     experienceContractRoute: contract.primaryScreen.route,
     keyFlowRoute: keyFlow.route,
     captureMatrix: [
-      { route: contract.primaryScreen.route, fontScale: 1, status: 'pass', captureId: 'normal-home', platform: 'ios', device: 'iPhone 15' },
-      { route: contract.primaryScreen.route, fontScale: 1.4, status: 'pass', captureId: 'large-home', platform: 'ios', device: 'iPhone 15' },
-      { route: keyFlow.route, fontScale: 1, status: 'pass', captureId: 'normal-key-flow', platform: 'android', device: 'Pixel 8' },
-      { route: keyFlow.route, fontScale: 1.4, status: 'pass', captureId: 'large-key-flow', platform: 'android', device: 'Pixel 8' },
+      capture(contract.primaryScreen.route, 'Home', 1, 'normal-home', 'ios', 'iPhone 15'),
+      capture(contract.primaryScreen.route, 'Home', 1.4, 'large-home', 'ios', 'iPhone 15'),
+      capture(keyFlow.route, 'CaptureReview', 1, 'normal-key-flow', 'android', 'Pixel 8'),
+      capture(keyFlow.route, 'CaptureReview', 1.4, 'large-key-flow', 'android', 'Pixel 8'),
     ],
     checks,
   };
@@ -46,6 +58,16 @@ function passingManifest(contract, keyFlow) {
 test('accepts native evidence for the generic experience contract', (context) => {
   const { projectRoot, contract, keyFlow } = projectWithContract(context);
   assert.deepEqual(validate(projectRoot, passingManifest(contract, keyFlow)), []);
+});
+
+test('rejects Metro Refreshing banners and host debug chrome even when capture status says pass', (context) => {
+  const { projectRoot, contract, keyFlow } = projectWithContract(context);
+  const manifest = passingManifest(contract, keyFlow);
+  manifest.captureMatrix[0].ocrText = 'Refreshing...';
+  manifest.captureMatrix[1].cleanliness.hostDebugChrome = 'present';
+  const issues = validate(projectRoot, manifest);
+  assert.ok(issues.some((issue) => issue.rule === 'unclean-native-capture' && /overlay text/.test(issue.message)));
+  assert.ok(issues.some((issue) => issue.rule === 'unclean-native-capture' && /host debug chrome/.test(issue.message)));
 });
 
 test('rejects missing large-text capture and motif review', (context) => {

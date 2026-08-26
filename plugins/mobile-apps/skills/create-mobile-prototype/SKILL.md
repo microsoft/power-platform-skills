@@ -137,7 +137,9 @@ direction.
 Write `<PROJECT_DIR>/brief.md`. Mark `Mode: prototype` and preserve the source
 paths of approved design/plan inputs. Show a compact impact preview containing
 the expected entities, native capabilities, connectors, screens, design work,
-and validation stages. Ask Proceed / Revise / Cancel before planning.
+and validation stages. For a clear brief continue automatically; ask only the
+single focused first-outcome clarification allowed for low confidence. This
+preview is not a separate approval gate.
 
 Before the impact preview, derive and validate the shared product experience
 contract. This is mandatory for a one-line or few-line brief and does not require a screenshot, HTML page, or design intake:
@@ -224,10 +226,14 @@ Visual reference:
   navigation silhouette, required motifs, and forbidden drift; use original
   copy and licensed local assets.
 
-This is a mock-backed prototype. Run the normal approval gates and write the
-same native-app-plan.md used by real apps, but perform no environment or
-Dataverse discovery. The schema sidecar must be complete enough for typed local
-mocks and must be marked planningMode=prototype, executionEligible=false.
+This is a mock-backed prototype. Write the same complete editable
+native-app-plan.md used by real apps, but perform no environment or Dataverse
+discovery. Do not pause at real-app section gates and do not mint an approval
+receipt. The foreground will resolve Navigation and run one consolidated local
+review for product/screens, logical data, native capabilities, connector
+intent, design direction, assumptions, and build order. The schema sidecar
+must be complete enough for typed local mocks and must be marked
+planningMode=prototype, executionEligible=false.
 The data-model architect must additionally write and validate the neutral
 prototype domain model. It names the stable repository interfaces and hooks
 that screens use in both prototype and Dataverse modes.
@@ -254,11 +260,43 @@ test -f "$PROJECT_DIR/.tmp/context-enrichment-contract.json"
 test -f "$PROJECT_DIR/.tmp/workflow-journey-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-screen-contract.json"
 test -f "$PROJECT_DIR/.tmp/experience-foundation-contract.json"
-test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
 node -e "const c=require(process.argv[1]); if(c.planningMode!=='prototype'||c.executionEligible!==false||!Array.isArray(c.tables)) process.exit(1)" "$PROJECT_DIR/.tmp/dataverse-schema-contract.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
   --project-root "$PROJECT_DIR"
 ```
+
+Resolve and validate Navigation before approval so the review shows the real
+durable destinations, nested ownership, Profile access, launch/resume policy,
+and critical flow:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-contract.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/prototype-plan-review.js" \
+  --project-root "$PROJECT_DIR" --action draft
+```
+
+Present exactly one editable review from `native-app-plan.md` and the existing
+sidecars. Include product/audience/primary job, assumptions/confidence, journey
+and outcomes, Home/launch/resume/key flow, screen graph and five-way roles,
+navigation, compact logical data/fixture summary, capability placement and
+fallbacks, future connector proposals, design direction/signature components,
+build order, and preview status. Ask `Approve`, `Revise`, or `Cancel` once.
+
+On `Revise`, edit only the named section, rerun dependent planning validation,
+resolve Navigation again when screen/jobs changed, and present the same
+consolidated review. On explicit approval run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prototype-plan-review.js" \
+  --project-root "$PROJECT_DIR" --action approve --response approve
+node "${CLAUDE_SKILL_DIR}/../../scripts/prototype-plan-review.js" \
+  --project-root "$PROJECT_DIR" --action status
+test -f "$PROJECT_DIR/.tmp/mobile-plan-status.json"
+```
+
+The receipt must report `mayAuthorizeExternalMutations: false`. Do not start
+template, data, design, native, or screen writes before this status passes.
 
 When `--from-plan` was supplied, do not silently replace approved Data Model,
 Native Capabilities, Connectors, Product Experience Contract / Design, Screen Map, Navigation
@@ -289,7 +327,23 @@ initial/home route, otherwise the first tab/root route. Normalize the plan's
 `app/(app)/...tsx` file to an Expo href such as `/(app)/home`. Runtime
 configuration is deferred until Step 5 creates the repository provider.
 
-### Step 5 - Generate The Typed Domain Layer
+### Steps 5-6a - Generate Runtime Data And Automatic Design
+
+The approved neutral domain, representative content/media intent, Screen
+Contract, Journey, and Navigation Contract must exist before either lane.
+When the host supports independent tasks, run these disjoint lanes in parallel:
+
+- **Data lane:** Step 5 writes only `src/data/`, generated local media/assets,
+  prototype runtime/provider files, and data/runtime manifests.
+- **Design lane:** Step 6a writes only `brand/` and
+  `.tmp/design-context-evidence.json` using the selected design-system mode.
+
+Neither lane edits the plan, Screen/Navigation contracts, shared navigation,
+or the other lane's files. When background tasks are unavailable, run data then
+design in the foreground with identical inputs, outputs, and validators. Do not
+run a project-wide typecheck while either lane is writing.
+
+#### Step 5 - Generate The Typed Domain Layer
 
 Run:
 
@@ -300,7 +354,6 @@ node "${CLAUDE_SKILL_DIR}/scripts/configure-prototype-runtime.js" \
   "$PROJECT_DIR" prototype "$PROTOTYPE_ENTRY_ROUTE"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope domain
-npm --prefix "$PROJECT_DIR" run type-check
 ```
 
 The generator reads `.tmp/prototype-domain-model.json` and writes:
@@ -331,18 +384,30 @@ Write `.mobile-app/state.json` per
 `dataMode: "prototype"`, null environment/transition/hashes, the current
 domain/repository/fixture revisions, and the current lifecycle schema version.
 
-### Step 6 - Apply Native Capabilities And Design
+#### Step 6a - Generate Automatic Or Optional Design
+
+Run `/design-system` in orchestrator mode unless `--no-design`. Pass
+`--working-dir` and `--design-intake` when supplied; the older
+`--from-design-intake` spelling is accepted only as a compatibility alias. Even
+with `--no-design`, require app-specific semantic aliases/tokens; never leave
+the raw Tamagui starter palette as the product design.
+
+Normal prompt-only prototypes must select `automatic-native.md`, ask no brand,
+cost, style, HTML, or screenshot question, write 2-5 Product Experience
+Primitives, and record the bounded context/model-call evidence. Explicit visual
+inputs route to `optional-modes.md`.
+
+### Step 6 - Join Lanes And Apply Native Capabilities
+
+Do not continue until domain validation passes and `brand/design-system.md`,
+`brand/tokens.ts`, and `.tmp/design-context-evidence.json` exist. Validate
+data/design compatibility against media intent, state expectations, signature
+components, and Screen/Navigation contracts.
 
 For every approved `## Native Capabilities` row, execute `/add-native`
 sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
 unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
-
-Run `/design-system` in orchestrator mode unless `--no-design`. Pass
-`--working-dir` and `--design-intake` when supplied; the older
-`--from-design-intake` spelling is accepted only as a compatibility alias. Even with
-`--no-design`, require app-specific semantic aliases/tokens; never leave the raw
-Tamagui starter palette as the product design.
 
 Require `/design-system` to read `$PROJECT_DIR/.tmp/experience-contract.json`
 before choosing tokens. Its automatic direction comes from visual character,
@@ -361,12 +426,10 @@ an industry preset, or substitute remote imagery for an offline-required
 asset. The design-system output must name the Reference Contract, required
 motifs, forbidden drift, and signature components before builders run.
 
-Resolve the approved Markdown Screen Map into deterministic journey and
-navigation contracts, then compile the compact builder assembly sheet:
+Validate the approved Navigation Contract, then compile the compact builder
+assembly sheet after runtime data and design outputs join:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" \
-  --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-contract.js" \
   --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
@@ -375,6 +438,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" \
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" \
   --project-root "$PROJECT_DIR" \
   --pack ".tmp/screen-build-pack.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action validate
 ```
 
 Do not launch skeleton or builder work when the pack is missing or stale.
@@ -382,22 +447,12 @@ The resolver may normalize the existing screen sidecar, but it must not alter
 the approved Markdown plan or invent destinations. Re-run
 `npm --prefix "$PROJECT_DIR" run type-check`.
 
-### Step 7 - Navigation, Shared Code, And Skeletons
+### Step 7 - Shared Code And Typed Skeletons
 
 Reuse the current owning implementation in `/create-mobile-app` for shared
 code, contract-selected foundation primitives, pack-derived dependencies, and
-typed skeletons. Apply the navigation shell from the resolved contract first:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" \
-  --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" \
-  --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
-  --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" \
-  --project-root "$PROJECT_DIR"
-```
+typed skeletons. Do not apply the navigation shell yet; the foreground applies
+it after the native canary screens are real TSX and before Metro starts.
 
 Prototype-specific rules:
 
@@ -424,8 +479,25 @@ Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
 ### Step 8 - Build Screens
 
-Spawn `mobile-app:screen-builder` in the same bounded waves and with the same
-status/retry protocol as `/create-mobile-app` Step 11. Each prompt must include:
+Read `.tmp/screen-build-pack.json → builderWaves`. Require `foundations`,
+`native-canary`, and bounded `supporting-*` waves. The `native-canary` targets
+must equal Home plus the complete critical/key-flow sequence; do not replace
+them with empty skeletons or a readiness hash.
+
+Build only `native-canary` first. Mark those routes `building`:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action update \
+  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
+  --status building
+```
+
+Spawn `mobile-app:screen-builder` for each canary screen using the same screen
+work order and artifact envelope as later screens. Persist every returned
+artifact only through `write-screen-artifact.js`. Use the foreground fallback
+from the host-capability contract when nested builders are unavailable; it must
+consume the same pack entries and validators. Each prompt must include:
 
 ```text
 Data mode: prototype.
@@ -463,8 +535,44 @@ badges, payment, sign-in, or other unapproved UI merely because the domain is
 retail.
 ~~~
 
-Run the screen-wave TypeScript gate after every wave. Group failures by root
-cause and cap retries at two per screen.
+After writing canary screens:
+
+1. validate each canary with `validate-mobile-app.js --scope screen --screen`;
+2. run `npm --prefix "$PROJECT_DIR" run type-check`;
+3. apply and validate the navigation shell;
+4. mark canary routes `type-safe`;
+5. start Metro with `--require-canary`;
+6. capture/review clean native Home and key-flow evidence when the host has a
+   simulator/device capture surface;
+7. repair shared/root causes once, then rerun the canary gates.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action update \
+  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
+  --status type-safe
+node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
+  --project-root "$PROJECT_DIR" --require-canary
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action update \
+  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
+  --status available-in-metro
+```
+
+Do not evaluate a refreshing/disconnected/debug-overlay frame. If native
+capture is unavailable, record `DONE_WITH_CONCERNS: native canary capture
+unavailable` and continue only after static canary/type/Metro gates pass.
+
+Once the canary passes, build `supporting-*` waves in dependency order. Screens
+inside one wave may run in parallel; waves remain sequential. Mark each wave
+`building`, persist artifacts through the same writer, run per-screen checks
+and TypeScript, then mark it `type-safe`. Group failures by root cause and cap
+retries at two per screen. Never let builder completion order change Home,
+navigation, tokens, shared components, domain data, or route ownership.
 
 ### Step 9 - Final Validation
 
@@ -477,14 +585,16 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --proje
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
-  --project-root "$PROJECT_DIR" --scope all --record
+  --project-root "$PROJECT_DIR" --scope all --record --reuse-if-unchanged
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action validate --require-complete
 ```
 
 The canonical complete-app validator runs domain, requirement/task,
 navigation, runtime-state, media, screen-source, accessibility, safe-area, and
-TypeScript checks against the fully generated app. It preserves the existing
-build order; it does not introduce a Home/key-flow canary or start Metro
-before supporting screens are complete.
+TypeScript checks after every supporting screen is type-safe. Validate the
+route manifest again and fail if any planned screen is unreachable or remains
+`planned`/`building`.
 
 When design-intake.md declares high or strict-structural fidelity, record the
 native-evidence command below as pending in final-validation.md. Do not run it
@@ -569,7 +679,7 @@ pattern. Re-run the relevant static gates after refinement.
 After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.
 
-### Step 10 - Record State And Start Metro
+### Step 10 - Record State And Report Metro
 
 Update `.mobile-app/state.json`:
 
@@ -583,26 +693,31 @@ Update `.mobile-app/state.json`:
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
 
-Start Metro through the non-interactive launcher:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
-  --project-root "$PROJECT_DIR"
-```
-
-It chooses an available port, probes Metro's status endpoint, records the
-ready URL and log path, and reports startup failures directly. Do not use a web
-runtime or crawl routes in a browser. Return the Metro URL/QR handoff and
-instruct the user to scan it with the Power Apps Developer app or a compatible
-custom development client that includes the native host; Expo Go is
+Reuse the Metro process started after the native canary. Do not start a second
+process or rerun planning/design because Metro disconnected. Return its
+recorded URL, port, command, log path, and truthful status. If launch failed,
+preserve the project and report the exact manual command. Do not use a web
+runtime or crawl routes in a browser. The user opens the URL/QR in the Power
+Apps Developer app or a compatible custom development client; Expo Go is
 unsupported.
 
 ### Step 10.5 - Native Reference Evidence
 
 For every prototype, native capture additionally validates the generic
 experience contract. Ensure `$PROJECT_DIR/.tmp/experience-visual-review.json`
-names `keyFlowRoute`, captures both primary and key-flow routes at normal and
-large text, and scopes every evidence-backed check to `primary` and `key-flow`.
+names `keyFlowRoute`, captures Home and key-flow outcome on iOS and Android,
+captures Home at large text on at least one platform, and scopes every
+evidence-backed check to `primary` and `key-flow`. Every capture records
+`screenId`, route, platform/device, dimensions, text size, stable state, and
+cleanliness with Metro overlay, development error overlay, and host debug
+chrome all `absent`.
+
+Do not capture or review while the app says `Refreshing...`, `Disconnected`,
+shows a development error/red box, or displays the purple host/debug gear.
+Those frames fail evidence even when the app composition underneath is good.
+Review focal point/action, header and safe areas, media/fallback, card/list
+density and crop, bottom/sticky clearance, touch targets, readable text,
+screen-reader order, responsive width, and long/localized content.
 Run:
 
 ~~~bash
@@ -619,7 +734,9 @@ native client, capture and retain:
 
 1. Home at default text size on iOS.
 2. Home at default text size on Android.
-3. Home at large system text on either platform.
+3. Key-flow outcome at default text size on iOS.
+4. Key-flow outcome at default text size on Android.
+5. Home at large system text on either platform.
 
 Write PROJECT_DIR/.tmp/visual-qa/<session>/manifest.json with:
 
@@ -634,7 +751,15 @@ Write PROJECT_DIR/.tmp/visual-qa/<session>/manifest.json with:
       "dynamicType": "default or large",
       "result": "pass or fail",
       "path": "project-local screenshot path when available",
-      "captureId": "native automation capture ID when a local path is unavailable"
+      "captureId": "native automation capture ID when a local path is unavailable",
+      "screenId": "Home or key-flow screen ID",
+      "dimensions": { "width": 390, "height": 844 },
+      "captureState": "stable",
+      "cleanliness": {
+        "metroOverlay": "absent",
+        "developmentErrorOverlay": "absent",
+        "hostDebugChrome": "absent"
+      }
     }
   ],
   "referenceChecks": [

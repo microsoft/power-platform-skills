@@ -205,6 +205,27 @@ builds the same production-quality screens, and starts Metro without requiring
 Microsoft sign-in. Planned external connectors are visible throw-stubs, so an
 unsupported interaction fails clearly instead of silently succeeding.
 
+Prototype planning presents one consolidated editable review covering product
+and screens, the neutral logical model, native capabilities, connector intent,
+design direction, assumptions, and build order. Approval is local and can
+never authorize Power Platform mutation. After approval, typed runtime data
+and the automatic native design path may run in disjoint parallel lanes.
+
+The compact V3 build pack preserves five-way screen roles, durable navigation,
+Profile access, app-specific component/card recipes, media policy, states,
+accessibility, and a Home + complete key-flow `native-canary` wave. Metro starts
+only after those real TSX screens pass focused validation and TypeScript;
+supporting screens build afterward in bounded waves. A route manifest tracks
+every planned screen through Planned, Building, Type-safe, Available in Metro,
+Reviewed, or Concern.
+
+Connected image-led products use approved cached CDN media with bundled
+fallback; explicit offline media remains local-first. Native captures must be
+stable and free of `Refreshing...`, disconnected/error overlays, and host
+debug chrome. Without clean native captures, the result is reported as
+statically validated and Metro-ready with a visual-evidence concern, never as
+benchmark-equivalent visual completion.
+
 When the model and UX are approved:
 
 ```text

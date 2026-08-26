@@ -4,7 +4,7 @@
  *
  * Usage:
  *   import { LoadingState, ErrorState, EmptyState, ScreenHeader,
- *            ModalHeader, BottomActionBar, FloatingActionButton, FilterChipRow, FormField, RowPick,
+ *            ModalHeader, BottomActionBar, useBottomActionClearance, FloatingActionButton, FilterChipRow, FormField, RowPick,
  *            StatusPill, StatTile, Hero, SectionHeader, EntityImage,
  *            AvatarInitials, InfoRow, ActionRow, Gradient } from '@/components';
  */
@@ -370,13 +370,41 @@ export function EmptyState({
 
 // ─── BottomActionBar ─────────────────────────────────────────────────────────
 
-export function BottomActionBar({ children }: { children: React.ReactNode }) {
+export function useBottomActionClearance({
+  actionHeight = 72,
+  tabBarHeight = 0,
+  spacing = 16,
+}: {
+  actionHeight?: number;
+  tabBarHeight?: number;
+  spacing?: number;
+} = {}) {
   const insets = useSafeAreaInsets();
+  return actionHeight + tabBarHeight + insets.bottom + spacing;
+}
+
+export function BottomActionBar({
+  children,
+  safeArea = true,
+  tabBarClearance = 'not-applicable',
+  tabBarHeight = 64,
+  spacing = 16,
+}: {
+  children: React.ReactNode;
+  safeArea?: boolean;
+  tabBarClearance?: 'above' | 'not-applicable';
+  tabBarHeight?: number;
+  spacing?: number;
+}) {
+  const insets = useSafeAreaInsets();
+  const bottomClearance = (safeArea ? insets.bottom : 0)
+    + (tabBarClearance === 'above' ? tabBarHeight : 0)
+    + spacing;
   return (
     <YStack
       px="$4"
       pt="$3"
-      pb={insets.bottom > 0 ? insets.bottom + 20 : 20}
+      pb={bottomClearance}
       bg="$surface1"
       borderTopWidth={1}
       borderTopColor="$borderColor"

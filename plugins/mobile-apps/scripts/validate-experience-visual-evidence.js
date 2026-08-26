@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateExperienceContract } = require('./experience-patterns');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const { isCleanNativeCapture, validateNativeCaptureCleanliness } = require('./lib/native-capture-evidence');
 
 function parseArgs(argv) {
   const args = {};
@@ -45,6 +46,7 @@ function captureMatches(capture, expectedRoute, largeText, projectRoot) {
     && ['ios', 'android'].includes(platform)
     && typeof capture?.device === 'string'
     && capture.device.trim().length > 0
+    && isCleanNativeCapture(capture)
     && ['pass', 'passed'].includes(String(capture?.status || capture?.result || '').toLowerCase())
     && hasNativeCaptureEvidence(capture, projectRoot);
 }
@@ -126,6 +128,11 @@ function validate(projectRoot, manifest) {
     issues.push({ rule: 'build-pack-key-flow-drift', message: 'Screen build pack keyFlowRoute does not match the experience screen contract.' });
   }
   const captures = Array.isArray(manifest.captureMatrix) ? manifest.captureMatrix : [];
+  captures.forEach((capture, index) => {
+    for (const message of validateNativeCaptureCleanliness(capture, `captureMatrix[${index}]`)) {
+      issues.push({ rule: 'unclean-native-capture', message });
+    }
+  });
   const captureIds = new Set(captures.map((capture) => String(capture?.captureId || '').trim()).filter(Boolean));
   for (const platform of ['ios', 'android']) {
     if (!captures.some((capture) => String(capture?.platform || '').toLowerCase() === platform && hasNativeCaptureEvidence(capture, projectRoot))) {
@@ -145,7 +152,7 @@ function validate(projectRoot, manifest) {
     }
   }
   const checks = Array.isArray(manifest.checks) ? manifest.checks : [];
-  const requiredChecks = ['focalPoint', 'regionOrder', 'primaryAction', 'taskFit', 'contentRealism', 'signatureMotifs', 'forbiddenDefaults', 'contrast', 'touchTargets', 'safeAreas', 'keyboard', 'offlineState', 'screenReaderOrder', 'responsiveLayout', 'localizedContent'];
+  const requiredChecks = ['focalPoint', 'regionOrder', 'primaryAction', 'taskFit', 'contentRealism', 'signatureMotifs', 'forbiddenDefaults', 'contrast', 'touchTargets', 'safeAreas', 'headerOwnership', 'mediaFallback', 'cardListDensity', 'contentCrop', 'bottomClearance', 'keyboard', 'offlineState', 'screenReaderOrder', 'responsiveLayout', 'localizedContent'];
   for (const expected of requiredChecks) {
     const check = checks.find((candidate) => candidate.id === expected);
     const scopes = Array.isArray(check?.scopes) ? check.scopes : [];

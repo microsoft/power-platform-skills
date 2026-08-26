@@ -161,6 +161,7 @@ test('reference-led prototypes bind screenshot intake through planning, polish, 
   const realApp = read('skills/create-mobile-app/SKILL.md');
   const planner = read('agents/native-app-planner.md');
   const designSystem = read('skills/design-system/SKILL.md');
+  const optionalDesign = read('skills/design-system/optional-modes.md');
   const designRefiner = read('skills/design-react-native-app/SKILL.md');
   const referenceContract = 'shared/references/reference-fidelity.md';
   const intakeContract = 'skills/design-system/references/reference-intake.md';
@@ -183,7 +184,9 @@ test('reference-led prototypes bind screenshot intake through planning, polish, 
   assert.match(realApp, /Native reference evidence/);
   assert.match(planner, /Reference fidelity fails closed/);
   assert.match(planner, /Reference Contract/);
-  assert.match(designSystem, /Reference-contract mode/);
+  assert.match(designSystem, /Optional mode/);
+  assert.match(optionalDesign, /Screenshot or design intake/);
+  assert.match(optionalDesign, /reference-fidelity\.md/);
   assert.match(designRefiner, /Reference-contract mode/);
 });
 
@@ -210,6 +213,7 @@ test('brief-derived experience contract drives planning without a reference inpu
   const prototype = read('skills/create-mobile-prototype/SKILL.md');
   const realApp = read('skills/create-mobile-app/SKILL.md');
   const designSystem = read('skills/design-system/SKILL.md');
+  const automaticDesign = read('skills/design-system/automatic-native.md');
   const stylePicker = read('skills/design-system/references/vibe/style-picker.md');
   const refiner = read('skills/design-react-native-app/SKILL.md');
   const seeds = read('skills/create-mobile-prototype/scripts/gen-mock-services.js');
@@ -247,9 +251,12 @@ test('brief-derived experience contract drives planning without a reference inpu
   assert.match(realApp, /screen_build_pack_path/);
   assert.match(realApp, /sidecar-declared `keyFlow`/);
   assert.doesNotMatch(realApp, /INDUSTRY_CONFIRM_REQUESTED:/);
-  assert.match(designSystem, /Experience-contract mode/);
+  assert.match(designSystem, /Automatic native mode/);
   assert.doesNotMatch(designSystem, /polished-inspection/);
-  assert.match(designSystem, /DESIGN_EXPRESSION_RESULT/);
+  assert.match(automaticDesign, /experience-contract\.json/);
+  assert.match(automaticDesign, /design-context-evidence\.json/);
+  assert.match(automaticDesign, /Do not render a gallery/);
+  assert.doesNotMatch(automaticDesign, /DESIGN_EXPRESSION_RESULT/);
   assert.match(stylePicker, /DESIGN_EXPRESSION_RESULT/);
   assert.match(stylePicker, /never write a plan block/);
   assert.doesNotMatch(stylePicker, /direction-polished-inspection/);
@@ -271,4 +278,43 @@ test('Open and legacy plugin metadata remain exact mirrors', () => {
   const legacyPlugin = JSON.parse(read('.claude-plugin/plugin.json'));
   assert.deepEqual(legacyPlugin, openPlugin);
   assert.equal(openPlugin.keywords.includes('prototype'), true);
+});
+
+test('prototype builds and starts the native canary before supporting screen waves', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  const canaryIndex = skill.indexOf('Build only `native-canary` first');
+  const metroIndex = skill.indexOf('--project-root "$PROJECT_DIR" --require-canary');
+  const supportingIndex = skill.indexOf('Once the canary passes, build `supporting-*` waves');
+  assert.ok(canaryIndex > 0, 'native canary instructions must exist');
+  assert.ok(metroIndex > canaryIndex, 'Metro must start after real canary generation');
+  assert.ok(supportingIndex > metroIndex, 'supporting fan-out must follow canary Metro readiness');
+  assert.match(skill, /write-screen-artifact\.js/);
+  assert.match(skill, /route-manifest\.js[\s\S]*--status type-safe/);
+  assert.match(skill, /Do not start a second[\s\S]*process/);
+});
+
+test('prototype uses one consolidated non-mutating approval before data or design', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  const planner = read('agents/native-app-planner.md');
+  assert.match(planner, /Prototype consolidated-draft override/);
+  assert.match(planner, /do not enter Gate 1, Gate 2,[\s\S]*Gate 4a, Gate 4b/);
+  assert.match(skill, /prototype-plan-review\.js[\s\S]*--action draft/);
+  assert.match(skill, /prototype-plan-review\.js[\s\S]*--action approve --response approve/);
+  assert.match(skill, /mayAuthorizeExternalMutations: false/);
+  assert.doesNotMatch(skill, /This is a mock-backed prototype\. Run the normal approval gates/);
+  const approval = skill.indexOf('--action approve --response approve');
+  const data = skill.indexOf('#### Step 5 - Generate The Typed Domain Layer');
+  const design = skill.indexOf('#### Step 6a - Generate Automatic Or Optional Design');
+  assert.ok(approval > 0 && data > approval && design > approval);
+});
+
+test('prototype data and design lanes are disjoint and final validation reuses only unchanged passes', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  const validator = read('scripts/validate-mobile-app.js');
+  assert.match(skill, /Data lane:[\s\S]*`src\/data\/`/);
+  assert.match(skill, /Design lane:[\s\S]*`brand\/`/);
+  assert.match(skill, /run these disjoint lanes in parallel/);
+  assert.match(skill, /Do not\s+run a project-wide typecheck while either lane is writing/);
+  assert.match(validator, /--reuse-if-unchanged/);
+  assert.match(validator, /unchanged-since-recorded-pass/);
 });

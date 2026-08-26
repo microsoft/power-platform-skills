@@ -127,6 +127,13 @@ test('rejects a detail route whose parameter is dropped from the query bindings'
   assert.match(errors, /path parameter productId is not bound to screen operation id field id/);
 });
 
+test('rejects a declared path parameter that is absent from the route', () => {
+  const value = contract();
+  value.screens[0].routeParameters.push({ name: 'categoryId', source: 'path', required: true });
+  value.screens[0].data.operations[1].routeBindings.push({ parameter: 'categoryId', target: 'filter', field: 'productId' });
+  assert.match(validate(value).join('\n'), /declared path parameter categoryId is absent from route/);
+});
+
 test('allows pagination none only for an explicitly bounded collection', () => {
   const value = contract();
   delete value.screens[0].data.operations[1].pagination.maximumExpectedCount;

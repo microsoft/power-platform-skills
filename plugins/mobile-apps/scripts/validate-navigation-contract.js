@@ -4,8 +4,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { contractHash } = require('./experience-patterns');
+const { isKnownIconIntent } = require('./lib/navigation-icons');
 const { workflowJourneyRevision } = require('./resolve-workflow-journey');
-const { navigationContractRevision, screenGraphRevision } = require('./resolve-navigation-contract');
+const { navigationContractRevision, navigationRole, screenGraphRevision } = require('./resolve-navigation-contract');
 
 const ACTION_DESTINATION = /\b(?:scan|add|create|capture|pay|submit|sync|search|edit|delete|confirm)\b/i;
 
@@ -18,7 +19,7 @@ function validateNavigationContract(contract, context = {}) {
   if (!['tabs-stack', 'stack', 'drawer'].includes(contract?.model)) errors.push('navigationContract.model is invalid');
   const destinations = Array.isArray(contract?.destinations) ? contract.destinations : [];
   if (!destinations.length || contract?.destinationCount !== destinations.length) errors.push('navigation destinationCount does not match destinations');
-  if (contract?.model === 'tabs-stack' && (destinations.length < 3 || destinations.length > 5)) errors.push('tabs-stack requires 3-5 durable destinations');
+  if (contract?.model === 'tabs-stack' && (destinations.length < 2 || destinations.length > 5)) errors.push('tabs-stack requires 2-5 durable destinations');
   if (contract?.model === 'drawer' && destinations.length <= 5) errors.push('drawer requires more than five durable destinations');
   if (contract?.model === 'stack' && (!contract.decision?.stackOnlyReason || !contract.decision?.stackOnlyEvidence?.length || !contract.decision?.returnHomeMechanism)) errors.push('stack-only navigation requires reason, evidence, and return-home mechanism');
   const destinationIds = new Set();
@@ -38,10 +39,13 @@ function validateNavigationContract(contract, context = {}) {
     if (ACTION_DESTINATION.test(label)) errors.push(`navigation destination ${destination?.id} represents an action rather than a stable area`);
     if (destination?.order !== index + 1) errors.push(`navigation destination ${destination?.id} order must be ${index + 1}`);
     if (destination?.independentJob !== true || destination?.statePolicy !== 'preserve' || !destination?.durabilityEvidence?.length) errors.push(`navigation destination ${destination?.id} lacks durable independent-state evidence`);
+    if (!isKnownIconIntent(destination?.iconIntent)) errors.push(`navigation destination ${destination?.id} has unknown icon intent ${destination?.iconIntent || '<missing>'}`);
   }
   if (!destinationIds.has(contract?.initialDestinationId)) errors.push('initial destination is not registered');
   const screenIds = new Set((context.screenContract?.screens || []).map((screen) => screen.id));
   const routeByScreenId = new Map((context.screenContract?.screens || []).map((screen) => [screen.id, screen.route]));
+  const destinationByScreenId = new Map(destinations.map((destination) => [destination.rootScreenId, destination]));
+  const flowByScreenId = new Map((contract?.flows || []).flatMap((flow) => (flow.screenIds || []).map((screenId) => [screenId, flow])));
   const routing = contract?.routingPolicy;
   if (!routing || !screenIds.has(routing.primaryScreenId) || !screenIds.has(routing.launchScreenId)) errors.push('navigation routing policy requires known primary and launch screens');
   if (routing && routeByScreenId.get(routing.launchScreenId) !== routing.launchRoute) errors.push('navigation launch route does not match its screen');
@@ -64,6 +68,27 @@ function validateNavigationContract(contract, context = {}) {
     if (flow?.presentation !== 'nested-stack' && (flow.tabVisibility !== 'covered-by-modal' || !/return-to-owner/i.test(flow.dismissBehavior || ''))) errors.push(`modal flow ${flow?.id} must cover tabs and return to its owner`);
   }
   if (screenIds.size) for (const screenId of screenIds) if (!ownedScreens.has(screenId)) errors.push(`screen ${screenId} has no destination or flow owner`);
+  for (const screen of context.screenContract?.screens || []) {
+    const destination = destinationByScreenId.get(screen.id);
+    const flow = flowByScreenId.get(screen.id);
+    const expectedRole = navigationRole(screen, {
+      destination: Boolean(destination),
+      stage: String(flow?.id || '').startsWith('journey-') ? {} : null,
+      presentation: flow?.presentation,
+    });
+    if (screen.navigation?.role !== expectedRole) errors.push(`screen ${screen.id} navigation role must be ${expectedRole}`);
+  }
+  const profileScreens = (context.screenContract?.screens || []).filter((screen) => screen.route === '/(app)/profile' || screen.file === 'app/(app)/profile.tsx' || String(screen.id || '').toLowerCase() === 'profile');
+  const profilePolicy = contract?.globalRoutePolicy;
+  if (profileScreens.length !== 1) errors.push(`screen graph requires exactly one Profile screen; found ${profileScreens.length}`);
+  const profile = profileScreens[0];
+  if (profile && (profilePolicy?.profileScreenId !== profile.id || profilePolicy?.profileRoute !== profile.route)) errors.push('Profile access policy does not match the Profile screen');
+  if (!['destination', 'header-action', 'settings-destination'].includes(profilePolicy?.profileAccess)) errors.push('Profile access policy requires a visible destination or labeled global action');
+  const profileReachable = new Set(profilePolicy?.profileReachableFromDestinationIds || []);
+  for (const destinationId of destinationIds) if (!profileReachable.has(destinationId)) errors.push(`Profile is not reachable from destination ${destinationId}`);
+  if ([...profileReachable].some((destinationId) => !destinationIds.has(destinationId))) errors.push('Profile access policy references an unknown destination');
+  const profileDestination = destinations.find((destination) => destination.rootScreenId === profile?.id);
+  if ((profilePolicy?.profileAccess === 'destination') !== Boolean(profileDestination)) errors.push('Profile destination placement does not match profileAccess');
   if (contract?.adaptivePresentation?.destinationIdentityStableAcrossSizes !== true) errors.push('adaptive presentation must preserve destination identity');
   if (contract?.accessibility?.labelsRequired !== true || contract?.accessibility?.selectedStateRequired !== true || contract?.accessibility?.minimumTouchTarget < 44) errors.push('navigation accessibility contract is incomplete');
   return { valid: errors.length === 0, errors, revision: errors.length ? null : navigationContractRevision(contract) };

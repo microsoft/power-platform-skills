@@ -17,6 +17,7 @@ const {
   validateExperienceContract,
 } = require('./experience-patterns');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
+const { buildRouteManifest, validateRouteManifest, writeAtomic: writeRouteManifestAtomic } = require('./route-manifest');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -113,8 +114,18 @@ function validateInputs(contract, screenContract, foundation, normalizedScreens)
 }
 
 function dataIntent(projectRoot) {
+  const domainPath = path.join(projectRoot, '.tmp', 'prototype-domain-model.json');
   const schemaPath = path.join(projectRoot, '.tmp', 'dataverse-schema-contract.json');
   const prototypePath = path.join(projectRoot, 'src', 'generated', '.prototype-manifest.json');
+  if (fs.existsSync(domainPath)) {
+    const domain = readJson(domainPath, 'Prototype domain model');
+    return {
+      adapter: 'local',
+      entities: (domain.entities || []).map((entity) => entity.key || entity.displayName).filter(Boolean),
+      path: '.tmp/prototype-domain-model.json',
+      hash: sha256(fs.readFileSync(domainPath, 'utf8')),
+    };
+  }
   if (fs.existsSync(schemaPath)) {
     const schema = readJson(schemaPath, 'Data intent');
     const tables = Array.isArray(schema.tables) ? schema.tables : [];
@@ -135,6 +146,183 @@ function dataIntent(projectRoot) {
     };
   }
   throw new Error('Data intent is missing: expected .tmp/dataverse-schema-contract.json or src/generated/.prototype-manifest.json.');
+}
+
+function chunks(values, size) {
+  const result = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
+}
+
+function semanticColorRoles() {
+  return [
+    ['brand-accent', 'limited-brand-emphasis', '$accentDeep'],
+    ['primary-action', 'single-state-primary-action', '$accentBase'],
+    ['selection', 'selected-navigation-or-option', '$accentSoft'],
+    ['warning', 'blocked-progress-or-risk', '$statusPending'],
+    ['error', 'invalid-or-failed-state', '$statusOverdue'],
+    ['destructive', 'destructive-action-only', '$statusOverdue'],
+    ['success', 'completed-or-confirmed-state', '$statusComplete'],
+    ['informational', 'neutral-context-or-help', '$color10'],
+  ].map(([role, intent, token]) => ({ role, intent, token }));
+}
+
+function cardRecipes() {
+  return [
+    { id: 'FeatureCard', purpose: 'focal-feature', density: 'balanced', anatomy: ['media-or-status', 'context', 'title', 'supporting-copy', 'primary-action'], mediaAspectRatio: '16:9', maxPrimaryActions: 1, dynamicHeight: true, maxTitleLines: 2 },
+    { id: 'ProductCard', purpose: 'product-selection', density: 'balanced', anatomy: ['image', 'category', 'name', 'price', 'availability', 'action'], mediaAspectRatio: '4:3', maxPrimaryActions: 1, dynamicHeight: true, maxTitleLines: 2 },
+    { id: 'RecordRow', purpose: 'record-navigation', density: 'dense', anatomy: ['identifier', 'status', 'metadata', 'disclosure'], mediaAspectRatio: null, maxPrimaryActions: 0, dynamicHeight: true, maxTitleLines: 2 },
+    { id: 'ResumeCard', purpose: 'workflow-resume', density: 'balanced', anatomy: ['current-work', 'progress', 'saved-state', 'continue-action'], mediaAspectRatio: null, maxPrimaryActions: 1, dynamicHeight: true, maxTitleLines: 2 },
+    { id: 'CategoryTile', purpose: 'category-navigation', density: 'balanced', anatomy: ['semantic-icon-or-image', 'short-label'], mediaAspectRatio: '1:1', maxPrimaryActions: 1, dynamicHeight: true, maxTitleLines: 2 },
+    { id: 'StatusSummary', purpose: 'status-and-next-action', density: 'dense', anatomy: ['semantic-status', 'supporting-context', 'next-action'], mediaAspectRatio: null, maxPrimaryActions: 1, dynamicHeight: true, maxTitleLines: 2 },
+  ];
+}
+
+function designRecipe(contract, primary, navigation, foundation) {
+  return {
+    hierarchy: {
+      focalPoint: primary.firstViewport?.focalPoint || contract.firstViewport.focalPoint,
+      maxFirstViewportRegions: primary.firstViewport?.maxRegions || contract.firstViewport.regionOrder.length,
+      maxFeatureViewportShare: primary.firstViewport?.maxFeatureViewportShare || 0.4,
+      nextContentVisible: primary.firstViewport?.nextContentVisible !== false,
+    },
+    actions: { primaryPlacement: primary.primaryAction?.placement || 'inline', maxPrimaryActionsPerState: 1 },
+    navigation: { model: navigation.model, destinationCount: navigation.destinationCount, preserveNestedTabs: navigation.model === 'tabs-stack' },
+    signatureComponent: primary.signatureComponent,
+    density: contract.firstViewport.contentDensity,
+    visualCharacter: contract.visualCharacter,
+    media: { policy: contract.assetPolicy.media, fallbackRequired: contract.assetPolicy.media !== 'not-applicable' },
+    spacing: { minimumControlSize: 44, minimumContentGap: 8 },
+    semanticColorRoles: semanticColorRoles(),
+    cardRecipes: cardRecipes(),
+  };
+}
+
+function applicableStates(screen, journey) {
+  const states = new Set(screen.states || []);
+  const dataDriven = (screen.data?.entities || []).length > 0 || (screen.data?.operations || []).length > 0;
+  if (dataDriven) ['populated', 'loading', 'empty', 'error', 'offline', 'retry'].forEach((state) => states.add(state));
+  if ((screen.capabilityComposition || []).length) ['permission-denied', 'unavailable'].forEach((state) => states.add(state));
+  if ((screen.data?.operations || []).some((operation) => ['create', 'update', 'delete'].includes(operation.kind))) states.add('success');
+  const staged = (journey?.stages || []).some((stage) => stage.screenIds.includes(screen.id));
+  if (journey?.resume?.supported && staged) ['interrupted', 'resumed'].forEach((state) => states.add(state));
+  return [...states];
+}
+
+function enrichScreen(screen, basic, data, journey, contextContract) {
+  const stage = (journey?.stages || []).find((item) => item.screenIds.includes(screen.id));
+  const stateActions = (journey?.stateActions || []).filter((item) => item.screenId === screen.id);
+  const guardedActions = stateActions
+    .filter((item) => item.guardId)
+    .map((item) => ({
+      actionId: item.primaryAction,
+      guardId: item.guardId,
+      falseBehavior: 'disabled-with-reason',
+      blockingMessage: (journey?.completionGuards || []).find((guard) => guard.id === item.guardId)?.blockingMessage || 'Complete the required work before continuing.',
+    }));
+  const signatureComponents = (journey?.signatureComponents || []).filter((component) => (
+    (component.requiredOnStageScreens && stage)
+    || (component.placement === 'primary-screen' && screen.role === 'primary')
+    || (!component.requiredOnStageScreens && component.placement !== 'primary-screen' && stage)
+  ));
+  if (screen.signatureComponent?.required && screen.signatureComponent.testId
+    && !signatureComponents.some((component) => component.testId === screen.signatureComponent.testId)) {
+    signatureComponents.push({ ...screen.signatureComponent, placement: 'screen-contract', semanticRole: 'signature' });
+  }
+  const contextEntries = (contextContract?.displayContext || []).filter((entry) => (screen.context?.entryIds || []).includes(entry.id));
+  const primaryAction = screen.primaryAction ? { ...screen.primaryAction } : null;
+  const firstRegionCount = screen.firstViewport?.regionIds?.length || 0;
+  const mediaRequired = screen.media?.required === true;
+  const enriched = {
+    ...basic,
+    ...screen,
+    productRole: screen.productRole || (screen.role === 'primary'
+      ? 'durable-destination'
+      : screen.role === 'key-flow' ? 'bounded-flow-step' : 'nested-detail'),
+    headerMode: screen.header?.mode || basic.headerMode,
+    firstViewport: {
+      ...screen.firstViewport,
+      visiblePrimaryAction: Boolean(primaryAction),
+      primaryActionPlacement: primaryAction?.placement || 'none',
+    },
+    context: {
+      ...screen.context,
+      entries: contextEntries,
+      forbiddenInferences: contextContract?.forbiddenInferences || [],
+    },
+    primaryAction,
+    media: {
+      ...screen.media,
+      source: screen.media?.source || 'domain-fixture',
+      delivery: contractMediaDelivery(basic.data.mediaPolicy),
+      sizing: mediaRequired ? (firstRegionCount > 1 || primaryAction?.placement === 'inline' ? 'responsive-clamped' : 'responsive-aspect') : 'not-applicable',
+      maxViewportShare: mediaRequired ? Math.min(screen.firstViewport?.maxFeatureViewportShare || 0.4, firstRegionCount > 1 ? 0.6 : 0.8) : 0,
+    },
+    states: applicableStates(screen, journey),
+    dependencies: {
+      ...screen.dependencies,
+      artifacts: [...new Set([...(screen.dependencies?.artifacts || []), '.tmp/experience-contract.json', '.tmp/navigation-contract.json'])],
+    },
+    data: {
+      ...basic.data,
+      ...screen.data,
+      adapter: data.adapter,
+      viewModel: 'src/generated/experience-view-model.ts',
+      recordIdentity: 'stable-primary-key',
+      mediaPolicy: basic.data.mediaPolicy,
+      mediaFields: basic.data.mediaFields,
+    },
+    journey: {
+      journeyId: journey?.journeyId || null,
+      journeyKind: journey?.journeyKind || null,
+      stageId: stage?.id || null,
+      stageOrder: stage?.order || null,
+      visibleStages: (journey?.stages || []).map(({ id, label, order }) => ({ id, label, order })),
+      completionRuleIds: stage ? [stage.completionRuleId] : [],
+      resumeBehavior: journey?.resume?.supported ? 'restore-current-stage-and-draft' : 'none',
+      continuityBindings: (journey?.continuityKeys || []).map((key) => ({ key, source: 'workflow-state' })),
+    },
+    actionState: { primaryActionId: primaryAction?.id || null, stateActions, guardedActions },
+    signatureComponents,
+    testIds: [...new Set([
+      ...(screen.testIds || basic.testIds || []),
+      ...signatureComponents.map((component) => component.testId).filter(Boolean),
+    ])],
+    semanticColorRoles: semanticColorRoles(),
+    capabilityComposition: screen.capabilityComposition || [],
+    layoutBudgets: {
+      maxFocalViewportShare: screen.firstViewport?.maxFeatureViewportShare || 0.4,
+      requiredFirstViewportRegions: [...(screen.firstViewport?.regionIds || [])],
+      requireJourneyContext: Boolean(stage && (journey?.stages || []).length > 1),
+      maxReservedFooterShare: 0.2,
+      stickySurfaceOrder: [
+        'content',
+        ...(primaryAction?.placement === 'sticky-bottom' ? ['primary-action'] : []),
+        ...(screen.navigation?.kind === 'tab-root' ? ['tabs'] : []),
+        'safe-area',
+      ],
+    },
+    contractSource: screen.contractSource || 'structured',
+  };
+  enriched.states = applicableStates(enriched, journey);
+  return enriched;
+}
+
+function contractMediaDelivery(mediaPolicy) {
+  if (mediaPolicy === 'local-first') return 'bundled';
+  if (mediaPolicy === 'remote-cdn-cached') return 'remote-cached-with-bundled-fallback';
+  if (mediaPolicy === 'remote-allowed') return 'remote-with-bundled-fallback';
+  return 'not-applicable';
+}
+
+function builderWaves(screens, criticalFlow, foundation) {
+  const criticalIds = [...new Set(criticalFlow?.screenIds || screens.filter((screen) => ['primary', 'key-flow'].includes(screen.role)).map((screen) => screen.id))];
+  const supporting = screens.filter((screen) => !criticalIds.includes(screen.id));
+  return [
+    { id: 'foundations', kind: 'foundation', targets: foundation.primitives.map((primitive) => primitive.component), dependsOn: [] },
+    { id: 'native-canary', kind: 'screen', targets: criticalIds, dependsOn: ['foundations'] },
+    ...chunks(supporting, 5).map((wave, index) => ({ id: `supporting-${index + 1}`, kind: 'screen', targets: wave.map((screen) => screen.id), dependsOn: [index === 0 ? 'native-canary' : `supporting-${index}`] })),
+  ];
 }
 
 function screenRecord(screen, primary, keyFlow, foundation, data, contract) {
@@ -246,6 +434,13 @@ function compileScreenBuildPack(projectRoot) {
   validateInputs(contract, screenContract, foundation, normalizedScreens);
   const primary = screenContract.primaryScreen || normalizedScreens.find((screen) => screen.role === 'primary');
   const keyFlow = screenContract.keyFlow || normalizedScreens.find((screen) => screen.role === 'key-flow');
+  const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
+  const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
+  const navigationPath = path.join(root, '.tmp', 'navigation-contract.json');
+  const richContract = screenContract.schemaVersion >= 2 && fs.existsSync(journeyPath) && fs.existsSync(navigationPath);
+  const contextContract = fs.existsSync(contextPath) ? readJson(contextPath, 'Context enrichment contract') : null;
+  const journey = fs.existsSync(journeyPath) ? readJson(journeyPath, 'Workflow journey') : null;
+  const navigation = fs.existsSync(navigationPath) ? readJson(navigationPath, 'Navigation contract') : null;
   const mergedScreens = [...screenMap];
   for (const screen of [
     { id: 'Home', route: primary.route, file: primary.file },
@@ -257,10 +452,7 @@ function compileScreenBuildPack(projectRoot) {
     const basic = screenRecord(screen, primary, keyFlow, foundation, data, contract);
     const structured = normalizedScreens.find((candidate) => candidate.route === screen.route);
     if (!structured) return basic;
-    return {
-      ...basic,
-      ux: structured,
-    };
+    return richContract ? enrichScreen(structured, basic, data, journey, contextContract) : { ...basic, ux: structured };
   });
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
@@ -279,7 +471,8 @@ function compileScreenBuildPack(projectRoot) {
       : {}),
   };
   const pack = {
-    schemaVersion: 1,
+    schemaVersion: richContract ? 2 : 1,
+    ...(richContract ? { screenContractVersion: screenContract.schemaVersion } : {}),
     sources: {
       experienceContract: sha256(fs.readFileSync(experiencePath, 'utf8')),
       screenContract: sha256(fs.readFileSync(screenPath, 'utf8')),
@@ -316,15 +509,21 @@ function compileScreenBuildPack(projectRoot) {
         file: primitive.file,
         testID: primitive.testID,
       })),
+      ...(richContract ? {
+        recipe: designRecipe(contract, screens.find((screen) => screen.role === 'primary'), navigation, foundation),
+        signatureComponents: foundation.primitives.map((primitive) => ({ kind: primitive.motif, component: primitive.component, testId: primitive.testID })),
+        tokenSourceBindings: { palette: 'brand/tokens.ts', typography: 'brand/tokens.ts', semantics: 'brand/design-system.md' },
+        escapePolicy: { explicitOptionalModesOnly: true, industryPresetForbidden: true },
+      } : {}),
     },
     shell: {
       safeAreaOwner: 'screen',
       rootSafeAreaProviderOnly: true,
       headerModes: Object.fromEntries(screens.map((screen) => [screen.route, screen.headerMode])),
     },
-    journey: sourcePaths.workflowJourney ? readJson(path.join(root, sourcePaths.workflowJourney), 'Workflow journey') : null,
-    navigation: sourcePaths.navigationContract
-      ? readJson(path.join(root, sourcePaths.navigationContract), 'Navigation contract')
+    journey,
+    navigation: navigation
+      ? { ...navigation, criticalFlow: screenContract.criticalFlow }
       : {
           initialRoute: primary.route,
           keyFlowRoute: keyFlow.route,
@@ -343,6 +542,16 @@ function compileScreenBuildPack(projectRoot) {
       mediaFields: ['imageUrl', 'imageAltText', 'imageCacheKey', 'imageAssetKey'],
     },
     screens,
+    ...(richContract ? {
+      productStructure: {
+        primaryScreenId: navigation.routingPolicy.primaryScreenId,
+        launchScreenId: navigation.routingPolicy.launchScreenId,
+        resumeScreenId: navigation.routingPolicy.resumeScreenId,
+        criticalFlowScreenIds: [...screenContract.criticalFlow.screenIds],
+      },
+      capabilityBindings: screens.flatMap((screen) => (screen.capabilityComposition || []).map((capability) => ({ screenId: screen.id, ...capability }))),
+      builderWaves: builderWaves(screens, screenContract.criticalFlow, foundation),
+    } : {}),
     buildOrder: [
       ...foundation.primitives.map((primitive) => ({ kind: 'foundation', id: primitive.component, file: primitive.file, dependsOn: [] })),
       { kind: 'screen', id: primaryScreen.id, route: primaryScreen.route, dependsOn: foundation.primitives.map((primitive) => primitive.component) },
@@ -360,7 +569,7 @@ function compileScreenBuildPack(projectRoot) {
       },
     },
   };
-  pack.uiContractFingerprint = uiContractFingerprint(pack);
+  if (richContract) pack.uiContractFingerprint = uiContractFingerprint(pack);
   pack.revision = revisionForPack(pack);
   return pack;
 }
@@ -387,6 +596,12 @@ function main(argv) {
     const output = path.resolve(root, args.output || '.tmp/screen-build-pack.json');
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, `${JSON.stringify(pack, null, 2)}\n`);
+    if (pack.schemaVersion === 2) {
+      const routeManifest = buildRouteManifest(pack);
+      const routeErrors = validateRouteManifest(routeManifest, pack);
+      if (routeErrors.length) throw new Error(`Route manifest is invalid: ${routeErrors.join('; ')}`);
+      writeRouteManifestAtomic(path.join(root, '.tmp', 'route-manifest.json'), routeManifest);
+    }
     if (args.json) process.stdout.write(`${JSON.stringify({ output, revision: pack.revision }, null, 2)}\n`);
     else process.stdout.write(`Screen build pack written: ${output} (${pack.revision})\n`);
     return 0;

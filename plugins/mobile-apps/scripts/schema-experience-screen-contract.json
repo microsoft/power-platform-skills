@@ -111,7 +111,7 @@
         },
         "navigation": { "$ref": "#/definitions/navigation" },
         "role": { "enum": ["primary", "key-flow", "supporting"] },
-        "productRole": { "enum": ["primary-hub", "durable-destination", "workflow-step", "detail", "capture-surface", "transient", "modal", "immersive-utility"] },
+        "productRole": { "enum": ["primary-hub", "durable-destination", "workflow-step", "detail", "capture-surface", "transient", "modal", "immersive-utility", "nested-detail", "bounded-flow-step", "immersive-modal", "global-utility"] },
         "purpose": { "type": "string", "minLength": 5 },
         "presentation": {
           "type": "object",
@@ -219,6 +219,20 @@
           "additionalProperties": false
         },
         "forbiddenDefaults": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+        ,"capabilityComposition": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["capability", "mode", "fallbackStates", "maxViewportShare"],
+            "properties": {
+              "capability": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "mode": { "enum": ["on-demand", "supporting", "primary"] },
+              "fallbackStates": { "type": "array", "minItems": 1, "items": { "enum": ["loading", "permission-denied", "unavailable", "offline", "manual-entry"] }, "uniqueItems": true },
+              "maxViewportShare": { "type": "number", "minimum": 0, "maximum": 0.6 }
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     },
@@ -298,7 +312,7 @@
         "parentRoute": { "type": "string", "pattern": "^/" },
         "tabLabel": { "type": "string", "minLength": 1 },
         "destinationId": { "type": ["string", "null"] },
-        "role": { "enum": ["destination-root", "nested-detail", "flow-step", "modal-flow"] },
+        "role": { "enum": ["durable-destination", "nested-detail", "bounded-flow-step", "immersive-modal", "global-utility", "destination-root", "flow-step", "modal-flow"] },
         "presentation": { "enum": ["root", "nested-stack", "modal", "full-screen-modal"] },
         "tabVisibility": { "enum": ["visible", "covered-by-modal", "not-applicable"] },
         "backTarget": { "type": ["string", "null"] },

@@ -118,6 +118,7 @@ function validateScreenComposition(pack, options = {}) {
         if (!/TODO:\s*screen-builder fills JSX here/i.test(source)) {
           issues.push(...validateScreenSourceContract(source, screen, {
             minimumControlSize: pack.design?.recipe?.spacing?.minimumControlSize || 44,
+            navigationContract: pack.navigation,
           }));
           if (screen.signatureComponent?.required && !source.includes(screen.signatureComponent.testId)) issues.push({ rule: 'signature-component-not-rendered', message: `Screen ${label} does not render ${screen.signatureComponent.testId}.` });
           if (/allowFontScaling\s*=\s*\{\s*false\s*\}/.test(source)) issues.push({ rule: 'dynamic-type-disabled', message: `Screen ${label} disables font scaling.` });

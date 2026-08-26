@@ -4,6 +4,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { revisionForPack, sha256 } = require('./compile-screen-build-pack');
+const { validateNavigationContinuity } = require('./validate-navigation-continuity');
+const {
+  validateActionState,
+  validateCapabilityComposition,
+  validateCrossScreenContinuity,
+  validatePrimaryExperience,
+  validateRuntimeStateCoverage,
+  validateSemanticColorUsage,
+  validateSignatureComponents,
+  validateStaticLayoutBudgets,
+} = require('./lib/workflow-regression');
 
 function currentSourceHash(projectRoot, relativePath, source) {
   if (source === 'designRecipe') {
@@ -19,8 +30,8 @@ function currentSourceHash(projectRoot, relativePath, source) {
 function validateScreenBuildPack(projectRoot, pack) {
   const issues = [];
   const staleTargets = new Set();
-  if (!pack || pack.schemaVersion !== 1) {
-    return { issues: [{ rule: 'invalid-schema-version', message: 'Screen build pack requires schemaVersion: 1.' }], staleTargets: [] };
+  if (!pack || ![1, 2].includes(pack.schemaVersion)) {
+    return { issues: [{ rule: 'invalid-schema-version', message: 'Screen build pack requires schemaVersion 1 or 2.' }], staleTargets: [] };
   }
   if (!/^[a-f0-9]{64}$/i.test(String(pack.revision || '')) || pack.revision !== revisionForPack(pack)) {
     issues.push({ rule: 'revision-drift', message: 'Screen build pack revision does not match its deterministic content.' });
@@ -48,7 +59,13 @@ function validateScreenBuildPack(projectRoot, pack) {
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');
   const keyFlow = (pack.screens || []).find((screen) => screen.role === 'key-flow');
   if (!primary || !keyFlow) issues.push({ rule: 'missing-primary-or-key-flow', message: 'Screen build pack requires primary and key-flow screens.' });
-  if (!primary?.firstViewport?.length || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !Array.isArray(primary?.dependencies) || !Array.isArray(primary?.testIds)) {
+  const hasPrimaryViewport = pack.schemaVersion === 2
+    ? Array.isArray(primary?.firstViewport?.regionIds) && primary.firstViewport.regionIds.length > 0
+    : Array.isArray(primary?.firstViewport) && primary.firstViewport.length > 0;
+  const hasPrimaryDependencies = pack.schemaVersion === 2
+    ? primary?.dependencies && ['foundation', 'fixtures', 'screens', 'artifacts'].every((key) => Array.isArray(primary.dependencies[key]))
+    : Array.isArray(primary?.dependencies);
+  if (!hasPrimaryViewport || !primary?.primaryAction || !Array.isArray(primary?.states) || !['loading', 'empty', 'error', 'offline'].every((state) => primary.states.includes(state)) || !hasPrimaryDependencies || !Array.isArray(primary?.testIds)) {
     issues.push({ rule: 'incomplete-primary-screen', message: 'Primary build-pack screen requires viewport, action, states, dependencies, and test IDs.' });
   }
   if (pack.shell?.safeAreaOwner !== 'screen' || pack.shell?.rootSafeAreaProviderOnly !== true || !pack.shell?.headerModes || primary?.headerMode !== 'root' || keyFlow?.headerMode !== 'back') {
@@ -70,6 +87,30 @@ function validateScreenBuildPack(projectRoot, pack) {
   }
   if (!pack.fixtures?.adapter || !Array.isArray(pack.fixtures?.entities) || !pack.fixtures.assetPolicy || !pack.fixtures.assetManifest || pack.fixtures?.viewModel !== 'src/generated/experience-view-model.ts' || pack.fixtures?.recordIdentity !== 'stable-primary-key' || pack.fixtures?.mediaPolicy !== pack.fixtures?.assetPolicy || pack.fixtures?.mediaManifest !== pack.fixtures?.assetManifest || !Array.isArray(pack.fixtures?.mediaFields) || pack.fixtures.mediaFields.join('|') !== 'imageUrl|imageAltText|imageCacheKey|imageAssetKey') {
     issues.push({ rule: 'missing-fixture-intent', message: 'Screen build pack requires fixture adapter, entities, and asset policy.' });
+  }
+  if (pack.schemaVersion === 2) {
+    if (![2, 3].includes(pack.screenContractVersion)) issues.push({ rule: 'missing-screen-contract-version', message: 'Rich build packs require Screen Contract version 2 or 3.' });
+    if (!pack.design?.recipe || !Array.isArray(pack.design.recipe.cardRecipes)
+      || !['FeatureCard', 'ProductCard', 'RecordRow', 'ResumeCard', 'CategoryTile', 'StatusSummary'].every((id) => pack.design.recipe.cardRecipes.some((recipe) => recipe.id === id))) {
+      issues.push({ rule: 'missing-card-recipes', message: 'Rich build packs require all six purpose-specific card/list recipes.' });
+    }
+    if (!Array.isArray(pack.builderWaves) || !pack.builderWaves.some((wave) => wave.id === 'native-canary')) {
+      issues.push({ rule: 'missing-builder-waves', message: 'Rich build packs require foundation, native-canary, and bounded supporting waves.' });
+    }
+    if (!/^[a-f0-9]{64}$/i.test(String(pack.uiContractFingerprint || ''))) {
+      issues.push({ rule: 'missing-ui-contract-fingerprint', message: 'Rich build packs require a UI contract fingerprint.' });
+    }
+    for (const issue of [
+      ...validateNavigationContinuity(pack),
+      ...validatePrimaryExperience(pack),
+      ...validateActionState(pack),
+      ...validateCrossScreenContinuity(pack),
+      ...validateSignatureComponents(pack),
+      ...validateCapabilityComposition(pack),
+      ...validateSemanticColorUsage(pack),
+      ...validateStaticLayoutBudgets(pack),
+      ...validateRuntimeStateCoverage(pack),
+    ]) issues.push(issue);
   }
   return { issues, staleTargets: [...staleTargets].sort() };
 }

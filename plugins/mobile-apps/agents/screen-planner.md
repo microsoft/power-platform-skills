@@ -80,6 +80,23 @@ the relevant route parameters and identify the owning durable destination for
 each nested or modal flow screen. Tabs and drawer entries are independently
 revisitable destinations, never workflow actions or transient steps.
 
+**Product navigation role is AI-owned.** Classify every screen from its user
+job and lifecycle using exactly one of these `navigation.role` values:
+
+- `durable-destination` — independently revisitable root preserving its own state;
+- `nested-detail` — detail/form/supporting route owned by one durable root;
+- `bounded-flow-step` — ordered step that is not independently revisited;
+- `immersive-modal` — camera, scanner, signature, payment, or focused capture that intentionally covers persistent navigation;
+- `global-utility` — Profile or another globally reachable utility that need not consume a tab.
+
+Set `navigation.candidate.supportedByBriefOrSafeProductInference: true` for a
+declared durable job even when its display label is not repeated verbatim in
+the brief. Do not make workflow steps into tabs. Use `immersive-modal` only
+with explicit capability/presentation evidence. Every signed-in graph has one
+Profile at `/(app)/profile`; classify it as `durable-destination` when it is a
+frequent product job and tab capacity permits, otherwise `global-utility` with
+a labeled Profile header/avatar action reachable from every durable root.
+
 In prototype mode, bind every data-driven screen to exact operations from the
 neutral domain model. Name the exported `@/data` hook, selected/filter/sort/
 write fields, route bindings, relationship use, pagination mode, and fixture

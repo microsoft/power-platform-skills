@@ -330,9 +330,9 @@ function experienceFromIntent(intent, profile, text) {
     connectivity: signalCount(profile, 'offline') ? 'offline-preferred' : 'network-optional',
     media: explicitCachedCdn
       ? 'remote-cdn-cached'
-      : selected.contentModel.includes('media') && (signalCount(profile, 'offline') || intent === 'commerce')
+      : selected.contentModel.includes('media') && signalCount(profile, 'offline')
         ? 'local-first'
-        : selected.contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
+        : selected.contentModel.includes('media') ? 'remote-cdn-cached' : 'not-applicable',
   };
   return { ...selected, assetPolicy, text };
 }
@@ -467,6 +467,10 @@ function validateExperienceContract(contract) {
     if (!Array.isArray(spans) || !spans.length || spans.some((span) => typeof span?.signal !== 'string' || typeof span?.text !== 'string' || !Number.isInteger(span?.start) || !Number.isInteger(span?.end) || span.end <= span.start)) {
       issues.push(`promptEvidence.${field} is invalid`);
     }
+  }
+  if (contract?.assetPolicy?.connectivity === 'offline-preferred'
+    && !(contract?.promptEvidence?.assetPolicy || []).some((span) => span?.signal === 'offline')) {
+    issues.push('assetPolicy.connectivity offline-preferred requires explicit offline prompt evidence');
   }
   if (!contract?.primaryScreen || contract.primaryScreen.route !== '/(app)/home' || contract.primaryScreen.file !== 'app/(app)/home.tsx') {
     issues.push('primaryScreen must point to the canonical home route');
