@@ -15,6 +15,8 @@ Read only:
 - `.tmp/experience-foundation-contract.json`;
 - `.tmp/experience-screen-contract.json`;
 - `.tmp/navigation-contract.json` when present;
+- `.tmp/design-content-projection.json` (required; generated after domain
+  validation);
 - the `## Design` section of `native-app-plan.md` only when a required value is
   absent from structured contracts.
 
@@ -23,6 +25,39 @@ brand examples, galleries, or named direction files. Write
 `.tmp/design-context-evidence.json` containing `mode: automatic-native`, the
 relative files read (including the ownership manifest), exact byte counts, and
 `designModelCalls: 1`.
+
+Use this exact evidence shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "mode": "automatic-native",
+  "designModelCalls": 1,
+  "filesRead": [
+    {
+      "scope": "project or plugin",
+      "path": "relative/path",
+      "bytes": 123,
+      "sha256": "64 lowercase hex characters"
+    }
+  ]
+}
+```
+
+Record `skills/design-system/reference-ownership.json` and
+`skills/design-system/automatic-native.md` with `scope: plugin`. Record every
+structured project input with `scope: project`.
+
+Stop when `.tmp/design-content-projection.json` is absent, stale, or invalid.
+Do not substitute generic examples or read TypeScript fixture source. Use its
+representative records, field combinations, choice/status vocabulary, longest
+strings, and scenarios as the content pressure-test for every design decision.
+Before reading it, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/compile-design-content-projection.js" \
+  --project-root "<working_dir>" --check
+```
 
 ## Authority
 
@@ -35,7 +70,8 @@ it cannot choose a palette, dashboard, card anatomy, or navigation model.
 ## Design decisions
 
 Use the combined audience, job, interaction mode, visual character, content
-density, focal point, media role, and real fixture examples to choose:
+density, focal point, media role, and projected representative content to
+choose:
 
 - an accessible palette direction with distinct brand, primary action,
   selection, warning, error, destructive, success, and information roles;

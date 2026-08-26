@@ -313,13 +313,21 @@ test('prototype uses one consolidated non-mutating approval before data or desig
   assert.ok(approval > 0 && data > approval && design > approval);
 });
 
-test('prototype data and design lanes are disjoint and final validation reuses only unchanged passes', () => {
+test('prototype validates real content before design and reuses only unchanged final passes', () => {
   const skill = read('skills/create-mobile-prototype/SKILL.md');
+  const automaticDesign = read('skills/design-system/automatic-native.md');
   const validator = read('scripts/validate-mobile-app.js');
-  assert.match(skill, /Data lane:[\s\S]*`src\/data\/`/);
-  assert.match(skill, /Design lane:[\s\S]*`brand\/`/);
-  assert.match(skill, /run these disjoint lanes in parallel/);
-  assert.match(skill, /Do not\s+run a project-wide typecheck while either lane is writing/);
+  const data = skill.indexOf('gen-data-layer.js');
+  const projection = skill.indexOf('compile-design-content-projection.js');
+  const design = skill.indexOf('#### Step 6a - Generate Automatic Or Optional Design');
+  assert.ok(data > 0 && projection > data && design > projection);
+  assert.match(skill, /Do not run data generation and design in[\s\S]*parallel/);
+  assert.doesNotMatch(skill, /disjoint lanes|Data lane:|Design lane:/);
+  assert.match(skill, /up to three real representative records per entity/);
+  assert.match(skill, /validate-design-context-evidence\.js/);
+  assert.match(skill, /Repair design context\/evidence only; never regenerate the planner/);
+  assert.match(automaticDesign, /design-content-projection\.json/);
+  assert.match(automaticDesign, /representative records, field combinations, choice\/status vocabulary, longest/);
   assert.match(validator, /--reuse-if-unchanged/);
   assert.match(validator, /unchanged-since-recorded-pass/);
 });

@@ -17,6 +17,7 @@
         ".tmp/experience-foundation-contract.json",
         ".tmp/experience-screen-contract.json",
         ".tmp/navigation-contract.json",
+        ".tmp/design-content-projection.json",
         "native-app-plan.md#Design"
       ],
       "pluginReferences": [

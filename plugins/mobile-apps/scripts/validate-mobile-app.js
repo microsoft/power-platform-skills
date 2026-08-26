@@ -28,6 +28,7 @@ const FINGERPRINT_ARTIFACTS = [
   '.mobile-app/prototype-domain-manifest.json',
   '.mobile-app/navigation-shell.json',
   '.tmp/context-enrichment-contract.json',
+  '.tmp/design-content-projection.json',
   '.tmp/workflow-journey-contract.json',
   '.tmp/navigation-contract.json',
   '.tmp/experience-contract.json',

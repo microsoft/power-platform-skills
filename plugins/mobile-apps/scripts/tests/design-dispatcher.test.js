@@ -55,8 +55,10 @@ test('automatic native design owns full quality rules without optional reference
     /remote-cdn-cached/,
     /Sticky actions clear tabs, keyboard, and device bottom inset/,
     /Dynamic Type/,
+    /design-content-projection\.json/,
     /design-context-evidence\.json/,
     /designModelCalls: 1/,
+    /"scope": "project or plugin"/,
   ]) assert.match(automatic, requirement);
   assert.doesNotMatch(automatic, /style-picker\.md|brand-examples\.md|reference-intake\.md|input-modes\.md/);
 });

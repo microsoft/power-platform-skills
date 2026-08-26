@@ -331,21 +331,12 @@ initial/home route, otherwise the first tab/root route. Normalize the plan's
 `app/(app)/...tsx` file to an Expo href such as `/(app)/home`. Runtime
 configuration is deferred until Step 5 creates the repository provider.
 
-### Steps 5-6a - Generate Runtime Data And Automatic Design
+### Steps 5-6a - Generate Runtime Data, Then Design
 
-The approved neutral domain, representative content/media intent, Screen
-Contract, Journey, and Navigation Contract must exist before either lane.
-When the host supports independent tasks, run these disjoint lanes in parallel:
-
-- **Data lane:** Step 5 writes only `src/data/`, generated local media/assets,
-  prototype runtime/provider files, and data/runtime manifests.
-- **Design lane:** Step 6a writes only `brand/` and
-  `.tmp/design-context-evidence.json` using the selected design-system mode.
-
-Neither lane edits the plan, Screen/Navigation contracts, shared navigation,
-or the other lane's files. When background tasks are unavailable, run data then
-design in the foreground with identical inputs, outputs, and validators. Do not
-run a project-wide typecheck while either lane is writing.
+Run these steps strictly in order. Do not run data generation and design in
+parallel: automatic design requires the validated representative content that
+Step 5 materializes. The approved neutral Domain, Screen, Journey, and
+Navigation contracts remain immutable inputs throughout both steps.
 
 #### Step 5 - Generate The Typed Domain Layer
 
@@ -358,6 +349,8 @@ node "${CLAUDE_SKILL_DIR}/scripts/configure-prototype-runtime.js" \
   "$PROJECT_DIR" prototype "$PROTOTYPE_ENTRY_ROUTE"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
   --project-root "$PROJECT_DIR" --scope domain
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-design-content-projection.js" \
+  --project-root "$PROJECT_DIR"
 ```
 
 The generator reads `.tmp/prototype-domain-model.json` and writes:
@@ -370,6 +363,13 @@ The generator reads `.tmp/prototype-domain-model.json` and writes:
   `PowerAppsProvider`;
 - fail-closed Dataverse and connector adapter placeholders;
 - local/cache-backed media resolution and an exact generated-file manifest.
+
+After domain validation, `compile-design-content-projection.js` writes the
+bounded `.tmp/design-content-projection.json` consumed by automatic design. It
+contains up to three real representative records per entity, actual field
+combinations, choice/status vocabulary, longest strings, and non-offline
+fixture scenarios. It is deterministic compiler output, not planner-authored
+JSON. Do not invoke design when this projection is missing or stale.
 
 The migrator is a no-op for a fresh project. On an explicitly resumed legacy
 prototype, it transactionally preserves edited fixtures and restores the old
@@ -390,6 +390,12 @@ domain/repository/fixture revisions, and the current lifecycle schema version.
 
 #### Step 6a - Generate Automatic Or Optional Design
 
+Require `.tmp/design-content-projection.json` before invoking `/design-system`.
+The automatic path must read it before choosing tokens, component anatomy,
+density, or spacing. Optional reference modes also receive it as product
+content context; visual references may refine appearance but do not replace
+the validated domain examples.
+
 Run `/design-system` in orchestrator mode unless `--no-design`. Pass
 `--working-dir` and `--design-intake` when supplied; the older
 `--from-design-intake` spelling is accepted only as a compatibility alias. Even
@@ -401,12 +407,26 @@ cost, style, HTML, or screenshot question, write 2-5 Product Experience
 Primitives, and record the bounded context/model-call evidence. Explicit visual
 inputs route to `optional-modes.md`.
 
-### Step 6 - Join Lanes And Apply Native Capabilities
+For automatic-native mode, validate the exact context receipt before applying
+tokens:
 
-Do not continue until domain validation passes and `brand/design-system.md`,
-`brand/tokens.ts`, and `.tmp/design-context-evidence.json` exist. Validate
-data/design compatibility against media intent, state expectations, signature
-components, and Screen/Navigation contracts.
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-design-context-evidence.js" \
+  --project-root "$PROJECT_DIR"
+```
+
+Missing projection evidence, stale bytes, a stale content projection, more than
+one design model call, or optional-mode reference loading is a design-step
+failure. Repair design context/evidence only; never regenerate the planner.
+
+### Step 6 - Apply Design And Native Capabilities
+
+Do not continue until domain validation passes and
+`.tmp/design-content-projection.json`, `brand/design-system.md`,
+`brand/tokens.ts`, and `.tmp/design-context-evidence.json` exist. Validate that
+the design context evidence includes the projection, then validate data/design
+compatibility against media intent, state expectations, signature components,
+and Screen/Navigation contracts.
 
 For every approved `## Native Capabilities` row, execute `/add-native`
 sequentially from `PROJECT_DIR`. The template allowlist and runtime bans remain
@@ -414,10 +434,12 @@ unchanged. A capability absent from the bundled template is a blocker; do not
 install native code or fake a wrapper.
 
 Require `/design-system` to read `$PROJECT_DIR/.tmp/experience-contract.json`
-before choosing tokens. Its automatic direction comes from visual character,
-audience, interaction/entry mode, focal point, motifs, and density; it must
-write `## Product Experience Primitives` in `brand/design-system.md` and must
-not fall back to an inspection or industry preset.
+and `$PROJECT_DIR/.tmp/design-content-projection.json` before choosing tokens.
+Its automatic direction comes from visual character, audience,
+interaction/entry mode, focal point, motifs, density, and representative
+content; it must write `## Product Experience Primitives` in
+`brand/design-system.md` and must not fall back to an inspection or industry
+preset.
 
 Apply `brand/tokens.ts` to `tamagui.config.ts` using the current
 `/create-mobile-app` brand-token integration contract, then type-check.

@@ -208,8 +208,12 @@ unsupported interaction fails clearly instead of silently succeeding.
 Prototype planning presents one consolidated editable review covering product
 and screens, the neutral logical model, native capabilities, connector intent,
 design direction, assumptions, and build order. Approval is local and can
-never authorize Power Platform mutation. After approval, typed runtime data
-and the automatic native design path may run in disjoint parallel lanes.
+never authorize Power Platform mutation. After approval, typed runtime data is
+generated and validated first. A bounded design-content projection then gives
+automatic design representative records, field combinations, choice/status
+vocabulary, longest strings, and scenarios before it selects tokens or
+component anatomy. Data generation and automatic design do not run in
+parallel.
 
 The compact V3 build pack preserves five-way screen roles, durable navigation,
 Profile access, app-specific component/card recipes, media policy, states,
