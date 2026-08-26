@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 30 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 31 skills that cover the full lifecycle of a Power Pages code site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, performance, testing, and auditing. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -376,6 +376,18 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Auto-discovers routes from your framework's router
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
+
+#### `/perf-checker`
+
+> "Check my site for performance anti-patterns"
+
+Statically scans the entire local codebase for Power Pages performance anti-patterns — unpaginated lists, webpages/web templates used as APIs, FetchXML over-fetching, N+1 queries, wildcard/contains-style filters, advanced query hints, query cache bypassing, unbounded/over-expanded Web API calls, related-column ordering, disabled header/footer output caching, sign-in and page tracking, and oversized assets — then produces an HTML report by severity and offers safe auto-fixes with per-fix approval.
+
+- Grounded in the Site Checker performance checklist and FetchXML/Web API best practices
+- Supports code-site projects and classic PAC downloads with root-level `.portalconfig` / `website.yml` metadata
+- Reviews list pagination, webpage-as-API endpoints, FetchXML hints, and cache-busting patterns
+- Findings grouped by severity with concrete fixes and precise `file:line` locations
+- Auto-fixes site-setting/tracking issues on explicit per-finding consent; leaves code changes to you
 
 ### Support
 

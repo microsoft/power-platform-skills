@@ -2,7 +2,7 @@
 
 > **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 24 user-invocable skills (12 ALM + 12 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
+> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 30 user-invocable skills (12 ALM + 18 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
@@ -667,6 +667,19 @@ New skill introduced by PR #144. Orchestrates AI summarization API integration a
 | `add-ai-webapi:4.2.skip-webrole` | gate | consent | 4.2 | *"Continue without a web role (AI endpoints will 403) / Stop here"* — fires only when the user skipped web-role creation and the run is on a known-broken path. | nothing |
 | `add-ai-webapi:5.5.commit` | gate | consent | 5.5 | *"Commit Phase 5 Layer 3 integration changes now? / Skip"* — explicit commit after summarization-service + UI wiring complete. | nothing |
 | `add-ai-webapi:6.4.commit` | gate | consent | 6.4 | *"Commit new Summarization/* site settings? / Skip"* — explicit commit after `ai-webapi-settings-architect` creates the YAMLs. | nothing |
+
+---
+
+### 6.30 `perf-checker` (1 loop-style gate + 1 plan gate)
+
+Static performance-analysis skill. Scans the local codebase for performance anti-patterns (FetchXML/Web API over-fetching, disabled output caching, tracking, volume/asset issues), reports them, and offers safe auto-fixes with per-fix consent. Read-only until the Phase 4 loop, which mutates only the site-setting/tracking findings the user explicitly approves.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `perf-checker:4.auto-fix` | gate | consent | 4 | Per-finding: each `autoFixAvailable` finding loops through this prompt template surfacing the tag and the exact change (site setting or YAML field). User answers Yes / No / Skip-all per finding. | nothing |
+| `perf-checker:6.next-action` | gate | plan | 6 (`### Step 5.3`) | Post-report prompt — *"Walk me through the manual fixes / Re-scan / Done"*. Drives whether the FetchXML/Web API code-fix walkthrough runs next. Reviewing and re-scanning are read-only. | nothing |
+
+The `perf-checker:4.auto-fix` template fires once per finding with `autoFixAvailable: true` (the output-cache and tracking findings), mirroring the `diagnose-deployment:6.auto-fix` loop-style pattern — one gate ID, content varies per finding. FetchXML/Web API findings are never auto-fixed (they need human judgment), so they are excluded from the loop and surfaced via the plan gate instead.
 
 ---
 
