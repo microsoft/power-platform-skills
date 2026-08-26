@@ -205,7 +205,21 @@ Use `AskUserQuestion`:
 
 If `.powerpages-site` does **not** exist (first deployment), skip this step — there are no existing permissions to audit.
 
-### 4.3 Build the Site
+### 4.3 Validate Site Integrity
+
+Before building, run the shared lifecycle check:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+This validates deterministic bidirectional rules for every code site and, when
+`.powerpages-localization.json` exists, resource parity, protected tokens, locale availability,
+runtime direction coordination, and localization structure. It also reports content-expansion
+and geometry findings for review. If validation fails, stop and remediate the reported source or
+resource defects before deployment. This is not a new approval gate.
+
+### 4.4 Build the Site
 
 Before uploading, ensure the site is built:
 
@@ -216,7 +230,7 @@ npm run build
 
 If the build fails, stop and help the user fix the build errors before retrying.
 
-### 4.4 Upload to Power Pages
+### 4.5 Upload to Power Pages
 
 Run the upload command:
 
@@ -448,7 +462,7 @@ If the user skips activation (or after activation completes), suggest:
 
 ### NEVER Use `pac pages upload`
 
-Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt code site metadata if used on a code site project. This applies to every upload step in this skill (Phase 4.4, Phase 6.4, and troubleshooting retries).
+Always use `pac pages upload-code-site` — **never** use `pac pages upload`. The `pac pages upload` command is designed for portal-studio-style sites and will corrupt code site metadata if used on a code site project. This applies to every upload step in this skill (Phase 4.5, Phase 6.4, and troubleshooting retries).
 
 ### Throughout All Phases
 

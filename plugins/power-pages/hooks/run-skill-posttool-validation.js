@@ -6,7 +6,9 @@ const { spawnSync } = require('child_process');
 const {
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  getBlockingSpawnStatus,
   isAlmPlanSkill,
+  modifiesVisibleSource,
 } = require('../scripts/lib/powerpages-hook-utils');
 const { planDataPath } = require('../scripts/lib/alm-paths');
 
@@ -51,8 +53,36 @@ process.stdin.on('end', () => {
       });
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
-      validatorStatus = result.status ?? 0;
+      validatorStatus = getBlockingSpawnStatus(result);
+      if (result.error || result.signal) {
+        process.stderr.write(
+          `[power-pages] Skill validator did not complete: ` +
+          `${result.error?.message || `signal ${result.signal}`}.\n`
+        );
+      }
       debug(`[power-pages hook] Validator exited with code ${validatorStatus}\n`);
+    }
+
+    // A skill-specific validator knows its own artifacts, but cannot enforce
+    // cross-cutting localization and direction invariants. Run the shared pass
+    // only after that validator succeeds so its error remains the primary result.
+    if (validatorStatus === 0 && modifiesVisibleSource(skillName)) {
+      const integrityPath = path.join(__dirname, '..', 'scripts', 'validate-site-integrity.js');
+      const integrity = spawnSync(
+        process.execPath,
+        [integrityPath, '--projectRoot', cwd],
+        { encoding: 'utf8', cwd }
+      );
+      if (integrity.stdout) process.stdout.write(integrity.stdout);
+      if (integrity.stderr) process.stderr.write(integrity.stderr);
+      validatorStatus = getBlockingSpawnStatus(integrity);
+      if (integrity.error || integrity.signal) {
+        process.stderr.write(
+          `[power-pages] Site integrity validator did not complete: ` +
+          `${integrity.error?.message || `signal ${integrity.signal}`}.\n`
+        );
+      }
+      debug(`[power-pages hook] Site integrity exited with code ${validatorStatus}\n`);
     }
 
     // ALM plan reconcile backstop (auto-heal). The refresh-alm-plan-data.js calls
