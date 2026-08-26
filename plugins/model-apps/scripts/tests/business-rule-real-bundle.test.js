@@ -7,14 +7,25 @@
 //
 // Why this is worth having before the feature exists: business rules were deferred on the belief
 // that they could not be verified at all, because the `*ProcessWithWfomJson` bound actions were
-// absent on the test orgs available at the time. That premise has since been falsified — on a
-// current org the org `$metadata` document does declare all three
-// (`CreateProcessWithWfomJson`, `UpdateProcessWithWfomJson`, `RetrieveProcessWithWfomJson`), and a
-// live `pushArtifact('businessRule', …)` reached
-// `workflows(00000000-…)/Microsoft.Dynamics.CRM.CreateProcessWithWfomJson` rather than 404ing.
-// The live push has NOT yet been observed succeeding: the one attempt sent a rule with a null
-// `rootCondition` (an empty rule) and the server returned 400, and the org became unavailable
-// before a well-formed rule could be pushed. So the remaining unknown is narrow and named.
+// absent on the test orgs available at the time. That premise turned out to be wrong — on current
+// orgs `$metadata` DOES declare all three (`CreateProcessWithWfomJson`, `UpdateProcessWithWfomJson`,
+// `RetrieveProcessWithWfomJson`).
+//
+// But the API is declared and NOT FUNCTIONAL, which is a different and better-evidenced blocker.
+// Measured across 6 orgs: `RetrieveProcessWithWfomJson` — a bound FUNCTION whose only parameter is
+// the bound entity, so there is nothing a caller can get wrong — returns HTTP 400 (0x80040216,
+// "An unexpected error occurred") on an UNTOUCHED, server-created rule in all six. Reading a rule
+// the platform itself wrote fails identically to writing one, which rules out our payload.
+//
+// Eliminated along the way, each on its own: the table being unpublished (PublishXml returned 204,
+// still 400), wrong field logical names (read back from `Attributes` and confirmed), and anything
+// specific to a brand-new custom table (the same rule on OOB `account` fails too). An earlier
+// hypothesis of mine — that the first 400 was caused by pushing an EMPTY rule (null rootCondition)
+// — is DISPROVEN: a complete rule with condition, clause and action fails exactly the same way.
+//
+// So what remains proven here is the SDK half, which is genuinely useful: the authoring contract and
+// the wire payload. The environmental blocker is tracked separately, and the cheapest gate for any
+// future attempt is a single `RetrieveProcessWithWfomJson` returning 200 on an existing rule.
 //
 // Two traps worth recording, both of which cost real time:
 //   * `$metadata` is XML. `dataverseRequest` sends `Accept: application/json`, so it answers 415 —

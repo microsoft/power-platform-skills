@@ -2671,7 +2671,8 @@ test('the header/navigation refresh is a DIFFERENT setting from the new look', a
 });
 
 test('the header/navigation refresh honours BOTH values — false actively disables', async () => {
-  // NOT symmetry for its own sake. Live-verified: the SDK defaults the app artifact's
+  // NOT symmetry for its own sake. Verified against the real vendored bundle (offline, by capturing
+  // the writes a push issues): the SDK defaults the app artifact's
   // `headerAndNavigationRefresh` to TRUE and pushing a new app writes '2' (ON) unprompted, so the
   // platform default is ON. Treating `false` as "do nothing" would silently leave the feature ON for
   // an author who explicitly asked for it off — the exact silent-disagreement class this build keeps
