@@ -80,13 +80,33 @@ Store only the canonical locale string in `localStorage` under a
 site-specific key. This is browser-local preference data; do not write it to
 Dataverse or associate it with the signed-in user.
 
-When the visitor changes language:
+Generate one locale coordinator for runtime-localized sites. Single-language
+sites and static localization modes do not receive this infrastructure. The
+coordinator is the only owner of active locale changes.
 
-- Change the localization library's active locale without reloading.
-- Persist the canonical locale.
-- Set `document.documentElement.lang`.
-- Set `document.documentElement.dir` to `rtl` or `ltr`.
-- Fall back to the default locale for missing values.
+Required coordinator paths:
+
+- React/Vue: `src/i18n/localeCoordinator.ts`
+- Angular runtime: follow the existing i18n service directory, otherwise
+  `src/app/i18n/locale-coordinator.service.ts`
+
+The coordinator must expose a public `switchLocale` operation and:
+
+1. Canonicalize and validate the requested supported locale.
+2. Prepare messages and any required target-script font before visible change.
+3. Cancel or invalidate stale switch requests.
+4. Activate the localization library locale without reloading.
+5. Set `document.documentElement.lang` and `.dir` from the same resolved locale.
+6. Apply the locale/script font profile and localized metadata when configured.
+7. Persist the canonical locale only after a successful commit.
+8. Fall back to the default locale for invalid saved values and missing messages.
+
+Add direction-change subscriptions only when components cache physical
+geometry, such as charts, carousels, virtualized lists, grids, or overlays.
+Ordinary components using logical CSS need no subscription.
+
+The language selector calls the coordinator; it must not independently mutate
+the localization library, `lang`, `dir`, or persistence.
 
 ## Static locale behavior
 
@@ -190,6 +210,11 @@ Write `.powerpages-localization.json` after implementation using this shape:
   },
   "generatedFiles": ["src/components/LanguageSelector.tsx"],
   "managedFiles": ["src/i18n/index.ts", "src/main.tsx"],
+  "unavailableLocales": [],
+  "bidirectionalReadiness": {
+    "status": "ready",
+    "findings": []
+  },
   "adoptedExistingConfiguration": false,
   "lastOperation": "create",
   "updatedAt": "2026-07-30T00:00:00.000Z"
@@ -200,6 +225,25 @@ For Astro built-in routing, use `"packageName": "astro-built-in"`. For XLF,
 map each locale to its source/target XLF file. Keep paths repository-relative.
 Set `translationMethod` to `"agent"` or `"blank"` so validation can
 distinguish intentional empty targets from broken translations.
+
+`unavailableLocales` is optional and contains configured locale tags that have
+resources on disk for development/remediation but must not be selectable,
+auto-detected, advertised, or deployed as production static output. The
+implementation must expose one managed `localeAvailability` module with an
+`isLocaleAvailable` predicate that rejects the unavailable set. Every selector,
+switch/detection path, alternate-language metadata generator, and static output
+configuration must apply that predicate; recording the array in the manifest
+does not disable a locale by itself. During `pending-remediation`, all
+configured locales opposite to the default locale's direction must remain
+unavailable.
+`bidirectionalReadiness` is optional for same-direction locale sets and required
+when the configured set contains both LTR and RTL:
+
+- `ready` — no unresolved compatibility findings.
+- `approved-with-limitations` — the experience remains functional, readable,
+  accurate, and accessible; the maker explicitly accepted documented limits.
+- `pending-remediation` — hard compatibility work remains; affected locales
+  belong in `unavailableLocales` and managed availability logic.
 
 Schema version 1 includes `packageVerification`:
 

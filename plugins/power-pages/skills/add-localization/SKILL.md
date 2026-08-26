@@ -22,7 +22,8 @@ environment languages or translates Dataverse records.
 
 **Initial request:** $ARGUMENTS
 
-Read `${PLUGIN_ROOT}/references/i18n-frameworks.md` before planning or editing.
+Read `${PLUGIN_ROOT}/references/i18n-frameworks.md` and
+`${PLUGIN_ROOT}/references/bidirectional-design.md` before planning or editing.
 
 ## Core principles
 
@@ -37,6 +38,8 @@ Read `${PLUGIN_ROOT}/references/i18n-frameworks.md` before planning or editing.
 - Always show: **AI translations may contain errors - please verify them before publishing.**
 - Treat `[FROM_CREATE_SITE]` in `$ARGUMENTS` as invocation context. It suppresses
   this skill's deploy prompt so create-site remains deployment owner.
+- Generate a locale coordinator only for React, Vue, and runtime Angular.
+  Single-language, Angular static, and Astro static sites do not receive it.
 
 ## Workflow
 
@@ -238,6 +241,27 @@ Use `AskUserQuestion`:
 
 If agent-generated is selected, immediately display the AI translation warning.
 
+### 2.6 Direction transition and readiness audit
+
+Resolve every existing and proposed locale with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<LOCALE>"
+```
+
+Classify the existing and resulting sets as `ltr-only`, `rtl-only`, or `mixed`.
+When this operation first changes an LTR-only or RTL-only site to `mixed`, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Add every finding to the Phase 3 plan. Include logical-CSS remediation,
+validated physical exceptions, mixed/user content, localized formatting,
+script font coverage, directional assets, calendars/date-pickers, gestures,
+drawers, breadcrumbs, tables, charts, carousels, overlays, SVG/canvas, and
+third-party components. Do not modify files before plan approval.
+
 ---
 
 ## Phase 3: Plan and approve
@@ -256,6 +280,9 @@ Present:
   and the approved canonical `lang` plus resolved `dir` attribute repair.
 - Language-selector placement and runtime/static behavior.
 - Build, validator, browser, RTL, and token checks.
+- Direction-set transition, readiness findings, proposed remediations, physical
+  exceptions, script-font changes, and whether any locale may remain
+  unavailable pending remediation.
 - Known limitations and any approved translation replacements.
 
 <!-- gate: add-localization:3.plan-approval | category=plan | cancel-leaves=nothing -->
@@ -287,6 +314,12 @@ or resource hierarchy. In repair mode, apply only the approved delta. Never
 remove a package, switch Angular mode, or replace custom initialization unless
 the approved plan names that change.
 
+For runtime mode, create or adopt exactly one locale coordinator at the path
+defined in the framework reference. The language selector must call
+`switchLocale`; it must not independently update translations, persistence,
+`lang`, or `dir`. Add metadata/font preparation and geometry notifications only
+when the site needs them. Do not create a coordinator for static mode.
+
 ---
 
 ## Phase 5: Extract and localize content
@@ -316,6 +349,12 @@ approved root-document repair: set static `lang` to the approved canonical
 default locale and `dir` to that locale's resolved direction. Do not infer or
 substitute a different source locale during implementation.
 
+Apply approved bidirectional remediation. Use logical CSS by default. Add
+`<bdi>`/`dir="auto"` at unknown-content boundaries, explicit isolation for
+machine values, `Intl` formatting for locale-sensitive data, and script-aware
+font profiles only where the configured scripts need them. Preserve brand
+character across font profiles.
+
 Write `.powerpages-localization.json` using reference schema version 1
 after the approved implementation is complete. Record `packageVerification`
 from the package-validator result. For an unverified alternative, record
@@ -324,6 +363,17 @@ when one was supplied. Record `initializationEvidence` when deterministic
 framework patterns do not recognize the selected package. Set `lastOperation` to `create`,
 `add-languages`, `repair`, or `reconfigure`, and set `translationMethod` to
 `agent` or `blank`.
+
+For mixed-direction sets, also record `bidirectionalReadiness`. Keep a locale
+in `unavailableLocales` when technical blockers remain. It must be excluded
+from selectors, browser auto-detection, alternate-language metadata, and
+production static output. Its resources may remain available in development
+for remediation. Generate one managed `localeAvailability` module that exports
+`isLocaleAvailable`, rejects entries in `unavailableLocales`, and is applied
+by every selector, locale switch/detection path, alternate-language metadata
+generator, and static locale output configuration. The manifest alone does not
+disable a locale. While readiness is `pending-remediation`, every configured
+locale whose direction is opposite to the default locale remains unavailable.
 
 ---
 
@@ -345,10 +395,17 @@ with Playwright:
 - `html[lang]` and `html[dir]`.
 - Browser console has no localization errors.
 - One RTL locale when configured.
+- Every representative route in one LTR and one RTL locale at desktop and
+  narrow/mobile viewports when the configured set is mixed.
+- Script font loading, mixed-direction names/comments/URLs/identifiers,
+  locale-aware dates/numbers/percentages, directional icons, calendars, and
+  any audited complex component.
 
 For static modes, verify equivalent locale URLs/builds. For runtime modes,
 verify persisted selection, browser-language matching, invalid saved-value
-fallback, and no page reload during switching.
+fallback, no page reload, and both LTR -> RTL -> LTR and RTL -> LTR -> RTL
+round trips. Preserve route, form state, focus, and application state. Verify
+that stale resource requests cannot overwrite a newer selection.
 
 For an explicitly unverified package, all build, initialization, switching or
 route navigation, resource loading, `lang`/`dir`, and console checks are
@@ -366,6 +423,15 @@ with a one-line reason. Include locale/key counts, blank/stale values,
 translation warning, build result, browser checks, and RTL areas needing
 manual visual review.
 
+Classify the result as:
+
+- **Ready** — the new locale may be enabled.
+- **Approved with limitations** — only usable degradation remains; show the
+  exact component/page impact and browser evidence.
+- **Pending remediation** — build/runtime failure, incorrect `lang`/`dir`,
+  unreadable text, unreachable critical controls, or serious accessibility
+  failure remains; keep the affected locale unavailable.
+
 <!-- gate: add-localization:7.review | category=plan | cancel-leaves=localized-site-files -->
 
 > 🚦 **Gate (plan · add-localization:7.review):** Maker accepts the verified localization result or requests a focused revision.
@@ -374,8 +440,19 @@ manual visual review.
 > **Why we ask:** Translation wording and selector placement require maker review even when technical checks pass.
 > **Cancel leaves:** Localized site files — the verified localization changes remain on disk for review or revision.
 
-Use `AskUserQuestion` with **Accept changes** and **Request revisions**. Apply
-requested revisions, then repeat Phase 6 and this gate.
+Use `AskUserQuestion`:
+
+- For **Ready**: **Accept changes** and **Request revisions**.
+- For usable limitations: **Fix before enabling**, **Enable with documented
+  limitations**, **Save but keep locale unavailable**, and **Request revisions**.
+- For **Pending remediation**: **Fix blockers now**, **Save but keep locale
+  unavailable**, and **Request revisions**. Do not offer enablement.
+
+Explicit acceptance applies only to usable degradation. It cannot override a
+build/runtime failure, incorrect direction, unreadable content, unreachable
+critical control, or serious accessibility failure. Apply requested revisions,
+then repeat Phase 6 and this gate. If the maker saves a pending locale, do not
+offer deployment in Phase 8.
 
 ---
 

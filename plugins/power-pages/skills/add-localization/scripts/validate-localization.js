@@ -13,12 +13,17 @@ const {
   KNOWN_PACKAGES,
   LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
+  classifyLocaleDirections,
   detectFramework,
   detectLocalization,
+  getLocaleDirection,
   protectedTokenSignature,
   validateLocalizationManifestShape,
   validateLocales,
 } = require('../../../scripts/lib/localization-config');
+const {
+  auditBidirectionalReadiness,
+} = require('../../../scripts/lib/bidirectional-readiness');
 
 function readJson(filePath) {
   try {
@@ -252,6 +257,24 @@ function validateLocalization(projectRoot) {
     if (!manifest.locales.includes(manifest.defaultLocale)) {
       errors.push('Manifest defaultLocale must be one of the configured locales.');
     }
+    if (Array.isArray(manifest.unavailableLocales)) {
+      const unavailableValidation = validateLocales(manifest.unavailableLocales);
+      if (!unavailableValidation.valid || unavailableValidation.duplicates.length ||
+          unavailableValidation.canonicalization.length ||
+          unavailableValidation.locales.length !== manifest.unavailableLocales.length) {
+        errors.push(
+          'Manifest unavailableLocales must be valid, canonical, and unique BCP-47 tags.'
+        );
+      }
+      for (const locale of manifest.unavailableLocales) {
+        if (!manifest.locales.includes(locale)) {
+          errors.push(`Unavailable locale ${locale} must also appear in manifest locales.`);
+        }
+        if (locale === manifest.defaultLocale) {
+          errors.push('Manifest defaultLocale cannot be unavailable.');
+        }
+      }
+    }
   }
 
   const packageJson = readJson(path.join(projectRoot, 'package.json')) || {};
@@ -303,7 +326,187 @@ function validateLocalization(projectRoot) {
     errors.push('Managed files do not configure document language (lang).');
   }
 
+  const unavailableLocales = Array.isArray(manifest.unavailableLocales)
+    ? manifest.unavailableLocales
+    : [];
+  const hasAvailabilityImplementation = unavailableLocales.length > 0
+    ? validateLocaleAvailability(
+      projectRoot,
+      allManagedFiles,
+      unavailableLocales,
+      errors
+    )
+    : true;
+
+  if (Array.isArray(manifest.locales) && manifest.locales.length >= 2) {
+    const directionSet = classifyLocaleDirections(manifest.locales);
+    if (directionSet.classification === 'mixed') {
+      const bidiAudit = auditBidirectionalReadiness(projectRoot);
+      const readinessPending =
+        manifest.bidirectionalReadiness?.status === 'pending-remediation';
+      if (!manifest.bidirectionalReadiness) {
+        errors.push(
+          'Mixed-direction localization requires manifest bidirectionalReadiness metadata.'
+        );
+      }
+      const unavailableLocaleSet = new Set(unavailableLocales);
+      const defaultDirection = getLocaleDirection(manifest.defaultLocale);
+      const oppositeDirectionLocales = manifest.locales.filter(
+        (locale) => getLocaleDirection(locale) !== defaultDirection
+      );
+      const allOppositeLocalesUnavailable = oppositeDirectionLocales.every(
+        (locale) => unavailableLocaleSet.has(locale)
+      );
+      if (readinessPending && !allOppositeLocalesUnavailable) {
+        errors.push(
+          'Pending bidirectional remediation requires every locale opposite to the ' +
+          'default direction to be unavailable.'
+        );
+      }
+      if (readinessPending && !hasAvailabilityImplementation) {
+        errors.push(
+          'Pending bidirectional remediation requires managed availability logic that ' +
+          'excludes each unavailable opposite-direction locale.'
+        );
+      }
+      const canSuppressReadinessErrors =
+        readinessPending &&
+        allOppositeLocalesUnavailable &&
+        hasAvailabilityImplementation;
+      if (!canSuppressReadinessErrors) {
+        for (const finding of bidiAudit.findings.filter((item) => item.severity === 'error')) {
+          errors.push(
+            `Bidirectional readiness ${finding.file}:${finding.line} ` +
+            `[${finding.rule}]: ${finding.message}`
+          );
+        }
+      }
+      const availableLocales = manifest.locales.filter(
+        (locale) => !unavailableLocaleSet.has(locale)
+      );
+      const availableDirectionSet = classifyLocaleDirections(availableLocales);
+      if (manifest.mode === 'runtime' &&
+          availableDirectionSet.classification === 'mixed') {
+        validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
+      }
+    }
+  }
+
   return errors;
+}
+
+function validateLocaleAvailability(
+  projectRoot,
+  allManagedFiles,
+  unavailableLocales,
+  errors
+) {
+  const availabilityPaths = allManagedFiles.filter((relativePath) =>
+    /locale[-_.]?availability/i.test(path.basename(relativePath))
+  );
+  if (availabilityPaths.length !== 1) {
+    errors.push(
+      'Pending bidirectional remediation requires one managed locale availability module.'
+    );
+    return false;
+  }
+
+  const availabilityPath = availabilityPaths[0];
+  const fullAvailabilityPath = path.join(projectRoot, availabilityPath);
+  if (!fs.existsSync(fullAvailabilityPath)) return false;
+  const availabilitySource = fs.readFileSync(fullAvailabilityPath, 'utf8');
+  let valid = true;
+  if (!/\bexport\s+(?:function|const)\s+isLocaleAvailable\b/.test(availabilitySource) ||
+      !/!\s*unavailableLocales\.(?:has|includes)\s*\(/.test(availabilitySource)) {
+    errors.push(
+      'The locale availability module must export isLocaleAvailable and reject ' +
+      'entries in unavailableLocales.'
+    );
+    valid = false;
+  }
+  for (const locale of unavailableLocales) {
+    if (!availabilitySource.includes(locale)) {
+      errors.push(`Locale availability module does not exclude ${locale}.`);
+      valid = false;
+    }
+  }
+
+  const boundaryPattern =
+    /LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage|navigator\.languages?|\bhreflang\b|rel\s*=\s*['"]alternate|(?:^|\W)locales?\s*:/im;
+  const boundaryFiles = allManagedFiles
+    .filter((relativePath) => relativePath !== availabilityPath)
+    .filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)))
+    .map((relativePath) => ({
+      relativePath,
+      source: fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'),
+    }))
+    .filter(({ source }) => boundaryPattern.test(source));
+  for (const { relativePath, source } of boundaryFiles) {
+    if (!/\bisLocaleAvailable\s*\(|\bfilter\s*\(\s*isLocaleAvailable\b/.test(source)) {
+      errors.push(
+        `Locale activation boundary ${relativePath} does not apply isLocaleAvailable.`
+      );
+      valid = false;
+    }
+  }
+  if (boundaryFiles.length === 0) {
+    errors.push(
+      'Managed files do not expose a locale activation boundary that applies availability.'
+    );
+    valid = false;
+  }
+  return valid;
+}
+
+function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {
+  const coordinatorPaths = allManagedFiles.filter((relativePath) =>
+    /locale[-_.]?coordinator/i.test(path.basename(relativePath))
+  );
+  if (coordinatorPaths.length !== 1) {
+    errors.push(
+      'Mixed-direction runtime localization requires one managed locale coordinator file.'
+    );
+    return;
+  }
+
+  const [coordinatorPath] = coordinatorPaths;
+  const fullPath = path.join(projectRoot, coordinatorPath);
+  if (!fs.existsSync(fullPath)) return;
+  const source = fs.readFileSync(fullPath, 'utf8');
+  const requirements = [
+    [/switchLocale/i, 'an exported or public switchLocale operation'],
+    [
+      /document\.documentElement\.(?:lang|setAttribute\(['"]lang)/i,
+      'document language updates',
+    ],
+    [
+      /document\.documentElement\.(?:dir|setAttribute\(['"]dir)/i,
+      'document direction updates',
+    ],
+    [
+      /changeLanguage|setActiveLang|locale\.value|activeLocale/i,
+      'localization-library activation',
+    ],
+    [/localStorage/i, 'locale preference persistence'],
+  ];
+  for (const [pattern, description] of requirements) {
+    if (!pattern.test(source)) {
+      errors.push(`Locale coordinator ${coordinatorPath} is missing ${description}.`);
+    }
+  }
+  const localeDerivedDirection =
+    /document\.documentElement\.dir\s*=\s*(?!['"](?:ltr|rtl)['"]\s*;)[^;\n]*(?:locale|direction|dirBy|resolve|getLocale)/i.test(
+      source
+    ) ||
+    /document\.documentElement\.setAttribute\(\s*['"]dir['"]\s*,\s*(?!['"](?:ltr|rtl)['"]\s*\))[^)\n]*(?:locale|direction|dirBy|resolve|getLocale)/i.test(
+      source
+    );
+  if (!localeDerivedDirection) {
+    errors.push(
+      `Locale coordinator ${coordinatorPath} must derive document direction from ` +
+      'the selected locale instead of assigning a fixed direction.'
+    );
+  }
 }
 
 function validateFrameworkModePackage(projectRoot, manifest, dependencies, detected, errors) {
@@ -385,4 +588,5 @@ module.exports = {
   validateManifestShape: validateLocalizationManifestShape,
   validateFrameworkModePackage,
   validateLocalization,
+  validateRuntimeCoordinator,
 };

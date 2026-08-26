@@ -27,6 +27,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
 - **Site content language is independent of Dataverse language**: Generate every user-visible SPA string in the approved content language. Dataverse and Power Pages platform-managed messages remain English (`en-US`, LCID `1033`) in this workflow.
+- **Bidirectional by default**: Read `${PLUGIN_ROOT}/references/bidirectional-design.md`. Every site must use direction-neutral layout, mixed-content boundaries, and script-capable typography even when its initial language has only one direction. A later LTR/RTL locale must not require a general redesign.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
@@ -349,7 +350,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
    The `marker` string is the comment tag Phase 5 emits into the page source as a reserved anchor that `/add-ai-webapi` later finds. Keep the shape uniform — one marker per placement, always the same tag, so the follow-up skill's explore step can grep for them deterministically.
 
-5. Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
+5. Read the design aesthetics reference `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and the shared bidirectional standard `${PLUGIN_ROOT}/references/bidirectional-design.md`.
 6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
    Font choices must support the complete writing system used by `SITE_LOCALE`.
    Verify glyph coverage and shaping rather than selecting a Latin-only font
@@ -507,7 +508,7 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
 > **Narrate progress in the loader**: Before each of the steps below, update `<PROJECT_ROOT>/public/scaffold-status.json` so the user — who may still be watching the Home page loader — sees what's actually happening instead of the hardcoded placeholder cycle. Use a short present-participle `message` (e.g., `"Creating Navbar component"`, `"Creating Contact page"`). Include any useful grouping context inline in the message itself. The loader picks up changes within ~1.5 seconds. Updates become no-ops once step 4 replaces the Home page.
 
-1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
+1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, background treatments, and logical CSS properties. The selected font stack must cover `SITE_LOCALE`'s resolved script. Do not use physical left/right layout as the default, even for an initially LTR-only site. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
 2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
 3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
 4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced — no further status updates are needed after that.*
@@ -548,8 +549,20 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
   stable routes avoid breaking bookmarks, analytics, integrations, tests, and
   a later `/add-localization` setup. Use localized paths only when the maker
   explicitly requests them for a permanently single-language SEO strategy.
-- For RTL locales, use logical CSS properties, preserve sensible reading order,
-  and mirror only directional controls/icons.
+- For every locale, use logical CSS properties and preserve meaningful DOM
+  reading/focus order. Do not reverse arrays or use `row-reverse` to simulate
+  RTL. Initial RTL sites must also be visually verified in RTL.
+- Wrap independently inserted unknown-direction content (names, comments,
+  titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
+  code, file paths, GUIDs, and other machine values explicitly isolated,
+  normally LTR. Use `dir="auto"` for free-form multilingual inputs.
+- Format dates, numbers, currency, percentages, and relative time with `Intl`
+  APIs rather than concatenating locale-sensitive punctuation or symbols.
+- Classify directional icons and assets as unchanged, mirrored, or replaced.
+  Mirror only controls whose semantics follow reading progression.
+- A required physical declaration may remain only with an adjacent
+  `/* bidi-physical: <specific reason>; verify=ltr,rtl */` directive and
+  successful browser verification in both directions.
 
 **Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
 
@@ -611,6 +624,19 @@ After each significant change (new page or component), browse the site via Playw
 
 The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
 
+Run the deterministic readiness audit after all pages and components exist:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every `error` finding. Review every physical-geometry finding in the live
+site. For an intentionally physical product requirement, keep the declaration,
+add the validated adjacent `bidi-physical` directive, and verify that component
+in both LTR and RTL. Use pseudo-opposite-direction content to check wrapping,
+navigation, forms, mixed names/identifiers, icons, calendars, and narrow/mobile
+layout even when no second real locale exists yet.
+
 ### 5.6 Clean Up the Live Status File
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
@@ -649,7 +675,7 @@ and its existing deployment prompt.
 
 When `LOCALIZATION_REQUESTED=false`, skip the child workflow.
 
-> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
+> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive script-capable typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, logical direction-neutral layout, and all requested pages/features before moving to accessibility verification.
 
 **Output**: All pages, components, design elements, and requested localization implemented and verified
 

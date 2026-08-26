@@ -49,6 +49,8 @@ The plugin provides 32 skills that cover the full lifecycle of a Power Pages cod
 Scaffolds a complete code site from a framework template, applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview in the browser throughout development.
 
 - Choose from React, Vue, Angular, or Astro
+- Direction-neutral layouts work with LTR and RTL writing systems from the start
+- Script-aware fonts, locale-aware formatting, and mixed-direction content safety
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
 - Git commits at each milestone
@@ -391,7 +393,14 @@ Power Pages code-site SPAs.
   for Angular, and built-in static locale routes for Astro
 - Generates translations with the agent or creates blank values for manual
   completion
-- Adds an accessible language selector with fallback and RTL handling
+- Resolves direction from each locale's writing script, including languages
+  written in multiple scripts
+- Audits the first opposite-direction locale and remediates blocking layout,
+  component, asset, mixed-content, and font issues
+- Adds an accessible language selector with fallback and safe runtime LTR/RTL
+  switching; runtime React, Vue, and Angular sites use a locale coordinator
+- Keeps an unsafe new locale unavailable for later remediation, or records
+  explicit approval for usable non-blocking limitations
 - Localizes only the SPA UI; it does not enable Dataverse environment languages
 
 #### `/add-seo`
@@ -521,6 +530,7 @@ Several skills now ask about solution identity, orphan components, and pre-expor
 - [PAC CLI Reference](https://learn.microsoft.com/power-platform/developer/cli/reference/pages)
 - [Power Pages REST API](https://learn.microsoft.com/rest/api/power-platform/powerpages/websites)
 - [Dataverse Web API](https://learn.microsoft.com/power-apps/developer/data-platform/webapi/overview)
+- [Bidirectional design standard](references/bidirectional-design.md)
 - [ALM prompts — user guide](references/alm-prompts.md)
 
 ## Testing validator scripts
