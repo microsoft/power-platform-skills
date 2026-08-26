@@ -6,6 +6,18 @@
 // override. That is now `MakerSdkOptions.languageCode`, and the plugin threads a resolved LCID into
 // `createMakerSdk` (see `makeSdk` in build-model-app.js).
 //
+// COVERAGE, stated honestly: the tests below cover FORM labels and SITEMAP titles. They do NOT
+// cover DASHBOARD labels, even though the SDK parameterizes `dashboardRegistration(languageCode)`
+// the same way — an empty dashboard emits no `<labels>` at all, so there is nothing to assert
+// without a populated dashboard fixture. A re-vendor that dropped dashboard parameterization while
+// leaving form and sitemap intact would therefore pass this file. Closing that needs a dashboard
+// with real content, which is worth adding when the dashboard phase next gets attention.
+//
+// Live status: the FORM half is live-verified — a form pushed against a genuinely Spanish org
+// (base language 3082) came back FROM THE SERVER with `languagecode="3082"` on every label. The
+// sitemap half is real-bundle-verified only; the live app create failed on an unrelated
+// `appmodules` error before its sitemap could be read back.
+//
 // This drives the REAL vendored bundle rather than a mock, because the whole failure mode is "the
 // mock accepts an option the bundle ignores". A mock-based test would stay green against a bundle
 // that dropped the option on the floor — precisely the state this file exists to detect after a

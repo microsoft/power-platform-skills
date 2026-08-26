@@ -100,7 +100,7 @@ test('REAL BUNDLE: Button, FlyoutAnchor and SplitButton all emit writes', async 
   }
 });
 
-test('REAL BUNDLE: hidden/disabled are STATIC booleans on the wire', async () => {
+test('REAL BUNDLE: hidden/disabled reach the wire as real booleans, not rules or strings', async () => {
   // The limit worth recording: `hidden: true` is a fixed state, not a rule. Rule-evaluated
   // visibility on modern commands is Power Fx + a component library and cannot be authored
   // headlessly, so an author must not expect "hide when status = closed" to be expressible here.
@@ -111,9 +111,19 @@ test('REAL BUNDLE: hidden/disabled are STATIC booleans on the wire', async () =>
   const pushed = await sdk.pushArtifact('command', art.id);
   assert.strictEqual(pushed.saved, true);
   assert.ok(writes.length > 0, 'a static hidden/disabled button still writes');
-  const all = JSON.stringify(writes);
-  // The values must land as booleans/flags, never as an unevaluated expression string.
-  assert.doesNotMatch(all, /statuscode eq/i, 'no rule expression is carried — these are static flags');
+
+  // POSITIVE assertions on the observed wire shape:
+  //   { …, "buttonlabeltext": "Static", "hidden": true, "isdisabled": true }
+  // A negative-only test ("no rule expression appears") would pass for three DIFFERENT failures:
+  // the SDK dropping both flags, coercing them to the strings "true"/"false", or inverting them.
+  // Naming the real keys and the real types is what makes this a contract test.
+  const body = writes.map((w) => w.body).find((b) => b && b.hidden !== undefined);
+  assert.ok(body, 'a command row carrying the visibility flags was written; got ' + JSON.stringify(writes.map((w) => w.body)).slice(0, 300));
+  assert.strictEqual(body.hidden, true, '`hidden` is a real boolean on the wire, not a string and not inverted');
+  assert.strictEqual(body.isdisabled, true, '`disabled` maps to `isdisabled`, also a real boolean');
+
+  // And the negative still holds: no unevaluated rule expression is carried.
+  assert.doesNotMatch(JSON.stringify(writes), /statuscode eq/i, 'no rule expression — these are static flags');
 });
 
 test('the plugin builds an UNTITLED group, because titled top-level groups are a platform limit', () => {
