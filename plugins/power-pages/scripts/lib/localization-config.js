@@ -61,6 +61,19 @@ const DEFAULT_SOURCE_SCAN_LIMITS = Object.freeze({
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 10 * 1024 * 1024,
 });
+// Direction belongs to a writing script, not permanently to a language. The
+// runtime's ICU/CLDR data supplies likely scripts through Intl.Locale#maximize.
+// CLDR ScriptMetadata field 6 identifies every script containing RTL letters;
+// keep this list complete because Intl.Locale#textInfo can report language-level
+// direction even when an explicit script requests the opposite direction.
+// See: https://github.com/unicode-org/cldr/blob/main/common/properties/scriptMetadata.txt
+const RTL_SCRIPTS = Object.freeze(new Set([
+  'Adlm', 'Arab', 'Aran', 'Armi', 'Avst', 'Chrs', 'Cprt', 'Elym', 'Gara',
+  'Hatr', 'Hebr', 'Hung', 'Khar', 'Lydi', 'Mand', 'Mani', 'Mend', 'Merc',
+  'Mero', 'Narb', 'Nbat', 'Nkoo', 'Orkh', 'Ougr', 'Palm', 'Phli', 'Phlp',
+  'Phnx', 'Prti', 'Rohg', 'Samr', 'Sarb', 'Sidt', 'Sogd', 'Sogo', 'Syrc',
+  'Syre', 'Syrj', 'Syrn', 'Thaa', 'Yezi',
+]));
 
 let cachedRegistry;
 
@@ -99,6 +112,13 @@ function validateLocalizationManifestShape(manifest) {
         manifest[field].some((value) => typeof value !== 'string' || !value.trim())) {
       errors.push(`Manifest ${field} must be an array of non-empty strings.`);
     }
+  }
+  if (manifest.unavailableLocales !== undefined &&
+      (!Array.isArray(manifest.unavailableLocales) ||
+       manifest.unavailableLocales.some(
+         (value) => typeof value !== 'string' || !value.trim()
+       ))) {
+    errors.push('Manifest unavailableLocales must be an array of non-empty strings.');
   }
   if (!manifest.resourcePaths || typeof manifest.resourcePaths !== 'object' ||
       Array.isArray(manifest.resourcePaths) ||
@@ -177,6 +197,31 @@ function validateLocalizationManifestShape(manifest) {
         errors.push('Manifest initializationEvidence.marker must be a non-empty string.');
       } else if (evidence.marker.length > 200) {
         errors.push('Manifest initializationEvidence.marker must not exceed 200 characters.');
+      }
+    }
+  }
+  if (manifest.bidirectionalReadiness !== undefined) {
+    const readiness = manifest.bidirectionalReadiness;
+    if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
+      errors.push('Manifest bidirectionalReadiness must be an object.');
+    } else {
+      if (!['ready', 'approved-with-limitations', 'pending-remediation'].includes(
+        readiness.status
+      )) {
+        errors.push(
+          'Manifest bidirectionalReadiness.status must be "ready", ' +
+          '"approved-with-limitations", or "pending-remediation".'
+        );
+      }
+      if (readiness.findings !== undefined && !Array.isArray(readiness.findings)) {
+        errors.push('Manifest bidirectionalReadiness.findings must be an array.');
+      }
+      if (readiness.status === 'pending-remediation' &&
+          (!Array.isArray(manifest.unavailableLocales) ||
+           manifest.unavailableLocales.length === 0)) {
+        errors.push(
+          'Pending bidirectional remediation requires at least one unavailable locale.'
+        );
       }
     }
   }
@@ -447,7 +492,7 @@ function validateLocales(input, options = {}) {
   };
 }
 
-function getLocaleDirection(locale) {
+function getLocaleMetadata(locale) {
   let canonical;
   let parsed;
   try {
@@ -456,16 +501,67 @@ function getLocaleDirection(locale) {
   } catch {
     // Private-use-only tags such as x-contoso are valid BCP-47 identifiers but
     // do not carry script metadata from which a direction can be derived.
-    return 'ltr';
+    return {
+      locale,
+      language: null,
+      script: null,
+      region: null,
+      direction: 'ltr',
+      directionSource: 'private-use-default',
+    };
   }
 
-  // Node exposes Unicode text direction through Intl.Locale.textInfo. Keep the
-  // language fallback for older Node releases that do not implement it.
-  const intlDirection = parsed.textInfo?.direction;
-  if (intlDirection === 'rtl' || intlDirection === 'ltr') return intlDirection;
+  const maximized = parsed.maximize();
+  const script = parsed.script || maximized.script || null;
+  if (script && RTL_SCRIPTS.has(script)) {
+    return {
+      locale: canonical,
+      language: parsed.language,
+      script,
+      region: parsed.region || maximized.region || null,
+      direction: 'rtl',
+      directionSource: parsed.script ? 'explicit-script' : 'likely-script',
+    };
+  }
+  if (script) {
+    return {
+      locale: canonical,
+      language: parsed.language,
+      script,
+      region: parsed.region || maximized.region || null,
+      direction: 'ltr',
+      directionSource: parsed.script ? 'explicit-script' : 'likely-script',
+    };
+  }
 
-  const rtlLanguages = new Set(['ar', 'dv', 'fa', 'he', 'ku', 'ps', 'sd', 'ug', 'ur', 'yi']);
-  return rtlLanguages.has(parsed.language.toLowerCase()) ? 'rtl' : 'ltr';
+  const textInfo = typeof parsed.getTextInfo === 'function'
+    ? parsed.getTextInfo()
+    : parsed.textInfo;
+  const direction = ['rtl', 'ltr'].includes(textInfo?.direction)
+    ? textInfo.direction
+    : 'ltr';
+  return {
+    locale: canonical,
+    language: parsed.language,
+    script: null,
+    region: parsed.region || null,
+    direction,
+    directionSource: textInfo?.direction ? 'intl-text-info' : 'unknown-default',
+  };
+}
+
+function getLocaleDirection(locale) {
+  return getLocaleMetadata(locale).direction;
+}
+
+function classifyLocaleDirections(locales) {
+  const entries = locales.map((locale) => getLocaleMetadata(locale));
+  const directions = [...new Set(entries.map((entry) => entry.direction))].sort();
+  return {
+    classification: directions.length > 1 ? 'mixed' : `${directions[0] || 'ltr'}-only`,
+    directions,
+    locales: entries,
+  };
 }
 
 function resolveLocale(input) {
@@ -479,10 +575,15 @@ function resolveLocale(input) {
   }
 
   const [locale] = validation.locales;
+  const metadata = getLocaleMetadata(locale);
   return {
     ...validation,
     locale,
-    direction: getLocaleDirection(locale),
+    language: metadata.language,
+    script: metadata.script,
+    region: metadata.region,
+    direction: metadata.direction,
+    directionSource: metadata.directionSource,
   };
 }
 
@@ -1177,11 +1278,13 @@ module.exports = {
   MANIFEST_NAME,
   KNOWN_PACKAGES,
   hasLocaleNavigationSignal,
+  classifyLocaleDirections,
   detectFramework,
   detectLocalization,
   detectSiteLanguage,
   detectSiteLanguageForFramework,
   getLocaleDirection,
+  getLocaleMetadata,
   inspectProject,
   loadRegistry,
   resolveLocale,
