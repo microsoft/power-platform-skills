@@ -81,6 +81,8 @@ Read the full source. Identify:
 - **Data access:** is `dataApi` used? Which entities? Which columns?
 - **Components in use:** Fluent UI V9 components, any D3.js charts, etc.
 - **Styling approach:** `makeStyles` + tokens, layout (flex/grid)
+- **Visual identity:** palette, typography, density, radii, borders/shadows, imagery,
+  and whether the current page follows MDA defaults or a distinct design language
 - **Accessibility:** existing ARIA labels, keyboard handling
 
 ### 1d. `RuntimeTypes.ts` (optional)
@@ -117,8 +119,16 @@ Ask questions via `AskUserQuestion`, one at a time:
      > code-only changes. Would you like to continue with code-only edits?"
    - If code-only: continue.
 
-4. **"Any specific requirements for the changes?"** — styling, accessibility,
-   behavior, or preservation constraints not yet covered.
+4. **"Any specific requirements for the changes?"** — styling or design reference
+   (screenshot/mockup, website/brand, or text description), accessibility, behavior,
+   or preservation constraints not yet covered.
+   - Treat new visual direction as a hard requirement and record concrete layout,
+     palette, typography, density, shape, borders/shadows, imagery, and interaction
+     details in Design Notes.
+   - When the edit is a visual redesign, the new direction overrides the original
+     page's MDA styling. Preserve functionality, not obsolete visual defaults.
+   - If a website reference cannot be inspected, ask for a screenshot or concrete
+     style details rather than falling back to MDA styling.
 
 > **Connector data changes** (SharePoint, weather, Office 365, SQL, custom REST):
 > Do **not** run connector discovery here — the orchestrator delegates that to the
@@ -179,6 +189,14 @@ Enter plan mode (`EnterPlanMode`) with:
 ### Preservation Constraints
 - [What must remain unchanged — feature preservation, specific behaviors]
 
+### Design Fidelity
+- **Source:** [screenshot/mockup, website/brand reference, text description,
+  existing page, or "preserve current design"]
+- **Must match:** [concrete hierarchy, layout, palette, typography, density, shape,
+  imagery, and interaction details]
+- **Allowed deviations:** [accessibility/responsiveness/host-safety adjustments only,
+  or "none"]
+
 ### Risks
 - [Any tension with the original prompt, or any risky aspects — or "None"]
 ```
@@ -230,8 +248,10 @@ Write `genpage-edit-plan.md` to the working directory root (NOT inside the
  independently verifiable.>
 
 ## Design Notes
-<Styling, accessibility, or behavior guidance the orchestrator should follow
- when applying the changes.>
+<Design source plus concrete hierarchy, layout, palette, typography, density, shape,
+ imagery, and interaction requirements. State that user-directed styling overrides
+ default MDA styling; list only the smallest deviations required for accessibility,
+ responsiveness, or genpage host safety. Include other behavior guidance.>
 
 ## Relevant Samples
 <Optional. If a sample from ${PLUGIN_ROOT}/samples/ would help the

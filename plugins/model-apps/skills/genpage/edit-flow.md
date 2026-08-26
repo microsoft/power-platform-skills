@@ -177,8 +177,10 @@ preservation constraints.
 
 Also read:
 - `${PLUGIN_ROOT}/references/rules.md` — all code-gen
-  rules still apply to edits (Fluent UI V9 only, makeStyles with tokens, WCAG AA,
-  no `100vh`/`100vw`, etc.)
+  rules still apply to edits (Fluent UI V9 only, `makeStyles`, WCAG AA,
+  no `100vh`/`100vw`, etc.). User-directed visual requirements in the approved
+  edit plan override default MDA styling; tokens are defaults, not a reason to
+  discard an explicit palette, typography, spacing, shape, or layout.
 - `<working-dir>/RuntimeTypes.ts` — if generated in Edit Phase 3, for verified
   column names
 - `<working-dir>/<page-id>/page.tsx` — the current source
@@ -191,6 +193,12 @@ Apply each change from the edit plan using targeted `Edit` operations on
 RuntimeTypes.ts when the edit touches Dataverse data access. Use ONLY logical
 names, datasets, table GUIDs, and operations from the seeded connector bindings
 or approved edit plan when the edit touches connector data access.
+
+For visual edits, implement the plan's Design Fidelity/Design Notes as acceptance
+criteria. Preserve the requested hierarchy, layout, palette, typography, density,
+radii, borders/shadows, imagery, and interaction states. Use Fluent components for
+behavior and accessibility while styling their slots to match; do not normalize the
+page back to stock MDA cards, form sections, command bars, spacing, or blue accents.
 
 Do NOT rewrite the entire file. Use the minimum necessary `Edit` operations.
 

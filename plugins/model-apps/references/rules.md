@@ -12,7 +12,10 @@ Comprehensive rules for generating generative page code. Read this file during c
 4. **Limited Imports**: Only React, Fluent UI V9, FluentUI icons, and D3.js for charts
 5. **DataAPI**: ONLY use when explicit TableRegistrations provided; otherwise use mocked data
 6. **Entity Logical Names**: Use singular lowercase (e.g., `"account"` not `"accounts"`)
-7. **Styling**: Use `makeStyles` with tokens; avoid inline styles except for dynamic values
+7. **Styling**: Use `makeStyles`; avoid inline styles except for dynamic values. Theme
+   tokens are the default, not a visual constraint: when the user supplies a palette,
+   typography, spacing, shape, or other design values, encode those values in
+   `makeStyles` (or CSS custom properties) instead of replacing them with MDA defaults.
 8. **Responsive Design**: Use flexbox and relative units; NEVER use `100vh`/`100vw`
 9. **Icons — verified names only**: Import from `@fluentui/react-icons`; use unsized variants only (e.g., `AddRegular` not `Add24Regular`). Icon names are frequently hallucinated — names like `MedicalRegular`, `PawRegular`, `AnimalRabbitRegular`, `BirdRegular` do not exist. **Always Read `${PLUGIN_ROOT}/references/verified-icons.txt`** (~5000 names) and cross-check every icon import against that list. After writing, Grep your own output for `from "@fluentui/react-icons"` and verify each named import. If an icon you want is not in the list, pick the closest semantic substitute that is. Never guess a name.
 10. **No External Libraries**: No routing libraries (React Router) or assumptions of implicit dependencies
@@ -25,6 +28,14 @@ Comprehensive rules for generating generative page code. Read this file during c
 17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
 18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
 19. **All hooks above every early return — no conditional hook calls**: Detail/record pages crash with **minified React error #310** ("rendered more/fewer hooks than the previous render") on the *first* open of a record, then work on the second click. Cause: a hook — usually a `useMemo` deriving chart points or display rows from loaded data — sits *below* a loading/empty early return (`if (data.loading) return <Spinner/>`). On the first render data is still loading, the component early-returns and never reaches that `useMemo` (fewer hooks); when data arrives it renders past the return and calls the extra hook → the hook count differs between renders → #310. The "works the second time" intermittency (the cached render skips the loading branch) is the signature of this bug. **Fix:** place every `useMemo`/`useState`/`useEffect`/`useCallback` **above all early returns**, and make derived memos tolerate not-yet-loaded data (read from an always-initialized value, e.g. `data.rows ?? []`). Early returns are fine — they just must come *after* the last hook call. This is the React rules of hooks: never call a hook below a conditional `return`.
+20. **User design direction overrides default MDA styling**: Treat screenshots,
+   mockups, website/brand references, and explicit text descriptions as requirements,
+   not suggestions. Match their visual hierarchy, layout, palette, typography, density,
+   radii, borders, shadows, and imagery as closely as the runtime permits. Fluent UI V9
+   remains the component/accessibility foundation; it does not require the page to look
+   like a stock model-driven app. Do not normalize a requested design into neutral cards,
+   standard form sections, command bars, default spacing, or the default blue accent.
+   Accessibility, responsiveness, and host-safety rules remain mandatory.
 
 ---
 
@@ -83,9 +94,16 @@ export default GeneratedComponent;
 ## Layout and Styling
 
 ### Design Principles
-- Follow Microsoft Fluent Design System principles
+- When the user gives no visual direction, follow Microsoft Fluent Design System
+  principles and the host theme.
+- When the user gives visual direction, preserve it. Use Fluent components for
+  behavior and accessibility, then style their slots with `makeStyles` to achieve the
+  requested appearance.
 - Use sentence case for all text
-- Use theme tokens (e.g., `tokens.spacingVerticalXL`, `tokens.colorNeutralBackground1`)
+- Use theme tokens (e.g., `tokens.spacingVerticalXL`,
+  `tokens.colorNeutralBackground1`) as defaults. Explicit design values may use CSS
+  literals or custom properties in `makeStyles`; do not substitute a near-enough token
+  when that substitution materially changes the requested design.
 - `makeStyles` for styling; inline styles only for dynamic values
 - Group content in sections for visual separation
 
@@ -138,12 +156,32 @@ const useStyles = makeStyles({
 - Provide back/forward navigation for wizard flows
 - No React Router or hash/history API routing
 
-### User-Provided Mockups/Screenshots
-- When user provides mockups, those take precedence for layout, structure, and visual design
-- Follow the provided design closely while adapting to Fluent UI V9 components
-- Maintain all technical constraints: accessibility (ARIA, keyboard nav, WCAG AA), responsive design, proper semantic HTML
-- If the mockup conflicts with accessibility or responsive design requirements, prioritize accessibility while staying as close to the visual design as possible
-- Translate design elements to equivalent Fluent UI components (e.g., custom buttons -> Fluent Button with appropriate styling)
+### User-Directed Visual Design
+
+Use this precedence order:
+
+1. User-provided screenshot or mockup
+2. User-provided website or brand reference
+3. Explicit text description of the desired style
+4. Existing page style for edits, unless the user asks to replace it
+5. Fluent/MDA defaults only when no direction exists
+
+- Translate the source into concrete implementation decisions: page regions, visual
+  hierarchy, palette, typography, spacing/density, corner treatment, borders/shadows,
+  iconography, imagery, and interaction states.
+- Follow the design closely while adapting controls to Fluent UI V9. "Use Fluent UI"
+  means use supported components and accessible behavior; it does **not** mean reset
+  the visual treatment to default Fluent/MDA styling.
+- Do not add generic MDA chrome that is absent from the reference, such as a stock
+  command bar, neutral section cards, or standard form-style field groups.
+- If a website reference cannot be inspected, ask for a screenshot or concrete style
+  details during planning. Never claim fidelity to a reference that was not available.
+- Maintain accessibility (ARIA, keyboard navigation, WCAG AA), responsive behavior,
+  semantic HTML, and genpage host constraints. If those conflict with the reference,
+  make the smallest necessary deviation and preserve the rest of the design.
+- Translate custom controls to equivalent Fluent components and style their slots
+  (for example, a branded button becomes a Fluent `Button` with matching colors,
+  typography, radius, border, and interaction states).
 
 ---
 
