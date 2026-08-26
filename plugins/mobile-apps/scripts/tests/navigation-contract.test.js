@@ -10,7 +10,7 @@ const { deriveExperienceFromBrief } = require('../experience-patterns');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
 const { resolveNavigationContract } = require('../resolve-navigation-contract');
-const { validateNavigationContract, validateProductNavigationFit } = require('../validate-navigation-contract');
+const { validateNavigationContract } = require('../validate-navigation-contract');
 const { validateNavigationContinuity } = require('../validate-navigation-continuity');
 
 const resolverScript = path.resolve(__dirname, '..', 'resolve-navigation-contract.js');
@@ -167,56 +167,6 @@ test('navigation resolution is independent of domain adapters and overrides a co
   assert.equal(first.contract.decision.provisionalHint, 'stack');
 });
 
-test('product-fit validation rejects missing durable areas for benchmark app archetypes', () => {
-  const cases = [
-    {
-      brief: 'Create a mobile app for showcasing inventory items to flight passengers. This app will be used in flight for selling travel accessories, beauty products and watches. Organize products by category and support a shopping bag.',
-      screens: ['Shop product catalog', 'Categories', 'Product detail', 'Bag'],
-      destinations: ['Shop', 'Bag'],
-      missing: /durable categories destination/i,
-    },
-    {
-      brief: 'Create an offline field receiving app for expected shipments, damaged quantities, inspection, and saved drafts.',
-      screens: ['Home receiving status', 'Expected shipments', 'Saved drafts', 'Damage inspection'],
-      destinations: ['Home', 'Shipments'],
-      missing: /durable drafts destination/i,
-    },
-    {
-      brief: 'Maintain and audit gym equipment across multiple gyms with repairs, maintenance, and warranty.',
-      screens: ['Home gym work', 'Equipment inventory', 'Repair and maintenance work'],
-      destinations: ['Home', 'Equipment'],
-      missing: /durable work destination/i,
-    },
-    {
-      brief: 'Create a mobile app for tracking company inventory, app should support scanning, printing barcodes, Track warranty ownerships or IT assets. Support monthly inspections and repair and updates status.',
-      screens: ['Home asset status', 'Assets inventory', 'Monthly inspections', 'Repairs'],
-      destinations: ['Home', 'Assets', 'Inspections'],
-      missing: /durable repairs destination/i,
-    },
-  ];
-  for (const scenario of cases) {
-    const experienceContract = deriveExperienceFromBrief(scenario.brief);
-    const screenContract = {
-      screens: scenario.screens.map((purpose, index) => ({ id: `Screen${index}`, purpose, route: `/(app)/screen-${index}` })),
-    };
-    const contract = {
-      destinations: scenario.destinations.map((label) => {
-        const stem = label.toLowerCase().replace(/s$/, '');
-        const screenIndex = scenario.screens.findIndex((purpose) => purpose.toLowerCase().includes(stem));
-        return {
-          id: label.toLowerCase(),
-          label,
-          route: `/(app)/${label.toLowerCase()}`,
-          rootScreenId: `Screen${screenIndex}`,
-        };
-      }),
-    };
-    const errors = [];
-    validateProductNavigationFit(contract, { experienceContract, screenContract }, errors);
-    assert.match(errors.join('\n'), scenario.missing);
-  }
-});
-
 test('validation rejects action destinations and unowned screens', () => {
   const value = contracts('Open Home and saved Drafts, then submit current work.', [
     screen('Home', 'primary', 'Open current state.', { candidate: candidate() }),
@@ -229,6 +179,21 @@ test('validation rejects action destinations and unowned screens', () => {
   const errors = validateNavigationContract(value.contract, { experienceContract: value.experience, workflowJourney: value.workflow, screenContract: value.screenContract }).errors.join('\n');
   assert.match(errors, /represents an action/);
   assert.match(errors, /has no destination or flow owner/);
+});
+
+test('validation rejects legacy product-role labels even when navigation ownership is correct', () => {
+  const value = contracts('Use Home and saved Drafts to revisit ongoing work.', [
+    screen('Home', 'primary', 'Open current state.', { candidate: candidate() }),
+    screen('Drafts', 'supporting', 'Resume saved drafts.', { kind: 'stack-root', candidate: candidate() }),
+    profileScreen(),
+  ]);
+  value.screenContract.screens.find((item) => item.id === 'Home').productRole = 'primary-hub';
+  const errors = validateNavigationContract(value.contract, {
+    experienceContract: value.experience,
+    workflowJourney: value.workflow,
+    screenContract: value.screenContract,
+  }).errors.join('\n');
+  assert.match(errors, /screen Home productRole must be durable-destination/);
 });
 
 test('continuity rejects ordinary details that lose tabs or destination ownership', () => {
@@ -273,4 +238,43 @@ test('foreground CLI attaches Navigation and the aligned Screen Graph to a stage
   assert.equal(bundle.artifacts.navigationContract.model, 'tabs-stack');
   assert.equal(bundle.artifacts.experienceScreenContract.screens.every((item) => item.navigation.destinationId), true);
   assert.equal(fs.existsSync(path.join(root, '.tmp', 'navigation-contract.json')), false);
+});
+
+test('foreground CLI normalizes schema-v1 sidecars even when they already contain screens', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'navigation-legacy-screen-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
+  const brief = 'Browse products and inspect one product.';
+  const experience = deriveExperienceFromBrief(brief);
+  const context = resolveContextEnrichment(brief, experience);
+  const workflow = resolveWorkflowJourney(brief, experience, context);
+  fs.writeFileSync(path.join(root, 'brief.md'), brief);
+  fs.writeFileSync(path.join(root, 'native-app-plan.md'), [
+    '### Screen Map',
+    '',
+    '| Screen | Route | File |',
+    '|---|---|---|',
+    '| Discover | /(app)/home | app/(app)/home.tsx |',
+    '| Product detail | /(app)/products/[productId] | app/(app)/products/[productId].tsx |',
+    '| Profile | /(app)/profile | app/(app)/profile.tsx |',
+  ].join('\n'));
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), JSON.stringify(experience));
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), JSON.stringify(workflow));
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), JSON.stringify({
+    schemaVersion: 1,
+    primaryScreen: { route: '/(app)/home', file: 'app/(app)/home.tsx', runtimeMarkers: ['experience-primary-action'] },
+    keyFlow: { route: '/(app)/products/[productId]', file: 'app/(app)/products/[productId].tsx', outcome: 'Inspect one product.' },
+    screens: [{ id: 'legacy-screen-that-must-not-bypass-normalization' }],
+  }));
+
+  const result = spawnSync(process.execPath, [resolverScript, '--project-root', root], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const normalized = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'));
+  assert.equal(normalized.schemaVersion, 2);
+  assert.deepEqual(normalized.screens.map((item) => item.route), [
+    '/(app)/home',
+    '/(app)/products/[productId]',
+    '/(app)/profile',
+  ]);
+  assert.equal(normalized.screens.some((item) => item.id === 'legacy-screen-that-must-not-bypass-normalization'), false);
 });

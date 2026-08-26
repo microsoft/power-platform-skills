@@ -125,7 +125,7 @@ test('offline receiving resolves resumable durable roots and an owned bounded ca
     screen('Drafts', 'Resume receiving drafts saved on this device.', 'durable-destination'),
     screen('Identify', 'Scan barcode or QR code with manual identification fallback.', 'immersive-modal', { keyFlow: true, parentRoute: '/(app)/shipments' }),
     screen('Receive', 'Record received and damaged quantities, batch, and expiry.', 'bounded-flow-step', { parentRoute: '/(app)/shipments' }),
-    screen('Inspect', 'Capture inspection results, damage photos, and GPS location.', 'bounded-flow-step', { parentRoute: '/(app)/shipments' }),
+    screen('Inspect', 'Capture inspection results, damage photos, and GPS location.', 'immersive-modal', { parentRoute: '/(app)/shipments' }),
     screen('Confirm', 'Obtain recipient signature confirmation.', 'immersive-modal', { parentRoute: '/(app)/shipments' }),
     screen('Review', 'Review the completed reception and pending sync state.', 'bounded-flow-step', { parentRoute: '/(app)/shipments' }),
     profile(),

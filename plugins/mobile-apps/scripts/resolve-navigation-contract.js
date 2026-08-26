@@ -441,7 +441,7 @@ function main(argv) {
     const rawScreens = bundle?.artifacts?.experienceScreenContract || readJson(args.screenContract, '.tmp/experience-screen-contract.json');
     const planPath = path.join(root, 'native-app-plan.md');
     const fallbackScreens = fs.existsSync(planPath) ? parseScreenMap(fs.readFileSync(planPath, 'utf8')) : [];
-    const screens = Array.isArray(rawScreens.screens)
+    const screens = [2, 3].includes(rawScreens.schemaVersion) && Array.isArray(rawScreens.screens)
       ? rawScreens
       : {
           ...rawScreens,

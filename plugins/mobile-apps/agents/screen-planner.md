@@ -97,21 +97,15 @@ Profile at `/(app)/profile`; classify it as `durable-destination` when it is a
 frequent product job and tab capacity permits, otherwise `global-utility` with
 a labeled Profile header/avatar action reachable from every durable root.
 
-Do not collapse independent product jobs into a single Home stack. Apply these
-deterministic product-fit baselines when the brief has the matching evidence:
-
-| Product evidence | Required durable destinations | Nested or modal flows |
-|---|---|---|
-| Product discovery with categories and cart/bag | Shop or Browse, Categories, Bag or Cart | Product detail and checkout |
-| Offline shipment receiving | Home, Shipments, Drafts | Scan, inspect, damage capture, confirmation |
-| Multi-site equipment maintenance | Home, Equipment, Work | Scanner, equipment detail, repair update |
-| Asset inventory with inspections and repairs | Home, Assets, Inspections, Repairs | Scanner, asset detail, inspection/repair forms |
-
-These labels may use domain-appropriate synonyms, but each job must remain an
-independently revisitable, state-preserving destination. For 2-5 destinations,
-select labeled tabs with nested stacks. Use a drawer only above five. Stack-only
-is valid only when the brief truly defines one durable area and the Navigation
-Decision records concrete evidence plus a visible return-home mechanism.
+Do not collapse independent product jobs into a single Home stack, but do not
+use a fixed screen count, route list, or industry navigation preset. Infer the
+smallest complete screen graph from the brief, requirement coverage, domain
+operations, and workflow journey. For every proposed durable destination,
+record the brief evidence or safe product inference that makes it independently
+revisitable and state-preserving. For 2-5 AI-selected destinations, use labeled
+tabs with nested stacks. Use a drawer only above five. Stack-only is valid only
+when the AI-derived graph has one durable area and the Navigation Decision
+records concrete evidence plus a visible return-home mechanism.
 
 In prototype mode, bind every data-driven screen to exact operations from the
 neutral domain model. Name the exported `@/data` hook, selected/filter/sort/
