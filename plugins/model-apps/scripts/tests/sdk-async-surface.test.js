@@ -44,9 +44,10 @@ const ASYNC_SDK_METHODS = [
 // real SDK call cannot hide behind an unusual variable name without this list being updated.
 const SDK_RECEIVERS = ['provision', 'sdk'];
 
-// An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so on the same
-// line. There are none today; the escape hatch exists so a future author is pushed to justify one
-// in-line rather than delete this test.
+// An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so, either on
+// the same line or on the line immediately above it — the latter because these calls are often too
+// long for a readable trailing comment. Requiring adjacency keeps the waiver next to the code it
+// excuses, so it cannot drift onto an unrelated call later.
 const OPT_OUT = 'sdk-async-ok';
 
 function pluginSourceFiles() {
@@ -78,6 +79,7 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   let scanned = 0;
   let calls = 0;
   let inComment = 0;
+  let waived = 0;
 
   for (const file of pluginSourceFiles()) {
     // This file names the methods in prose and in the ASYNC_SDK_METHODS list; scanning it would
@@ -98,7 +100,7 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
       // is deliberately NOT skipped, because the code before it still runs.
       const lead = text.trimStart();
       if (lead.startsWith('//') || lead.startsWith('/*') || lead.startsWith('*')) { inComment++; continue; }
-      if (text.includes(OPT_OUT)) continue;
+      if (text.includes(OPT_OUT) || String(lines[line - 2] || '').includes(OPT_OUT)) { waived++; continue; }
       findings.push(`${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`);
     }
   }
@@ -107,6 +109,9 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   assert.ok(scanned > 50, `the scan walked the plugin source (saw ${scanned} files)`);
   assert.ok(calls > 30, `the scan found the SDK calls it is meant to guard (saw ${calls})`);
   assert.ok(inComment > 0, 'the comment filter is exercised (documentation naming these calls exists)');
+  // The waiver must stay RARE and deliberate. If this ever grows large, the rule is being routed
+  // around rather than followed.
+  assert.ok(waived <= 5, `only a handful of deliberate ${OPT_OUT} waivers exist (saw ${waived})`);
   assert.deepStrictEqual(findings, [],
     'these SDK calls are NOT awaited, but the vendored SDK returns a Promise. Unawaited, they do '
     + 'not throw — they silently feed a Promise to a pure helper and corrupt the artifact '
