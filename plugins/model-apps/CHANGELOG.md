@@ -129,6 +129,37 @@ and corrects a smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **Rebuilds no longer duplicate sub-grids or skip field removals** — the plugin now
+  awaits the maker SDK's asynchronous artifact surface.
+
+  The vendored SDK was re-taken from its merged `master` tip, so the shipped bundle is
+  reproducible from a commit rather than from a feature branch. That uptake brought a
+  **breaking upstream change** the previous bundle predated: the workspace is no longer
+  an ephemeral session cache that hard-fails on a second build, but a 300s staleness
+  window with *revalidating reads* — so `getArtifact`, `addElement`, `updateElement`,
+  `removeElement`, `moveElement`, `findElements` and `queryTree` now return promises.
+
+  Un-awaited, that fails **silently rather than loudly**. A promise is truthy, so the
+  engine's `|| {}` guards never fire and the artifact helpers receive a promise instead
+  of a form:
+
+  | helper | got | build result |
+  | --- | --- | --- |
+  | `hasSubgrid` | `false` | a rebuild splices a **duplicate sub-grid** |
+  | `hasQuickView` | `false` | a rebuild splices a **duplicate quick-view** |
+  | `formFieldLogicals` | `[]` | every spec field looks missing, so **all are re-added** |
+  | `findFieldCellPointer` | `null` | an explicit-layout field removal **never lands** |
+
+  Every one of those produces a wrong artifact on a real environment behind `2xx`
+  responses and a green build. Reproduced live, read-only, against a stock `account`
+  main form on a real environment: awaited, the helpers read 24 fields and located the
+  cell; un-awaited, the same helpers returned `[]` and `null`.
+
+  All 40 call sites are fixed, and two independent nets now guard the class — a source
+  scan that fails on any un-awaited call, and test mocks that are `async` (and actually
+  yield) so the ~1500 mock-driven tests can finally detect a missing `await` instead of
+  passing either way.
+
 - **Dataverse labels no longer use a hardcoded `1033`**
   ([#447](https://github.com/microsoft/power-platform-skills/issues/447)). In an
   organization that has not provisioned 1033, `data-model` halted with
@@ -252,6 +283,23 @@ and corrects a smoke-eval assertion that could never pass live.
   portal shows.
 
 ### Tests
+- **The mocks no longer lie about the SDK contract.** Every test mock's generic surface
+  returned plain values while the real SDK returns promises, so an engine call that
+  forgot its `await` behaved identically under the mock — `await` on a non-promise is a
+  no-op. That made ~1500 mock-driven tests structurally blind to the async class. The
+  mocks are now `async` *and* yield before their side effect (an `async` arrow with no
+  `await` in its body still runs synchronously, so async alone would have changed the
+  return value but not the timing).
+- **Rebuild idempotence is asserted.** Every reconcile test previously started from an
+  *empty* deployed form, where "re-add everything" and "add only what's missing" produce
+  identical call logs, so no assertion could tell a working reconcile from a broken one.
+  A two-pass build against one store now requires the second pass to re-add no field and
+  splice no second sub-grid.
+- **Concurrency stress against the real bundle** — 40 concurrent artifact mutations must
+  all survive in the shared workspace manifest (its read-modify-write is the natural
+  lost-update site now that builds interleave far more), 20 writers contending for one
+  artifact must serialize to a whole value, and 40 interleaved reads must each return
+  their own artifact.
 - A contract test drives the **real vendored SDK** and asserts the serialized sitemap bytes: a
   platform-ref `VectorIcon` reaches the XML on an Entity subarea, and the bundle does **not** filter a
   bare Fluent token — pinning that `appDef` is the only guard, so the drop cannot be delegated to the
