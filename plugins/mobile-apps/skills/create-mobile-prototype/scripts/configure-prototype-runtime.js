@@ -122,6 +122,11 @@ function packageDisplayName(packageJson) {
     .join(' ');
 }
 
+function publicExpoRoute(route) {
+  const normalized = String(route || '').replace(/\/+/g, '/');
+  return normalized.replace(/^\/\(app\)(?=\/|$)/, '') || '/';
+}
+
 if (!fs.existsSync(packagePath) || !fs.existsSync(indexPath) || !fs.existsSync(rootLayoutPath) || !fs.existsSync(appLayoutPath)) {
   fail('project must contain package.json, app/_layout.tsx, app/index.tsx, and app/(app)/_layout.tsx');
 }
@@ -130,8 +135,8 @@ const packageJson = readJson(packagePath);
 const existingBackup = fs.existsSync(backupPath) ? readJson(backupPath) : null;
 
 if (mode === 'prototype') {
-  const entryRoute = entryRouteArg || '/(app)/home';
-  if (!entryRoute.startsWith('/(app)/')) fail('prototype entry route must start with /(app)/');
+  const entryRoute = publicExpoRoute(entryRouteArg || '/(app)/home');
+  if (!entryRoute.startsWith('/')) fail('prototype entry route must be an absolute Expo route');
   if (!fs.existsSync(prototypeProviderPath)) fail('src/data/PrototypeDataProvider.tsx is missing; generate the neutral data layer before configuring prototype runtime');
 
   const currentMode = fs.existsSync(modePath) ? readText(modePath) : '';
@@ -158,7 +163,7 @@ if (mode === 'prototype') {
     appId: null,
     appDisplayName: packageDisplayName(packageJson),
     region: 'prod',
-    environmentId: '00000000-0000-0000-0000-000000000000',
+    environmentId: '',
     description: 'Local mock-data prototype',
     buildPath: './dist',
     buildEntryPoint: 'index.html',

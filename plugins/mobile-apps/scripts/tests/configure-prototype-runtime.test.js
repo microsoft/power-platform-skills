@@ -39,7 +39,8 @@ test('enables a no-auth local prototype runtime idempotently', (t) => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.match(packageJson.scripts.predev, /prototype mode/);
   assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /dataMode: 'prototype' \| 'dataverse' = 'prototype'/);
-  assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /\/\(app\)\/inspections/);
+  assert.match(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /\/inspections/);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, 'src/config/dataMode.ts'), 'utf8'), /\/\(app\)\//);
   assert.match(fs.readFileSync(path.join(root, 'app/index.tsx'), 'utf8'), /dataMode === 'prototype'/);
   assert.match(fs.readFileSync(path.join(root, 'app/(app)/_layout.tsx'), 'utf8'), /dataMode !== 'prototype'/);
   const rootLayout = fs.readFileSync(path.join(root, 'app/_layout.tsx'), 'utf8');
@@ -49,6 +50,7 @@ test('enables a no-auth local prototype runtime idempotently', (t) => {
   assert.match(rootLayout, /return <PrototypeDataProvider>\{children\}<\/PrototypeDataProvider>/);
   assert.doesNotMatch(rootLayout, /QueryClientProvider/);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8')).databaseReferences, {});
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'power.config.json'), 'utf8')).environmentId, '');
   assert.equal(fs.existsSync(path.join(root, 'src/generated/connectorSchemas.ts')), true);
 
   const second = run(root, 'prototype', '/(app)/inspections');

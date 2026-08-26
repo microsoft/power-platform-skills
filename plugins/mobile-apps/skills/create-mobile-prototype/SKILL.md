@@ -451,8 +451,10 @@ the approved Markdown plan or invent destinations. Re-run
 
 Reuse the current owning implementation in `/create-mobile-app` for shared
 code, contract-selected foundation primitives, pack-derived dependencies, and
-typed skeletons. Do not apply the navigation shell yet; the foreground applies
-it after the native canary screens are real TSX and before Metro starts.
+typed skeletons. Apply and validate the deterministic navigation shell after
+skeletons and before any screen-builder fan-out. Builders never own layout or
+destination registration, so parallel completion order cannot remove tabs,
+change route ownership, or rewrite the launch route.
 
 Prototype-specific rules:
 
@@ -477,27 +479,37 @@ Prototype-specific rules:
 
 Run `npm --prefix "$PROJECT_DIR" run type-check` before builders.
 
+Apply the navigation shell before builders:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" --project-root "$PROJECT_DIR"
+```
+
 ### Step 8 - Build Screens
 
-Read `.tmp/screen-build-pack.json → builderWaves`. Require `foundations`,
-`native-canary`, and bounded `supporting-*` waves. The `native-canary` targets
-must equal Home plus the complete critical/key-flow sequence; do not replace
-them with empty skeletons or a readiness hash.
+Read `.tmp/screen-build-pack.json → builderWaves`. Require `foundations`
+followed by bounded `screens-*` waves. Every screen wave depends directly on
+the immutable foundations and navigation contracts, has at most five targets,
+and runs per-screen validation plus TypeScript before it is marked type-safe.
+There is no Home-first canary or serialized vertical slice.
 
-Build only `native-canary` first. Mark those routes `building`:
+For each screen wave, mark its routes `building`:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
   --project-root "$PROJECT_DIR" --action update \
-  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
+  --screen <wave-screen-id> [--screen <wave-screen-id> ...] \
   --status building
 ```
 
-Spawn `mobile-app:screen-builder` for each canary screen using the same screen
-work order and artifact envelope as later screens. Persist every returned
-artifact only through `write-screen-artifact.js`. Use the foreground fallback
-from the host-capability contract when nested builders are unavailable; it must
-consume the same pack entries and validators. Each prompt must include:
+Spawn one `mobile-app:screen-builder` for each target in a wave, up to the
+wave's `maxConcurrency`. Persist every returned artifact only through
+`write-screen-artifact.js`. Use the foreground fallback from the
+host-capability contract when nested builders are unavailable; it must consume
+the same pack entries and validators. Each prompt must include:
 
 ```text
 Data mode: prototype.
@@ -518,6 +530,11 @@ Read PROJECT_DIR/.tmp/workflow-journey-contract.json,
 PROJECT_DIR/.tmp/navigation-contract.json, and the matching build-pack screen.
 Preserve stage guards, action priority, continuity keys, destination
 ownership, first viewport, states, dependencies, test IDs, and header mode.
+For Home, materialize `design.recipe.composition`: render its literal marker,
+fixture-backed collection, selected card recipes and their literal
+`requiredCardRecipeTestIds`, required domain metadata, and density target. Do
+not add marker-only wrappers without the selected recipe anatomy. Do not add a
+floating Settings/gear action or oversized workflow stepper.
 Use canonical domain IDs and `resolveDomainMedia` from @/data. Missing or stale
 contracts are blockers; do not infer a fallback navigation or data shape.
 ```
@@ -535,44 +552,26 @@ badges, payment, sign-in, or other unapproved UI merely because the domain is
 retail.
 ~~~
 
-After writing canary screens:
+After writing each wave:
 
-1. validate each canary with `validate-mobile-app.js --scope screen --screen`;
+1. validate each target with `validate-mobile-app.js --scope screen --screen`;
 2. run `npm --prefix "$PROJECT_DIR" run type-check`;
-3. apply and validate the navigation shell;
-4. mark canary routes `type-safe`;
-5. start Metro with `--require-canary`;
-6. capture/review clean native Home and key-flow evidence when the host has a
-   simulator/device capture surface;
-7. repair shared/root causes once, then rerun the canary gates.
+3. mark the wave routes `type-safe`;
+4. repair shared/root causes once and rerun the wave gates.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
   --project-root "$PROJECT_DIR" --action update \
-  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
+  --screen <wave-screen-id> [--screen <wave-screen-id> ...] \
   --status type-safe
-node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
-  --project-root "$PROJECT_DIR" --require-canary
-node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
-  --project-root "$PROJECT_DIR" --action update \
-  --screen <canary-screen-id> [--screen <canary-screen-id> ...] \
-  --status available-in-metro
 ```
 
-Do not evaluate a refreshing/disconnected/debug-overlay frame. If native
-capture is unavailable, record `DONE_WITH_CONCERNS: native canary capture
-unavailable` and continue only after static canary/type/Metro gates pass.
-
-Once the canary passes, build `supporting-*` waves in dependency order. Screens
-inside one wave may run in parallel; waves remain sequential. Mark each wave
-`building`, persist artifacts through the same writer, run per-screen checks
-and TypeScript, then mark it `type-safe`. Group failures by root cause and cap
-retries at two per screen. Never let builder completion order change Home,
-navigation, tokens, shared components, domain data, or route ownership.
+Screen waves may execute in parallel because every work order is immutable and
+builders own disjoint files. If the host cannot run the full bounded wave,
+split it into smaller batches without changing contracts or prioritizing Home.
+Group failures by root cause and cap retries at two per screen. Never let
+builder completion order change Home, navigation, tokens, shared components,
+domain data, or route ownership.
 
 ### Step 9 - Final Validation
 
@@ -667,8 +666,16 @@ forbidden defaults with a dashboard or generic CRUD composition.
 Wait for it to complete. If it modifies any UI files, run:
 ```bash
 npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all --record
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" \
+  --project-root "$PROJECT_DIR"
+node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
+  --project-root "$PROJECT_DIR" --action validate --require-complete
 ```
-to guarantee it didn't break TS typing.
+to revalidate the complete app, navigation shell, route ownership, and TS
+typing after cross-screen polish. Repair shared causes once rather than making
+independent screen-local token, header, status, or action-placement variants.
 
 For high or strict-structural fidelity, the design-refinement prompt must also
 provide native-app-plan.md, design-intake.md, and brand/design-system.md.
@@ -693,11 +700,16 @@ Update `.mobile-app/state.json`:
 Append a memory-bank entry with generated tables, planned connector stubs,
 native capabilities, screens, validation result, and preview path.
 
-Reuse the Metro process started after the native canary. Do not start a second
-process or rerun planning/design because Metro disconnected. Return its
-recorded URL, port, command, log path, and truthful status. If launch failed,
-preserve the project and report the exact manual command. Do not use a web
-runtime or crawl routes in a browser. The user opens the URL/QR in the Power
+Start Metro only after every route is complete and the final validators pass:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/start-prototype-metro.js" \
+  --project-root "$PROJECT_DIR" --require-complete-app
+```
+
+Return its recorded URL, port, command, log path, and truthful status. If
+launch failed, preserve the project and report the exact manual command. Do not
+use a web runtime or crawl routes in a browser. The user opens the URL/QR in the Power
 Apps Developer app or a compatible custom development client; Expo Go is
 unsupported.
 

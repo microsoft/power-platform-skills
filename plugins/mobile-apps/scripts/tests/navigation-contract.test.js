@@ -10,7 +10,7 @@ const { deriveExperienceFromBrief } = require('../experience-patterns');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
 const { resolveNavigationContract } = require('../resolve-navigation-contract');
-const { validateNavigationContract } = require('../validate-navigation-contract');
+const { validateNavigationContract, validateProductNavigationFit } = require('../validate-navigation-contract');
 const { validateNavigationContinuity } = require('../validate-navigation-continuity');
 
 const resolverScript = path.resolve(__dirname, '..', 'resolve-navigation-contract.js');
@@ -118,13 +118,14 @@ test('two independently revisited durable destinations use tabs-stack and own ne
   const brief = 'Let people browse the Shop and repeatedly review their saved Bag while product details remain nested.';
   const screens = [
     screen('Shop', 'primary', 'Browse and revisit the product catalog.', { candidate: candidate(), tabLabel: 'Shop' }),
+    screen('Categories', 'supporting', 'Browse and revisit product categories.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Categories' }),
     screen('Bag', 'supporting', 'Review and revisit saved bag items.', { kind: 'stack-root', candidate: candidate(), tabLabel: 'Bag' }),
     screen('ProductDetail', 'key-flow', 'Inspect one product before adding it.', { candidate: candidate({ hasStableRoot: false, revisitedIndependently: false, peerToOtherDestinations: false, isNotAFlowStep: false }), parentRoute: '/(app)/shop' }, '/(app)/shop/product/[productId]'),
     profileScreen(),
   ];
   const value = contracts(brief, screens);
   assert.equal(value.contract.model, 'tabs-stack');
-  assert.deepEqual(value.contract.destinations.map((item) => item.label), ['Shop', 'Bag']);
+  assert.deepEqual(value.contract.destinations.map((item) => item.label), ['Shop', 'Categories', 'Bag']);
   assert.equal(value.screenContract.screens.find((item) => item.id === 'ProductDetail').navigation.destinationId, 'shop');
   assert.equal(value.screenContract.screens.find((item) => item.id === 'ProductDetail').navigation.tabVisibility, 'visible');
   assert.deepEqual(validateNavigationContract(value.contract, { experienceContract: value.experience, workflowJourney: value.workflow, screenContract: value.screenContract }).errors, []);
@@ -164,6 +165,56 @@ test('navigation resolution is independent of domain adapters and overrides a co
   assert.equal(first.contract.model, 'tabs-stack');
   assert.deepEqual(first.contract, second.contract);
   assert.equal(first.contract.decision.provisionalHint, 'stack');
+});
+
+test('product-fit validation rejects missing durable areas for benchmark app archetypes', () => {
+  const cases = [
+    {
+      brief: 'Create a mobile app for showcasing inventory items to flight passengers. This app will be used in flight for selling travel accessories, beauty products and watches. Organize products by category and support a shopping bag.',
+      screens: ['Shop product catalog', 'Categories', 'Product detail', 'Bag'],
+      destinations: ['Shop', 'Bag'],
+      missing: /durable categories destination/i,
+    },
+    {
+      brief: 'Create an offline field receiving app for expected shipments, damaged quantities, inspection, and saved drafts.',
+      screens: ['Home receiving status', 'Expected shipments', 'Saved drafts', 'Damage inspection'],
+      destinations: ['Home', 'Shipments'],
+      missing: /durable drafts destination/i,
+    },
+    {
+      brief: 'Maintain and audit gym equipment across multiple gyms with repairs, maintenance, and warranty.',
+      screens: ['Home gym work', 'Equipment inventory', 'Repair and maintenance work'],
+      destinations: ['Home', 'Equipment'],
+      missing: /durable work destination/i,
+    },
+    {
+      brief: 'Create a mobile app for tracking company inventory, app should support scanning, printing barcodes, Track warranty ownerships or IT assets. Support monthly inspections and repair and updates status.',
+      screens: ['Home asset status', 'Assets inventory', 'Monthly inspections', 'Repairs'],
+      destinations: ['Home', 'Assets', 'Inspections'],
+      missing: /durable repairs destination/i,
+    },
+  ];
+  for (const scenario of cases) {
+    const experienceContract = deriveExperienceFromBrief(scenario.brief);
+    const screenContract = {
+      screens: scenario.screens.map((purpose, index) => ({ id: `Screen${index}`, purpose, route: `/(app)/screen-${index}` })),
+    };
+    const contract = {
+      destinations: scenario.destinations.map((label) => {
+        const stem = label.toLowerCase().replace(/s$/, '');
+        const screenIndex = scenario.screens.findIndex((purpose) => purpose.toLowerCase().includes(stem));
+        return {
+          id: label.toLowerCase(),
+          label,
+          route: `/(app)/${label.toLowerCase()}`,
+          rootScreenId: `Screen${screenIndex}`,
+        };
+      }),
+    };
+    const errors = [];
+    validateProductNavigationFit(contract, { experienceContract, screenContract }, errors);
+    assert.match(errors.join('\n'), scenario.missing);
+  }
 });
 
 test('validation rejects action destinations and unowned screens', () => {

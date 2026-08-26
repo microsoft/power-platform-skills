@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { validateScreenSourceContract } = require('../lib/screen-source-contract');
+const { jsxElements, validateCompositionSource, validateScreenSourceContract } = require('../lib/screen-source-contract');
 
 function screen(overrides = {}) {
   return {
@@ -131,4 +131,40 @@ test('sticky actions require calculated scroll, tab, and safe-area clearance', (
   const clipped = '<ScreenShell scroll={false}><ScrollView><Text>Last record</Text></ScrollView><BottomActionBar safeArea tabBarClearance="above"><Button testID="save-asset">Save asset</Button></BottomActionBar></ScreenShell>';
   const rules = new Set(validateScreenSourceContract(clipped, sticky).map((issue) => issue.rule));
   assert.ok(rules.has('sticky-content-clearance-missing'));
+});
+
+test('primary composition requires authored density, domain metadata, and no floating settings action', () => {
+  const composition = {
+    id: 'resumable-work-home',
+    markerTestId: 'composition-recipe-resumable-work-home',
+    requiredCardRecipeTestIds: ['composition-card-resume-card'],
+    minimumVisibleRecords: 2,
+    requiredMetadata: ['status', 'next-action'],
+    requireCollectionBinding: true,
+    maxStepperStages: 4,
+    forbidFloatingUtilityActions: true,
+  };
+  const primary = screen({ role: 'primary' });
+  const valid = [
+    '<YStack testID="composition-recipe-resumable-work-home">',
+    '{records.map((record) => <RecordRow key={record.id} testID="composition-card-resume-card" status={record.status} accessibilityLabel="Resume next action" />)}',
+    '</YStack>',
+  ].join('\n');
+  const validIssues = [];
+  validateCompositionSource(valid, primary, jsxElements(valid), validIssues, { designRecipe: { composition } });
+  assert.deepEqual(validIssues, []);
+
+  const sparse = [
+    '<YStack>',
+    '<StatusSummary>Summary</StatusSummary>',
+    '<FloatingActionButton accessibilityLabel="Settings" style={{ position: "absolute" }} />',
+    '</YStack>',
+  ].join('\n');
+  const sparseIssues = [];
+  validateCompositionSource(sparse, primary, jsxElements(sparse), sparseIssues, { designRecipe: { composition } });
+  const rules = new Set(sparseIssues.map((issue) => issue.rule));
+  assert.ok(rules.has('composition-recipe-marker-missing'));
+  assert.ok(rules.has('first-viewport-content-too-sparse'));
+  assert.ok(rules.has('composition-domain-metadata-missing'));
+  assert.ok(rules.has('floating-settings-action'));
 });

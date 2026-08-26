@@ -119,6 +119,7 @@ function validateScreenComposition(pack, options = {}) {
           issues.push(...validateScreenSourceContract(source, screen, {
             minimumControlSize: pack.design?.recipe?.spacing?.minimumControlSize || 44,
             navigationContract: pack.navigation,
+            designRecipe: pack.design?.recipe,
           }));
           if (screen.signatureComponent?.required && !source.includes(screen.signatureComponent.testId)) issues.push({ rule: 'signature-component-not-rendered', message: `Screen ${label} does not render ${screen.signatureComponent.testId}.` });
           if (/allowFontScaling\s*=\s*\{\s*false\s*\}/.test(source)) issues.push({ rule: 'dynamic-type-disabled', message: `Screen ${label} disables font scaling.` });
@@ -139,14 +140,20 @@ function validateScreenComposition(pack, options = {}) {
     if (!screenIds.has(target)) issues.push({ rule: 'unknown-wave-target', message: `Builder wave targets unknown screen ${target}.` });
   }
   const foundationWave = waves.find((wave) => wave.id === 'foundations' && wave.kind === 'foundation');
-  const verticalSlice = waves.find((wave) => wave.id === 'vertical-slice' && wave.kind === 'screen');
   if (!foundationWave) issues.push({ rule: 'missing-foundation-wave', message: 'Builder waves require a foundations wave.' });
-  if (!verticalSlice) issues.push({ rule: 'missing-vertical-slice-wave', message: 'Builder waves require a vertical-slice wave.' });
-  else {
-    const criticalIds = pack.navigation?.criticalFlow?.screenIds || [];
-    if (!criticalIds.every((id) => verticalSlice.targets.includes(id))) issues.push({ rule: 'incomplete-vertical-slice', message: 'Vertical-slice wave must contain every critical-flow screen.' });
-    if (!verticalSlice.gates?.includes('typecheck') || !verticalSlice.gates?.includes('static-quality-review')) issues.push({ rule: 'missing-vertical-slice-gates', message: 'Vertical-slice wave requires typecheck and static-quality-review gates.' });
-    if (!verticalSlice.dependsOn?.includes('foundations')) issues.push({ rule: 'vertical-slice-order', message: 'Vertical-slice wave must depend on foundations.' });
+  if (waves.some((wave) => /canary|vertical-slice/i.test(String(wave.id)))) {
+    issues.push({ rule: 'serialized-screen-wave', message: 'Builder waves must not serialize a Home-first canary or vertical slice.' });
+  }
+  for (const wave of waves.filter((candidate) => candidate.kind === 'screen')) {
+    if (!/^screens-\d+$/.test(String(wave.id))) issues.push({ rule: 'screen-wave-name', message: `Screen wave ${wave.id} must use screens-<n> naming.` });
+    if (!wave.dependsOn?.includes('foundations')) issues.push({ rule: 'screen-wave-order', message: `Screen wave ${wave.id} must depend directly on foundations.` });
+    if (!Array.isArray(wave.targets) || wave.targets.length < 1 || wave.targets.length > 5
+      || !Number.isInteger(wave.maxConcurrency) || wave.maxConcurrency < 1 || wave.maxConcurrency > wave.targets.length) {
+      issues.push({ rule: 'screen-wave-bound', message: `Screen wave ${wave.id} must contain 1-5 targets and maxConcurrency cannot exceed its target count.` });
+    }
+    if (!wave.gates?.includes('typecheck') || !wave.gates?.includes('static-quality-review')) {
+      issues.push({ rule: 'missing-screen-wave-gates', message: `Screen wave ${wave.id} requires typecheck and static-quality-review gates.` });
+    }
   }
   return issues;
 }

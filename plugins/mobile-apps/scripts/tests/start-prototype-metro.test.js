@@ -8,10 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { buildRouteManifest, updateRouteStatus } = require('../route-manifest');
-const { patchTextPreservingEol, probeMetroStatus, selectMetroPort, startPrototypeMetro, validateCanaryReadiness, waitForMetroReady } = require('../start-prototype-metro');
+const { patchTextPreservingEol, probeMetroStatus, selectMetroPort, startPrototypeMetro, validateCompleteAppReadiness, waitForMetroReady } = require('../start-prototype-metro');
 
-function canaryProject(context) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-canary-'));
+function completeProject(context) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prototype-complete-'));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   fs.mkdirSync(path.join(root, 'app', '(app)'), { recursive: true });
@@ -23,7 +23,7 @@ function canaryProject(context) {
     schemaVersion: 2,
     revision: 'a'.repeat(64),
     screens,
-    builderWaves: [{ id: 'native-canary', kind: 'screen', targets: ['Home', 'Work'], dependsOn: ['foundations'] }],
+    builderWaves: [{ id: 'screens-1', kind: 'screen', targets: ['Home', 'Work'], dependsOn: ['foundations'], maxConcurrency: 2, gates: ['typecheck', 'static-quality-review'] }],
     navigation: {
       initialRoute: '/(app)/home', routingPolicy: { launchRoute: '/(app)/home' },
       destinations: [{ id: 'home', rootScreenId: 'Home', route: '/(app)/home' }],
@@ -72,12 +72,12 @@ test('reports Metro ready only after the status endpoint responds', async (conte
   assert.equal((await waitForMetroReady(port, { timeoutMs: 1000, intervalMs: 10 })).ready, true);
 });
 
-test('requires real type-safe Home and key-flow TSX before Metro planning', async (context) => {
-  const { root } = canaryProject(context);
-  assert.deepEqual(validateCanaryReadiness(root), { packRevision: 'a'.repeat(64), screenIds: ['Home', 'Work'] });
-  const planned = await startPrototypeMetro(root, { requireCanary: true, planOnly: true, preferredPort: 19120, maximumPort: 19140 });
-  assert.deepEqual(planned.canary.screenIds, ['Home', 'Work']);
+test('requires every planned screen to be real and type-safe before Metro planning', async (context) => {
+  const { root } = completeProject(context);
+  assert.deepEqual(validateCompleteAppReadiness(root), { packRevision: 'a'.repeat(64), screenIds: ['Home', 'Work'] });
+  const planned = await startPrototypeMetro(root, { requireCompleteApp: true, planOnly: true, preferredPort: 19120, maximumPort: 19140 });
+  assert.deepEqual(planned.completeApp.screenIds, ['Home', 'Work']);
 
   fs.writeFileSync(path.join(root, 'app/(app)/work.tsx'), 'export default function Work() { return null; }\n');
-  assert.throws(() => validateCanaryReadiness(root), /still a skeleton/);
+  assert.throws(() => validateCompleteAppReadiness(root), /still a skeleton/);
 });

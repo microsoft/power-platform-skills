@@ -211,8 +211,11 @@ test('rich Screen Contracts compile into the V3 validator-owned build-pack shape
   assert.deepEqual(pack.design.recipe.cardRecipes.map((recipe) => recipe.id), [
     'FeatureCard', 'ProductCard', 'RecordRow', 'ResumeCard', 'CategoryTile', 'StatusSummary',
   ]);
-  assert.deepEqual(pack.builderWaves.map((wave) => wave.id), ['foundations', 'native-canary', 'supporting-1']);
-  assert.deepEqual(pack.builderWaves.find((wave) => wave.id === 'native-canary').targets, ['Home', 'ProductsId']);
+  assert.deepEqual(pack.builderWaves.map((wave) => wave.id), ['foundations', 'screens-1']);
+  assert.deepEqual(pack.builderWaves.find((wave) => wave.id === 'screens-1').targets, pack.screens.map((screen) => screen.id));
+  assert.equal(pack.builderWaves.find((wave) => wave.id === 'screens-1').maxConcurrency, pack.screens.length);
+  assert.equal(pack.design.recipe.composition.id, 'product-discovery-home');
+  assert.deepEqual(pack.design.recipe.composition.requiredCardRecipes, ['FeatureCard', 'ProductCard', 'CategoryTile']);
   assert.equal(pack.screens.find((screen) => screen.id === 'Profile').navigation.role, 'global-utility');
   assert.equal(pack.screens.every((screen) => screen.presentation && screen.layoutBudgets && screen.semanticColorRoles), true);
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });

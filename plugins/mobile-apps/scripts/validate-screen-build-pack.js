@@ -94,8 +94,41 @@ function validateScreenBuildPack(projectRoot, pack) {
       || !['FeatureCard', 'ProductCard', 'RecordRow', 'ResumeCard', 'CategoryTile', 'StatusSummary'].every((id) => pack.design.recipe.cardRecipes.some((recipe) => recipe.id === id))) {
       issues.push({ rule: 'missing-card-recipes', message: 'Rich build packs require all six purpose-specific card/list recipes.' });
     }
-    if (!Array.isArray(pack.builderWaves) || !pack.builderWaves.some((wave) => wave.id === 'native-canary')) {
-      issues.push({ rule: 'missing-builder-waves', message: 'Rich build packs require foundation, native-canary, and bounded supporting waves.' });
+    const waves = Array.isArray(pack.builderWaves) ? pack.builderWaves : [];
+    const screenWaves = waves.filter((wave) => wave.kind === 'screen');
+    if (!waves.some((wave) => wave.id === 'foundations' && wave.kind === 'foundation') || !screenWaves.length) {
+      issues.push({ rule: 'missing-builder-waves', message: 'Rich build packs require a foundation wave and bounded screen waves.' });
+    }
+    if (waves.some((wave) => /canary|vertical-slice/i.test(String(wave.id)))) {
+      issues.push({ rule: 'serialized-screen-wave', message: 'Rich build packs must not serialize a Home-first canary or vertical slice.' });
+    }
+    for (const wave of screenWaves) {
+      if (!/^screens-\d+$/.test(String(wave.id))
+        || !wave.dependsOn?.includes('foundations')
+        || !Number.isInteger(wave.maxConcurrency)
+        || wave.maxConcurrency < 1
+        || wave.maxConcurrency > 5
+        || !Array.isArray(wave.targets)
+        || wave.targets.length < 1
+        || wave.targets.length > 5
+        || wave.maxConcurrency > wave.targets.length
+        || !['typecheck', 'static-quality-review'].every((gate) => wave.gates?.includes(gate))) {
+        issues.push({ rule: 'invalid-screen-wave', message: `Screen wave ${wave.id} must depend on foundations, cap concurrency at 5, and run typecheck plus static quality review.` });
+      }
+    }
+    const composition = pack.design?.recipe?.composition;
+    if (!composition
+      || typeof composition.id !== 'string'
+      || !Array.isArray(composition.requiredCardRecipes)
+      || !composition.requiredCardRecipes.length
+      || !Array.isArray(composition.requiredCardRecipeTestIds)
+      || composition.requiredCardRecipeTestIds.length !== composition.requiredCardRecipes.length
+      || !Number.isInteger(composition.minimumVisibleRecords)
+      || composition.minimumVisibleRecords < 1
+      || !Array.isArray(composition.requiredMetadata)
+      || !composition.requiredMetadata.length
+      || !String(composition.markerTestId || '').startsWith('composition-recipe-')) {
+      issues.push({ rule: 'missing-composition-recipe', message: 'Rich build packs require an archetype-specific composition recipe with density, metadata, cards, and a runtime marker.' });
     }
     if (!/^[a-f0-9]{64}$/i.test(String(pack.uiContractFingerprint || ''))) {
       issues.push({ rule: 'missing-ui-contract-fingerprint', message: 'Rich build packs require a UI contract fingerprint.' });

@@ -105,6 +105,19 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   in an older compatibility run, report `DONE_WITH_CONCERNS: screen build pack
   unavailable; using legacy plan fallback.` Never silently invent a dashboard,
   CRUD flow, or generic motif when a pack field is missing.
+- **Composition recipe is binding on Home.** For the primary screen, read
+  `design.recipe.composition` from the pack. Render its literal
+  `markerTestId` on the authored content composition; use its selected card
+  recipes, representative collection, minimum visible-record target, and
+  required domain metadata. Render every literal
+  `requiredCardRecipeTestIds` marker on the region that materializes that
+  selected recipe; a marker without the recipe anatomy is invalid. A
+  queue/list Home must show real fixture-backed
+  records with useful status and next-action context, not one oversized empty
+  card. Keep workflow steppers within `maxStepperStages`. Never add an
+  app-owned floating Settings/gear action; Settings belongs in Profile or the
+  approved navigation shell. The marker proves intent, not visual quality, so
+  the actual hierarchy and content must still satisfy the recipe.
 - **Canonical data identity is mandatory.** When the pack names
   `src/generated/experience-view-model.ts`, import
   `toExperienceRecord`, `getExperienceAsset`, and `resolveExperienceMedia` from

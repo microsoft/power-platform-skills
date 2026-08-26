@@ -538,6 +538,67 @@ function validateFirstViewportSource(source, screen, elements, issues) {
   }
 }
 
+function validateCompositionSource(source, screen, elements, issues, options) {
+  if (screen.role !== 'primary') return;
+  const composition = options.designRecipe?.composition;
+  if (!composition) return;
+  const label = screen.route || screen.id || '<unknown>';
+  if (!elements.some((element) => literalTestId(element.openTag) === composition.markerTestId)) {
+    issues.push({
+      rule: 'composition-recipe-marker-missing',
+      message: `Primary screen ${label} must render literal marker ${composition.markerTestId} on its authored composition.`,
+    });
+  }
+  for (const marker of composition.requiredCardRecipeTestIds || []) {
+    if (!elements.some((element) => literalTestId(element.openTag) === marker)) {
+      issues.push({
+        rule: 'composition-card-recipe-missing',
+        message: `Primary screen ${label} must materialize selected card recipe marker ${marker}.`,
+      });
+    }
+  }
+  if (composition.requireCollectionBinding
+    && !/<(?:FlatList|SectionList|FlashList)\b|\.map\s*\(/.test(source)) {
+    issues.push({
+      rule: 'first-viewport-content-too-sparse',
+      message: `Primary screen ${label} must bind a representative collection so at least ${composition.minimumVisibleRecords} domain records can appear in the first viewport.`,
+    });
+  }
+  const metadataEvidence = [
+    ...source.matchAll(/\b(?:accessibilityLabel|testID)\s*=\s*["']([^"']+)["']/g),
+    ...source.matchAll(/>\s*([^<>{}\n]+?)\s*</g),
+  ].map((match) => slug(match[1])).join(' ');
+  const sourceIdentifiers = source.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  const metadataAliases = {
+    'next-action': ['next-action', 'continue', 'resume'],
+    'updated-at': ['updated-at', 'updated', 'last-updated', 'updatedat'],
+    availability: ['availability', 'available', 'in-stock', 'actionable'],
+  };
+  for (const field of composition.requiredMetadata || []) {
+    const aliases = metadataAliases[field] || [slug(field)];
+    if (!aliases.some((alias) => metadataEvidence.includes(alias) || sourceIdentifiers.includes(alias))) {
+      issues.push({
+        rule: 'composition-domain-metadata-missing',
+        message: `Primary screen ${label} must visibly evidence ${field} metadata required by ${composition.id}.`,
+      });
+    }
+  }
+  if (composition.maxStepperStages === 0 && /<[^>]*(?:Stepper|ProgressSteps|StepIndicator)\b/.test(source)) {
+    issues.push({ rule: 'unnecessary-home-stepper', message: `Primary screen ${label} must not turn ${composition.id} into a workflow stepper.` });
+  }
+  const stepMatches = [...source.matchAll(/(?:step|stage)[-_ ]?(?:label|id)?\s*[:=]\s*["']/gi)];
+  if (composition.maxStepperStages > 0 && stepMatches.length > composition.maxStepperStages) {
+    issues.push({ rule: 'oversized-first-viewport-stepper', message: `Primary screen ${label} exceeds the ${composition.maxStepperStages}-stage compact stepper budget.` });
+  }
+  if (composition.forbidFloatingUtilityActions
+    && /(?:settings|gear)[\s\S]{0,240}(?:position\s*:\s*['"]absolute['"]|<FloatingActionButton\b)|<FloatingActionButton\b[\s\S]{0,240}(?:settings|gear)/i.test(source)) {
+    issues.push({
+      rule: 'floating-settings-action',
+      message: `Primary screen ${label} must expose settings through Profile or navigation, not an app-owned floating action.`,
+    });
+  }
+}
+
 function validateScreenSourceContract(source, screen, options = {}) {
   const issues = [];
   if (typeof source !== 'string' || !screen) return issues;
@@ -549,6 +610,7 @@ function validateScreenSourceContract(source, screen, options = {}) {
   validateProfileAccess(source, screen, elements, issues, options);
   validateVisiblePrimaryAction(source, screen, elements, issues);
   validateFirstViewportSource(source, screen, elements, issues);
+  validateCompositionSource(source, screen, elements, issues, options);
   validateAvailabilityBinding(source, screen, elements, issues);
   validateRelatedMediaBinding(source, screen, issues);
   validateAggregateFreshness(source, screen, issues);
@@ -565,6 +627,7 @@ module.exports = {
   actionMarkerCandidates,
   jsxElements,
   regionMarkerCandidates,
+  validateCompositionSource,
   validateProfileAccess,
   validateStaticEngineeringRules,
   validateScreenSourceContract,

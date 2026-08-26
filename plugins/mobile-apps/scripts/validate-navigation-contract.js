@@ -10,6 +10,59 @@ const { navigationContractRevision, navigationRole, screenGraphRevision } = requ
 
 const ACTION_DESTINATION = /\b(?:scan|add|create|capture|pay|submit|sync|search|edit|delete|confirm)\b/i;
 
+function validateProductNavigationFit(contract, context, errors) {
+  const screens = context.screenContract?.screens || [];
+  const experience = context.experienceContract || {};
+  const destinations = contract.destinations || [];
+  const destinationText = (destination) => [
+    destination.id,
+    destination.label,
+    destination.route,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasDestination = (pattern) => destinations.some((destination) => pattern.test(destinationText(destination)));
+  const requireDestinations = (archetype, requirements) => {
+    for (const [name, pattern] of requirements) {
+      if (!hasDestination(pattern)) errors.push(`${archetype} navigation requires a durable ${name} destination`);
+    }
+  };
+  const screenIntent = screens.map((screen) => [screen.id, screen.purpose, screen.route].filter(Boolean).join(' ')).join(' ').toLowerCase();
+  const contentModel = new Set(experience.contentModel || []);
+
+  if (experience.primarySurface === 'product-led-discovery'
+    && contentModel.has('categories')
+    && contentModel.has('cart')) {
+    requireDestinations('product discovery', [
+      ['shop or browse', /\b(?:shop|browse|home|products?)\b/],
+      ['categories', /\bcategor(?:y|ies)\b/],
+      ['bag or cart', /\b(?:bag|cart|basket)\b/],
+    ]);
+  } else if (experience.assetPolicy?.connectivity === 'offline-preferred'
+    && /\b(?:shipment|receiv)/.test(screenIntent)) {
+    requireDestinations('offline receiving', [
+      ['Home', /\bhome\b/],
+      ['Shipments', /\bshipments?\b/],
+      ['Drafts', /\b(?:drafts?|saved)\b/],
+    ]);
+  } else if (experience.primarySurface === 'decision-led-overview'
+    && /\b(?:asset|inventory)\b/.test(screenIntent)
+    && /\b(?:inspections?|repairs?)\b/.test(screenIntent)) {
+    requireDestinations('asset management', [
+      ['Home', /\bhome\b/],
+      ['Assets', /\b(?:assets?|inventory)\b/],
+      ['Inspections', /\binspections?\b/],
+      ['Repairs', /\brepairs?\b/],
+    ]);
+  } else if (/\bgym\b/.test(screenIntent)
+    && /\bequipment\b/.test(screenIntent)
+    && /\b(?:maintenance|repair|warranty|work)\b/.test(screenIntent)) {
+    requireDestinations('equipment maintenance', [
+      ['Home', /\bhome\b/],
+      ['Equipment', /\bequipment\b/],
+      ['Work', /\b(?:work|repairs?|maintenance)\b/],
+    ]);
+  }
+}
+
 function validateNavigationContract(contract, context = {}) {
   const errors = [];
   if (contract?.schemaVersion !== 1) errors.push('navigationContract.schemaVersion must be 1');
@@ -91,6 +144,7 @@ function validateNavigationContract(contract, context = {}) {
   if ((profilePolicy?.profileAccess === 'destination') !== Boolean(profileDestination)) errors.push('Profile destination placement does not match profileAccess');
   if (contract?.adaptivePresentation?.destinationIdentityStableAcrossSizes !== true) errors.push('adaptive presentation must preserve destination identity');
   if (contract?.accessibility?.labelsRequired !== true || contract?.accessibility?.selectedStateRequired !== true || contract?.accessibility?.minimumTouchTarget < 44) errors.push('navigation accessibility contract is incomplete');
+  validateProductNavigationFit(contract, context, errors);
   return { valid: errors.length === 0, errors, revision: errors.length ? null : navigationContractRevision(contract) };
 }
 
@@ -128,4 +182,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { validateNavigationContract };
+module.exports = { validateNavigationContract, validateProductNavigationFit };

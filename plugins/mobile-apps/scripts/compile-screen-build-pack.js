@@ -85,6 +85,14 @@ function identifier(value) {
   return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('') || 'Screen';
 }
 
+function testIdSegment(value) {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase();
+}
+
 function validateInputs(contract, screenContract, foundation, normalizedScreens) {
   const issues = validateExperienceContract(contract);
   if (issues.length) throw new Error(`Experience contract is invalid: ${issues.join('; ')}`);
@@ -179,6 +187,36 @@ function cardRecipes() {
 }
 
 function designRecipe(contract, primary, navigation, foundation) {
+  const compositions = {
+    'product-led-discovery': {
+      id: 'product-discovery-home',
+      requiredCardRecipes: ['FeatureCard', 'ProductCard', 'CategoryTile'],
+      minimumVisibleRecords: 2,
+      requiredMetadata: ['price', 'availability'],
+      maxStepperStages: 0,
+    },
+    'task-led-workflow': {
+      id: 'resumable-work-home',
+      requiredCardRecipes: ['ResumeCard', 'RecordRow', 'StatusSummary'],
+      minimumVisibleRecords: 2,
+      requiredMetadata: ['status', 'next-action'],
+      maxStepperStages: 4,
+    },
+    'decision-led-overview': {
+      id: 'decision-overview-home',
+      requiredCardRecipes: ['StatusSummary', 'RecordRow'],
+      minimumVisibleRecords: 2,
+      requiredMetadata: ['status', 'updated-at'],
+      maxStepperStages: 0,
+    },
+  };
+  const composition = compositions[contract.primarySurface] || {
+    id: 'focused-tool-home',
+    requiredCardRecipes: ['RecordRow', 'StatusSummary'],
+    minimumVisibleRecords: 1,
+    requiredMetadata: ['status'],
+    maxStepperStages: 3,
+  };
   return {
     hierarchy: {
       focalPoint: primary.firstViewport?.focalPoint || contract.firstViewport.focalPoint,
@@ -195,6 +233,13 @@ function designRecipe(contract, primary, navigation, foundation) {
     spacing: { minimumControlSize: 44, minimumContentGap: 8 },
     semanticColorRoles: semanticColorRoles(),
     cardRecipes: cardRecipes(),
+    composition: {
+      ...composition,
+      markerTestId: `composition-recipe-${composition.id}`,
+      requiredCardRecipeTestIds: composition.requiredCardRecipes.map((recipe) => `composition-card-${testIdSegment(recipe)}`),
+      forbidFloatingUtilityActions: true,
+      requireCollectionBinding: composition.minimumVisibleRecords > 1,
+    },
   };
 }
 
@@ -316,12 +361,16 @@ function contractMediaDelivery(mediaPolicy) {
 }
 
 function builderWaves(screens, criticalFlow, foundation) {
-  const criticalIds = [...new Set(criticalFlow?.screenIds || screens.filter((screen) => ['primary', 'key-flow'].includes(screen.role)).map((screen) => screen.id))];
-  const supporting = screens.filter((screen) => !criticalIds.includes(screen.id));
   return [
     { id: 'foundations', kind: 'foundation', targets: foundation.primitives.map((primitive) => primitive.component), dependsOn: [] },
-    { id: 'native-canary', kind: 'screen', targets: criticalIds, dependsOn: ['foundations'] },
-    ...chunks(supporting, 5).map((wave, index) => ({ id: `supporting-${index + 1}`, kind: 'screen', targets: wave.map((screen) => screen.id), dependsOn: [index === 0 ? 'native-canary' : `supporting-${index}`] })),
+    ...chunks(screens, 5).map((wave, index) => ({
+      id: `screens-${index + 1}`,
+      kind: 'screen',
+      targets: wave.map((screen) => screen.id),
+      dependsOn: ['foundations'],
+      maxConcurrency: Math.min(5, wave.length),
+      gates: ['typecheck', 'static-quality-review'],
+    })),
   ];
 }
 

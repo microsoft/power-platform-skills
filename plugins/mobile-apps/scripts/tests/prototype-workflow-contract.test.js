@@ -280,17 +280,18 @@ test('Open and legacy plugin metadata remain exact mirrors', () => {
   assert.equal(openPlugin.keywords.includes('prototype'), true);
 });
 
-test('prototype builds and starts the native canary before supporting screen waves', () => {
+test('prototype applies navigation before bounded screen waves and starts Metro after complete validation', () => {
   const skill = read('skills/create-mobile-prototype/SKILL.md');
-  const canaryIndex = skill.indexOf('Build only `native-canary` first');
-  const metroIndex = skill.indexOf('--project-root "$PROJECT_DIR" --require-canary');
-  const supportingIndex = skill.indexOf('Once the canary passes, build `supporting-*` waves');
-  assert.ok(canaryIndex > 0, 'native canary instructions must exist');
-  assert.ok(metroIndex > canaryIndex, 'Metro must start after real canary generation');
-  assert.ok(supportingIndex > metroIndex, 'supporting fan-out must follow canary Metro readiness');
+  const shellIndex = skill.indexOf('apply-navigation-shell.js');
+  const screenWaveIndex = skill.indexOf('Spawn one `mobile-app:screen-builder` for each target in a wave');
+  const validationIndex = skill.indexOf('### Step 9 - Final Validation');
+  const metroIndex = skill.indexOf('--project-root "$PROJECT_DIR" --require-complete-app');
+  assert.ok(shellIndex > 0 && shellIndex < screenWaveIndex, 'navigation shell must be applied before screen fan-out');
+  assert.ok(screenWaveIndex < validationIndex && validationIndex < metroIndex, 'Metro must start after bounded screen waves and complete-app validation');
+  assert.doesNotMatch(skill, /native-canary|require-canary|supporting-\*/);
+  assert.match(skill, /bounded `screens-\*` waves/);
   assert.match(skill, /write-screen-artifact\.js/);
   assert.match(skill, /route-manifest\.js[\s\S]*--status type-safe/);
-  assert.match(skill, /Do not start a second[\s\S]*process/);
 });
 
 test('prototype uses one consolidated non-mutating approval before data or design', () => {

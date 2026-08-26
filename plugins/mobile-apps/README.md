@@ -213,9 +213,10 @@ and the automatic native design path may run in disjoint parallel lanes.
 
 The compact V3 build pack preserves five-way screen roles, durable navigation,
 Profile access, app-specific component/card recipes, media policy, states,
-accessibility, and a Home + complete key-flow `native-canary` wave. Metro starts
-only after those real TSX screens pass focused validation and TypeScript;
-supporting screens build afterward in bounded waves. A route manifest tracks
+accessibility, and archetype-specific composition. Foundations and navigation
+are applied once, then all screens build in bounded disjoint waves. Metro
+starts only after every real TSX screen passes complete-app validation and
+TypeScript. A route manifest tracks
 every planned screen through Planned, Building, Type-safe, Available in Metro,
 Reviewed, or Concern.
 
