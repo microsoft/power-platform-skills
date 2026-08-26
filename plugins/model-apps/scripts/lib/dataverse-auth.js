@@ -228,6 +228,37 @@ async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
 }
 
 /**
+ * The organization's base language (LCID), read at transport level.
+ *
+ * Needed *before* the maker SDK exists: `MakerSdkOptions.languageCode` is a construction-time
+ * option, but the SDK's own `queryRecords` is the usual way to read `organization.languagecode` —
+ * a chicken-and-egg the transport hatch resolves. Same class of read as `WhoAmI`.
+ *
+ * Fail-soft, for the same reason as {@link readProvisionedLanguages}: a caller that cannot learn the
+ * base language must fall back and say so, not fail the build.
+ *
+ * @param {string} envUrl
+ * @param {Function} [request=dataverseRequest] injectable transport for tests
+ * @returns {Promise<number|null>} the base LCID, or null when it could not be determined
+ */
+async function readOrgLanguageCode(envUrl, request = dataverseRequest) {
+  try {
+    const res = await request(envUrl, 'GET', 'organizations?$select=languagecode&$top=1');
+    // Status-gated for the same reason as readProvisionedLanguages: dataverseRequest resolves
+    // { status, data } for every HTTP response, so an error envelope would otherwise read as
+    // "no rows" and silently become the 1033 fallback.
+    if (!res || res.status < 200 || res.status >= 300) return null;
+    // Shape: { "@odata.context": "...", "value": [ { "organizationid": "...", "languagecode": 1033 } ] }
+    // NOTE the plural entity SET name: the singular 'organization' 404s on the Web API.
+    const row = res.data && Array.isArray(res.data.value) ? res.data.value[0] : null;
+    const lcid = row && Number(row.languagecode);
+    return Number.isInteger(lcid) && lcid > 0 && lcid <= 65535 ? lcid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Parses CLI args. Accepts both space-separated (`--flag value`) and
  * equals-separated (`--flag=value`) forms, plus bare boolean flags (`--bool`).
  *   <positional> [--flag value] [--flag=value] [--bool]
@@ -325,6 +356,7 @@ module.exports = {
   requiredLevel,
   getDefaultPublisherPrefix,
   readProvisionedLanguages,
+  readOrgLanguageCode,
   parseArgs,
   readAliasedFlag,
   readJsonArg,

@@ -615,3 +615,71 @@ test('requireSuccessfulPush distinguishes an already-exists collision from a ver
     (e) => e.name === 'BuildHalt' && e.code === 'already-exists' && /adopt it/.test(e.message) && !/re-download the app/.test(e.message)
   );
 });
+
+// #455 wiring: the CLI resolves the authoring LCID BEFORE constructing the SDK (because
+// MakerSdkOptions.languageCode is a construction-time option) and then hands the SAME value to the
+// data-model phase. Two things must hold, and neither is covered by testing resolveLanguageCode
+// alone: the pre-resolved value must be USED, and it must NOT be re-resolved.
+//
+// Re-resolution is not merely wasteful — the data-model phase would repeat the org read and the
+// provisioned-languages probe, and any disagreement would label columns in one language while the
+// SDK stamps FormXML and sitemap titles in another.
+test('a pre-resolved authoring language is used verbatim by the data-model phase', async () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_t', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'cr_name' }, columns: [{ schemaName: 'cr_note', displayName: 'Note', type: 'text' }] }],
+    relationships: [],
+  };
+  const seen = [];
+  let orgReads = 0;
+  let probes = 0;
+  const sdk = {
+    createTable: async (o) => { seen.push(['createTable', o]); return { logicalName: 'cr_t', metadataId: 't' }; },
+    createColumn: async (l, o) => { seen.push(['createColumn', o]); return { logicalName: (o.schemaName || '').toLowerCase(), metadataId: 'c' }; },
+  };
+  const provision = {
+    queryRecords: async (set) => { if (set === 'organization') { orgReads += 1; return [{ languagecode: 1033 }]; } return []; },
+    findTables: async () => [], findColumns: async () => [], fetchEntityMetadata: async () => ({}),
+  };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+
+  await provisionDataModel({
+    sdk, provision, runner, spec, apply: true,
+    preResolvedLanguageCode: 3082,
+    // Deliberately CONTRADICTORY inputs: if the pre-resolved value is honoured, neither of these is
+    // consulted. If it is ignored, the explicit 1031 would win and the probe would fire.
+    languageCode: 1031,
+    provisionedLanguages: async () => { probes += 1; return [1031, 1033]; },
+  });
+
+  const withLang = seen.filter(([, o]) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0, 'at least one label-bearing write happened');
+  for (const [what, o] of withLang) {
+    assert.strictEqual(o.languageCode, 3082, `${what} must use the pre-resolved LCID, not re-resolve one`);
+  }
+  assert.strictEqual(orgReads, 0, 'the org language must NOT be read again once it is already resolved');
+  assert.strictEqual(probes, 0, 'the provisioned-languages probe must NOT fire again');
+});
+
+test('without a pre-resolved language the data-model phase still resolves one itself', async () => {
+  // The self-resolving path is not dead code: provision-entities.js and every existing unit test
+  // reach provisionDataModel without a pre-resolved value, so removing it would break them.
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_t', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }],
+    relationships: [],
+  };
+  const seen = [];
+  const sdk = {
+    createTable: async (o) => { seen.push(o); return { logicalName: 'cr_t', metadataId: 't' }; },
+    createColumn: async (l, o) => { seen.push(o); return { logicalName: 'x', metadataId: 'c' }; },
+  };
+  const provision = {
+    queryRecords: async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : []),
+    findTables: async () => [], findColumns: async () => [], fetchEntityMetadata: async () => ({}),
+  };
+  await provisionDataModel({ sdk, provision, runner: makeRunner({ emit: () => {}, total: 10 }), spec, apply: true });
+  const withLang = seen.filter((o) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0 && withLang.every((o) => o.languageCode === 1031),
+    'the org base language is still resolved when nothing was pre-resolved');
+});

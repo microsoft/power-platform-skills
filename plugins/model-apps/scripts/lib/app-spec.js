@@ -467,6 +467,12 @@ function validateAppSpec(spec, opts = {}) {
   if (spec.app && spec.app.newLook !== undefined && typeof spec.app.newLook !== 'boolean') {
     errors.push('app.newLook must be a boolean');
   }
+  // The Wave 2 header/navigation refresh is a SEPARATE public-preview setting from the new look;
+  // enabling one does not enable the other. Boolean-only for the same reason as newLook — a string
+  // "false" is truthy and would silently turn the feature ON for an author who meant to disable it.
+  if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
+    errors.push('app.headerNavigationRefresh must be a boolean');
+  }
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     errors.push('languageCode must be a positive integer LCID');
   }

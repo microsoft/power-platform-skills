@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -2608,4 +2609,114 @@ test('a failed new-look write does not fail the build, but is never reported as 
     warnings.some((w) => /new look/i.test(w) && /setting definition not found/.test(w)),
     'the cause is surfaced: ' + JSON.stringify(warnings)
   );
+});
+
+// The Wave 2 header/navigation refresh. Written through the SDK's dedicated
+// `setHeaderAndNavigationRefresh` rather than a raw setting write, because the encoding is a trap:
+// it is a `datatype = 0` (Number) TRI-STATE where ON is '2', not '1', and writing '1' is ACCEPTED by
+// the API and then silently fails to enable the feature. Delegating means the plugin cannot get that
+// wrong, and these tests pin the delegation rather than re-encoding the value here.
+test('app.headerNavigationRefresh delegates to the SDK API with the created app id', async () => {
+  const { sdk } = mockSdk();
+  const calls = [];
+  sdk.setHeaderAndNavigationRefresh = async (appId, enabled) => { calls.push({ appId, enabled }); return 'created'; };
+  const spec = makeSpec();
+  spec.app.headerNavigationRefresh = true;
+
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  assert.strictEqual(calls.length, 1, 'exactly one call: ' + JSON.stringify(calls));
+  assert.strictEqual(calls[0].enabled, true);
+  assert.strictEqual(calls[0].appId, r.created.app, 'the APP MODULE id, not the unique name — the setting row is keyed by parentappmoduleid');
+  assert.strictEqual(r.created.headerNavigationRefresh, true);
+  assert.strictEqual(r.created.headerNavigationRefreshOutcome, 'created', 'the outcome is recorded verbatim so a caller can tell a fresh enable from a no-op re-run');
+});
+
+test('the header/navigation refresh is a DIFFERENT setting from the new look', async () => {
+  // Both are per-app settings and both can be on, but they are separate settingdefinition rows and
+  // enabling one must not enable the other. Conflating them would silently under-deliver whichever
+  // one the author actually asked for.
+  const { sdk } = mockSdk();
+  const saved = [];
+  const hdr = [];
+  sdk.saveSettingValue = async (name, value, opts) => { saved.push({ name, value, opts }); };
+  sdk.setHeaderAndNavigationRefresh = async (appId, enabled) => { hdr.push({ appId, enabled }); return 'created'; };
+
+  // newLook alone must not touch header/nav
+  const a = makeSpec(); a.app.newLook = true;
+  const ra = await runSdkBuild(a, { sdk, apply: true });
+  assert.ok(ra.ok);
+  assert.strictEqual(saved.length, 1, 'newLook wrote its own setting');
+  assert.deepStrictEqual(hdr, [], 'newLook must NOT enable the header/navigation refresh');
+  assert.strictEqual(ra.created.headerNavigationRefresh, undefined);
+
+  // header/nav alone must not touch newLook
+  saved.length = 0; hdr.length = 0;
+  const b = makeSpec(); b.app.headerNavigationRefresh = true;
+  const rb = await runSdkBuild(b, { sdk, apply: true });
+  assert.ok(rb.ok);
+  assert.strictEqual(hdr.length, 1, 'header/nav was written');
+  assert.deepStrictEqual(saved, [], 'the header/navigation refresh must NOT enable the new look');
+  assert.strictEqual(rb.created.newLook, undefined);
+
+  // both together: two independent writes
+  saved.length = 0; hdr.length = 0;
+  const c = makeSpec(); c.app.newLook = true; c.app.headerNavigationRefresh = true;
+  const rc = await runSdkBuild(c, { sdk, apply: true });
+  assert.ok(rc.ok);
+  assert.strictEqual(saved.length, 1, 'both set: new look written');
+  assert.strictEqual(hdr.length, 1, 'both set: header/nav written');
+  assert.strictEqual(rc.created.newLook, true);
+  assert.strictEqual(rc.created.headerNavigationRefresh, true);
+});
+
+test('the header/navigation refresh is OPT-IN — absent or false calls nothing', async () => {
+  for (const value of [undefined, false]) {
+    const { sdk } = mockSdk();
+    const calls = [];
+    sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'created'; };
+    const spec = makeSpec();
+    if (value !== undefined) spec.app.headerNavigationRefresh = value;
+    const r = await runSdkBuild(spec, { sdk, apply: true });
+    assert.ok(r.ok);
+    assert.deepStrictEqual(calls, [], `headerNavigationRefresh=${value} must make no call`);
+  }
+});
+
+test('a failed header/navigation write does not fail the build, but is never reported as success', async () => {
+  // Public preview, rolls out by tenant. The SDK throws a PLAIN Error (not an SdkError subclass)
+  // when the environment lacks the setting definition, so the catch here is deliberately broad.
+  const { sdk } = mockSdk();
+  sdk.setHeaderAndNavigationRefresh = async () => { throw new Error("App setting 'HeaderAndNavigationRefresh' is not available in this environment"); };
+  const spec = makeSpec();
+  spec.app.headerNavigationRefresh = true;
+  const warnings = [];
+
+  const r = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+  assert.ok(r.ok, 'a rolling-out preview setting must not fail an otherwise-good build');
+  assert.strictEqual(r.created.headerNavigationRefresh, false, 'reported as NOT enabled — never a silent success');
+  assert.ok(
+    warnings.some((w) => /header and navigation refresh/i.test(w) && /not available in this environment/.test(w)),
+    'the real cause reaches the caller; got: ' + JSON.stringify(warnings)
+  );
+});
+
+test('app.headerNavigationRefresh must be a boolean', () => {
+  // A string "false" is truthy in JS and would silently turn the feature ON for an author who meant
+  // to disable it — the same trap the newLook validation exists to close.
+  for (const bad of ['true', 'false', 1, 0, {}, []]) {
+    const spec = makeSpec();
+    spec.app.headerNavigationRefresh = bad;
+    const v = validateAppSpec(spec);
+    assert.ok(
+      (v.errors || []).some((e) => /app.headerNavigationRefresh must be a boolean/.test(e)),
+      `headerNavigationRefresh=${JSON.stringify(bad)} must be rejected`
+    );
+  }
+  for (const good of [true, false, undefined]) {
+    const spec = makeSpec();
+    if (good !== undefined) spec.app.headerNavigationRefresh = good;
+    const v = validateAppSpec(spec);
+    assert.ok(!(v.errors || []).some((e) => /headerNavigationRefresh/.test(e)), `${good} must be accepted`);
+  }
 });

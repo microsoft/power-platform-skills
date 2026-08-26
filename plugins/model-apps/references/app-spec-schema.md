@@ -78,16 +78,31 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Best-effort:** this is a platform feature that rolls out by tenant. If the setting cannot be
   written the build still succeeds — the app is fully functional on the classic shell — but it warns
   and reports `created.newLook: false`, so a failure is never mistaken for success.
+- **`app.headerNavigationRefresh`** *(optional, default off)* — opt into the **Wave 2 header and
+  navigation refresh** (public preview) for this app.
+  This is a **different setting from `app.newLook`** and the two are independent: `newLook` writes
+  `NewLookAlwaysOn` (the new-look shell), while this writes `HeaderAndNavigationRefresh` (the header
+  and navigation redesign). Enabling one does **not** enable the other; set both if you want both.
+  Written through the SDK's dedicated API rather than a raw setting write, because the encoding is a
+  trap: it is a Number **tri-state where ON is `'2'`, not `'1'`**, and writing `'1'` is *accepted by
+  the API and then silently fails to enable the feature*. Delegating means the plugin cannot get it
+  wrong.
+  **Best-effort**, exactly like `newLook`: a tenant without the setting definition still gets a fully
+  working app, with a warning and `created.headerNavigationRefresh: false` — never a silent success.
+  On success `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`, so
+  a fresh enable is distinguishable from a no-op re-run.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
-  stamped on the Dataverse labels the **data-model phase** creates (table, column, choice, status
-  reason, relationship and alternate-key display names). It does **not** reach form, dashboard or
-  sitemap labels — those go through SDK serializers that hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+  stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
+  reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
+  The serializers used to hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)); they now take the
+  authoring language, so a non-English build no longer produces translated columns next to English
+  form labels.
   **Normally omit it**: the build reads the organization's base language
   (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
   Set it only to deliberately author labels in a *different* provisioned language than the org

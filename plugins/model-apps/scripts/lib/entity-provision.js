@@ -18,6 +18,9 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
 const { odataLit } = require('./odata.js');
+// Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
+// construction-time option, so the LCID must be known before the SDK that would normally read it.
+const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
 
 // App Spec column type -> SDK ColumnType. Lookup is omitted (side effect of a OneToMany
 // relationship); Customer is handled specially (createCustomerColumn).
@@ -305,11 +308,51 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
   }, { recoverable: true });
 }
 
+// Resolve the AUTHORING language once, at transport level, before the maker SDK is constructed.
+//
+// #455: `MakerSdkOptions.languageCode` is a construction-time option — the App, Form and Dashboard
+// adapters bake it in, so it must be known before `createMakerSdk`. But the default source for it is
+// `organization.languagecode`, which the SDK itself would normally read. That circularity is why
+// this reads over the transport hatch instead.
+//
+// Same precedence as `resolveLanguageCode`, and deliberately so: an explicit CLI flag, then the App
+// Spec field, then the organization's base language, then 1033. The explicit branches are also
+// checked against the provisioned set here, so the halt happens once — before the SDK exists and
+// long before any label is written.
+//
+// `readOrg` / `provisionedLanguages` are injected for tests.
+async function resolveAuthoringLanguage({ envUrl, languageCode, spec, warn, readOrg, provisionedLanguages }) {
+  const readOrgLcid = readOrg || ((url) => readOrgLanguageCode(url));
+  const probe = provisionedLanguages || (() => readProvisionedLanguages(envUrl));
+  return resolveLanguageCode({
+    // resolveLanguageCode only needs `.queryRecords('organization', …)`; adapt the transport read to
+    // that shape rather than duplicating the precedence ladder, so the two paths cannot drift.
+    provision: {
+      queryRecords: async (set) => {
+        if (set !== 'organization') return [];
+        const lcid = await readOrgLcid(envUrl);
+        return lcid ? [{ languagecode: lcid }] : [];
+      },
+    },
+    spec,
+    languageCode,
+    warn,
+    provisionedLanguages: probe,
+  });
+}
+
 // Discover-then-create global choices, tables, columns, status reasons, alternate keys,
 // and relationships (idempotent). Returns captured maps used by sample data + later phases.
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
-  const resolvedLanguageCode = await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
+  // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
+  // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
+  // adapters bake it in. Re-resolving here would repeat the org read and the provisioned-languages
+  // probe, and could disagree with the value the SDK is already stamping into FormXML and sitemap
+  // titles. So an already-resolved value wins outright. The self-resolving path stays for callers
+  // that construct the SDK themselves and for the existing unit tests.
+  const resolvedLanguageCode = preResolvedLanguageCode
+    || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
   
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
@@ -591,4 +634,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };

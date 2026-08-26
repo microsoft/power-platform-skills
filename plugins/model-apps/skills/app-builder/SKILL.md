@@ -301,8 +301,9 @@ provisioned set with
 `node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`.
 The check is best-effort: if that read fails the build proceeds unchanged.
 
-The App Spec field `languageCode` pins the same value across runs. Note this covers the data-model
-phase only; form and sitemap labels still carry 1033 (SDK limitation, issue #455).
+The App Spec field `languageCode` pins the same value across runs. It now covers the **whole** build:
+data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
+1033 take the authoring language as an option ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a

@@ -10,6 +10,38 @@ jobs-to-be-done surfaces checkable, adds plugin update notices, fixes four crash
 and corrects a smoke-eval assertion that could never pass live.
 
 ### Added
+- **`app.headerNavigationRefresh` — opt into the Wave 2 header and navigation
+  refresh.** A **different** setting from `app.newLook`, and independent of it:
+  `newLook` writes `NewLookAlwaysOn` (the new-look shell), this writes
+  `HeaderAndNavigationRefresh` (the header/navigation redesign). Enabling one does
+  not enable the other.
+
+  Written through the SDK's dedicated `setHeaderAndNavigationRefresh` rather than a
+  raw setting write, because the encoding is a trap: it is a Number **tri-state
+  where ON is `'2'`, not `'1'`** — and `'1'` is *accepted by the API and then
+  silently fails to enable the feature*. Delegating means the plugin cannot get
+  that wrong.
+
+  Best-effort, like the new look: a tenant without the definition still gets a
+  fully working app, with a warning and `created.headerNavigationRefresh: false`,
+  never a silent success.
+
+- **Form, dashboard and sitemap labels now honour the authoring language**
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+  Previously only the data-model phase respected `languageCode`; form, dashboard
+  and sitemap labels went through SDK serializers that hardcoded 1033 with no
+  caller override, so a `--language-code 1031` build produced German columns and
+  English form labels.
+
+  The SDK now takes the authoring LCID as a construction-time option, so the build
+  resolves it **before** the SDK exists — over the same transport hatch the
+  provisioned-language check uses — and hands the identical value to both the SDK
+  and the data-model phase, so the two halves cannot disagree.
+
+  Unchanged when you pass nothing: omitting the option preserves the previous 1033
+  behaviour exactly, which is what makes this opt-in rather than a silent
+  re-labelling of every existing app.
+
 - **`app.newLook` — opt into the modern ("new look") shell.** Writes the per-app
   `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
   *hiding the user switch*, so the result is deterministic rather than a per-user
@@ -106,9 +138,10 @@ and corrects a smoke-eval assertion that could never pass live.
   Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
   `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table and
   its Choice columns are created and the build fails a few steps later — which reads
-  like an environment problem rather than a defect. And this covers the **data-model
-  phase only**; form, dashboard and sitemap labels still come from SDK serializers that
-  hardcode 1033 with no caller override
+  like an environment problem rather than a defect. This originally covered the
+  **data-model phase only**; form, dashboard and sitemap labels came from SDK serializers
+  that hardcoded 1033 with no caller override — closed in this same release, see
+  *"Form, dashboard and sitemap labels now honour the authoring language"* under Added
   ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
 - **A hand-pinned `languageCode` is no longer lost on download**

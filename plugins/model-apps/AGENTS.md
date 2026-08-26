@@ -167,13 +167,22 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `updateTable(logical, { quickCreateEnabled })` deliberately passes no language: it only builds a
   Label when a `displayName`/`pluralName`/`description` is supplied, and otherwise round-trips
   Dataverse's own labels under `MSCRM.MergeLabels`.
-  **Scope — this does NOT extend to the `forms`, `dashboards` or `app-shell` phases.** Those go
-  through the vendored SDK's artifact serializers, which hardcode `1033` into FormXML
+  **Scope — this now extends to the `forms`, `dashboards` and `app-shell` phases too.** Those go
+  through the vendored SDK's artifact serializers, which used to hardcode `1033` into FormXML
   (`<label languagecode="1033">`), SiteMap XML (`<Title LCID="1033">`) and dashboard XML with **no
-  caller override**, so the plugin cannot pass a language even though it has one. That is an SDK-side
-  gap tracked in [#455](https://github.com/microsoft/power-platform-skills/issues/455). It is not
-  known to fail a build — the #447 reporter's full build completed once the data-model phase was
-  fixed — but in a non-1033 org those labels are stored tagged with a language the org lacks.
+  caller override** ([#455](https://github.com/microsoft/power-platform-skills/issues/455)). The SDK
+  now takes the authoring LCID as a **construction-time** option (`MakerSdkOptions.languageCode`),
+  which is why `main()` resolves the language over the transport hatch (`resolveAuthoringLanguage`,
+  `scripts/lib/entity-provision.js`) **before** calling `makeSdk`, and passes the identical value on
+  as `opts.preResolvedLanguageCode` so the data-model phase cannot resolve a different one. Both SDK
+  instances get the same LCID deliberately: `pushArtifact` refuses a push whose stored artifact
+  language disagrees with the SDK performing it (`ARTIFACT_LANGUAGE_MISMATCH`, for registrations
+  marked `languageSensitive` — App, Form, Dashboard). Passing nothing preserves the SDK's own 1033
+  default exactly, so the option is opt-in rather than a silent re-labelling.
+  Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
+  parameter is the *environment base* language, a different concept.
+  Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
+  would keep passing against a bundle that ignored the option.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
   **`--changed-only`** (Preview, off by default) is a fail-closed SAFE partial apply: after a FRESH

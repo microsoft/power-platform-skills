@@ -16,6 +16,9 @@ const path = require('node:path');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
+// #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
+// bakes it into the App/Form/Dashboard adapters.
+const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
@@ -39,7 +42,7 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (findTables/findColumns/fetchEntityMetadata) and every artifact
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
-function makeSdk(env, spec, workspaceDir) {
+function makeSdk(env, spec, workspaceDir, languageCode) {
   const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
@@ -48,9 +51,21 @@ function makeSdk(env, spec, workspaceDir) {
     instanceUrl: env,
     httpClient,
     solutionUniqueName: spec.solution && spec.solution.uniqueName,
+    // #455: the App, Form and Dashboard adapters bake this in at construction, so it is the ONLY
+    // way to stop sitemap titles and FormXML labels being written at a hardcoded 1033. Omitted
+    // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
+    ...(languageCode ? { languageCode } : {}),
   });
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const provisionSdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
+  const provisionSdk = createMakerSdk({
+    workspacePath: workspaceDir,
+    instanceUrl: env,
+    httpClient,
+    // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
+    // language disagrees with the SDK performing it (for language-sensitive registrations), so two
+    // instances at different LCIDs would make every push of a fetched artifact fail.
+    ...(languageCode ? { languageCode } : {}),
+  });
   provisionSdk.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
@@ -461,9 +476,24 @@ async function main() {
     env,
     workspaceDir,
   };
+  // #455: the App, Form and Dashboard adapters bake the authoring LCID in at CONSTRUCTION, so it
+  // has to be resolved before the SDK exists — which is why this reads over the transport hatch
+  // rather than through `provision.queryRecords`. Resolving here also means the provisioned-language
+  // halt fires once, before anything is constructed or written. Dry runs skip it: they perform no
+  // writes, and a language read is a round trip a plan does not need.
+  //
+  // Best-effort by construction — every failure mode inside resolves to the 1033 fallback with a
+  // warning, so this cannot turn a working build into a broken one.
+  const authoringLanguageCode = opts.apply
+    ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
+    : undefined;
+  // Reuse the SAME resolved value for the data-model phase instead of repeating the org read and the
+  // provisioned-languages probe. A disagreement between the two would label columns in one language
+  // and FormXML/sitemap titles in another — assigned after resolution because `opts` is built above.
+  opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir);
+  const { sdk, provisionSdk, httpClient, cleanup } = makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   const journal = opts.apply

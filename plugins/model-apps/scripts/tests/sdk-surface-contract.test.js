@@ -79,6 +79,10 @@ const SKILL_SDK_SURFACE = [
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
   'setEntityIcon',
+  // Wave 2 header/navigation refresh (`app.headerNavigationRefresh`). Used instead of a raw setting
+  // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
+  // by the API and silently fails to enable the feature. The SDK owns that encoding.
+  'setHeaderAndNavigationRefresh',
   'updateElement',
   'updateRecord',
   'updateTable',

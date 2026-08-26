@@ -106,6 +106,11 @@ const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 // organization: `settingdefinition` uniquename `NewLookAlwaysOn`, datatype 2 (boolean), default
 // "false". See the app-shell phase for why this one rather than the other new-look definitions.
 const NEW_LOOK_SETTING = 'NewLookAlwaysOn';
+// The Wave 2 header/navigation refresh (public preview) — a DIFFERENT `settingdefinition` from
+// NEW_LOOK_SETTING above. Named here only for the warning message; the value encoding (a Number
+// tri-state where ON is '2', not '1') lives in the SDK's setHeaderAndNavigationRefresh, which is
+// why the plugin does not write this row by hand.
+const HEADER_NAV_SETTING = 'HeaderAndNavigationRefresh';
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -902,7 +907,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -1763,6 +1768,41 @@ async function runSdkBuild(spec, opts = {}) {
       const detail = (err && err.message) || String(err);
       if (typeof opts.warn === 'function') {
         opts.warn(`could not enable the new look (${NEW_LOOK_SETTING}): ${detail} — the app is fully built and functional, but stays on the classic shell. This setting is a platform feature that rolls out by tenant.`);
+      }
+    }
+  }
+
+  // 7b-iii. Wave 2 header + navigation refresh — opt-in via `app.headerNavigationRefresh`.
+  //
+  // DISTINCT from `newLook` above, and both can be set independently. `NewLookAlwaysOn` is the
+  // new-look shell toggle; `HeaderAndNavigationRefresh` is the Wave 2 header/navigation redesign
+  // (public preview). They are separate `settingdefinition` rows and enabling one does not enable
+  // the other.
+  //
+  // Written through the SDK's dedicated `setHeaderAndNavigationRefresh` rather than a raw setting
+  // write, because the encoding is a trap: this is a `datatype = 0` (Number) TRI-STATE where ON is
+  // '2', not '1'. The SDK's own note records that of the nine Number settings with rows in a live
+  // org, eight use '1' for on and only this one uses '2' — and that writing '1' is ACCEPTED by the
+  // API and then silently fails to enable the feature. Hand-rolling this is how you ship a green
+  // build with the feature off.
+  //
+  // Same best-effort contract as the new look: this is a rolling-out preview, so a tenant without
+  // the definition gets a warning and `headerNavigationRefresh: false`, never a silent success and
+  // never a failed build. The SDK throws a plain Error (not an SdkError subclass) when the
+  // definition is absent, so this catches broadly on purpose.
+  if (has('app-shell') && spec.app && spec.app.headerNavigationRefresh === true && result.created.app) {
+    try {
+      const outcome = await provision.setHeaderAndNavigationRefresh(result.created.app, true);
+      // AppSettingWriteOutcome is 'created' | 'updated' | 'unchanged' — all three mean the row now
+      // holds the ON value, so all three are success. Recorded verbatim so a caller can tell a
+      // fresh enable from a no-op re-run.
+      result.created.headerNavigationRefresh = true;
+      result.created.headerNavigationRefreshOutcome = outcome;
+    } catch (err) {
+      result.created.headerNavigationRefresh = false;
+      const detail = (err && err.message) || String(err);
+      if (typeof opts.warn === 'function') {
+        opts.warn(`could not enable the header and navigation refresh (${HEADER_NAV_SETTING}): ${detail} — the app is fully built and functional, but keeps the current header and navigation. This setting is a public-preview feature that rolls out by tenant.`);
       }
     }
   }
