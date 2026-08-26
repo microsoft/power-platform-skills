@@ -1,0 +1,112 @@
+'use strict';
+// REAL BUNDLE: the header/navigation refresh VALUE ENCODING.
+//
+// `app.headerNavigationRefresh` delegates to the SDK's `setHeaderAndNavigationRefresh` precisely
+// because the encoding is a trap: it is a `datatype = 0` (Number) TRI-STATE where ON is '2', not
+// '1'. Of the nine Number settings with rows in a live org, eight use '1' for on and only this one
+// uses '2' — and writing '1' is ACCEPTED by the API and then silently fails to enable the feature.
+//
+// The plugin's own tests stub `setHeaderAndNavigationRefresh` and assert delegation, which is the
+// right thing to test on that side. But delegation only protects us if the BUNDLE gets the encoding
+// right, and a re-vendor could flip it with every plugin test still green: the plugin would report
+// `created.headerNavigationRefresh: true` while the setting quietly did nothing.
+//
+// So this pins the wire payload against the real bundle, the same way lcid-real-bundle.test.js pins
+// the language option.
+const test = require('node:test');
+const assert = require('node:assert');
+const os = require('node:os');
+const path = require('node:path');
+const fs = require('node:fs');
+
+const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
+const APP_ID = '11111111-1111-1111-1111-111111111111';
+const dirs = [];
+
+// The setting write is an upsert keyed by (settingdefinitionid, parentappmoduleid), so the SDK first
+// looks the definition up and probes for an existing row. Answer both, then record the write.
+function sdkWithCapture({ existingRow = null } = {}) {
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hdrnav-'));
+  dirs.push(dir);
+  const writes = [];
+  const httpClient = {
+    get: async (url) => {
+      const u = String(url);
+      if (/settingdefinition/i.test(u)) {
+        return { status: 200, headers: {}, body: { value: [{ settingdefinitionid: '22222222-2222-2222-2222-222222222222', uniquename: 'HeaderAndNavigationRefresh', datatype: 0 }] } };
+      }
+      if (/appsetting/i.test(u)) {
+        return { status: 200, headers: {}, body: { value: existingRow ? [existingRow] : [] } };
+      }
+      return { status: 200, headers: {}, body: {} };
+    },
+    post: async (url, body) => { writes.push({ verb: 'post', url: String(url), body }); return { status: 204, headers: { 'odata-entityid': 'https://x/appsettings(33333333-3333-3333-3333-333333333333)' }, body: {} }; },
+    patch: async (url, body) => { writes.push({ verb: 'patch', url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+    put: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+  };
+  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  sdk.initWorkspace();
+  return { sdk, writes };
+}
+
+const settingValueOf = (writes) => {
+  const w = writes.find((x) => x.body && typeof x.body.value === 'string');
+  return w ? w.body.value : undefined;
+};
+
+test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+
+test('REAL BUNDLE: enabling the header/navigation refresh writes the tri-state ON value "2"', async () => {
+  const { sdk, writes } = sdkWithCapture();
+  const outcome = await sdk.setHeaderAndNavigationRefresh(APP_ID, true);
+  assert.ok(['created', 'updated', 'unchanged'].includes(outcome), `unexpected outcome: ${JSON.stringify(outcome)}`);
+  const value = settingValueOf(writes);
+  assert.strictEqual(value, '2',
+    'ON must be "2". "1" is accepted by the API and then silently fails to enable the feature, so a '
+    + 'bundle that wrote "1" would produce a green build with the feature off.');
+});
+
+test('REAL BUNDLE: disabling writes "1", and ON/OFF are not the same value', async () => {
+  const { sdk, writes } = sdkWithCapture();
+  await sdk.setHeaderAndNavigationRefresh(APP_ID, false);
+  const off = settingValueOf(writes);
+  assert.strictEqual(off, '1', 'OFF is "1"');
+
+  const on = sdkWithCapture();
+  await on.sdk.setHeaderAndNavigationRefresh(APP_ID, true);
+  // The guard that matters if the constants are ever swapped or collapsed: if ON and OFF serialized
+  // identically, every single-value assertion above could still pass on one branch.
+  assert.notStrictEqual(settingValueOf(on.writes), off, 'ON and OFF must not serialize to the same value');
+});
+
+test('REAL BUNDLE: the setting row is bound to the app module id', async () => {
+  // The row is keyed by (settingdefinitionid, parentappmoduleid). Binding the wrong id would write a
+  // real row that simply governs nothing — a silent no-op with a success return.
+  const { sdk, writes } = sdkWithCapture();
+  await sdk.setHeaderAndNavigationRefresh(APP_ID, true);
+  const body = writes.find((w) => w.body && typeof w.body.value === 'string')?.body || {};
+  const bind = JSON.stringify(body);
+  assert.match(bind, new RegExp(APP_ID), `the app module id must appear in the write; got ${bind}`);
+  assert.match(bind, /appmodule/i, 'bound through an appmodule navigation property');
+});
+
+test('REAL BUNDLE: a non-boolean is rejected rather than coerced', async () => {
+  // The plugin validates `app.headerNavigationRefresh` as a boolean, but the SDK is the last line of
+  // defence for any other caller: a truthy string like "false" must not be read as ON.
+  //
+  // Wrapped in an async thunk because the SDK validates SYNCHRONOUSLY — it throws before returning a
+  // promise, which `assert.rejects` alone does not treat as a rejection.
+  const { sdk } = sdkWithCapture();
+  for (const bad of ['true', 'false', 1, 0, null]) {
+    await assert.rejects(
+      async () => sdk.setHeaderAndNavigationRefresh(APP_ID, bad),
+      `${JSON.stringify(bad)} must be rejected, not coerced`
+    );
+  }
+  // And the happy path still works, so the guard is not simply rejecting everything.
+  const ok = sdkWithCapture();
+  await ok.sdk.setHeaderAndNavigationRefresh(APP_ID, true);
+  assert.strictEqual(settingValueOf(ok.writes), '2');
+});
