@@ -22,6 +22,7 @@ Add essential SEO assets to a Power Pages code site: `robots.txt`, `sitemap.xml`
 - **Crawlability first:** Every public page must be discoverable by search engines via a valid `robots.txt` and `sitemap.xml` before any other SEO work matters.
 - **Accurate metadata:** Meta tags (title, description, Open Graph) must truthfully represent page content — misleading metadata harms rankings.
 - **Framework-aware placement:** SEO assets must be placed in the correct location for the detected framework (public directory, layout component, etc.).
+- **Preserve localized metadata:** Read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. When localization exists, keep language-specific titles, descriptions, social metadata, alternate links, and static locale routes synchronized without advertising unavailable locales.
 
 **Initial request:** $ARGUMENTS
 

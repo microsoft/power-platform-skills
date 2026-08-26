@@ -23,7 +23,9 @@ environment languages or translates Dataverse records.
 **Initial request:** $ARGUMENTS
 
 Read `${PLUGIN_ROOT}/references/i18n-frameworks.md` and
-`${PLUGIN_ROOT}/references/bidirectional-design.md` before planning or editing.
+`${PLUGIN_ROOT}/references/bidirectional-design.md` before planning or editing. Also apply
+`${PLUGIN_ROOT}/references/site-modification-integrity.md` to all existing and future visible
+site changes.
 
 ## Core principles
 
@@ -374,6 +376,8 @@ by every selector, locale switch/detection path, alternate-language metadata
 generator, and static locale output configuration. The manifest alone does not
 disable a locale. While readiness is `pending-remediation`, every configured
 locale whose direction is opposite to the default locale remains unavailable.
+Record each pending scanner finding with its exact `file`, `line`, `rule`, and `message`
+so lifecycle validation can defer known work without allowing new regressions.
 
 ---
 

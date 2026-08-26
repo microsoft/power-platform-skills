@@ -17,6 +17,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
 - **Bidirectional by default** — All generated sites must follow `references/bidirectional-design.md`: resolve direction from the locale's writing script, prefer CSS logical properties, isolate mixed-direction content, use script-capable font profiles, and classify directional assets instead of mirroring everything. Intentional physical CSS requires an adjacent `/* bidi-physical: <specific reason>; verify=ltr,rtl */` directive. Run `scripts/audit-bidirectional-readiness.js` for deterministic readiness findings.
+- **Preserve site integrity after creation** — Any skill or agent that changes visible SPA source must follow `references/site-modification-integrity.md`: synchronize new semantic keys across configured locale resources, preserve unavailable-locale boundaries, use direction-neutral UI, and design for text expansion. The centralized hook runs `scripts/validate-site-integrity.js` after source-mutating skills, and deployment runs it again as the backstop for manual edits.
 - **Templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
@@ -40,6 +41,7 @@ agents/
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
   audit-bidirectional-readiness.js ← Audits generated source for deterministic bidirectional blockers and review findings
+  validate-site-integrity.js ← Shared post-modification/deployment localization and bidirectional integrity check
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
@@ -49,6 +51,7 @@ references/                    ← Shared reference docs used by multiple skills
   odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
   bcp47-subtags.json           ← Bundled IANA Language Subtag Registry snapshot
   bidirectional-design.md      ← Shared LTR/RTL design, typography, content, component, coordinator, and testing standard
+  site-modification-integrity.md ← Shared lifecycle contract for localized, direction-safe, expansion-safe site edits
   i18n-frameworks.md           ← Framework localization modes, packages, resources, selector behavior, and manifest schema
   dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
   framework-conventions.md     ← Framework detection, paths, route discovery

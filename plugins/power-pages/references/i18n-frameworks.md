@@ -245,6 +245,11 @@ when the configured set contains both LTR and RTL:
 - `pending-remediation` — hard compatibility work remains; affected locales
   belong in `unavailableLocales` and managed availability logic.
 
+Each pending finding must preserve the exact scanner result with `file`, `line`, `rule`, and
+`message`.
+Only those recorded physical-layout blockers are deferred by lifecycle validation; newly
+introduced findings, invisible bidi controls, and invalid exception directives still block.
+
 Schema version 1 includes `packageVerification`:
 
 - Known recommendations use `status: "verified"` and

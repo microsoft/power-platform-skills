@@ -32,6 +32,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 - **Client-side auth is UX only** — Power Pages authentication is server-side (session cookies). Client-side role checks control what users see, not what they can access. Server-side table permissions enforce actual security.
 - **Framework-appropriate patterns** — Every auth artifact (hooks, composables, services, directives, guards) must match the detected framework's idioms and conventions.
 - **Development parity** — Include mock data for local development so developers can test auth flows and role-based UI without deploying to Power Pages.
+- **Preserve site integrity** — Before changing navigation, auth pages, dialogs, or role-based UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. Synchronize all visible auth states across configured locale resources and keep them bidirectional and expansion-safe.
 
 **Initial request:** $ARGUMENTS
 
