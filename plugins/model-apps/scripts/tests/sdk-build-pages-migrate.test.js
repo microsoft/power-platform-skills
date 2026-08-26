@@ -81,10 +81,10 @@ function mockSdk() {
       store[`${t}:${id}`] = art;
       return JSON.parse(JSON.stringify(art));
     },
-    getArtifact: (t, id) => { calls.push({ name: 'getArtifact', args: [t, id] }); return store[`${t}:${id}`] || { id }; },
-    addElement: (t, id, ptr, el) => { calls.push({ name: 'addElement', args: [t, id, ptr, el] }); return {}; },
-    updateElement: (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
-    removeElement: (t, id, ptr) => { calls.push({ name: 'removeElement', args: [t, id, ptr] }); return {}; },
+    getArtifact: async (t, id) => { calls.push({ name: 'getArtifact', args: [t, id] }); return store[`${t}:${id}`] || { id }; },
+    addElement: async (t, id, ptr, el) => { calls.push({ name: 'addElement', args: [t, id, ptr, el] }); return {}; },
+    updateElement: async (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
+    removeElement: async (t, id, ptr) => { calls.push({ name: 'removeElement', args: [t, id, ptr] }); return {}; },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
     publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); return { type: t, id, shipped: true, publish: { kind: 'verified' } }; },

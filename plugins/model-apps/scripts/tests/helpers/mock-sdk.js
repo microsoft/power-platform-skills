@@ -4,6 +4,12 @@
 // calls; returns benign successes so the build reaches the app-shell + publish phases.
 // Minimal JsonPointer + form-seed helpers so the mock simulates the SDK's generic mutation surface
 // (addElement/updateElement/removeElement/getArtifact) the build engine now uses.
+//
+// The generic surface is `async` HERE because it is async in the REAL SDK. That fidelity is
+// load-bearing, not cosmetic: when this mock returned plain values, an engine call that forgot its
+// `await` still behaved correctly under the mock (`await` on a non-promise is a no-op), so every
+// mock-driven test passed while the real bundle silently fed a Promise into a pure helper. Keeping
+// the mock synchronous made ~1500 tests blind to that entire class. Do not "simplify" these back.
 function jpGet(o, p) { let c = o; for (const t of (p === '' ? [] : p.split('/').slice(1))) { if (c == null) return undefined; c = c[t]; } return c; }
 function jpSet(o, p, v) { const ts = p.split('/').slice(1); const l = ts.pop(); let c = o; for (const t of ts) c = c[t]; c[l] = v; }
 function jpRemove(o, p) { const ts = p.split('/').slice(1); const l = ts.pop(); let c = o; for (const t of ts) c = c[t]; if (Array.isArray(c)) c.splice(Number(l), 1); else delete c[l]; }
@@ -45,11 +51,11 @@ function makeSimpleMockSdk() {
     },
     createWebResource: async (o) => { calls.push(['createWebResource', o.name]); return { id: `wr-${++idc}`, name: o.name }; },
     pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
-    getArtifact: (t, id) => store[`${t}:${id}`] || { id, columns: [] },
+    getArtifact: async (t, id) => { await Promise.resolve(); return store[`${t}:${id}`] || { id, columns: [] }; },
     fetchArtifact: async (t, id) => { if (!store[`${t}:${id}`]) store[`${t}:${id}`] = t === 'form' ? seedForm(id) : t === 'app' ? { id, siteMap: { areas: [] } } : { id, columns: [] }; return store[`${t}:${id}`]; },
-    addElement: (t, id, ptr, el) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
-    updateElement: (t, id, ptr, patch) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
-    removeElement: (t, id, ptr) => { const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
+    addElement: async (t, id, ptr, el) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
+    removeElement: async (t, id, ptr) => { await Promise.resolve(); const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
     updateRecord: async () => undefined,
     addSolutionComponent: async () => undefined,
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),

@@ -77,6 +77,7 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   const findings = [];
   let scanned = 0;
   let calls = 0;
+  let inComment = 0;
 
   for (const file of pluginSourceFiles()) {
     // This file names the methods in prose and in the ASYNC_SDK_METHODS list; scanning it would
@@ -84,11 +85,19 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     if (path.basename(file) === path.basename(__filename)) continue;
     const src = fs.readFileSync(file, 'utf8');
     scanned++;
+    const lines = src.split('\n');
     for (const m of src.matchAll(re)) {
       calls++;
       if (m[1]) continue; // awaited
       const line = src.slice(0, m.index).split('\n').length;
-      const text = src.split('\n')[line - 1] || '';
+      const text = lines[line - 1] || '';
+      // Prose mentions a call to EXPLAIN it — this file's own header does exactly that, and so does
+      // the rebuild-idempotency test in sdk-build.test.js. A comment cannot execute, so skip it
+      // rather than force documentation to avoid naming the very API it documents. Covers `//`,
+      // `/*` and the `*` continuation lines of a block comment; a trailing comment after real code
+      // is deliberately NOT skipped, because the code before it still runs.
+      const lead = text.trimStart();
+      if (lead.startsWith('//') || lead.startsWith('/*') || lead.startsWith('*')) { inComment++; continue; }
       if (text.includes(OPT_OUT)) continue;
       findings.push(`${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`);
     }
@@ -97,6 +106,7 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   // Positive assertions first: a scan that silently matched nothing would "pass" forever.
   assert.ok(scanned > 50, `the scan walked the plugin source (saw ${scanned} files)`);
   assert.ok(calls > 30, `the scan found the SDK calls it is meant to guard (saw ${calls})`);
+  assert.ok(inComment > 0, 'the comment filter is exercised (documentation naming these calls exists)');
   assert.deepStrictEqual(findings, [],
     'these SDK calls are NOT awaited, but the vendored SDK returns a Promise. Unawaited, they do '
     + 'not throw — they silently feed a Promise to a pure helper and corrupt the artifact '

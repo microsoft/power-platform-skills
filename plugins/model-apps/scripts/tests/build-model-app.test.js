@@ -50,10 +50,10 @@ function mockSdk() {
     createWebResource: async (o) => { calls.push(['createWebResource', o.name]); return { id: `wr-${++idc}`, name: o.name }; },
     pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     fetchArtifact: async (t, id) => { if (!store[`${t}:${id}`]) store[`${t}:${id}`] = t === 'form' ? seedForm(id) : t === 'app' ? { id, siteMap: { areas: [] } } : { id, columns: [] }; return store[`${t}:${id}`]; },
-    getArtifact: (t, id) => store[`${t}:${id}`] || { id, columns: [] },
-    addElement: (t, id, ptr, el) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
-    updateElement: (t, id, ptr, patch) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
-    removeElement: (t, id, ptr) => { const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
+    getArtifact: async (t, id) => { await Promise.resolve(); return store[`${t}:${id}`] || { id, columns: [] }; },
+    addElement: async (t, id, ptr, el) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
+    removeElement: async (t, id, ptr) => { await Promise.resolve(); const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
     updateRecord: async () => undefined,
     addSolutionComponent: async () => undefined,
     publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
@@ -423,7 +423,7 @@ test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYP
       return [{ publisherid: 'pub-1' }];
     },
     fetchArtifact: async () => ({ id: 'main-form-1' }),
-    getArtifact: () => ({ id: 'main-form-1', tabs: [] }),
+    getArtifact: async () => { await Promise.resolve(); return { id: 'main-form-1', tabs: [] }; },
   };
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'zava' },

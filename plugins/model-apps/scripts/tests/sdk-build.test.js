@@ -237,27 +237,27 @@ function mockSdk(opts = {}) {
       store[`${t}:${id}`] = art;
       return clone(art);
     },
-    getArtifact: (t, id) => {
+    getArtifact: async (t, id) => { await Promise.resolve();
       calls.push({ name: 'getArtifact', args: [t, id] });
       return store[`${t}:${id}`] || { id };
     },
     // Generic mutation surface (mirrors the SDK). The mock does NOT mint layout ids (tests don't
     // assert on them); it just maintains a coherent in-memory tree so getArtifact/firstSectionRowsPointer
     // and reconcile see the effects of adds/removes.
-    addElement: (t, id, ptr, el) => {
+    addElement: async (t, id, ptr, el) => { await Promise.resolve();
       calls.push({ name: 'addElement', args: [t, id, ptr, el] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       const arr = jpGet(art, ptr);
       if (Array.isArray(arr)) arr.push(clone(el));
       return clone(art);
     },
-    updateElement: (t, id, ptr, patch) => {
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
       calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       jpSet(art, ptr, clone(patch));
       return clone(art);
     },
-    removeElement: (t, id, ptr) => {
+    removeElement: async (t, id, ptr) => { await Promise.resolve();
       calls.push({ name: 'removeElement', args: [t, id, ptr] });
       const art = store[`${t}:${id}`];
       if (art) jpRemove(art, ptr);
@@ -1379,6 +1379,46 @@ test('idempotency: existing view/chart/form/app are reused, not re-created (no d
 });
 
 // --- Gap 1/2: update-in-place (reconcile) for forms + views; stock-form reuse -----------------
+
+// REBUILD IDEMPOTENCE — the highest-value regression net for the reconcile path, and the one the
+// suite was missing. Every other reconcile test starts from an EMPTY deployed form, so "re-add
+// everything" and "add only what's missing" produce identical call logs and no test can tell them
+// apart. Running the build twice against the SAME mock store makes the second pass observe the
+// first pass's artifacts, so a reconcile that has stopped reading the deployed form correctly
+// shows up as duplicate work.
+//
+// Concretely, this is the test that fails when a `provision.getArtifact(...)` in reconcileForm or
+// addSubgrids loses its `await`: the un-awaited Promise makes `formFieldLogicals` return `[]` and
+// `hasSubgrid` return false, so the second build re-adds every field and splices a second
+// sub-grid — on a real org, a visibly corrupted form behind a 2xx and a green build.
+test('REBUILD idempotency: a second build over the same deployed form re-adds no field and no duplicate sub-grid', async () => {
+  const spec = makeSpec();
+  // artifactsExist makes both passes reconcile the SAME 'form-existing' row; the deployed form
+  // starts empty, so pass 1 populates it and pass 2 must find its own work already done.
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const phases = ['solution', 'data-model', 'views', 'charts', 'forms'];
+
+  await runSdkBuild(spec, { sdk, apply: true, phases });
+  const firstPass = find(calls, 'addElement');
+  assert.ok(firstPass.length > 0, 'pass 1 populated the deployed form (otherwise pass 2 proves nothing)');
+
+  calls.length = 0; // same array the mock pushes into — measure ONLY the second pass
+  await runSdkBuild(spec, { sdk, apply: true, phases });
+
+  const readded = find(calls, 'addElement')
+    .flatMap((c) => (c.args[3] && c.args[3].cells) || [])
+    .filter((cell) => cell && cell.control && cell.control.fieldName)
+    .map((cell) => cell.control.fieldName);
+  assert.deepStrictEqual(readded, [],
+    `pass 2 re-added field(s) already on the deployed form: ${JSON.stringify(readded)} — the `
+    + 'reconcile is not reading the deployed form (check that every getArtifact is awaited)');
+
+  // A sub-grid is spliced as a whole SECTION, not a field cell, so it needs its own assertion.
+  const sections = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])));
+  assert.deepStrictEqual(sections.map((c) => c.args[2]), [],
+    'pass 2 spliced another sub-grid section — hasSubgrid did not see the one pass 1 added');
+});
+
 test('form update-in-place: an existing form is reconciled (addField per spec field), not recreated', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
