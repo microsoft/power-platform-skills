@@ -72,6 +72,18 @@ function validateScreenBuildPack(projectRoot, pack) {
     issues.push({ rule: 'invalid-shell-contract', message: 'Screen build pack requires route-owned safe areas plus root/back header modes.' });
   }
   for (const screen of pack.screens || []) {
+      const guidance = screen.compositionGuidance;
+      if (guidance && (guidance.version !== 1
+        || guidance.source !== 'deterministic-compiler'
+        || guidance.enforcement !== 'advisory-with-structural-baseline'
+        || typeof guidance.profile !== 'string'
+        || !Array.isArray(guidance.structuralRoles)
+        || guidance.structuralRoles.length < 2
+        || !Array.isArray(guidance.recommendedRecipes)
+        || !Array.isArray(guidance.interactionPatterns)
+        || guidance.equivalentImplementationsAllowed !== true)) {
+        issues.push({ rule: 'invalid-composition-guidance', message: `Screen ${screen.id} has malformed deterministic composition guidance.` });
+      }
     if (!['root', 'back', 'close', 'none'].includes(screen.headerMode) || pack.shell?.headerModes?.[screen.route] !== screen.headerMode) {
       issues.push({ rule: 'header-mode-drift', message: `Screen build pack header mode drift for ${screen.route || screen.id}.` });
     }

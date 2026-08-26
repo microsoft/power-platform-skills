@@ -265,9 +265,13 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-prototype-domain-model.js" \
   --project-root "$PROJECT_DIR"
 ```
 
-Resolve and validate Navigation before approval so the review shows the real
-durable destinations, nested ownership, Profile access, launch/resume policy,
-and critical flow:
+Finalize and validate the executable graph before approval. The resolver
+normalizes planner schema v1 to v2, preserves optional product-role/parent
+hints, rebinds pre-screen Journey stages/actions to actual screen IDs,
+synthesizes a missing critical flow, and then resolves durable destinations,
+nested ownership, Profile access, and launch/resume policy. These are
+deterministic compatibility operations; do not re-dispatch the planner for
+missing optional bookkeeping.
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-navigation-contract.js" --project-root "$PROJECT_DIR"
@@ -548,7 +552,6 @@ After writing canary screens:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/apply-navigation-shell.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-destinations.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-shell.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-navigation-continuity.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/route-manifest.js" \
@@ -645,36 +648,27 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
   --file <changed-file> [--file <changed-file> ...]
 ```
 
-### Step 9.6 - Automated Design Refinement (LLM Polish)
+### Step 9.6 - Optional Finding-Scoped Design Repair
 
-After the script-based stylistic sweep, apply the final layer of context-aware design polish to the generated prototype screens.
+Default: skip. Do not invoke `/design-react-native-app` after a successful
+normal build merely to add polish; that broad second design pass bypasses the
+bounded automatic-native path and can mutate screens after validation.
 
-**Print before starting:**
-> "-> [prototype 9.6/10] Running automated design refinement pass to polish UI, typography, RTL layouts, and accessibility..."
+Invoke it only when the maker explicitly requests a refinement or a named
+static quality/composition check has failed and the affected screen-builder has
+already attempted its local repair. Pass only the affected screen files, exact
+findings, `brand/tokens.ts`, native-app-plan.md, `.tmp/experience-contract.json`,
+`.tmp/experience-screen-contract.json`, `.tmp/experience-foundation-contract.json`,
+`.tmp/screen-build-pack.json`, and brand/design-system.md. Reference-led work
+also receives design-intake.md.
 
-Invoke the design skill:
-```text
-/design-react-native-app
-```
-Instruct the skill to review the generated screens in `<PROJECT_DIR>/app/(app)/` against the design system at `<PROJECT_DIR>/brand/tokens.ts`. 
-
-Always provide native-app-plan.md, `.tmp/experience-contract.json`,
-`.tmp/experience-screen-contract.json`, `.tmp/experience-foundation-contract.json`, `.tmp/screen-build-pack.json`, and brand/design-system.md. The
-refiner may repair hierarchy, density, focal point clarity, and signature
-motifs, but must not replace entry mode, region order, primary action, or
-forbidden defaults with a dashboard or generic CRUD composition.
-
-Wait for it to complete. If it modifies any UI files, run:
-```bash
-npm --prefix "$PROJECT_DIR" run type-check
-```
-to guarantee it didn't break TS typing.
-
-For high or strict-structural fidelity, the design-refinement prompt must also
-provide native-app-plan.md, design-intake.md, and brand/design-system.md.
-Refinement may improve spacing, accessibility, and interaction states, but it
-must not redesign the approved Home composition or introduce a Forbidden Drift
-pattern. Re-run the relevant static gates after refinement.
+The repair may adjust hierarchy, density, spacing, focal clarity, and existing
+signature motifs. It must not change routes, jobs, data operations, entry mode,
+region order, primary action, composition profile, or forbidden defaults. When
+it writes any file, rerun every affected per-screen check, TypeScript, changed-
+file validation, and the complete Step 9 validation sequence. A repair that
+cannot pass those existing gates is reverted only by the repair owner and
+reported as a concern; it never triggers planner regeneration.
 
 After validation and design polish, invoke `/preview-screens --working-dir <PROJECT_DIR>` unless
 the user opted out of visual companion output.

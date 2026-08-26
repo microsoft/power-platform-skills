@@ -58,7 +58,7 @@ function validateActionState(pack, options = {}) {
       const laterStages = new Set(stages.filter((candidate) => candidate.order > stage.order).map((candidate) => candidate.id));
       for (const action of actions.values()) {
         if (laterStages.has(action.stageId) && !blocked.has(action.id)) issues.push(issue('premature-stage-action', `Screen ${screen.id} incomplete state exposes later-stage action ${action.id}.`, { screenId: screen.id, actionId: action.id }));
-        if (action.kind === 'route') {
+        if (action.kind === 'route' && action.stageId === stage.id) {
           const targetStage = stageByScreen.get(action.target);
           if (targetStage && targetStage.order > stage.order + 1) issues.push(issue('stage-skip', `Action ${action.id} skips from stage ${stage.id} to ${targetStage.id}.`, { screenId: screen.id, actionId: action.id }));
         }

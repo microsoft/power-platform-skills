@@ -9,7 +9,8 @@ const { parseScreenMap } = require('./compile-screen-build-pack');
 const { normalizeScreenContract } = require('./lib/experience-screen-contract');
 const { inferIconIntent } = require('./lib/navigation-icons');
 const { stableStringify } = require('./resolve-context-enrichment');
-const { workflowJourneyRevision } = require('./resolve-workflow-journey');
+const { resolveWorkflowJourney, workflowJourneyRevision } = require('./resolve-workflow-journey');
+const { validateWorkflowJourney } = require('./validate-workflow-journey');
 
 const ACTION_WORDS = /\b(?:scan|add|create|capture|pay|submit|sync|search|edit|delete|confirm|review)\b/i;
 const DURABLE_WORDS = /\b(?:home|today|overview|records?|assignments?|queue|drafts?|inbox|conversations?|favorites?|saved|cart|bag|orders?|activity|history|progress|library|catalog|shop|accounts?|goals?|contacts?|calls?|settings|profile)\b/i;
@@ -40,19 +41,22 @@ function candidateEvidence(screen, brief, journey, primaryScreenId) {
   const semantic = `${screen.id || ''} ${screen.header?.title || ''} ${screen.purpose || ''} ${screen.route || ''}`;
   const stage = (journey.stages || []).find((item) => item.screenIds.includes(screen.id));
   const primary = screen.id === primaryScreenId || screen.role === 'primary';
+  const declaredDurable = screen.productRole === 'durable-destination';
   const dynamic = (screen.routeParameters || []).some((parameter) => parameter.source === 'path' && parameter.required);
   const modal = screen.navigation?.kind === 'modal';
-  const actionLike = explicit.isNotAnAction === false || (!primary && ACTION_WORDS.test(semantic) && !DURABLE_WORDS.test(semantic));
-  const flowStep = explicit.isNotAFlowStep === false || Boolean(stage && !primary && explicit.revisitedIndependently !== true);
+  const actionLike = explicit.isNotAnAction === false
+    || (!primary && !declaredDurable && ACTION_WORDS.test(semantic) && !DURABLE_WORDS.test(semantic));
+  const flowStep = explicit.isNotAFlowStep === false
+    || Boolean(stage && !primary && !declaredDurable && explicit.revisitedIndependently !== true);
   const durableVocabulary = DURABLE_WORDS.test(semantic);
-  const hasStableRoot = explicit.hasStableRoot ?? (primary || (['tab-root', 'stack-root'].includes(screen.navigation?.kind) && !dynamic && !modal));
-  const revisitedIndependently = explicit.revisitedIndependently ?? (primary || screen.navigation?.kind === 'tab-root' || durableVocabulary);
+  const hasStableRoot = explicit.hasStableRoot ?? (primary || declaredDurable || (['tab-root', 'stack-root'].includes(screen.navigation?.kind) && !dynamic && !modal));
+  const revisitedIndependently = explicit.revisitedIndependently ?? (primary || declaredDurable || screen.navigation?.kind === 'tab-root' || durableVocabulary);
   const preservesOwnState = explicit.preservesOwnState ?? (revisitedIndependently && !flowStep);
   const crossSessionValue = explicit.crossSessionValue ?? (/\b(?:draft|saved|history|inbox|record|assignment|progress|activity)\b/i.test(semantic));
-  const peerToOtherDestinations = explicit.peerToOtherDestinations ?? (primary || screen.navigation?.kind === 'tab-root' || durableVocabulary);
+  const peerToOtherDestinations = explicit.peerToOtherDestinations ?? (primary || declaredDurable || screen.navigation?.kind === 'tab-root' || durableVocabulary);
   const isNotAFlowStep = explicit.isNotAFlowStep ?? !flowStep;
   const isNotAnAction = explicit.isNotAnAction ?? !actionLike;
-  const supportedByBriefOrSafeProductInference = explicit.supportedByBriefOrSafeProductInference ?? (primary || screen.navigation?.kind === 'tab-root' || briefSupportsScreen(brief, screen));
+  const supportedByBriefOrSafeProductInference = explicit.supportedByBriefOrSafeProductInference ?? (primary || declaredDurable || screen.navigation?.kind === 'tab-root' || briefSupportsScreen(brief, screen));
   return {
     hasStableRoot,
     revisitedIndependently,
@@ -172,6 +176,89 @@ function applyNavigationContractToScreenGraph(screenContract, contract) {
         },
       };
     }),
+  };
+}
+
+function bindWorkflowJourneyToScreenGraph(workflowJourney, screenContract) {
+  const screens = screenContract?.screens || [];
+  const screenById = new Map(screens.map((screen) => [screen.id, screen]));
+  const primary = screens.find((screen) => screen.role === 'primary') || screens[0];
+  const candidates = screens.filter((screen) => !isProfileScreen(screen));
+  const usedFallbacks = new Set();
+  const screenIdMap = new Map();
+  const stages = (workflowJourney?.stages || []).map((stage, stageIndex) => {
+    const mappedScreenIds = (stage.screenIds || []).map((screenId) => {
+      if (screenById.has(screenId)) return screenId;
+      const terms = [screenId, stage.id, stage.label].map(slug).filter(Boolean);
+      const semanticMatch = candidates.find((screen) => {
+        const semantic = slug(`${screen.id} ${screen.purpose || ''} ${screen.header?.title || ''}`);
+        return terms.some((term) => semantic.includes(term));
+      });
+      const fallback = semanticMatch
+        || (stageIndex === 0 ? primary : null)
+        || candidates.find((screen) => !usedFallbacks.has(screen.id))
+        || primary;
+      if (!fallback) return screenId;
+      usedFallbacks.add(fallback.id);
+      screenIdMap.set(screenId, fallback.id);
+      return fallback.id;
+    });
+    return { ...stage, screenIds: [...new Set(mappedScreenIds)] };
+  });
+  const mapScreenId = (screenId) => screenIdMap.get(screenId) || screenId;
+  return {
+    ...workflowJourney,
+    stages,
+    actions: (workflowJourney?.actions || []).map((action) => ({
+      ...action,
+      target: mapScreenId(action.target),
+    })),
+    stateActions: (workflowJourney?.stateActions || []).map((stateAction) => ({
+      ...stateAction,
+      screenId: mapScreenId(stateAction.screenId),
+    })),
+  };
+}
+
+function finalizeWorkflowJourney(brief, experience, contextContract, workflowJourney, screenContract, domainModel = null, sourceSchemaVersion = screenContract?.schemaVersion) {
+  if (contextContract && sourceSchemaVersion === 1) {
+    return resolveWorkflowJourney(brief, experience, contextContract, { screenContract, domainModel });
+  }
+  return bindWorkflowJourneyToScreenGraph(workflowJourney, screenContract);
+}
+
+function withCriticalFlow(screenContract, workflowJourney) {
+  const screens = screenContract?.screens || [];
+  const screenIds = new Set(screens.map((screen) => screen.id));
+  const current = screenContract?.criticalFlow;
+  if (Array.isArray(current?.screenIds)
+    && current.screenIds.length >= 2
+    && current.screenIds.every((screenId) => screenIds.has(screenId))
+    && typeof current.outcome === 'string'
+    && current.outcome.trim()) {
+    return screenContract;
+  }
+  const primary = screens.find((screen) => screen.role === 'primary') || screens[0];
+  const keyFlow = screens.find((screen) => screen.route === screenContract?.keyFlow?.route)
+    || screens.find((screen) => screen.role === 'key-flow');
+  const stagedScreenIds = (workflowJourney?.stages || [])
+    .flatMap((stage) => stage.screenIds || [])
+    .filter((screenId) => screenIds.has(screenId));
+  const criticalScreenIds = [...new Set([
+    primary?.id,
+    ...stagedScreenIds,
+    keyFlow?.id,
+  ].filter(Boolean))];
+  if (criticalScreenIds.length < 2) {
+    const supporting = screens.find((screen) => screen.id !== primary?.id && !isProfileScreen(screen));
+    if (supporting) criticalScreenIds.push(supporting.id);
+  }
+  return {
+    ...screenContract,
+    criticalFlow: {
+      screenIds: criticalScreenIds,
+      outcome: current?.outcome || screenContract?.keyFlow?.outcome || workflowJourney?.primaryOutcome || 'Complete the primary product flow.',
+    },
   };
 }
 
@@ -437,10 +524,11 @@ function main(argv) {
     const readJson = (value, fallback) => JSON.parse(fs.readFileSync(path.resolve(root, value || fallback), 'utf8'));
     const briefPath = path.resolve(root, args.brief || (fs.existsSync(path.join(root, '.tmp', 'experience-brief.md')) ? '.tmp/experience-brief.md' : 'brief.md'));
     const experience = readJson(args.experienceContract, '.tmp/experience-contract.json');
-    const workflow = bundle?.artifacts?.workflowJourneyContract || readJson(args.workflowContract, '.tmp/workflow-journey-contract.json');
+    const rawWorkflow = bundle?.artifacts?.workflowJourneyContract || readJson(args.workflowContract, '.tmp/workflow-journey-contract.json');
     const rawScreens = bundle?.artifacts?.experienceScreenContract || readJson(args.screenContract, '.tmp/experience-screen-contract.json');
     const planPath = path.join(root, 'native-app-plan.md');
     const fallbackScreens = fs.existsSync(planPath) ? parseScreenMap(fs.readFileSync(planPath, 'utf8')) : [];
+    const sourceScreenSchemaVersion = rawScreens.schemaVersion;
     const screens = Array.isArray(rawScreens.screens)
       ? rawScreens
       : {
@@ -448,13 +536,30 @@ function main(argv) {
           schemaVersion: 2,
           screens: normalizeScreenContract(rawScreens, experience, fallbackScreens),
         };
-    const result = resolveNavigationContract(fs.readFileSync(briefPath, 'utf8'), experience, workflow, screens);
+    const brief = fs.readFileSync(briefPath, 'utf8');
+    const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
+    const domainPath = path.join(root, '.tmp', 'prototype-domain-model.json');
+    const contextContract = fs.existsSync(contextPath) ? JSON.parse(fs.readFileSync(contextPath, 'utf8')) : null;
+    const domainModel = fs.existsSync(domainPath) ? JSON.parse(fs.readFileSync(domainPath, 'utf8')) : null;
+    const workflow = finalizeWorkflowJourney(brief, experience, contextContract, rawWorkflow, screens, domainModel, sourceScreenSchemaVersion);
+    const finalizedScreens = withCriticalFlow(screens, workflow);
+    const workflowValidation = validateWorkflowJourney(workflow, {
+      briefText: brief,
+      experienceContract: experience,
+      ...(contextContract ? { contextContract } : {}),
+      screenContract: finalizedScreens,
+      ...(domainModel ? { domainModel } : {}),
+    });
+    if (!workflowValidation.valid) throw new Error(`finalized Workflow Journey is invalid: ${workflowValidation.errors.join('; ')}`);
+    const result = resolveNavigationContract(brief, experience, workflow, finalizedScreens);
     const outputPath = path.resolve(root, args.output || '.tmp/navigation-contract.json');
     if (bundle && args.updateBundle) {
+      bundle.artifacts.workflowJourneyContract = workflow;
       bundle.artifacts.navigationContract = result.contract;
       bundle.artifacts.experienceScreenContract = result.screenContract;
       writeJsonAtomic(bundlePath, bundle);
     } else {
+      writeJsonAtomic(path.resolve(root, args.workflowContract || '.tmp/workflow-journey-contract.json'), workflow);
       writeJsonAtomic(outputPath, result.contract);
       writeJsonAtomic(path.resolve(root, args.screenContract || '.tmp/experience-screen-contract.json'), result.screenContract);
     }
@@ -470,6 +575,8 @@ if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
   applyNavigationContractToScreenGraph,
+  bindWorkflowJourneyToScreenGraph,
+  finalizeWorkflowJourney,
   isProfileScreen,
   navigationRole,
   navigationContractRevision,
@@ -477,4 +584,5 @@ module.exports = {
   resolveNavigationContract,
   resolveNavigationFromIntent,
   screenGraphRevision,
+  withCriticalFlow,
 };

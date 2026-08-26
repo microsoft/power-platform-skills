@@ -6,10 +6,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { deriveExperienceFromBrief } = require('../experience-patterns');
+const { contractHash, deriveExperienceFromBrief, primaryComposition } = require('../experience-patterns');
+const { normalizeScreenContract } = require('../lib/experience-screen-contract');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
-const { resolveNavigationContract } = require('../resolve-navigation-contract');
+const { resolveNavigationContract, withCriticalFlow } = require('../resolve-navigation-contract');
 const { validateNavigationContract } = require('../validate-navigation-contract');
 const { validateNavigationContinuity } = require('../validate-navigation-continuity');
 
@@ -222,4 +223,75 @@ test('foreground CLI attaches Navigation and the aligned Screen Graph to a stage
   assert.equal(bundle.artifacts.navigationContract.model, 'tabs-stack');
   assert.equal(bundle.artifacts.experienceScreenContract.screens.every((item) => item.navigation.destinationId), true);
   assert.equal(fs.existsSync(path.join(root, '.tmp', 'navigation-contract.json')), false);
+});
+
+test('foreground CLI finalizes planner-v1 Journey bindings and critical flow without planner repair', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'navigation-v1-finalization-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
+  const brief = 'Technicians identify gym equipment, inspect it, review active repairs, and confirm the next maintenance action.';
+  const experience = deriveExperienceFromBrief(brief);
+  const context = resolveContextEnrichment(brief, experience);
+  const workflow = resolveWorkflowJourney(brief, experience, context);
+  const v1 = {
+    schemaVersion: 1,
+    experienceContractSha256: contractHash(experience),
+    primaryScreen: { route: '/(app)/home', file: 'app/(app)/home.tsx', ...primaryComposition(experience) },
+    keyFlow: { route: '/(app)/equipment/inspect', file: 'app/(app)/equipment/inspect.tsx', outcome: 'Inspect selected equipment.' },
+    requiredScreens: [
+      { id: 'Equipment', route: '/(app)/equipment', file: 'app/(app)/equipment.tsx', outcome: 'Browse equipment.' },
+      { id: 'InspectEquipment', route: '/(app)/equipment/inspect', file: 'app/(app)/equipment/inspect.tsx', outcome: 'Inspect selected equipment.' },
+      { id: 'Repairs', route: '/(app)/repairs', file: 'app/(app)/repairs.tsx', outcome: 'Review active repairs.' },
+      { id: 'ConfirmMaintenance', route: '/(app)/maintenance/confirm', file: 'app/(app)/maintenance/confirm.tsx', outcome: 'Confirm maintenance work.' },
+      { id: 'Profile', route: '/(app)/profile', file: 'app/(app)/profile.tsx', outcome: 'Review profile and sign out.' },
+    ],
+  };
+  fs.writeFileSync(path.join(root, 'brief.md'), brief);
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-contract.json'), JSON.stringify(experience));
+  fs.writeFileSync(path.join(root, '.tmp', 'context-enrichment-contract.json'), JSON.stringify(context));
+  fs.writeFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), JSON.stringify(workflow));
+  fs.writeFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), JSON.stringify(v1));
+  fs.writeFileSync(path.join(root, 'native-app-plan.md'), [
+    '## Screens', '', '### Screen Map',
+    '| Screen | Route | File |', '| --- | --- | --- |',
+    '| Home | /(app)/home | app/(app)/home.tsx |',
+    ...v1.requiredScreens.map((item) => `| ${item.id} | ${item.route} | ${item.file} |`),
+  ].join('\n'));
+  const result = spawnSync(process.execPath, [resolverScript, '--project-root', root], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const finalizedWorkflow = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'workflow-journey-contract.json'), 'utf8'));
+  const finalizedScreens = JSON.parse(fs.readFileSync(path.join(root, '.tmp', 'experience-screen-contract.json'), 'utf8'));
+  const screenIds = new Set(finalizedScreens.screens.map((item) => item.id));
+  assert.equal(finalizedScreens.schemaVersion, 2);
+  assert.equal(finalizedScreens.sourceSchemaVersion, undefined);
+  assert.ok(finalizedWorkflow.stages.flatMap((stage) => stage.screenIds).every((screenId) => screenIds.has(screenId)));
+  assert.ok(finalizedScreens.criticalFlow.screenIds.length >= 2);
+  assert.ok(finalizedScreens.criticalFlow.screenIds.every((screenId) => screenIds.has(screenId)));
+  assert.equal(finalizedScreens.criticalFlow.screenIds.includes('Home'), true);
+  assert.equal(finalizedScreens.criticalFlow.screenIds.includes('InspectEquipment'), true);
+});
+
+test('planner-v1 optional durable roles survive normalization without becoming required', () => {
+  const brief = 'Let staff revisit Home, Equipment, and Work while completing one nested maintenance step.';
+  const experience = deriveExperienceFromBrief(brief);
+  const context = resolveContextEnrichment(brief, experience);
+  const workflow = resolveWorkflowJourney(brief, experience, context);
+  const v1 = {
+    schemaVersion: 1,
+    experienceContractSha256: contractHash(experience),
+    primaryScreen: { route: '/(app)/home', file: 'app/(app)/home.tsx', ...primaryComposition(experience) },
+    keyFlow: { route: '/(app)/equipment/work', file: 'app/(app)/equipment/work.tsx', outcome: 'Complete maintenance work.' },
+    requiredScreens: [
+      { id: 'Equipment', route: '/(app)/equipment', file: 'app/(app)/equipment.tsx', outcome: 'Browse equipment.', productRole: 'durable-destination' },
+      { id: 'Work', route: '/(app)/work', file: 'app/(app)/work.tsx', outcome: 'Revisit active work.', productRole: 'durable-destination' },
+      { id: 'EquipmentWork', route: '/(app)/equipment/work', file: 'app/(app)/equipment/work.tsx', outcome: 'Complete maintenance work.', productRole: 'bounded-flow-step', navigation: { parentRoute: '/(app)/equipment' } },
+      { id: 'Profile', route: '/(app)/profile', file: 'app/(app)/profile.tsx', outcome: 'Review profile.', productRole: 'global-utility' },
+    ],
+  };
+  const normalized = normalizeScreenContract(v1, experience, [], []);
+  const preliminary = withCriticalFlow({ ...v1, schemaVersion: 2, screens: normalized }, workflow);
+  const result = resolveNavigationContract(brief, experience, workflow, preliminary);
+  assert.equal(result.contract.model, 'tabs-stack');
+  assert.deepEqual(result.contract.destinations.map((destination) => destination.rootScreenId), ['Home', 'Equipment', 'Work']);
+  assert.equal(result.contract.flows.find((flow) => flow.screenIds.includes('EquipmentWork')).ownerDestinationId, 'equipment');
 });

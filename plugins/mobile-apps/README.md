@@ -219,6 +219,15 @@ supporting screens build afterward in bounded waves. A route manifest tracks
 every planned screen through Planned, Building, Type-safe, Available in Metro,
 Reviewed, or Concern.
 
+Planner-authored Screen JSON remains deliberately small. Before builders run,
+deterministic finalization aligns Journey stages with real screen IDs and fills
+critical-flow/navigation compatibility fields. The compiler then adds optional
+domain-neutral composition guidance for discovery, priority workspaces,
+operational queues, staged work, confirmation, capture, detail, and form
+screens. Guidance names structural roles and useful recipe anatomy, not
+mandatory component imports; older plans and justified equivalent layouts keep
+the existing fallback and do not return to planning.
+
 Connected image-led products use approved cached CDN media with bundled
 fallback; explicit offline media remains local-first. Native captures must be
 stable and free of `Refreshing...`, disconnected/error overlays, and host

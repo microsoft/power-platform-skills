@@ -37,6 +37,7 @@ function defaultPattern(screen, contract) {
   if (/catalog|categor|browse|collection/.test(text)) {
     return contract?.mediaIntent?.criticality === 'required' || contract?.contentModel?.includes('media') ? 'image-card-grid' : 'compact-list';
   }
+  if (/\b(?:list|queue|records?)\b/.test(text)) return 'compact-list';
   if (/cart|bag|review|confirm|summary/.test(text)) return 'summary';
   if (/capture|scan|camera/.test(text)) return 'capture';
   if (/form|edit|create/.test(text)) return 'form';
@@ -93,6 +94,11 @@ function legacyScreenSpec(raw, role, contract, foundationComponents) {
     route: raw.route,
     file: raw.file,
     role,
+    ...(typeof raw.productRole === 'string' && raw.productRole ? { productRole: raw.productRole } : {}),
+    ...(raw.navigation && typeof raw.navigation === 'object' && !Array.isArray(raw.navigation)
+      ? { navigation: { ...raw.navigation, ...(raw.navigation.candidate ? { candidate: { ...raw.navigation.candidate } } : {}) } }
+      : {}),
+    routeParameters: (raw.routeParameters || []).map((parameter) => ({ ...parameter })),
     purpose: role === 'primary' ? contract.primaryJob : raw.outcome || `Support ${contract.primaryJob.toLowerCase()}`,
     presentation: {
       pattern,
@@ -131,6 +137,7 @@ function legacyScreenSpec(raw, role, contract, foundationComponents) {
     testIds: role === 'primary' ? [] : role === 'key-flow' ? ['experience-key-flow'] : [`screen-${slug(id)}`],
     dependencies: { foundation: foundationComponents, fixtures: [], screens: [] },
     data: { entities: [], fixtureScenarios: ['populated', ...REQUIRED_STATES] },
+    capabilityComposition: (raw.capabilityComposition || []).map((composition) => ({ ...composition })),
     forbiddenDefaults: [],
     contractSource: 'legacy-derived',
   };

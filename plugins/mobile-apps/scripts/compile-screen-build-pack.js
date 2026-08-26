@@ -178,6 +178,154 @@ function cardRecipes() {
   ];
 }
 
+const COMPOSITION_PROFILES = Object.freeze({
+  'discovery-merchandising': {
+    structuralRoles: ['journey-context', 'curated-feature', 'category-navigation', 'product-collection'],
+    recommendedRecipes: ['FeatureCard', 'CategoryTile', 'ProductCard'],
+    interactionPatterns: ['contextual-discovery', 'bounded-category-switching', 'purposeful-media-collection'],
+  },
+  'availability-discovery': {
+    structuralRoles: ['selection-context', 'availability-focus', 'guided-choice', 'supporting-options'],
+    recommendedRecipes: ['StatusSummary', 'FeatureCard', 'RecordRow'],
+    interactionPatterns: ['bounded-choice', 'availability-feedback', 'visible-selection-state'],
+  },
+  'learning-continuation': {
+    structuralRoles: ['learning-context', 'progress-summary', 'next-learning-step', 'supporting-content'],
+    recommendedRecipes: ['StatusSummary', 'ResumeCard', 'FeatureCard'],
+    interactionPatterns: ['progressive-disclosure', 'continue-action', 'progress-feedback'],
+  },
+  'conversation-attention': {
+    structuralRoles: ['workspace-context', 'attention-summary', 'conversation-collection', 'next-conversation-action'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['attention-ordering', 'unread-state', 'dense-conversation-rows'],
+  },
+  'content-feed': {
+    structuralRoles: ['feed-context', 'fresh-content', 'content-collection', 'creator-action'],
+    recommendedRecipes: ['FeatureCard', 'RecordRow'],
+    interactionPatterns: ['content-continuation', 'bounded-reactions', 'creator-entry'],
+  },
+  'priority-workspace': {
+    structuralRoles: ['work-context', 'priority-work', 'status-and-next-action', 'supporting-collection'],
+    recommendedRecipes: ['StatusSummary', 'FeatureCard', 'RecordRow'],
+    interactionPatterns: ['priority-ordering', 'visible-next-action', 'dense-operational-rows'],
+  },
+  'staged-workspace': {
+    structuralRoles: ['work-context', 'workflow-progress', 'current-work', 'supporting-collection'],
+    recommendedRecipes: ['StatusSummary', 'ResumeCard', 'RecordRow'],
+    interactionPatterns: ['stage-progress', 'continue-action', 'dense-operational-rows'],
+  },
+  'attention-led-overview': {
+    structuralRoles: ['scope-context', 'decision-summary', 'attention-queue', 'supporting-collection'],
+    recommendedRecipes: ['StatusSummary', 'FeatureCard', 'RecordRow'],
+    interactionPatterns: ['decision-ordering', 'status-distribution', 'quick-actions'],
+  },
+  'focused-capture': {
+    structuralRoles: ['task-context', 'capture-surface', 'manual-fallback', 'result-feedback'],
+    recommendedRecipes: ['StatusSummary', 'FeatureCard'],
+    interactionPatterns: ['permission-aware-capture', 'manual-fallback', 'result-confirmation'],
+  },
+  'guided-onboarding': {
+    structuralRoles: ['step-context', 'value-preview', 'guided-input', 'forward-action'],
+    recommendedRecipes: ['FeatureCard', 'StatusSummary'],
+    interactionPatterns: ['single-step-focus', 'progressive-disclosure', 'forward-action'],
+  },
+  'operational-queue': {
+    structuralRoles: ['queue-context', 'filter-controls', 'grouped-record-collection', 'record-status-metadata'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['bounded-filtering', 'status-ordering', 'dense-operational-rows'],
+  },
+  'collection-browser': {
+    structuralRoles: ['collection-context', 'filter-or-category-controls', 'record-collection', 'record-navigation'],
+    recommendedRecipes: ['CategoryTile', 'ProductCard', 'RecordRow'],
+    interactionPatterns: ['bounded-filtering', 'visible-selection-state', 'record-navigation'],
+  },
+  'guided-work-step': {
+    structuralRoles: ['stage-context', 'work-inputs', 'exception-summary', 'primary-actions'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['grouped-work-inputs', 'exception-callout', 'persistent-actions'],
+  },
+  'review-confirmation': {
+    structuralRoles: ['stage-context', 'decision-inputs', 'supporting-evidence', 'confirmation-context', 'primary-action'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['segmented-decision', 'evidence-section', 'confirmation-summary'],
+  },
+  'record-detail': {
+    structuralRoles: ['record-identity', 'decision-summary', 'detail-sections', 'record-actions'],
+    recommendedRecipes: ['StatusSummary', 'FeatureCard', 'RecordRow'],
+    interactionPatterns: ['grouped-detail-sections', 'status-context', 'bounded-actions'],
+  },
+  'focused-form': {
+    structuralRoles: ['form-context', 'grouped-inputs', 'validation-summary', 'primary-action'],
+    recommendedRecipes: ['StatusSummary'],
+    interactionPatterns: ['grouped-inputs', 'inline-validation', 'persistent-actions'],
+  },
+  'record-collection': {
+    structuralRoles: ['collection-context', 'filter-controls', 'record-collection', 'collection-action'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['bounded-filtering', 'dense-record-rows', 'record-navigation'],
+  },
+  'utility-detail': {
+    structuralRoles: ['utility-context', 'settings-sections', 'support-actions'],
+    recommendedRecipes: ['StatusSummary', 'RecordRow'],
+    interactionPatterns: ['grouped-settings', 'clear-labels', 'separated-destructive-action'],
+  },
+  'supporting-content': {
+    structuralRoles: ['screen-context', 'primary-content', 'supporting-content', 'screen-action'],
+    recommendedRecipes: ['FeatureCard', 'RecordRow'],
+    interactionPatterns: ['clear-hierarchy', 'bounded-actions'],
+  },
+});
+
+function primaryCompositionProfile(contract, journey) {
+  if (contract.primarySurface === 'product-led-discovery') return 'discovery-merchandising';
+  if (contract.primarySurface === 'availability-led-discovery') return 'availability-discovery';
+  if (contract.primarySurface === 'learning-journey') return 'learning-continuation';
+  if (contract.primarySurface === 'conversation-led-inbox') return 'conversation-attention';
+  if (contract.primarySurface === 'content-led-feed') return 'content-feed';
+  if (contract.primarySurface === 'task-led-workflow') return (journey?.stages || []).length > 1 ? 'staged-workspace' : 'priority-workspace';
+  if (contract.primarySurface === 'decision-led-overview') return 'attention-led-overview';
+  if (contract.primarySurface === 'capture-led-utility') return 'focused-capture';
+  if (contract.primarySurface === 'guided-onboarding') return 'guided-onboarding';
+  return 'supporting-content';
+}
+
+function supportingCompositionProfile(screen, contract, journey) {
+  if (screen.navigation?.role === 'global-utility') return 'utility-detail';
+  if (screen.navigation?.role === 'immersive-modal' || screen.presentation?.pattern === 'capture') return 'focused-capture';
+  if (screen.navigation?.role === 'durable-destination'
+    && ['compact-list', 'image-list', 'image-card-grid', 'timeline'].includes(screen.presentation?.pattern)) {
+    return ['operate', 'track'].includes(contract.interactionMode) ? 'operational-queue' : 'collection-browser';
+  }
+  const stage = (journey?.stages || []).find((item) => (item.screenIds || []).includes(screen.id));
+  if (stage) {
+    const finalStage = stage.order === (journey?.stages || []).length && (journey?.stages || []).length > 1;
+    return finalStage ? 'review-confirmation' : 'guided-work-step';
+  }
+  if (screen.presentation?.pattern === 'detail') return 'record-detail';
+  if (screen.presentation?.pattern === 'form' || screen.presentation?.pattern === 'guided-flow') return 'focused-form';
+  if (['compact-list', 'image-list', 'image-card-grid', 'timeline'].includes(screen.presentation?.pattern)) return 'record-collection';
+  return 'supporting-content';
+}
+
+function deriveCompositionGuidance(screen, contract, journey) {
+  const profile = screen.role === 'primary'
+    ? primaryCompositionProfile(contract, journey)
+    : supportingCompositionProfile(screen, contract, journey);
+  const policy = COMPOSITION_PROFILES[profile];
+  return {
+    version: 1,
+    source: 'deterministic-compiler',
+    enforcement: 'advisory-with-structural-baseline',
+    profile,
+    structuralRoles: [...policy.structuralRoles],
+    recommendedRecipes: [...policy.recommendedRecipes],
+    interactionPatterns: [...policy.interactionPatterns],
+    density: screen.presentation?.density || contract.firstViewport.contentDensity,
+    equivalentImplementationsAllowed: true,
+    absencePolicy: 'fall-back-to-screen-contract-and-domain-layout-decisions',
+  };
+}
+
 function designRecipe(contract, primary, navigation, foundation) {
   return {
     hierarchy: {
@@ -209,7 +357,7 @@ function applicableStates(screen, journey) {
   return [...states];
 }
 
-function enrichScreen(screen, basic, data, journey, contextContract) {
+function enrichScreen(screen, basic, data, journey, contextContract, contract) {
   const stage = (journey?.stages || []).find((item) => item.screenIds.includes(screen.id));
   const stateActions = (journey?.stateActions || []).filter((item) => item.screenId === screen.id);
   const guardedActions = stateActions
@@ -305,6 +453,7 @@ function enrichScreen(screen, basic, data, journey, contextContract) {
     contractSource: screen.contractSource || 'structured',
   };
   enriched.states = applicableStates(enriched, journey);
+  enriched.compositionGuidance = deriveCompositionGuidance(enriched, contract, journey);
   return enriched;
 }
 
@@ -403,6 +552,7 @@ function uiContractProjection(pack) {
       semanticColorRoles: screen.semanticColorRoles,
       capabilityComposition: screen.capabilityComposition,
       layoutBudgets: screen.layoutBudgets,
+      compositionGuidance: screen.compositionGuidance,
       ux: screen.ux,
     })),
   };
@@ -434,6 +584,15 @@ function compileScreenBuildPack(projectRoot) {
   validateInputs(contract, screenContract, foundation, normalizedScreens);
   const primary = screenContract.primaryScreen || normalizedScreens.find((screen) => screen.role === 'primary');
   const keyFlow = screenContract.keyFlow || normalizedScreens.find((screen) => screen.role === 'key-flow');
+  const primaryScreenId = normalizedScreens.find((screen) => screen.route === primary.route)?.id || 'Home';
+  const keyFlowScreenId = normalizedScreens.find((screen) => screen.route === keyFlow.route)?.id || identifier(keyFlow.route);
+  const criticalFlow = Array.isArray(screenContract.criticalFlow?.screenIds)
+    && screenContract.criticalFlow.screenIds.length >= 2
+    ? screenContract.criticalFlow
+    : {
+        screenIds: [...new Set([primaryScreenId, keyFlowScreenId])],
+        outcome: screenContract.criticalFlow?.outcome || keyFlow.outcome,
+      };
   const contextPath = path.join(root, '.tmp', 'context-enrichment-contract.json');
   const journeyPath = path.join(root, '.tmp', 'workflow-journey-contract.json');
   const navigationPath = path.join(root, '.tmp', 'navigation-contract.json');
@@ -452,7 +611,7 @@ function compileScreenBuildPack(projectRoot) {
     const basic = screenRecord(screen, primary, keyFlow, foundation, data, contract);
     const structured = normalizedScreens.find((candidate) => candidate.route === screen.route);
     if (!structured) return basic;
-    return richContract ? enrichScreen(structured, basic, data, journey, contextContract) : { ...basic, ux: structured };
+    return richContract ? enrichScreen(structured, basic, data, journey, contextContract, contract) : { ...basic, ux: structured };
   });
   const primaryScreen = screens.find((screen) => screen.role === 'primary');
   const keyFlowScreen = screens.find((screen) => screen.role === 'key-flow');
@@ -523,7 +682,7 @@ function compileScreenBuildPack(projectRoot) {
     },
     journey,
     navigation: navigation
-      ? { ...navigation, criticalFlow: screenContract.criticalFlow }
+      ? { ...navigation, criticalFlow }
       : {
           initialRoute: primary.route,
           keyFlowRoute: keyFlow.route,
@@ -547,10 +706,10 @@ function compileScreenBuildPack(projectRoot) {
         primaryScreenId: navigation.routingPolicy.primaryScreenId,
         launchScreenId: navigation.routingPolicy.launchScreenId,
         resumeScreenId: navigation.routingPolicy.resumeScreenId,
-        criticalFlowScreenIds: [...screenContract.criticalFlow.screenIds],
+        criticalFlowScreenIds: [...criticalFlow.screenIds],
       },
       capabilityBindings: screens.flatMap((screen) => (screen.capabilityComposition || []).map((capability) => ({ screenId: screen.id, ...capability }))),
-      builderWaves: builderWaves(screens, screenContract.criticalFlow, foundation),
+      builderWaves: builderWaves(screens, criticalFlow, foundation),
     } : {}),
     buildOrder: [
       ...foundation.primitives.map((primitive) => ({ kind: 'foundation', id: primitive.component, file: primitive.file, dependsOn: [] })),
@@ -614,7 +773,9 @@ function main(argv) {
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
 module.exports = {
+  COMPOSITION_PROFILES,
   compileScreenBuildPack,
+  deriveCompositionGuidance,
   parseScreenMap,
   revisionForPack,
   sha256,

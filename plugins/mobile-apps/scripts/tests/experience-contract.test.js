@@ -14,6 +14,7 @@ const {
   primaryComposition,
   validateExperienceContract,
 } = require('../experience-patterns');
+const { normalizeScreenContract } = require('../lib/experience-screen-contract');
 const { validate } = require('../validate-experience-contract');
 const {
   generateSeeds,
@@ -279,6 +280,19 @@ test('experience validator binds contract, plan, screen sidecar, and built ancho
 
   assert.deepEqual(validate(projectRoot, 'plan'), []);
   assert.deepEqual(validate(projectRoot, 'build'), []);
+
+  const v1ScreenContract = JSON.parse(fs.readFileSync(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), 'utf8'));
+  const normalizedScreens = normalizeScreenContract(v1ScreenContract, contract, [
+    { id: 'Home', route: '/(app)/home', file: 'app/(app)/home.tsx' },
+    { id: 'NextLesson', route: '/(app)/learning/next', file: 'app/(app)/learning/next.tsx', outcome: v1ScreenContract.keyFlow.outcome },
+  ], foundation.primitives.map((primitive) => primitive.component));
+  fs.writeFileSync(path.join(projectRoot, '.tmp', 'experience-screen-contract.json'), `${JSON.stringify({
+    ...v1ScreenContract,
+    schemaVersion: 2,
+    criticalFlow: { screenIds: normalizedScreens.map((screen) => screen.id), outcome: v1ScreenContract.keyFlow.outcome },
+    screens: normalizedScreens,
+  }, null, 2)}\n`);
+  assert.equal(validate(projectRoot, 'build').some((issue) => issue.rule === 'invalid-screen-contract-schema'), false);
 
   fs.writeFileSync(path.join(projectRoot, 'app', '(app)', 'home.tsx'), '<View testID="experience-primary-action" />');
   const rules = new Set(validate(projectRoot, 'build').map((issue) => issue.rule));

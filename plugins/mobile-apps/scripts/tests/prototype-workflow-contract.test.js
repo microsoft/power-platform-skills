@@ -236,6 +236,9 @@ test('brief-derived experience contract drives planning without a reference inpu
   assert.match(screenBuilder, /Primary-screen runtime anchors are mandatory/);
   assert.match(screenBuilder, /Foundation primitives are mandatory/);
   assert.match(screenBuilder, /Screen build pack is the execution source/);
+  assert.match(screenBuilder, /Composition guidance is compiler-owned and non-blocking/);
+  assert.match(screenBuilder, /recommendedRecipes[^\n]*describe useful anatomy, not required/);
+  assert.match(screenBuilder, /Absence or a justified equivalent[\s\S]*never `BLOCKED`/);
   assert.match(screenBuilder, /validate-screen-build-pack\.js/);
   assert.match(screenBuilder, /Local-first media is mandatory/);
   assert.match(screenBuilder, /experience-primary-action/);
@@ -291,6 +294,8 @@ test('prototype builds and starts the native canary before supporting screen wav
   assert.match(skill, /write-screen-artifact\.js/);
   assert.match(skill, /route-manifest\.js[\s\S]*--status type-safe/);
   assert.match(skill, /Do not start a second[\s\S]*process/);
+  assert.match(skill, /rebinds pre-screen Journey stages\/actions to actual screen IDs/);
+  assert.doesNotMatch(skill, /validate-navigation-destinations\.js/);
 });
 
 test('prototype uses one consolidated non-mutating approval before data or design', () => {
@@ -317,4 +322,14 @@ test('prototype data and design lanes are disjoint and final validation reuses o
   assert.match(skill, /Do not\s+run a project-wide typecheck while either lane is writing/);
   assert.match(validator, /--reuse-if-unchanged/);
   assert.match(validator, /unchanged-since-recorded-pass/);
+});
+
+test('prototype skips broad post-validation redesign and scopes optional repairs', () => {
+  const skill = read('skills/create-mobile-prototype/SKILL.md');
+  assert.match(skill, /Optional Finding-Scoped Design Repair/);
+  assert.match(skill, /Default: skip/);
+  assert.match(skill, /Do not invoke `\/design-react-native-app` after a successful/);
+  assert.match(skill, /never triggers planner regeneration/);
+  assert.match(skill, /rerun every affected per-screen check, TypeScript,[\s\S]*complete Step 9 validation sequence/);
+  assert.doesNotMatch(skill, /After the script-based stylistic sweep, apply the final layer/);
 });

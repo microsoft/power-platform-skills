@@ -105,6 +105,28 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   in an older compatibility run, report `DONE_WITH_CONCERNS: screen build pack
   unavailable; using legacy plan fallback.` Never silently invent a dashboard,
   CRUD flow, or generic motif when a pack field is missing.
+- **Composition guidance is compiler-owned and non-blocking.** When the matching
+  pack screen contains `compositionGuidance`, use its `profile`, ordered
+  `structuralRoles`, `interactionPatterns`, and `density` as the starting
+  composition. `recommendedRecipes` describe useful anatomy, not required
+  component names: materialize equivalent app-specific JSX or an existing
+  shared component when it better fits the approved screen spec. Do not import
+  `FeatureCard`, `ResumeCard`, or another recipe merely because its name appears
+  in guidance; those names are not guaranteed exports. The approved Screen
+  Contract, per-screen Domain layout decisions, data operations, navigation,
+  actions, and a binding Reference Contract always win a conflict.
+  - `operational-queue` requires context/filter affordances plus grouped,
+    status-rich record navigation rather than loose title-only rows.
+  - `guided-work-step` requires stage context, grouped work inputs, visible
+    exception handling, and reachable primary actions.
+  - `review-confirmation` requires grouped decisions, supporting evidence or
+    context when contracted, confirmation context, and one final action.
+  - primary profiles preserve every listed structural role while allowing an
+    equivalent visual implementation suited to the app's real content.
+  If guidance is absent, follow its `absencePolicy` in spirit: use the existing
+  Screen Contract and Domain layout decisions. Absence or a justified equivalent
+  implementation is never `BLOCKED`, never triggers planner repair, and never
+  permits benchmark-domain copy or an industry template.
 - **Canonical data identity is mandatory.** When the pack names
   `src/generated/experience-view-model.ts`, import
   `toExperienceRecord`, `getExperienceAsset`, and `resolveExperienceMedia` from
@@ -538,6 +560,11 @@ assigned task. Record the pack `revision` in your final summary. Only an
 explicitly logged compatibility fallback may read the plan without a pack.
 
 **Functional fields:**
+- **Composition guidance** (when present in the matching build-pack screen) —
+  apply the compiler-selected structural roles and interaction patterns before
+  choosing JSX anatomy. Treat recipe names as recommendations and preserve
+  equivalent implementations. If absent, continue from Experience composition
+  plus Domain layout decisions without reporting a concern.
 - **Experience composition** (required on the contract primary screen) — read
   it before the domain-layout block. It supplies the user outcome, composition
   kind, focal point, exact first-viewport region order, visible primary action,

@@ -10,6 +10,7 @@ not dispatch a second design-model task.
 
 Read only:
 
+- `reference-ownership.json` already selected by the dispatcher;
 - `.tmp/experience-contract.json`;
 - `.tmp/experience-foundation-contract.json`;
 - `.tmp/experience-screen-contract.json`;
@@ -20,7 +21,8 @@ Read only:
 Do not read `optional-modes.md`, extraction references, style-picker files,
 brand examples, galleries, or named direction files. Write
 `.tmp/design-context-evidence.json` containing `mode: automatic-native`, the
-relative files read, exact byte counts, and `designModelCalls: 1`.
+relative files read (including the ownership manifest), exact byte counts, and
+`designModelCalls: 1`.
 
 ## Authority
 

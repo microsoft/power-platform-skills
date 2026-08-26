@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "kind": "mobile-design-reference-ownership",
+  "modes": {
+    "automatic-native": {
+      "entrypoint": "automatic-native.md",
+      "owns": [
+        "semantic-color-rules",
+        "spacing-and-hierarchy-rules",
+        "navigation-conventions",
+        "accessibility-requirements",
+        "media-policy",
+        "component-conventions"
+      ],
+      "projectInputs": [
+        ".tmp/experience-contract.json",
+        ".tmp/experience-foundation-contract.json",
+        ".tmp/experience-screen-contract.json",
+        ".tmp/navigation-contract.json",
+        "native-app-plan.md#Design"
+      ],
+      "pluginReferences": [
+        "automatic-native.md"
+      ],
+      "forbiddenReferences": [
+        "optional-modes.md",
+        "references/input-modes.md",
+        "references/figma-extraction.md",
+        "references/reference-intake.md",
+        "references/canvas-app-extraction.md",
+        "references/code-app-extraction.md",
+        "references/power-pages-extraction.md",
+        "references/vibe/style-picker.md",
+        "references/vibe/brand-examples.md",
+        "references/preview-template.md",
+        "references/refresh-flow.md"
+      ]
+    },
+    "optional": {
+      "entrypoint": "optional-modes.md",
+      "owns": [
+        "brand-and-logo-extraction",
+        "figma-extraction",
+        "screenshot-reference-intake",
+        "canvas-and-sibling-app-extraction",
+        "style-comparison",
+        "gallery-and-preview",
+        "refresh-and-reskin",
+        "theme-history-and-rollback"
+      ],
+      "projectInputs": [
+        "explicit-user-supplied-visual-inputs",
+        "approved-product-contracts"
+      ],
+      "pluginReferences": [
+        "optional-modes.md",
+        "references/input-modes.md",
+        "references/figma-extraction.md",
+        "references/reference-intake.md",
+        "references/canvas-app-extraction.md",
+        "references/code-app-extraction.md",
+        "references/power-pages-extraction.md",
+        "references/vibe/style-picker.md",
+        "references/vibe/brand-examples.md",
+        "references/preview-template.md",
+        "references/refresh-flow.md"
+      ],
+      "forbiddenReferences": []
+    }
+  },
+  "rules": {
+    "selectExactlyOneMode": true,
+    "automaticModeCannotEscalateWithoutExplicitInput": true,
+    "manifestIsPlannerOutput": false,
+    "galleryIsNativeEvidence": false
+  }
+}

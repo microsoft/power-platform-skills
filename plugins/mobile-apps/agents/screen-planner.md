@@ -184,6 +184,16 @@ file, and outcome that exercises the contract's main task after Home. In specs
 mode, read the existing sidecar and return `BLOCKED` if it does not match the
 current contract.
 
+Schema version 1 is intentionally small. A planned screen may additionally
+carry `productRole`, parent-route/navigation hints, route parameters, and
+capability composition when confidently known, but none is required merely to
+make the JSON richer. Do not emit recipe names, component anatomy, compiler
+profiles, duplicated per-screen data operations, or another UX sidecar. The
+foreground resolver preserves valid optional hints, rebinds the pre-screen
+Journey to actual screen IDs, synthesizes critical flow, and writes version 2.
+Missing optional hints use deterministic fallback and never trigger planner
+repair or block approval.
+
 In graph mode, create the companion foundation manifest before listing screens:
 
 ```bash

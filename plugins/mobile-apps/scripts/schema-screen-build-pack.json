@@ -35,7 +35,13 @@
         "headerModes": { "type": "object" }
       }
     },
-    "navigation": { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes"] },
+    "journey": { "type": ["object", "null"] },
+    "navigation": {
+      "oneOf": [
+        { "type": "object", "required": ["initialRoute", "keyFlowRoute", "routes"] },
+        { "type": "object", "required": ["schemaVersion", "model", "destinations", "routingPolicy", "globalRoutePolicy"] }
+      ]
+    },
     "fixtures": {
       "type": "object",
       "required": ["adapter", "entities", "assetPolicy", "assetManifest", "viewModel", "recordIdentity", "mediaPolicy", "mediaManifest", "mediaFields"],
@@ -70,6 +76,23 @@
           "semanticColorRoles": { "type": "array" },
           "capabilityComposition": { "type": "array" },
           "layoutBudgets": { "type": "object" },
+          "compositionGuidance": {
+            "type": "object",
+            "required": ["version", "source", "enforcement", "profile", "structuralRoles", "recommendedRecipes", "interactionPatterns", "density", "equivalentImplementationsAllowed", "absencePolicy"],
+            "properties": {
+              "version": { "const": 1 },
+              "source": { "const": "deterministic-compiler" },
+              "enforcement": { "const": "advisory-with-structural-baseline" },
+              "profile": { "type": "string", "minLength": 1 },
+              "structuralRoles": { "type": "array", "minItems": 2, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "recommendedRecipes": { "type": "array", "items": { "enum": ["FeatureCard", "ProductCard", "RecordRow", "ResumeCard", "CategoryTile", "StatusSummary"] }, "uniqueItems": true },
+              "interactionPatterns": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+              "density": { "enum": ["sparse", "balanced", "dense"] },
+              "equivalentImplementationsAllowed": { "const": true },
+              "absencePolicy": { "const": "fall-back-to-screen-contract-and-domain-layout-decisions" }
+            },
+            "additionalProperties": false
+          },
           "contractSource": { "type": "string" },
           "data": {
             "type": "object",

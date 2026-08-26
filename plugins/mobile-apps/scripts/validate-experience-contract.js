@@ -82,8 +82,8 @@ function hasContractSummary(designSection, contract) {
 function validateScreenContract(contract, screenContract, issues) {
   if (!screenContract) return;
   const expected = primaryComposition(contract);
-  if (screenContract.schemaVersion !== 1) {
-    issues.push({ rule: 'invalid-screen-contract-schema', message: 'Experience screen contract schemaVersion must be 1.' });
+  if (![1, 2, 3].includes(screenContract.schemaVersion)) {
+    issues.push({ rule: 'invalid-screen-contract-schema', message: 'Experience screen contract schemaVersion must be 1, 2, or 3.' });
     return;
   }
   if (screenContract.experienceContractSha256 !== contractHash(contract)) {
@@ -227,7 +227,14 @@ function validateBuildPackAgreement(projectRoot, contract, screenContract, issue
     issues.push({ rule: 'invalid-screen-build-pack', message: `Screen build pack validation failed: ${validation.issues.map((issue) => issue.rule).join(', ')}.` });
     return;
   }
-  if (pack.experience?.entryMode !== contract.entryMode || pack.experience?.primarySurface !== contract.primarySurface || pack.navigation?.initialRoute !== contract.primaryScreen.route || pack.navigation?.keyFlowRoute !== screenContract?.keyFlow?.route) {
+  const launchRoute = pack.navigation?.routingPolicy?.launchRoute || pack.navigation?.initialRoute;
+  const keyFlowEntryScreenId = pack.navigation?.routingPolicy?.keyFlowEntryScreenId;
+  const keyFlowRoute = (pack.screens || []).find((screen) => screen.id === keyFlowEntryScreenId)?.route
+    || pack.navigation?.keyFlowRoute;
+  if (pack.experience?.entryMode !== contract.entryMode
+    || pack.experience?.primarySurface !== contract.primarySurface
+    || launchRoute !== contract.primaryScreen.route
+    || keyFlowRoute !== screenContract?.keyFlow?.route) {
     issues.push({ rule: 'screen-build-pack-drift', message: 'Screen build pack does not match the experience contract or key flow.' });
   }
   const primary = (pack.screens || []).find((screen) => screen.role === 'primary');

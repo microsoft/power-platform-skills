@@ -15,9 +15,30 @@ test('design-system primary skill is a small mutually-exclusive dispatcher', () 
   assert.match(dispatcher, /CODE_APPS_NATIVE_ORCHESTRATING=1/);
   assert.match(dispatcher, /automatic-native\.md/);
   assert.match(dispatcher, /optional-modes\.md/);
+  assert.match(dispatcher, /reference-ownership\.json/);
   assert.match(dispatcher, /Do not preload both instruction files/);
   assert.doesNotMatch(dispatcher, /style-picker\.md|reference-intake\.md|input-modes\.md|brand-examples\.md/);
   assert.doesNotMatch(dispatcher, /prototype-semantic-plan/);
+});
+
+test('reference ownership keeps the automatic path on six bounded rule families', () => {
+  const manifest = JSON.parse(read('skills/design-system/reference-ownership.json'));
+  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.rules.selectExactlyOneMode, true);
+  assert.equal(manifest.rules.manifestIsPlannerOutput, false);
+  assert.deepEqual(manifest.modes['automatic-native'].owns, [
+    'semantic-color-rules',
+    'spacing-and-hierarchy-rules',
+    'navigation-conventions',
+    'accessibility-requirements',
+    'media-policy',
+    'component-conventions',
+  ]);
+  assert.deepEqual(manifest.modes['automatic-native'].pluginReferences, ['automatic-native.md']);
+  assert.ok(manifest.modes['automatic-native'].forbiddenReferences.includes('optional-modes.md'));
+  assert.ok(manifest.modes.optional.pluginReferences.includes('references/figma-extraction.md'));
+  assert.ok(manifest.modes.optional.pluginReferences.includes('references/canvas-app-extraction.md'));
+  assert.ok(manifest.modes.optional.pluginReferences.includes('references/vibe/style-picker.md'));
 });
 
 test('automatic native design owns full quality rules without optional reference loading', () => {

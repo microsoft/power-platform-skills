@@ -11,6 +11,7 @@ const test = require('node:test');
 const { compileScreenBuildPack, parseScreenMap } = require('../compile-screen-build-pack');
 const { deriveExperienceFromBrief, foundationContract, primaryComposition } = require('../experience-patterns');
 const { normalizeScreenContract } = require('../lib/experience-screen-contract');
+const { validateJsonSchema } = require('../lib/json-schema-lite');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveNavigationContract } = require('../resolve-navigation-contract');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
@@ -215,5 +216,19 @@ test('rich Screen Contracts compile into the V3 validator-owned build-pack shape
   assert.deepEqual(pack.builderWaves.find((wave) => wave.id === 'native-canary').targets, ['Home', 'ProductsId']);
   assert.equal(pack.screens.find((screen) => screen.id === 'Profile').navigation.role, 'global-utility');
   assert.equal(pack.screens.every((screen) => screen.presentation && screen.layoutBudgets && screen.semanticColorRoles), true);
+  assert.deepEqual(pack.screens.find((screen) => screen.id === 'Home').compositionGuidance, {
+    version: 1,
+    source: 'deterministic-compiler',
+    enforcement: 'advisory-with-structural-baseline',
+    profile: 'discovery-merchandising',
+    structuralRoles: ['journey-context', 'curated-feature', 'category-navigation', 'product-collection'],
+    recommendedRecipes: ['FeatureCard', 'CategoryTile', 'ProductCard'],
+    interactionPatterns: ['contextual-discovery', 'bounded-category-switching', 'purposeful-media-collection'],
+    density: 'balanced',
+    equivalentImplementationsAllowed: true,
+    absencePolicy: 'fall-back-to-screen-contract-and-domain-layout-decisions',
+  });
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'schema-screen-build-pack.json'), 'utf8'));
+  assert.deepEqual(validateJsonSchema(pack, schema), []);
   assert.deepEqual(validateScreenBuildPack(root, pack), { issues: [], staleTargets: [] });
 });
