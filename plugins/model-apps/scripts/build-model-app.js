@@ -280,6 +280,11 @@ async function buildModelApp(spec, opts, deps) {
         appDir: opts.appDir, // resolves web-resource `contentPath` relative to the app folder
         env: opts.env, // for the pages phase (pac model genpage upload --environment)
         languageCode: opts.languageCode,
+        // Forwarded explicitly because this is a fresh literal, not a spread of `opts`: without it
+        // the data-model phase re-resolves, and on a transient org-read failure that fallback lands
+        // on 1033 while the SDK is already baked at the resolved LCID — the exact split-language
+        // build (translated FormXML, English columns) this threading exists to prevent.
+        preResolvedLanguageCode: opts.preResolvedLanguageCode,
         // Injected so the pure lib stays free of transport. Only consulted for an EXPLICIT override.
         provisionedLanguages: deps.provisionedLanguages,
         warn: deps.warn,
@@ -456,11 +461,21 @@ async function main() {
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   const languageCode = parseLanguageCode(readLanguageFlag(flags));
   const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
-  // The LCID is only consumed by the data-model phase, so a selector that excludes it makes the flag
-  // a no-op. Say so rather than accept it silently: a user who passed --language-code believes their
-  // labels are being pinned, and finding out otherwise means re-running the whole build.
-  if (languageCode !== undefined && Array.isArray(phases) && phases.length && !phases.includes('data-model')) {
-    process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — only the data-model phase creates labels.\n`);
+  // Phases that stamp an authoring language onto something. `data-model` writes Dataverse label
+  // objects; `forms`, `dashboards` and `app-shell` write FormXML `<labels>` and sitemap
+  // `<Titles><Title LCID=…>` through the SDK, which since #455 takes the LCID as a construction
+  // option. Anything else (views, pages, web-resources, publish, sample-data) creates no labels.
+  //
+  // This list must stay in step with what actually consumes the language. When it drifted before,
+  // the warning told users the flag was ignored on `--stage ui` at the same time as the build was
+  // faithfully applying it — worse than no warning, because it stops them investigating.
+  const LANGUAGE_CONSUMING_PHASES = ['data-model', 'forms', 'dashboards', 'app-shell'];
+  // A selector that excludes ALL of them makes the flag a genuine no-op. Say so rather than accept
+  // it silently: a user who passed --language-code believes their labels are being pinned, and
+  // finding out otherwise means re-running the whole build.
+  if (languageCode !== undefined && Array.isArray(phases) && phases.length
+      && !phases.some((p) => LANGUAGE_CONSUMING_PHASES.includes(p))) {
+    process.stderr.write(`⚠ --language-code ${languageCode} has no effect for the selected phases (${phases.join('·')}) — none of them create labels (${LANGUAGE_CONSUMING_PHASES.join(', ')} do).\n`);
   }
   const opts = {
     apply: flags.apply === true,

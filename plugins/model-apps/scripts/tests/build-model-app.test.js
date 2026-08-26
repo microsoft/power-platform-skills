@@ -992,3 +992,63 @@ test('readOrgLanguageCode queries the PLURAL entity set', async () => {
   assert.match(apiPath, /\$select=languagecode/, 'projects only the column it needs');
   assert.match(apiPath, /\$top=1/, 'one row is enough; there is exactly one organization row');
 });
+
+// The BLOCKER this file exists to prevent: `buildModelApp` builds a FRESH literal for `runBuild`
+// rather than spreading `opts`, so a field added to `opts` in `main()` is silently dropped unless it
+// is forwarded by hand. `preResolvedLanguageCode` was, in exactly that way, and nothing caught it —
+// the only other test touching it calls `provisionDataModel` directly, bypassing this seam entirely.
+//
+// Why the drop matters rather than merely wasting a round trip: without the pre-resolved value the
+// data-model phase re-resolves, and `resolveLanguageCode` falls back to 1033 when the org read
+// fails. On a transient failure (429, socket timeout, token refresh mid-flight) the SDK is already
+// baked at the resolved LCID while the columns land at 1033 — a split-language app, which is the
+// precise failure this threading exists to prevent.
+test('buildModelApp forwards preResolvedLanguageCode to the build (the literal drops what it does not name)', async () => {
+  const seen = [];
+  const r = await buildModelApp(
+    desk,
+    // Deliberately CONTRADICTORY: if the pre-resolved value is forwarded it wins outright. If it is
+    // dropped, the spec/flag value or the org read decides — and the assertion below names which.
+    { apply: true, env: 'https://x', languageCode: 1031, preResolvedLanguageCode: 3082 },
+    {
+      sdk: (() => {
+        const { sdk } = mockSdk();
+        sdk.queryRecords = async (set) => {
+          if (set === 'organization') return [{ languagecode: 1036 }];
+          if (set === 'solution') return [];
+          return [{ publisherid: 'pub-1' }];
+        };
+        const origColumn = sdk.createColumn;
+        sdk.createColumn = async (l, o) => { seen.push(o); return origColumn ? origColumn(l, o) : { logicalName: 'x', metadataId: 'c' }; };
+        return sdk;
+      })(),
+      warn: () => undefined,
+    }
+  );
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  const withLang = seen.filter((o) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0, 'the build created label-bearing columns');
+  for (const o of withLang) {
+    assert.strictEqual(o.languageCode, 3082,
+      'the PRE-RESOLVED language must reach the data-model phase — 1031 means the flag won, 1036 means the org read won, undefined means the literal dropped it');
+  }
+});
+
+// The stale-warning regression. `--language-code` used to be consumed only by `data-model`, so the
+// warning said so. Since #455 the SDK also stamps forms, dashboards and sitemap titles, and a
+// warning that tells a user their flag was ignored — while the build is faithfully applying it — is
+// worse than no warning, because it stops them investigating a real problem.
+test('--language-code only warns "no effect" for phases that genuinely create no labels', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const m = /const LANGUAGE_CONSUMING_PHASES = \[([^\]]+)\]/.exec(src);
+  assert.ok(m, 'the phase list is declared as a named constant, not inlined into the condition');
+  const listed = m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
+  for (const phase of ['data-model', 'forms', 'dashboards', 'app-shell']) {
+    assert.ok(listed.includes(phase),
+      `'${phase}' stamps an authoring language and must not be reported as unaffected by --language-code`);
+  }
+  // Phases that create no labels must NOT be listed, or the warning never fires when it should.
+  for (const phase of ['publish', 'sample-data', 'pages']) {
+    assert.ok(!listed.includes(phase), `'${phase}' creates no labels and must not suppress the warning`);
+  }
+});
