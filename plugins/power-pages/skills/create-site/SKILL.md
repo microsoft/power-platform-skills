@@ -28,6 +28,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
 - **Site content language is independent of Dataverse language**: Generate every user-visible SPA string in the approved content language. Dataverse and Power Pages platform-managed messages remain English (`en-US`, LCID `1033`) in this workflow.
 - **Bidirectional by default**: Read `${PLUGIN_ROOT}/references/bidirectional-design.md`. Every site must use direction-neutral layout, mixed-content boundaries, and script-capable typography even when its initial language has only one direction. A later LTR/RTL locale must not require a general redesign.
+- **Lifecycle-ready output**: Follow `${PLUGIN_ROOT}/references/site-modification-integrity.md` so later pages and components can preserve localization, direction, and content-expansion behavior through the shared post-modification validator.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
