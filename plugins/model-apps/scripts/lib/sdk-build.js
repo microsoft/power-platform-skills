@@ -965,19 +965,29 @@ async function runSdkBuild(spec, opts = {}) {
   // --- Form authoring via the SDK's generic surface (addElement/updateElement/removeElement) -------
   // The new SDK removed the per-artifact form mutators; a form is built as canonical intent
   // (./artifact-intent.js) and applied through the generic surface.
+  //
+  // EVERY read/mutate call below is awaited because the SDK's generic surface is ASYNC as of the
+  // upstream "300s cache staleness with async revalidating reads" change: getArtifact, addElement,
+  // updateElement, removeElement, moveElement, findElements and queryTree all return Promises now
+  // (a read may re-fetch from the server before serving a cached copy). Dropping an `await` here
+  // does NOT throw — a Promise is truthy, so the `|| {}` fallbacks stay dormant and the pure
+  // helpers below silently see a Promise instead of an artifact (hasSubgrid -> false -> duplicate
+  // sub-grid; findFieldCellPointer -> null -> the field is never pruned). That silence is why
+  // scripts/tests/sdk-async-surface.test.js scans this file for bare calls.
 
   // Create a NEW form body: create a MINIMAL form (the adapter seeds one default tab), append each
   // compiled tab (addElement recursively mints cell/section/tab ids — updateElement does NOT, so a
   // coarse whole-tab insert is the adapter-blessed path), then drop the seed tab at index 0. Every
   // intermediate state keeps >=1 tab, so the structural validator never rejects an empty form.
-  const createFormShell = (def) => {
+  const createFormShell = async (def) => {
     const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status });
     const tabs = def.tabs || [];
-    for (const tab of tabs) provision.addElement('form', art.id, '/tabs', tab);
+    // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
+    for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
     // Drop the adapter's seed tab (my tabs were appended after it) — but ONLY if I actually added at
     // least one tab, so a degenerate spec with an empty `tabs: []` still leaves the valid seed tab
     // rather than a tab-less form the designer can't open.
-    if (tabs.length > 0) provision.removeElement('form', art.id, '/tabs/0');
+    if (tabs.length > 0) await provision.removeElement('form', art.id, '/tabs/0');
     return art.id;
   };
 
@@ -998,12 +1008,12 @@ async function runSdkBuild(spec, opts = {}) {
   // A sub-grid used to be spliced as a single cell into the first field section's rows, which rendered
   // it half-width inside a 2-column section; giving it a dedicated section makes the related list span
   // the form. `sg.label` is already resolved to the child's display name by the forms phase.
-  const addSubgrids = (formId, subs) => {
+  const addSubgrids = async (formId, subs) => {
     for (const sg of subs || []) {
-      if (hasSubgrid(provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
-      const sectionsPtr = firstColumnSectionsPointer(provision.getArtifact('form', formId) || {});
+      if (hasSubgrid(await provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
+      const sectionsPtr = firstColumnSectionsPointer(await provision.getArtifact('form', formId) || {});
       if (!sectionsPtr) continue;
-      provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
+      await provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
     }
   };
 
@@ -1020,15 +1030,15 @@ async function runSdkBuild(spec, opts = {}) {
   // region doesn't exist -> add it whole. Rebuild: MERGE (append only handlers not already present,
   // keyed by event+function+library) so a re-run never duplicates a handler or appends a second
   // <events> root. The adapter mints each handlerUniqueId at serialize (we omit it).
-  const wireFormEvents = (formId, events) => {
+  const wireFormEvents = async (formId, events) => {
     const wanted = (events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
     if (!wanted.length) return false;
-    const form = provision.getArtifact('form', formId) || {};
+    const form = await provision.getArtifact('form', formId) || {};
     const bagC = (form.bag && form.bag.c) || [];
     const regionIdx = bagC.findIndex((e) => e && e.node && e.node.n === 'events');
     if (regionIdx < 0) {
       const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
-      provision.addElement('form', formId, '/bag/c', { i: nextI, node: formEventsRegionIntent(wanted) });
+      await provision.addElement('form', formId, '/bag/c', { i: nextI, node: formEventsRegionIntent(wanted) });
       return true;
     }
     // Existing region: append only handlers not already wired.
@@ -1042,7 +1052,7 @@ async function runSdkBuild(spec, opts = {}) {
     let added = false;
     for (const ev of wanted) {
       if (existing.has(`${ev.event}|${ev.function}|${ev.library}`)) continue;
-      provision.addElement('form', formId, `/bag/c/${regionIdx}/node/c`, formEventsRegionIntent([ev]).c[0]);
+      await provision.addElement('form', formId, `/bag/c/${regionIdx}/node/c`, formEventsRegionIntent([ev]).c[0]);
       added = true;
     }
     return added;
@@ -1062,15 +1072,15 @@ async function runSdkBuild(spec, opts = {}) {
       if (fn) wantCellByLogical[String(fn).toLowerCase()] = c;
     }
     const want = formFieldLogicals(def);
-    const have = new Set(formFieldLogicals(provision.getArtifact('form', formId) || {}));
+    const have = new Set(formFieldLogicals(await provision.getArtifact('form', formId) || {}));
     for (const logical of want) {
       if (have.has(logical)) continue; // idempotent: already on the form
-      const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', formId) || {});
+      const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', formId) || {});
       if (!rowsPtr) break;
-      provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
+      await provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
       have.add(logical);
     }
-    addSubgrids(formId, def.__subgrids);
+    await addSubgrids(formId, def.__subgrids);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.
@@ -1079,10 +1089,10 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
-      for (const logical of formFieldLogicals(provision.getArtifact('form', formId) || {})) {
+      for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
-        const ptr = findFieldCellPointer(provision.getArtifact('form', formId) || {}, logical);
-        if (ptr) provision.removeElement('form', formId, ptr);
+        const ptr = findFieldCellPointer(await provision.getArtifact('form', formId) || {}, logical);
+        if (ptr) await provision.removeElement('form', formId, ptr);
       }
     }
     requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
@@ -1096,7 +1106,7 @@ async function runSdkBuild(spec, opts = {}) {
   // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
   const reconcileView = async (viewId, def) => {
     await provision.fetchArtifact('view', viewId);
-    const current = provision.getArtifact('view', viewId) || {};
+    const current = await provision.getArtifact('view', viewId) || {};
     const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
     const merged = (current.columns || []).slice();
     for (const col of def.columns || []) {
@@ -1105,7 +1115,7 @@ async function runSdkBuild(spec, opts = {}) {
       have.add(n);
       merged.push({ name: n, width: col.width || 100, order: merged.length });
     }
-    provision.updateElement('view', viewId, '/columns', merged);
+    await provision.updateElement('view', viewId, '/columns', merged);
     requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
     reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
@@ -1190,8 +1200,8 @@ async function runSdkBuild(spec, opts = {}) {
     // types (view/chart/command/dashboard/app) still serialize unchanged from a full createArtifact.
     let id;
     if (type === 'form') {
-      id = createFormShell(def);
-      addSubgrids(id, def.__subgrids);
+      id = await createFormShell(def);
+      await addSubgrids(id, def.__subgrids);
     } else {
       id = provision.createArtifact(type, def).id;
     }
@@ -1305,7 +1315,7 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.fetchArtifact('form', id);
           // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
-          if (wireFormEvents(id, wantedEvents)) {
+          if (await wireFormEvents(id, wantedEvents)) {
             requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
             reportPartialPush(await provision.publishArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
           }
@@ -1339,10 +1349,10 @@ async function runSdkBuild(spec, opts = {}) {
           const qvFormId = formIdByEntityName[`${String(qv.targetEntity).toLowerCase()}|${qv.form}`];
           if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();
-          if (hasQuickView(provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
-          const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', hostId) || {});
+          if (hasQuickView(await provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
+          const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', hostId) || {});
           if (!rowsPtr) continue;
-          provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
+          await provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
           changed = true;
         }
         if (changed) {
@@ -1403,7 +1413,12 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
         const art = provision.createArtifact('dashboard', { name: dash.name });
-        (dash.tiles || []).forEach((tile, ti) => provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tile, result), ti)));
+        // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
+        // without awaiting them — the push below could then race an unfinished tile insert.
+        const tiles = dash.tiles || [];
+        for (let ti = 0; ti < tiles.length; ti++) {
+          await provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tiles[ti], result), ti));
+        }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
         result.created.dashboards[dash.name] = pushed.id;
@@ -1466,7 +1481,7 @@ async function runSdkBuild(spec, opts = {}) {
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
-          provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+          await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
         }
@@ -1724,7 +1739,7 @@ async function runSdkBuild(spec, opts = {}) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
-          provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
+          await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
           requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize', opts.warn);
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           return result.created.app;

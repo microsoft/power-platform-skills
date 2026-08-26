@@ -1,25 +1,25 @@
 'use strict';
-// SESSION-CACHE ORDERING INVARIANT — the guard for the plugin's persistent workspace.
+// WORKSPACE-CACHE ORDERING INVARIANT — the guard for the plugin's persistent workspace.
 //
-// The vendored SDK enforces its workspace as an EPHEMERAL SESSION CACHE: `MakerSdk` records
-// `sessionStartedAt`, and its internal read seam refuses a cached artifact whose `meta.fetchedAt`
-// predates the instance, throwing `ARTIFACT_CACHE_PREDATES_SESSION`.
+// HISTORY, because the rationale changed under us and the old one is misleading. The bundle this
+// test was written against ENFORCED the workspace as an ephemeral session cache: `MakerSdk`
+// recorded `sessionStartedAt` and refused a cached artifact whose `meta.fetchedAt` predated the
+// instance, throwing `ARTIFACT_CACHE_PREDATES_SESSION` (issue #469).
 //
-// The plugin does the opposite by design — `provisionSdk` owns a PERSISTENT `workspaceDir` that
-// survives across runs, and the build engine has ~10 `getArtifact` reads.
+// That enforcement is GONE from the SDK the plugin now vendors. Upstream replaced it with a 300s
+// TIME-based staleness window: a read whose cached copy is older than the window revalidates
+// against the server instead of failing, and the error no longer exists in the bundle at all.
+// So #469's hard-failure hazard — a user's SECOND build throwing — is closed by the SDK, not here.
 //
-// Live-probed against the real bundle while investigating this (issue #469): a second SDK instance
-// reading an artifact that a PREVIOUS instance had fetched/pushed does throw
-// `ARTIFACT_CACHE_PREDATES_SESSION`. A merely *created* entry does not — the guard keys on
-// `fetchedAt`, which a create has not set. So the hazard is real but narrow.
+// The invariant below is kept anyway, because the replacement has its own sharp edge. Reads inside
+// the 300s window are served from the local copy, and a mutation applied after a revalidation
+// refreshed that copy can now raise `StaleArtifactError` ("any pointer derived from the old copy
+// may now identify a different node"). Both hazards have the same root cause and the same fix:
+// never READ or PUSH an artifact kind this run did not itself FETCH or CREATE, and re-derive a
+// pointer from a fresh read rather than carrying one across a mutation.
 //
-// The engine is safe from it today only because every `getArtifact` read is preceded, IN THE SAME
-// RUN, by either a `fetchArtifact` or a create. That is an ordering invariant nothing enforced, and
-// it is invisible to the rest of the suite: every other test runs inside a single SDK session, so a
-// violation would pass all of them and fail only on a user's SECOND build.
-//
-// Rather than re-probe SDK internals here (brittle, and it asserts the SDK's behaviour rather than
-// the plugin's), this pins the invariant the PLUGIN owns and can break.
+// This asserts the invariant the PLUGIN owns, by source scan, rather than re-probing SDK internals
+// (brittle, and it would assert the SDK's behaviour rather than the plugin's).
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
@@ -27,7 +27,7 @@ const fs = require('node:fs');
 
 test('the build engine never reads an artifact kind it does not also fetch or create', () => {
   // A kind that is only ever READ from the workspace is, by construction, reading a cache entry it
-  // did not put there — which across runs is exactly ARTIFACT_CACHE_PREDATES_SESSION.
+  // did not put there — a copy of unknown age from an earlier run.
   const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
   const reads = [...src.matchAll(/provision\.getArtifact\(\s*'(\w+)'/g)].map((m) => m[1]);
   assert.ok(reads.length > 0, 'the scan found the getArtifact reads it is meant to guard');
@@ -40,7 +40,8 @@ test('the build engine never reads an artifact kind it does not also fetch or cr
       || (kind === 'form' && /createFormShell\(/.test(src));
     assert.ok(fetched || created,
       `'${kind}' is read from the workspace but never fetched or created in the same engine — `
-      + "a user's SECOND build would hit ARTIFACT_CACHE_PREDATES_SESSION (see issue #469)");
+      + "on a user's SECOND build that serves a previous run's copy, silently while it is inside "
+      + 'the SDK 300s staleness window (see issue #469)');
   }
 });
 
@@ -60,9 +61,9 @@ test('the build engine never PUSHES an artifact kind it does not also fetch or c
   // The residual half of #469, and the one the read-side guard above does not cover.
   //
   // `pushArtifact` reads the artifact through the same internal seam `getArtifact` uses, so a push
-  // of something cached by an EARLIER run hits ARTIFACT_CACHE_PREDATES_SESSION too — and separately
-  // trips ARTIFACT_LANGUAGE_MISMATCH once the plugin passes `languageCode`, because the stored
-  // artifact language would disagree with the pushing SDK.
+  // of something cached by an EARLIER run serves that stale copy — and separately trips
+  // ARTIFACT_LANGUAGE_MISMATCH once the plugin passes `languageCode`, because the stored artifact
+  // language would disagree with the pushing SDK.
   //
   // Both are currently unreachable only because every push is preceded, in the same run, by a fetch
   // or a create. A future batch optimisation that pushed "known clean" artifacts without re-fetching
@@ -80,7 +81,7 @@ test('the build engine never PUSHES an artifact kind it does not also fetch or c
       || (kind === 'form' && /createFormShell\(/.test(src));
     assert.ok(fetched || created,
       `'${kind}' is PUSHED but never fetched or created in the same engine — a second build would `
-      + 'hit ARTIFACT_CACHE_PREDATES_SESSION, and a non-default --language-code would additionally '
+      + 'push a previous run\'s cached copy, and a non-default --language-code would additionally '
       + 'hit ARTIFACT_LANGUAGE_MISMATCH (see issue #469)');
   }
 });

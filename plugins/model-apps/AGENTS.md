@@ -846,7 +846,7 @@ edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding w
 changes.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Three test files lock them — run all against every
+skill relies on behaviors that must survive. Four test files lock them — run all against every
 rebuilt bundle:
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
@@ -885,6 +885,18 @@ public `createMakerSdk` factory — the `MakerSdk`/`AppAdapter` classes are no l
 - **`seedRecordGraph` returns `{ createdIds: { <entityLogical>: [ids] } }`** and dedups only on an
   explicit **`matchOn`** key (it NEVER falls back to the primary display name — `buildSeedGroup`
   supplies `matchOn` from a single-column alternate key or the primary name, validated non-empty).
+
+`scripts/tests/sdk-async-surface.test.js` — the **sync-vs-async** guard, and the one to read first
+after a re-vendor. The SDK's generic surface is asynchronous (`addElement`, `findElements`,
+`getArtifact`, `moveElement`, `queryTree`, `removeElement`, `updateElement` all return Promises; a
+read may revalidate against the server before serving its cached copy). Forgetting an `await` does
+**not** throw: a Promise is truthy, so the engine's `|| {}` fallbacks stay dormant and the pure
+helpers silently receive a Promise — `hasSubgrid` → `false` (duplicate sub-grid), `formFieldLogicals`
+→ `[]` (every field looks missing), `findFieldCellPointer` → `null` (a removal never happens). Wrong
+artifacts, 2xx statuses, green build. The test therefore does two things: a **source scan** that
+fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
+`sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
+list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/

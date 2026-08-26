@@ -129,7 +129,7 @@ test('CONTRACT: a canonical /bag/c <events> region wires a handler into the reta
     // retired addFormEventHandler is gone). The adapter mints the handlerUniqueId at serialize.
     const bagC = (fetched.bag && fetched.bag.c) || [];
     const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
-    sdk.addElement('form', FID, '/bag/c', { i: nextI, node: formEventsRegionIntent([{ event: 'onload', library: 'new_smoke.js', function: 'Ticket.onLoad' }]) });
+    await sdk.addElement('form', FID, '/bag/c', { i: nextI, node: formEventsRegionIntent([{ event: 'onload', library: 'new_smoke.js', function: 'Ticket.onLoad' }]) });
     await sdk.pushArtifact('form', FID);
     assert.match(pushedXml, /Ticket\.onLoad/, 'the handler function is baked into the pushed formxml');
     assert.match(pushedXml, /handlerUniqueId/, 'the adapter minted the handlerUniqueId the caller omitted');
@@ -160,9 +160,9 @@ test('CONTRACT: removeElement drops a bound field from a fetched form (reconcile
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
   await sdk.fetchArtifact('form', FID);
-  const ptr = findFieldCellPointer(sdk.getArtifact('form', FID), 'new_tier');
+  const ptr = findFieldCellPointer(await sdk.getArtifact('form', FID), 'new_tier');
   assert.ok(ptr, 'the cell hosting the dropped field is located in the canonical tree');
-  sdk.removeElement('form', FID, ptr);
+  await sdk.removeElement('form', FID, ptr);
   await sdk.pushArtifact('form', FID);
   assert.ok(/datafieldname="new_name"/.test(pushedXml), 'the kept field survives the push');
   assert.ok(!/datafieldname="new_tier"/.test(pushedXml), 'the removed field is gone from the pushed formxml');

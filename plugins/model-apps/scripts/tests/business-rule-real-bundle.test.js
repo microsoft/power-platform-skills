@@ -158,7 +158,7 @@ test('REAL BUNDLE: an invalid condition is rejected at authoring time, not at th
   const { sdk } = sdkWithCapture();
   const { art } = authorRule(sdk);
   await assert.rejects(
-    async () => sdk.updateElement('businessRule', art.id, '/rootCondition', {
+    async () => await sdk.updateElement('businessRule', art.id, '/rootCondition', {
       id: 'c1', displayName: '', logic: 'XOR', clauses: [], trueBranch: [], falseBranch: [],
     }),
     'an unsupported logic operator must be caught locally rather than sent to the server'

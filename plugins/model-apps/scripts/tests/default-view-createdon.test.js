@@ -78,7 +78,7 @@ test('#7 enriching a default view REPLACES the stock createdon column (dropped f
   const id = STOCK_VIEW.savedqueryid;
   // Exactly what provision.enrichDefaultViews does: fetch the live view, replace /columns, push.
   await sdk.fetchArtifact('view', id);
-  sdk.updateElement('view', id, '/columns', defaultViewColumns(spec, spec.entities[0]));
+  await sdk.updateElement('view', id, '/columns', defaultViewColumns(spec, spec.entities[0]));
   await sdk.pushArtifact('view', id);
 
   const patch = capture.find((c) => /\/savedqueries\(/.test(c.url) && c.body && (c.body.fetchxml || c.body.layoutxml));
