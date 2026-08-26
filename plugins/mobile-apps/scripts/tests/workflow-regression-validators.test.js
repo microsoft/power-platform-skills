@@ -10,6 +10,8 @@ const {
   validateActionState,
   validateCapabilityComposition,
   validateCrossScreenContinuity,
+  validatePrimaryExperience,
+  validateRuntimeStateCoverage,
   validateSemanticColorUsage,
   validateSignatureComponents,
   validateStaticLayoutBudgets,
@@ -218,6 +220,70 @@ test('optional camera cannot be always mounted or dominate the first viewport', 
   const rules = new Set(validateCapabilityComposition(pack, { projectRoot: root, screenIds: ['Home'] }).map((item) => item.rule));
   assert.ok(rules.has('capability-overprominence'));
   assert.ok(rules.has('on-demand-camera-always-mounted'));
+});
+
+test('scanner cannot replace a non-capture Home experience', () => {
+  const pack = basePack();
+  pack.experience = { primarySurface: 'task-led-workflow' };
+  pack.screens[0].capabilityComposition[0].mode = 'primary';
+  assert.ok(validatePrimaryExperience(pack).some((item) => item.rule === 'scanner-home-hijack'));
+
+  pack.experience.primarySurface = 'capture-led-utility';
+  assert.deepEqual(validatePrimaryExperience(pack), []);
+});
+
+test('primary experience follows the production navigation launch route', () => {
+  const pack = basePack();
+  delete pack.navigation.initialRoute;
+  pack.navigation.initialDestinationId = 'work';
+  pack.navigation.destinations = [
+    { id: 'home', route: '/(app)/home' },
+    { id: 'work', route: '/(app)/work' },
+  ];
+  pack.navigation.routingPolicy = { launchRoute: '/(app)/work' };
+  assert.ok(validatePrimaryExperience(pack).some((item) => item.rule === 'primary-route-drift'));
+});
+
+test('structured screens declare applicable data, mutation, capability, and resume states', () => {
+  const pack = basePack();
+  for (const item of pack.screens) {
+    item.contractSource = 'structured';
+    item.states = ['populated', 'loading', 'empty', 'error', 'offline', 'retry'];
+  }
+  pack.screens[0].states.push('permission-denied', 'unavailable');
+  pack.screens[1].states.push('interrupted', 'resumed');
+  pack.screens[2].states.push('interrupted', 'resumed');
+  assert.deepEqual(validateRuntimeStateCoverage(pack), []);
+
+  pack.screens[0].states = pack.screens[0].states.filter((state) => state !== 'permission-denied');
+  const issue = validateRuntimeStateCoverage(pack).find((item) => item.rule === 'runtime-state-coverage-missing');
+  assert.equal(issue.screenId, 'Home');
+  assert.deepEqual(issue.states, ['permission-denied']);
+});
+
+test('structured runtime states require source implementation markers', (context) => {
+  const pack = basePack();
+  for (const item of pack.screens) item.contractSource = 'structured';
+  const home = pack.screens[0];
+  home.states = ['permission-denied', 'unavailable'];
+  home.data = { operations: [], routeBindings: [] };
+  const root = writeSources(context, pack);
+  const issue = validateRuntimeStateCoverage(pack, { projectRoot: root, screenIds: ['Home'] })
+    .find((item) => item.rule === 'runtime-state-implementation-missing');
+  assert.deepEqual(issue.states, ['permission-denied', 'unavailable']);
+
+  fs.writeFileSync(path.join(root, home.file), [
+    'export default function Screen() { return <YStack>',
+    '<YStack testID="runtime-state-permission-denied" />',
+    '<YStack testID="runtime-state-unavailable" />',
+    '</YStack>; }',
+  ].join('\n'));
+  assert.deepEqual(validateRuntimeStateCoverage(pack, { projectRoot: root, screenIds: ['Home'] }), []);
+
+  home.states.push('scanner-failed');
+  const customIssue = validateRuntimeStateCoverage(pack, { projectRoot: root, screenIds: ['Home'] })
+    .find((item) => item.rule === 'runtime-state-implementation-missing');
+  assert.deepEqual(customIssue.states, ['scanner-failed']);
 });
 
 test('error colors cannot represent ordinary selection and brand accent cannot flood the screen', (context) => {

@@ -149,7 +149,10 @@ environment-free path:
      exported hook that screens will consume;
    - selected/filter/sort/write fields and bounded or cursor pagination;
    - actors and UX permissions without claiming server authorization;
-   - realistic, relationship-complete fixtures with stable IDs;
+   - realistic, relationship-complete fixtures with stable IDs; normally use
+     3-8 records for each important list entity, allow fewer only when the
+     approved bounded maximum is smaller, and use synthetic totals rather than
+     large fixture arrays;
    - populated, loading, empty, error, offline, and brief-relevant edge
      scenarios;
    - local-first or explicitly approved cache-backed media with accessible alt

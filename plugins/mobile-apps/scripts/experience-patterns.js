@@ -163,17 +163,17 @@ const SEMANTIC_SIGNALS = {
   product: [/\b(?:product|products|item|items|inventory|accessor(?:y|ies)|beauty|watch|watches|catalog|services?|options?|choices?)\b/i],
   category: [/\b(?:category|categories|accessor(?:y|ies)|beauty|watch|watches|collection)\b/i],
   cart: [/\b(?:cart|basket|add to cart|checkout|purchase)\b/i],
-  media: [/\b(?:image|images|photo|photos|media|showcase|showcasing|visual)\b/i],
+  media: [/\b(?:image|images|photo|photos|photograph|photographs|media|showcase|showcasing|visual)\b/i],
   creator: [/\b(?:creator|create content|publish|publishing|post|posts|article|articles|video|videos|followers?)\b/i],
   discovery: [/\b(?:browse|browsing|discover|explore|showcase|showcasing|compare|find)\b/i],
   booking: [/\b(?:book|booking|schedule|appointment|reserve|reservation|availability|time slot)\b/i],
   learning: [/\b(?:learn|learning|lesson|course|study|curriculum|quiz|practice)\b/i],
   communication: [/\b(?:message|messages|chat|inbox|conversation|reply|notify)\b/i],
   finance: [/\b(?:balance|budget|spend|spending|income|expense|finance|financial|cash flow)\b/i],
-  operation: [/\b(?:complete|inspection|inspect|repair|maintain|maintenance|dispatch|approve|assignment|assignments|work order|checklist|task|warehouse|cycle count|receiving|bin|bins)\b/i],
+  operation: [/\b(?:complete|inspection|inspections|inspect|auditing|audit|issues?|repairs?|maint[a-z]*|warrant(?:y|ies)|equipment|dispatch|approve|assignment|assignments|work order|checklist|task|warehouse|cycle count|receiving|shipments?|quantities|expiry|confirmation|bin|bins)\b/i],
   capture: [/\b(?:scan|capture|photograph|photo|receipt|barcode|qr|upload|submit evidence|record a measurement)\b/i],
   tracking: [/\b(?:track|tracking|progress|history|status|monitor|goal)\b/i],
-  offline: [/\b(?:in[-\s]?flight|onboard|offline|no connection|airplane mode|disconnected)\b/i],
+  offline: [/\b(?:offline|no (?:network|connection|connectivity)|limited connectivity|intermittent connectivity|airplane mode|disconnected|works? without (?:a )?network|save on (?:the )?device|sync later)\b/i],
   cachedCdn: [/\b(?:cdn|cache-backed|cached\s+(?:cdn|image|media)|device\s+cache|remote-cdn-cached)\b/i],
   clean: [/\b(?:clean|minimal|simple|calm|refined)\b/i],
 };
@@ -234,7 +234,7 @@ function signalCount(profile, signal) {
   return (profile[signal] || []).length;
 }
 
-function chooseSemanticIntent(profile) {
+function chooseSemanticIntent(profile, text) {
   const score = (weights) => Object.entries(weights)
     .reduce((total, [signal, weight]) => total + signalCount(profile, signal) * weight, 0);
   const candidates = [
@@ -248,7 +248,17 @@ function chooseSemanticIntent(profile) {
     { id: 'operation', score: score({ operation: 4, employee: 2, tracking: 1 }), evidence: ['operation', 'employee', 'tracking'] },
     { id: 'tracking', score: score({ tracking: 3, consumer: 1, employee: 1 }), evidence: ['tracking', 'consumer', 'employee'] },
   ].sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
-  return { winner: candidates[0], runnerUp: candidates[1] };
+  let ordered = candidates;
+  const operationalJobs = String(text || '').match(/\b(?:auditing|audit|issues?|repairs?|maint[a-z]*|warrant(?:y|ies)|equipment|receiving|shipments?|quantities|expiry|confirmation)\b/gi) || [];
+  const assetOverview = /\b(?:track|tracking)\b[\s\S]{0,80}\b(?:company inventory|it assets?|ownership)\b|\b(?:company inventory|it assets?|ownership)\b[\s\S]{0,80}\b(?:track|tracking)\b/i.test(String(text || ''));
+  if (assetOverview) {
+    const tracking = candidates.find((candidate) => candidate.id === 'tracking');
+    ordered = [tracking, ...candidates.filter((candidate) => candidate !== tracking)];
+  } else if (operationalJobs.length >= 2 && ['capture', 'tracking'].includes(candidates[0].id)) {
+    const operation = candidates.find((candidate) => candidate.id === 'operation');
+    ordered = [operation, ...candidates.filter((candidate) => candidate !== operation)];
+  }
+  return { winner: ordered[0], runnerUp: ordered[1] };
 }
 
 function hasSufficientIntentEvidence(intent, profile) {
@@ -312,12 +322,17 @@ function experienceFromIntent(intent, profile, text) {
   const selected = byIntent[intent] || {
     audience: signalCount(profile, 'consumer') ? 'consumer' : signalCount(profile, 'employee') ? 'employee' : 'mixed', primaryJob: 'Understand the product and take the first useful action.', interactionMode: 'create', entryMode: 'onboarding', contentModel: ['records'], primarySurface: 'guided-onboarding', primaryAction: 'Start the guided flow', focalPoint: 'The clearest first step for the user', signatureMotifs: ['guided-start', 'value-preview'], forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'premature-tab-bar'], visualCharacter: 'warm-friendly', navigationModel: 'stack', evidence: [],
   };
+  if (signalCount(profile, 'media') > 0 && !selected.contentModel.includes('media')) {
+    selected.contentModel = [...selected.contentModel, 'media'].slice(0, 5);
+  }
   const explicitCachedCdn = signalCount(profile, 'cachedCdn') > 0 && selected.contentModel.includes('media');
   const assetPolicy = {
     connectivity: signalCount(profile, 'offline') ? 'offline-preferred' : 'network-optional',
     media: explicitCachedCdn
       ? 'remote-cdn-cached'
-      : signalCount(profile, 'offline') && selected.contentModel.includes('media') ? 'local-first' : selected.contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
+      : selected.contentModel.includes('media') && (signalCount(profile, 'offline') || intent === 'commerce')
+        ? 'local-first'
+        : selected.contentModel.includes('media') ? 'remote-allowed' : 'not-applicable',
   };
   return { ...selected, assetPolicy, text };
 }
@@ -363,7 +378,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
   const text = String(brief || '').trim();
   if (!text) throw new Error('brief must be a non-empty string');
   const profile = collectSemanticProfile(text);
-  const { winner, runnerUp } = chooseSemanticIntent(profile);
+  const { winner, runnerUp } = chooseSemanticIntent(profile, text);
   const semanticIntent = hasSufficientIntentEvidence(winner, profile) ? winner : null;
   const fallback = semanticIntent ? null : winner.score === 0 ? chooseRule(text) : null;
   const intent = semanticIntent?.id || (fallback?.rule.id === 'browse' ? 'commerce' : fallback?.rule.id);

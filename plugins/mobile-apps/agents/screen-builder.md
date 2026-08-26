@@ -565,7 +565,7 @@ explicitly logged compatibility fallback may read the plan without a pack.
 
   The audit service name comes from the Generated Services snapshot (it is always the single `*audit_log_entries*` service). The payload field list in the spec names which fields go in the JSON; you supply the runtime expressions (e.g. `submittedAt: new Date().toISOString()`, `inspectionId: id`, `defectCount: defects.length`). If `**Audit**` is absent, do NOT invent audit writes.
 - Native capabilities used (Expo modules)
-- State delta — loading/error defaults are inherited from shared rules; empty state copy/icon/CTA must still be domain-specific. If the spec omits state details for a data screen, use the Shared Conventions empty-state pattern plus the entity noun rather than blocking.
+- State delta — loading/error defaults are inherited from shared rules; empty state copy/icon/CTA must still be domain-specific. If the spec omits state details for a data screen, use the Shared Conventions empty-state pattern plus the entity noun rather than blocking. Implement every applicable state and give its rendered root a literal `testID="runtime-state-<state>"` marker (for example, `runtime-state-loading`, `runtime-state-permission-denied`, or `runtime-state-resumed`) so validation proves the state was implemented rather than merely declared.
 - Input ergonomics override — for Forms, inherit field order/control hints from Shared Conventions; only per-screen overrides appear here.
 - User actions (buttons, forms, navigation targets)
 - Animations (enter transition, list stagger, state transitions, press feedback)
@@ -1115,8 +1115,12 @@ Before finishing the screen, mentally verify:
 40. **Input ergonomics** — Tamagui inputs use web-standard props (`inputMode`, `type`, `enterKeyHint`, `autoComplete`, `onChange`, `onKeyDown`, `readOnly`). React Native inputs keep native props. Prefer native or bounded controls over free text when the data permits.
 41. **Progress preservation** — validation errors, failed saves, and refetches never clear user-entered values. Short forms guard dirty cancel/back; long or multi-step forms autosave a local draft and show a resume/discard prompt instead of starting over.
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
-43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
-44. **Buttons never silently no-op.** If an action depends on required state (`record`, `id`, selected row, loaded service data), either guarantee that state exists before rendering the button, or render the button disabled with a visible reason. Do not write handlers like `if (!record) return;` on an enabled visible button.
+43. **Reduced motion is functional, not decorative.** Any `Animated`, Reanimated
+    `withTiming`/`withSpring`, or entering/exiting transition must branch on
+    `useReducedMotion` (or the platform accessibility setting) and preserve the
+    same state change without motion.
+44. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
+45. **Buttons never silently no-op.** If an action depends on required state (`record`, `id`, selected row, loaded service data), either guarantee that state exists before rendering the button, or render the button disabled with a visible reason. Do not write handlers like `if (!record) return;` on an enabled visible button.
 
 ### Operational UX rules (control density + trust)
 

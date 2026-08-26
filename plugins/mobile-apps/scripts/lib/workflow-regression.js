@@ -215,6 +215,72 @@ function validateStaticLayoutBudgets(pack, options = {}) {
   return issues;
 }
 
+function validatePrimaryExperience(pack) {
+  const issues = [];
+  const screens = screenSelection(pack);
+  const primaryScreens = screens.filter((screen) => screen.role === 'primary');
+  if (primaryScreens.length !== 1) {
+    issues.push(issue('primary-screen-count', `Build pack requires exactly one primary screen; found ${primaryScreens.length}.`));
+    return issues;
+  }
+  const primary = primaryScreens[0];
+  const initialDestination = (pack.navigation?.destinations || [])
+    .find((destination) => destination.id === pack.navigation?.initialDestinationId);
+  const initialRoute = pack.navigation?.routingPolicy?.launchRoute
+    || initialDestination?.route
+    || pack.navigation?.initialRoute;
+  if (initialRoute && initialRoute !== primary.route) {
+    issues.push(issue('primary-route-drift', `Navigation starts at ${initialRoute}, not primary screen ${primary.route}.`, { screenId: primary.id }));
+  }
+  const scanner = (primary.capabilityComposition || []).find((capability) => /(?:barcode|qr|scanner|camera)/i.test(capability.capability));
+  if (scanner?.mode === 'primary' && pack.experience?.primarySurface !== 'capture-led-utility') {
+    issues.push(issue('scanner-home-hijack', `Primary screen ${primary.id} promotes ${scanner.capability} as the product surface without an immersive capture contract.`, { screenId: primary.id }));
+  }
+  if (primary.presentation?.pattern === 'capture' && pack.experience?.primarySurface !== 'capture-led-utility') {
+    issues.push(issue('capture-home-hijack', `Primary screen ${primary.id} uses a capture composition for a non-capture product.`, { screenId: primary.id }));
+  }
+  if (!primary.firstViewport?.focalPoint || !primary.primaryAction) {
+    issues.push(issue('primary-hierarchy-incomplete', `Primary screen ${primary.id} requires a focal point and visible primary action.`, { screenId: primary.id }));
+  }
+  return issues;
+}
+
+function validateRuntimeStateCoverage(pack, options = {}) {
+  const issues = [];
+  const journeyStages = new Set((pack.journey?.stages || []).flatMap((stage) => stage.screenIds || []));
+  for (const screen of screenSelection(pack, options.screenIds)) {
+    // Schema v1 contracts remain valid. Rich state coverage is required only
+    // from structured screen contracts that can represent the full policy.
+    if (screen.contractSource !== 'structured') continue;
+    const states = new Set(screen.states || []);
+    const dataDriven = (screen.data?.entities || []).length > 0 || (screen.data?.operations || []).length > 0;
+    const required = dataDriven
+      ? ['populated', 'loading', 'empty', 'error', 'offline', 'retry']
+      : [];
+    const capabilities = screen.capabilityComposition || [];
+    if (capabilities.length) required.push('permission-denied', 'unavailable');
+    const mutates = (screen.data?.operations || []).some((operation) => ['create', 'update', 'delete'].includes(operation.kind));
+    if (mutates) required.push('success');
+    if (pack.journey?.resume?.supported && journeyStages.has(screen.id)) required.push('interrupted', 'resumed');
+    const missing = [...new Set(required)].filter((state) => !states.has(state));
+    if (missing.length) {
+      issues.push(issue('runtime-state-coverage-missing', `Screen ${screen.id} is missing applicable runtime states: ${missing.join(', ')}.`, { screenId: screen.id, states: missing }));
+    }
+    const source = sourceFor(options.projectRoot, screen);
+    if (source) {
+      const implementedStates = [...new Set([...required, ...states])];
+      const unimplemented = implementedStates.filter((state) => {
+        const marker = `runtime-state-${String(state).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
+        return !source.includes(`testID="${marker}"`) && !source.includes(`testID='${marker}'`);
+      });
+      if (unimplemented.length) {
+        issues.push(issue('runtime-state-implementation-missing', `Screen ${screen.id} does not render deterministic markers for runtime states: ${unimplemented.join(', ')}.`, { screenId: screen.id, states: unimplemented }));
+      }
+    }
+  }
+  return issues;
+}
+
 function changedPaths(before, after, prefix = '') {
   if (stableStringify(before) === stableStringify(after)) return [];
   if (!before || !after || typeof before !== 'object' || typeof after !== 'object' || Array.isArray(before) || Array.isArray(after)) return [prefix || '<root>'];
@@ -250,5 +316,7 @@ module.exports = {
   validateSemanticColorUsage,
   validateSignatureComponents,
   validateStaticLayoutBudgets,
+  validatePrimaryExperience,
+  validateRuntimeStateCoverage,
   validateUiNeutralDataMigration,
 };

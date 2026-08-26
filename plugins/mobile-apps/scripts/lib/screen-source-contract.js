@@ -286,6 +286,69 @@ function validateStaticEngineeringRules(source, screen, elements, issues, option
   if (/<(?:Input|TextInput)\b/.test(source) && !/(?:KeyboardAvoidingView|KeyboardAware|useKeyboard|keyboardShouldPersistTaps)/.test(source)) {
     issues.push({ rule: 'keyboard-avoidance-missing', message: `Screen ${label} renders input without an explicit keyboard-avoidance strategy.` });
   }
+  if (/\ballowFontScaling\s*=\s*\{\s*false\s*\}/.test(source)) {
+    issues.push({ rule: 'dynamic-type-disabled', message: `Screen ${label} disables Dynamic Type on readable text.` });
+  }
+  if (/\bmaxFontSizeMultiplier\s*=\s*(?:\{\s*)?(?:0(?:\.\d+)?|1(?:\.[0-4]\d*)?)(?:\s*\})?/.test(source)) {
+    issues.push({ rule: 'dynamic-type-restricted', message: `Screen ${label} restricts text scaling below the supported accessibility range.` });
+  }
+  const reducedMotionVariables = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:useReducedMotion|isReduceMotionEnabled)\s*\(/g)]
+    .map((match) => match[1]);
+  const reducedMotionExpression = (expression, variable) => {
+    const escaped = escapeRegExp(variable);
+    const noMotion = '(?:undefined|null|false)';
+    return new RegExp(`(?:!\\s*)?\\b${escaped}\\b\\s*\\?\\s*${noMotion}\\s*:\\s*[^:]+$|(?:!\\s*)?\\b${escaped}\\b\\s*\\?\\s*[^:]+\\s*:\\s*${noMotion}$`).test(expression.trim());
+  };
+  const guardedMotionVariables = new Set();
+  for (const variable of reducedMotionVariables) {
+    const escaped = escapeRegExp(variable);
+    for (const match of source.matchAll(new RegExp(`\\bconst\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*([^;\\n]*\\b${escaped}\\b[^;\\n]*\\?[^;\\n]*:[^;\\n]*)`, 'g'))) {
+      if (reducedMotionExpression(match[2], variable)) guardedMotionVariables.add(match[1]);
+    }
+  }
+  const motionProps = [...source.matchAll(/\b(?:entering|exiting)\s*=\s*\{([^}]+)\}/g)].map((match) => match[1]);
+  const motionCalls = [...source.matchAll(/\b(?:Animated\.timing|Animated\.spring|withTiming|withSpring)\s*\(/g)];
+  const guardedProps = motionProps.every((expression) => (
+    reducedMotionVariables.some((variable) => reducedMotionExpression(expression, variable))
+    || [...guardedMotionVariables].some((variable) => new RegExp(`\\b${escapeRegExp(variable)}\\b`).test(expression))
+  ));
+  const guardedCalls = motionCalls.every((match) => {
+    const prefix = source.slice(Math.max(0, match.index - 320), match.index);
+    const callContext = source.slice(Math.max(0, match.index - 160), Math.min(source.length, match.index + 320));
+    return reducedMotionVariables.some((variable) => {
+      const escaped = escapeRegExp(variable);
+      const directTernary = new RegExp(`(?:!\\s*)?\\b${escaped}\\b\\s*\\?\\s*(?:undefined|null|false)\\s*:\\s*(?:Animated\\.timing|Animated\\.spring|withTiming|withSpring)|(?:!\\s*)?\\b${escaped}\\b\\s*\\?\\s*(?:Animated\\.timing|Animated\\.spring|withTiming|withSpring)[\\s\\S]{0,180}?\\s*:\\s*(?:undefined|null|false)`).test(callContext);
+      const enclosingBranch = new RegExp(`\\bif\\s*\\(\\s*!\\s*${escaped}\\b[^)]*\\)\\s*\\{[^{}]*$`).test(prefix);
+      const earlyReturn = new RegExp(`\\bif\\s*\\(\\s*${escaped}\\b[^)]*\\)\\s*(?:\\{\\s*)?return\\b[^;]*;[^{}]*$`).test(prefix);
+      const zeroDuration = new RegExp(`\\bduration\\s*:\\s*${escaped}\\b\\s*\\?\\s*0\\s*:`).test(callContext);
+      return directTernary || enclosingBranch || earlyReturn || zeroDuration;
+    });
+  });
+  if ((motionProps.length && !guardedProps) || (motionCalls.length && !guardedCalls)) {
+    issues.push({ rule: 'reduced-motion-missing', message: `Screen ${label} uses motion without guarding each animation with the reduced-motion preference.` });
+  }
+  for (const input of elements.filter((candidate) => /^(?:Input|TextInput)$/.test(candidate.name))) {
+    const usableLabelAttribute = (tag, attribute) => {
+      const match = tag.match(new RegExp(`\\b${attribute}\\s*=\\s*(?:["']([^"']*)["']|\\{\\s*([^}]+?)\\s*\\})`));
+      if (!match) return false;
+      if (match[1] !== undefined) return match[1].trim().length > 0;
+      const expression = match[2].trim();
+      if (/^(?:undefined|null|false|['"]\s*['"])$/.test(expression)) return false;
+      if (/^(?:true|false)\s*\?\s*['"]\s*['"]\s*:\s*['"]\s*['"]$/.test(expression)) return false;
+      return true;
+    };
+    const directLabel = ['accessibilityLabel', 'aria-label', 'accessibilityLabelledBy']
+      .some((attribute) => usableLabelAttribute(input.openTag, attribute));
+    const labelledContainer = elements.some((candidate) => candidate.name === 'FormField'
+      && elementContains(candidate, input)
+      && usableLabelAttribute(candidate.openTag, 'label'));
+    const inputId = input.openTag.match(/\b(?:id|nativeID)\s*=\s*["']([^"']+)["']/)?.[1];
+    const matchingLabel = inputId
+      && new RegExp(`<Label\\b[^>]*\\bhtmlFor\\s*=\\s*["']${escapeRegExp(inputId)}["'][^>]*>\\s*[^<{\\s][^<]*<\\/Label>`).test(source);
+    if (!directLabel && !labelledContainer && !matchingLabel) {
+      issues.push({ rule: 'input-label-missing', message: `Screen ${label} has an input without an accessible label or labelled FormField.` });
+    }
+  }
   for (const element of elements.filter((candidate) => /^(?:Pressable|Touchable)/.test(candidate.name))) {
     if (!/\baccessibilityRole\s*=/.test(element.openTag)) issues.push({ rule: 'custom-control-role-missing', message: `Screen ${label} has a custom touch control without accessibilityRole.` });
     const body = source.slice(element.openEnd, element.closeStart);

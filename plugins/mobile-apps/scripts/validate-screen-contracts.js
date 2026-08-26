@@ -61,12 +61,44 @@ function normalizeRoute(route) {
   return normalize(route).replace(/[?#].*$/, '').replace(/\/+$/, '') || '/';
 }
 
+function plainCell(value) {
+  return normalize(value)
+    .replace(/^[`"'“”']+|[`"'“”']+$/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function requirementClauses(markdown) {
+  const action = '(?:audit(?:ing)?|browse|buy|captur(?:e|ing)|continu(?:e|ing)|enter|(?:get|retriev)(?:ting|e|ing)?|inspect(?:ing)?|maint(?:ain|aining|ining)|manage|obtain|photograph|print|receiv(?:e|ing)|record|repair|scan|sell|showcas(?:e|ing)|track(?:ing)?|updat(?:e|ing)|view)';
+  const actionStart = new RegExp(`\\b${action}\\b`, 'i');
+  const actionJoin = new RegExp(`\\s*(?:,|\\band\\b)\\s+(?:to\\s+)?(?=${action}\\b)`, 'gi');
+  return String(markdown || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, '').trim())
+    .filter((line) => line && !line.startsWith('#') && !line.startsWith('|') && !line.startsWith('```'))
+    .flatMap((line) => line.split(/[.;]\s*/))
+    .map((sentence) => sentence
+      .replace(/^(?:create|design|build)\b.*?\b(?:app|solution)\b(?:\s+(?:for|to))?\s*/i, '')
+      .replace(/\b(?:users?|people|workers?)\s+should\s+be\s+able\s+to\s+/gi, ', ')
+      .replace(/,\s*(?:the\s+)?company\s+owns\b[^,]+,\s*/gi, ', ')
+      .replace(/\b(?:the\s+)?app\s+should\s+support\s+/gi, ', ')
+      .replace(/^(?:enable|help|allow|let|give)\b.*?\bto\s+(?=[a-z])/i, '')
+      .replace(/^.*?\bused\b.*?\bfor\s+(?=[a-z])/i, ''))
+    .map((sentence) => {
+      const firstAction = sentence.match(actionStart);
+      return firstAction ? sentence.slice(firstAction.index) : '';
+    })
+    .flatMap((sentence) => sentence.split(actionJoin))
+    .map((clause) => clause.replace(/[.;,]+$/, '').trim())
+    .filter((clause) => actionStart.test(clause));
+}
+
 function validateScreenContracts(markdown) {
   const issues = [];
   const screens = section(markdown, 'Screens');
   if (!screens) return [{ rule: 'missing-screens-section', message: 'Plan is missing its ## Screens section.' }];
 
   const screenMap = markdownTable(screens, 'Screen Map');
+  const mappedScreens = [];
   if (!screenMap) {
     issues.push({ rule: 'missing-screen-map', message: 'Screens must include a ### Screen Map Markdown table.' });
   } else {
@@ -94,6 +126,7 @@ function validateScreenContracts(markdown) {
           });
         } else {
           routes.set(normalizedRoute, name);
+          mappedScreens.push({ name, route: normalizedRoute });
         }
         if (file.startsWith('/') || file.includes('..') || !/^app\/.+\.tsx$/i.test(file)) {
           issues.push({
@@ -123,6 +156,68 @@ function validateScreenContracts(markdown) {
       rule: 'navigation-contract-columns',
       message: 'Navigation Contracts requires a Route column.',
     });
+  }
+
+  const requirements = section(markdown, 'App Requirements');
+  if (requirements.trim()) {
+    const coverage = markdownTable(screens, 'Requirement Coverage');
+    if (!coverage) {
+      issues.push({
+        rule: 'missing-requirement-coverage',
+        message: 'Screens must include a ### Requirement Coverage table for the confirmed App Requirements.',
+      });
+    } else {
+      const requiredColumns = ['requirement', 'brief evidence', 'surface', 'action', 'data', 'states'];
+      const indexes = Object.fromEntries(requiredColumns.map((column) => [column, coverage.headers.indexOf(column)]));
+      const missingColumns = requiredColumns.filter((column) => indexes[column] < 0);
+      if (missingColumns.length) {
+        issues.push({
+          rule: 'requirement-coverage-columns',
+          message: `Requirement Coverage requires columns: ${requiredColumns.join(', ')}.`,
+        });
+      } else if (!coverage.rows.length) {
+        issues.push({ rule: 'empty-requirement-coverage', message: 'Requirement Coverage must contain at least one explicit product job.' });
+      } else {
+        const normalizedRequirements = requirements.replace(/\s+/g, ' ').toLowerCase();
+        const clauses = requirementClauses(requirements);
+        const clauseAssignments = new Map(clauses.map((clause) => [clause, []]));
+        for (const [rowIndex, row] of coverage.rows.entries()) {
+          const values = Object.fromEntries(requiredColumns.map((column) => [column, plainCell(row[indexes[column]])]));
+          const label = `Requirement Coverage row ${rowIndex + 1}`;
+          for (const column of requiredColumns) {
+            if (!values[column]) issues.push({ rule: 'incomplete-requirement-coverage', message: `${label} is missing ${column}.` });
+          }
+          if (values['brief evidence'] && !normalizedRequirements.includes(values['brief evidence'].toLowerCase())) {
+            issues.push({ rule: 'unverified-requirement-evidence', message: `${label} evidence is not an exact phrase from App Requirements: ${values['brief evidence']}.` });
+          } else if (values['brief evidence']) {
+            const evidence = values['brief evidence'].toLowerCase();
+            const matchedClauses = clauses.filter((clause) => {
+              const normalizedClause = clause.toLowerCase();
+              return normalizedClause.includes(evidence) || evidence.includes(normalizedClause);
+            });
+            if (matchedClauses.length !== 1) {
+              issues.push({
+                rule: 'ambiguous-requirement-evidence',
+                message: `${label} must cite one bounded App Requirements clause; it currently matches ${matchedClauses.length}.`,
+              });
+            } else {
+              clauseAssignments.get(matchedClauses[0]).push(rowIndex + 1);
+            }
+          }
+          if (values.surface && !mappedScreens.some((screen) => (
+            values.surface.toLowerCase().includes(screen.name.toLowerCase())
+            || values.surface.includes(screen.route)
+          ))) {
+            issues.push({ rule: 'unknown-requirement-surface', message: `${label} points to an unknown Screen Map surface: ${values.surface}.` });
+          }
+        }
+        for (const clause of clauses) {
+          if (!clauseAssignments.get(clause).length) {
+            issues.push({ rule: 'uncovered-app-requirement', message: `No Requirement Coverage row cites this App Requirements clause: ${clause}.` });
+          }
+        }
+      }
+    }
   }
   return issues;
 }
@@ -164,4 +259,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { validateScreenContracts, validateScreenContractsWithExperience };
+module.exports = { requirementClauses, validateScreenContracts, validateScreenContractsWithExperience };

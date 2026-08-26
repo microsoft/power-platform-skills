@@ -264,6 +264,16 @@ function validatePrototypeDomainModel(model, context = {}) {
     }
     if (rows.length !== entity.estimatedPrototypeRows) errors.push(`fixtures.${entityKey} row count does not match estimatedPrototypeRows`);
   }
+  for (const operation of operations.filter((item) => item.kind === 'list')) {
+    const rows = fixtures[operation.entity] || [];
+    const expectedMaximum = operation.pagination?.maximumExpectedCount;
+    if ((!Number.isInteger(expectedMaximum) || expectedMaximum >= 3) && rows.length < 3) {
+      errors.push(`fixtures.${operation.entity} requires at least 3 representative records for list operation ${operation.key}`);
+    }
+    if (rows.length > 12) {
+      errors.push(`fixtures.${operation.entity} has ${rows.length} records; keep prototype fixtures compact and use synthetic totals for large-list behavior`);
+    }
+  }
   for (const entity of entities) {
     if (!Object.prototype.hasOwnProperty.call(fixtures, entity.key)) errors.push(`fixtures is missing entity ${entity.key}`);
   }

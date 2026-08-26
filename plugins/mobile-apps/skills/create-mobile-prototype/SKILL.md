@@ -474,19 +474,17 @@ Run in this order from `PROJECT_DIR`:
 node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-contracts.js" "$PROJECT_DIR/native-app-plan.md" --project-root "$PROJECT_DIR" --phase build
 node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-contract.js" --project-root "$PROJECT_DIR" --phase build
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-build-pack.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-screen-shells.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-experience-media.js" --project-root "$PROJECT_DIR" --pack ".tmp/screen-build-pack.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-action-state.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-cross-screen-continuity.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-signature-components.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-capability-composition.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-semantic-color-usage.js" --project-root "$PROJECT_DIR"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-static-layout-budgets.js" --project-root "$PROJECT_DIR"
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report app
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report app
-npm --prefix "$PROJECT_DIR" run type-check
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-app.js" \
+  --project-root "$PROJECT_DIR" --scope all --record
 ```
+
+The canonical complete-app validator runs domain, requirement/task,
+navigation, runtime-state, media, screen-source, accessibility, safe-area, and
+TypeScript checks against the fully generated app. It preserves the existing
+build order; it does not introduce a Home/key-flow canary or start Metro
+before supporting screens are complete.
 
 When design-intake.md declares high or strict-structural fidelity, record the
 native-evidence command below as pending in final-validation.md. Do not run it

@@ -601,7 +601,7 @@ For each screen the user adds, provide this compact shape:
 - **Calendar library** — REQUIRED for screens with `Calendar pattern` unless the pattern is `timeline-day-list`. Write `react-native-calendars` and name the exact components expected, for example `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, `Calendar`, `CalendarList`, or `Agenda`. The package must also appear in `### JavaScript Dependencies`; the screen-builder imports it directly after the orchestrator installs it. No `/add-native` wrapper or native rebuild is involved.
 - **Navigation** — what links to it / what it links to
 - **Navigation intent** — for each outgoing action, explicitly name `navigate`, `push`, or `replace` (must match Navigation Contracts `Intent`)
-- **State delta** — loading/error are inherited; specify only domain-specific empty copy/icon/CTA or non-standard state behavior. Empty state copy must be domain-specific (not "No items yet"). If the screen has filters, include filter-empty copy that names the active filter and recovery action. If the data source can fail independently, name the error action (`retry inspections`, `refresh assignments`) rather than treating failures as empty. For PDF/pen screens, include the specific native/artifact states: `invalidUrl` for malformed or unsupported PDF viewer input, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled` (non-error), `signatureCaptureFailed`, and `nativeModuleMissing` where applicable. Examples: `empty: calendar-outline, "No inspections scheduled", CTA "Schedule inspection"`; `filterEmpty: "No critical defects", recovery "Clear severity filter"`.
+- **State delta** — every data-driven structured screen declares `populated`, `loading`, `empty`, `error`, `offline`, and `retry`; mutation screens also declare `success`; capability screens declare `permission-denied` and `unavailable`; resumable journey steps declare `interrupted` and `resumed`. Specify domain-specific copy, action, and recovery behavior for each applicable state. Empty state copy must be domain-specific (not "No items yet"). If the screen has filters, include filter-empty copy that names the active filter and recovery action. If the data source can fail independently, name the error action (`retry inspections`, `refresh assignments`) rather than treating failures as empty. For PDF/pen screens, include the specific native/artifact states: `invalidUrl` for malformed or unsupported PDF viewer input, `viewerFailed`, `pdfGenerationFailed`, `uploadFailed`, `signatureCancelled` (non-error), `signatureCaptureFailed`, and `nativeModuleMissing` where applicable. Examples: `empty: calendar-outline, "No inspections scheduled", CTA "Schedule inspection"`; `filterEmpty: "No critical defects", recovery "Clear severity filter"`.
 - **Artifact persistence** (REQUIRED for generated PDFs, signatures, drawings, and uploaded PDFs/docs; omit otherwise) — one line naming the target: `on-device/share-only`, `Dataverse Image column <logicalName>`, `Dataverse File column <logicalName>`, `child Evidence/Attachment table <logicalName>`, `HTTPS URL from <source>`, or `local file URI from <source>`. For PDF viewer screens, never plan `content://`, `blob:`, or `http://` input.
 - **Input ergonomics override** (Form screens only, omit if Shared Conventions field controls cover it) — list only fields that differ from the entity default or require special native input behavior.
 - **Key user actions** — buttons / forms / gestures
@@ -727,6 +727,29 @@ Section format (same in all phases):
 | Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | new |
 
 > **Why the File column matters:** the orchestrator's Step 10b walks this column to (1) compute top-level tab/drawer entries (one per unique `app/(app)/<name>` — folder OR flat file) and (2) emit per-folder `_layout.tsx` files with the right modal options. Each builder reads its own row's File path as `target_file`. Without this column, the orchestrator falls back to flat `app/(app)/<screen-name>.tsx` for every screen — phantom tabs return.
+
+### Requirement Coverage
+
+Map every explicit product job from `## App Requirements` before writing
+per-screen specs. Use one row per independently understandable job; do not
+collapse unrelated jobs merely to reduce the screen count.
+
+| Requirement | Brief evidence | Surface | Action | Data | States |
+|---|---|---|---|---|---|
+| `<normalized job>` | `<exact short phrase copied from App Requirements>` | `<Screen name or route, plus region/flow step when grouped>` | `<visible user action>` | `<entity + operation, or local UI state>` | `<populated/loading/empty/error/recovery plus job-specific states>` |
+
+Hard requirements:
+
+- `Brief evidence` must be an exact phrase from the confirmed brief.
+- `Surface` must resolve to a Screen Map entry. A grouped region or flow step
+  still names its owning screen.
+- `Action` names the visible affordance, not an implementation helper.
+- `Data` names the supporting entity/operation or explicitly says local UI
+  state when persistence is unnecessary.
+- `States` includes the applicable failure and recovery behavior.
+- Scanner, camera, printing, and location are capability entry mechanisms;
+  they do not satisfy the domain job that uses them.
+- Do not add speculative rows. Every row must be traceable to brief evidence.
 
 ### Navigation Contracts
 

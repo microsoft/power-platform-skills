@@ -16,7 +16,7 @@ function domainModel() {
         { key: 'id', displayName: 'ID', type: 'id', required: true },
         { key: 'name', displayName: 'Name', type: 'text', required: true },
       ] },
-      { key: 'Product', displayName: 'Product', displayPluralName: 'Products', description: 'A product offered in the catalog.', primaryNameField: 'name', estimatedPrototypeRows: 1, fields: [
+      { key: 'Product', displayName: 'Product', displayPluralName: 'Products', description: 'A product offered in the catalog.', primaryNameField: 'name', estimatedPrototypeRows: 3, fields: [
         { key: 'id', displayName: 'ID', type: 'id', required: true },
         { key: 'categoryId', displayName: 'Category', type: 'reference', required: true, referenceTarget: 'Category' },
         { key: 'name', displayName: 'Name', type: 'text', required: true },
@@ -41,7 +41,7 @@ function domainModel() {
     ],
     offlineUxIntent: { connectivity: 'network-optional', requiredOperations: ['listProducts'] },
     fixtureRequirements: [
-      { key: 'catalog-populated', state: 'populated', description: 'One product is visible.', entity: 'Product', minimumRecords: 1 },
+      { key: 'catalog-populated', state: 'populated', description: 'Three products are visible.', entity: 'Product', minimumRecords: 3 },
       { key: 'catalog-loading', state: 'loading', description: 'Products are loading.' },
       { key: 'catalog-empty', state: 'empty', description: 'No products are visible.' },
       { key: 'catalog-error', state: 'error', description: 'Products failed to load.' },
@@ -50,10 +50,14 @@ function domainModel() {
     mediaPolicy: { mode: 'not-applicable', requiredFields: [], requiresFallback: false },
     fixtures: {
       Category: [{ id: 'category-travel', name: 'Travel essentials' }],
-      Product: [{ id: 'product-organizer', categoryId: 'category-travel', name: 'Travel organizer', status: 'available', price: { amount: 42.5, currencyCode: 'USD' } }],
+      Product: [
+        { id: 'product-organizer', categoryId: 'category-travel', name: 'Travel organizer', status: 'available', price: { amount: 42.5, currencyCode: 'USD' } },
+        { id: 'product-watch', categoryId: 'category-travel', name: 'Classic travel watch', status: 'available', price: { amount: 129, currencyCode: 'USD' } },
+        { id: 'product-mist', categoryId: 'category-travel', name: 'Hydration face mist', status: 'sold-out', price: { amount: 18, currencyCode: 'USD' } },
+      ],
     },
     fixtureScenarios: [
-      { key: 'catalog-populated', state: 'populated', description: 'One product is visible.', entity: 'Product', recordIds: ['product-organizer'] },
+      { key: 'catalog-populated', state: 'populated', description: 'Three products are visible.', entity: 'Product', recordIds: ['product-organizer', 'product-watch', 'product-mist'] },
       { key: 'catalog-loading', state: 'loading', description: 'Products are loading.' },
       { key: 'catalog-empty', state: 'empty', description: 'No products are visible.' },
       { key: 'catalog-error', state: 'error', description: 'Products failed to load.' },

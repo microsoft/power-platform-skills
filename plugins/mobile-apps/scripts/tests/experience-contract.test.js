@@ -32,8 +32,14 @@ const passengerShoppingBrief = [
   'Create a mobile app for showcasing inventory items to flight passengers.',
   'This app will be used in flight for selling travel accessories, beauty products and watches.',
   'The app should have clean aesthetics, should be accessible and easy to use.',
-  'Ui screen only.',
 ].join('\n');
+
+const exactBenchmarkBriefs = {
+  passenger: passengerShoppingBrief,
+  gym: 'Create an app for maintining and auditing equipment at gym user should be able to get maintence records of equipment by scanning a qr code, the company owns multiple gyms, the app should support tracking issues, on going repairs, upcoming maintennce and warranty for equipments',
+  assets: 'Create a mobile app for tracking company inventory, app should support scanning, printing barcodes, Track warranty ownerships or IT assets. Support monthly inspections and repair and updates status',
+  offlineReceiving: 'Design a mobile-first, offline field receiving solution. Enable field logisticians and inspectors to view expected shipments, scan barcodes or QR codes, record received and damaged quantities, capture inspection results, enter batch and expiry data, photograph damage, record GPS location, obtain recipient confirmation, and continue working with limited connectivity.',
+};
 
 test('brief-only contracts choose entry mode without a visual reference', () => {
   for (const [name, brief, entryMode] of briefCases) {
@@ -62,21 +68,54 @@ test('passenger shopping briefs resolve to local-first product discovery, not op
     assert.equal(contract.entryMode, 'discovery');
     assert.equal(contract.primarySurface, 'product-led-discovery');
     assert.deepEqual(contract.contentModel, ['products', 'categories', 'media', 'cart']);
-    assert.deepEqual(contract.assetPolicy, { connectivity: 'offline-preferred', media: 'local-first' });
+    assert.deepEqual(contract.assetPolicy, { connectivity: 'network-optional', media: 'local-first' });
     assert.equal(contract.navigationModel, 'stack');
     assert.equal(contract.signatureMotifs.includes('cart-action'), true);
     assert.equal(contract.forbiddenDefaults.includes('warehouse-operations'), true);
     assert.equal(contract.forbiddenDefaults.includes('airline-operations'), true);
     assert.equal(contract.promptEvidence.audience.some((span) => span.signal === 'consumer'), true);
     assert.equal(contract.promptEvidence.primaryJob.some((span) => span.signal === 'commerce'), true);
-    assert.equal(contract.promptEvidence.assetPolicy.some((span) => span.signal === 'offline'), true);
+    assert.equal(contract.promptEvidence.assetPolicy.some((span) => span.signal === 'offline'), false);
+    assert.deepEqual(validateExperienceContract(contract), []);
+  }
+});
+
+test('exact UX benchmark briefs preserve distinct product-appropriate Home contracts', () => {
+  const passenger = deriveExperienceFromBrief(exactBenchmarkBriefs.passenger);
+  assert.equal(passenger.entryMode, 'discovery');
+  assert.equal(passenger.primarySurface, 'product-led-discovery');
+  assert.equal(passenger.assetPolicy.connectivity, 'network-optional');
+  assert.ok(passenger.forbiddenDefaults.includes('warehouse-operations'));
+  assert.ok(passenger.forbiddenDefaults.includes('airline-operations'));
+
+  const gym = deriveExperienceFromBrief(exactBenchmarkBriefs.gym);
+  assert.equal(gym.entryMode, 'workflow');
+  assert.equal(gym.primarySurface, 'task-led-workflow');
+  assert.equal(gym.assetPolicy.connectivity, 'network-optional');
+  assert.notEqual(gym.primarySurface, 'capture-led-utility');
+
+  const assets = deriveExperienceFromBrief(exactBenchmarkBriefs.assets);
+  assert.equal(assets.entryMode, 'overview');
+  assert.equal(assets.primarySurface, 'decision-led-overview');
+  assert.equal(assets.assetPolicy.connectivity, 'network-optional');
+  assert.notEqual(assets.primarySurface, 'capture-led-utility');
+
+  const receiving = deriveExperienceFromBrief(exactBenchmarkBriefs.offlineReceiving);
+  assert.equal(receiving.entryMode, 'workflow');
+  assert.equal(receiving.primarySurface, 'task-led-workflow');
+  assert.equal(receiving.assetPolicy.connectivity, 'offline-preferred');
+  assert.equal(receiving.assetPolicy.media, 'local-first');
+  assert.notEqual(receiving.primarySurface, 'capture-led-utility');
+
+  for (const contract of [passenger, gym, assets, receiving]) {
+    assert.equal(contract.primaryScreen.route, '/(app)/home');
     assert.deepEqual(validateExperienceContract(contract), []);
   }
 });
 
 test('an explicit CDN-cached media decision overrides the inferred local-first media policy', () => {
   const contract = deriveExperienceFromBrief(passengerShoppingBrief, { mediaPolicy: 'remote-cdn-cached' });
-  assert.deepEqual(contract.assetPolicy, { connectivity: 'offline-preferred', media: 'remote-cdn-cached' });
+  assert.deepEqual(contract.assetPolicy, { connectivity: 'network-optional', media: 'remote-cdn-cached' });
   assert.equal(contract.assumptions.includes('Use the explicitly selected remote-cdn-cached media policy.'), true);
   assert.deepEqual(validateExperienceContract(contract), []);
   assert.throws(() => deriveExperienceFromBrief(passengerShoppingBrief, { mediaPolicy: 'unapproved-cdn' }), /mediaPolicy must be/);

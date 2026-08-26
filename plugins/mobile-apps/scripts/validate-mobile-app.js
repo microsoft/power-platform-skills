@@ -8,10 +8,15 @@ const path = require('node:path');
 const { domainModelRevision, validatePrototypeDomainModel } = require('./lib/prototype-domain-model');
 const { screenInputFingerprint, validateScreenArtifact } = require('./validate-screen-artifact');
 const { validateScreenBuildPack } = require('./validate-screen-build-pack');
+const { validateExperienceMedia } = require('./validate-experience-media');
+const { validateNavigationContinuity } = require('./validate-navigation-continuity');
+const { validateScreenShells } = require('./validate-screen-shells');
 const {
   validateActionState,
   validateCapabilityComposition,
   validateCrossScreenContinuity,
+  validatePrimaryExperience,
+  validateRuntimeStateCoverage,
   validateSemanticColorUsage,
   validateSignatureComponents,
   validateStaticLayoutBudgets,
@@ -199,7 +204,12 @@ function loadPack(projectRoot) {
 function validateTasksScope(projectRoot) {
   const pack = loadPack(projectRoot);
   const packValidation = validateScreenBuildPack(projectRoot, pack);
-  const errors = packValidation.issues.map((issue) => `[${issue.rule}] ${issue.message}`);
+  const errors = [
+    ...packValidation.issues,
+    ...validatePrimaryExperience(pack),
+    ...validateRuntimeStateCoverage(pack),
+    ...(Array.isArray(pack.navigation?.destinations) ? validateNavigationContinuity(pack) : []),
+  ].map((issue) => `[${issue.rule}] ${issue.message}`);
   return check('tasks', errors, { revision: pack.revision });
 }
 
@@ -228,6 +238,7 @@ function validateOneScreen(projectRoot, pack, screenId) {
     validateCapabilityComposition,
     validateSemanticColorUsage,
     validateStaticLayoutBudgets,
+    validateRuntimeStateCoverage,
   ]) {
     errors.push(...validator(pack, { projectRoot, screenIds: [screenId] }).map((item) => `[${item.rule}] ${item.message}`));
   }
@@ -239,7 +250,14 @@ function validateScreensScope(projectRoot, screenId = null) {
   const packValidation = validateScreenBuildPack(projectRoot, pack);
   if (packValidation.issues.length) return [check('screen-build-pack', packValidation.issues.map((issue) => `[${issue.rule}] ${issue.message}`))];
   if (screenId) return [validateOneScreen(projectRoot, pack, screenId)];
-  return pack.screens.map((screen) => validateOneScreen(projectRoot, pack, screen.id));
+  const sharedIssues = [
+    ...validateScreenShells(projectRoot),
+    ...validateExperienceMedia(projectRoot),
+  ];
+  return [
+    check('shared-screen-quality', sharedIssues.map((issue) => `[${issue.rule}] ${issue.message}`)),
+    ...pack.screens.map((screen) => validateOneScreen(projectRoot, pack, screen.id)),
+  ];
 }
 
 function validateTypecheckScope(projectRoot) {

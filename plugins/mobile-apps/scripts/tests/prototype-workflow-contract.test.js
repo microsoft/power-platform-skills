@@ -60,6 +60,7 @@ test('prototype creation uses the current planner and non-executable schema cont
   assert.match(skill, /prototype-domain-model\.json/);
   assert.match(skill, /resolve-navigation-contract\.js/);
   assert.match(skill, /@\/data/);
+  assert.match(skill, /validate-mobile-app\.js[\s\S]*--scope all --record/);
   assert.match(skill, /configure-prototype-runtime\.js[\s\S]*prototype/);
   assert.match(skill, /\.mobile-app\/state\.json/);
   assert.doesNotMatch(skill, /code-apps-native:/);

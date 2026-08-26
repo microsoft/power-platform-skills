@@ -91,6 +91,25 @@ test('rejects an operation with unknown fields or unsafe pagination', () => {
   assert.match(errors, /requires bounded or cursor pagination/);
 });
 
+test('requires representative but compact fixtures for ordinary list operations', () => {
+  const sparse = model();
+  sparse.operations[0].pagination.maximumExpectedCount = 20;
+  sparse.operations[0].pagination.boundedReason = 'The production catalog is larger than the compact fixture.';
+  assert.match(validatePrototypeDomainModel(sparse).errors.join('\n'), /at least 3 representative records/);
+
+  const oversized = model();
+  const product = structuredClone(oversized.fixtures.Product[0]);
+  oversized.fixtures.Product = Array.from({ length: 13 }, (_, index) => ({
+    ...product,
+    id: `product-${index}`,
+    name: `Travel organizer ${String.fromCharCode(65 + index)}`,
+  }));
+  oversized.entities.find((entity) => entity.key === 'Product').estimatedPrototypeRows = 13;
+  oversized.operations[0].pagination.maximumExpectedCount = 20;
+  oversized.operations[0].pagination.boundedReason = 'The production catalog is larger than the compact fixture.';
+  assert.match(validatePrototypeDomainModel(oversized).errors.join('\n'), /keep prototype fixtures compact/);
+});
+
 test('validates file fields as structured domain files', () => {
   const value = model();
   value.entities.find((entity) => entity.key === 'Product').fields.push({ key: 'specification', displayName: 'Specification', type: 'file', required: false });
