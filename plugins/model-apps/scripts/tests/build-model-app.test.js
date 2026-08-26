@@ -923,3 +923,72 @@ test('an unprovisioned languageCode halts the real provisionEntities path too', 
   assert.match(String(message), /1036 is not provisioned/,
     `the halt must surface from provisionEntities; got: ${JSON.stringify(r)}`);
 });
+
+// `readOrgLanguageCode` is the #455 counterpart to `readProvisionedLanguages`: it answers "what is
+// this organization's base language" at TRANSPORT level, because `MakerSdkOptions.languageCode` is a
+// construction-time option and the SDK that would normally read it does not exist yet.
+//
+// Its dangerous failure mode is the same one, and it is worth stating: `dataverseRequest` resolves
+// { status, data } for EVERY HTTP response rather than throwing, so without a status gate an error
+// envelope parses as "no rows" and silently becomes the 1033 fallback — the exact wrong answer in
+// the non-English org this whole line of work exists for.
+test('readOrgLanguageCode returns null (not a fallback) for a non-2xx response', async () => {
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  // Live-verified 200 shape:
+  //   { status: 200, data: { '@odata.context': '...', value: [ { languagecode: 1033, organizationid: '…' } ] } }
+  const responses = {
+    ok: { status: 200, data: { value: [{ '@odata.etag': 'W/"1"', languagecode: 1031, organizationid: 'x' }] } },
+    forbidden: { status: 403, data: { error: { message: 'no access' } } },
+    unauthorized: { status: 401, data: null },
+    serverError: { status: 500, data: 'Internal Server Error' },
+    empty: { status: 200, data: { value: [] } },
+    noValue: { status: 200, data: {} },
+    // A 4xx whose body happens to be well-shaped: decided by STATUS alone, like the sibling reader.
+    forbiddenButShaped: { status: 403, data: { value: [{ languagecode: 1031 }] } },
+  };
+  const call = (k) => readOrgLanguageCode('https://contoso.crm.dynamics.com', async () => responses[k]);
+
+  assert.strictEqual(await call('ok'), 1031, 'the base language is read from value[0].languagecode');
+  for (const bad of ['forbidden', 'unauthorized', 'serverError', 'empty', 'noValue']) {
+    assert.strictEqual(await call(bad), null, `"${bad}" must read as unknown, never as a language`);
+  }
+  assert.strictEqual(await call('forbiddenButShaped'), null,
+    'a non-2xx is rejected on STATUS even when the body carries a usable row');
+  assert.strictEqual(
+    await readOrgLanguageCode('https://contoso.crm.dynamics.com', async () => { throw new Error('ENOTFOUND'); }),
+    null, 'a throwing transport is unknown too — never a build failure'
+  );
+});
+
+test('readOrgLanguageCode rejects values that are not real LCIDs', async () => {
+  // An LCID is a 16-bit value. A malformed or out-of-range number reaching the SDK constructor would
+  // stamp every FormXML label with a language Dataverse cannot serve, so garbage must read as
+  // "unknown" and fall back, not be passed through.
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  const at = (languagecode) => readOrgLanguageCode('https://x', async () => ({ status: 200, data: { value: [{ languagecode }] } }));
+  for (const bad of [0, -1, 65536, 1e9, null, undefined, 'de-DE', '', NaN, 1033.5, {}, []]) {
+    assert.strictEqual(await at(bad), null, `languagecode=${JSON.stringify(bad)} must be rejected`);
+  }
+  // Numeric strings are accepted — Dataverse has returned both shapes for Number-typed columns.
+  assert.strictEqual(await at('1036'), 1036, 'a numeric string is a valid LCID');
+  assert.strictEqual(await at(65535), 65535, 'the 16-bit boundary is valid');
+});
+
+test('readOrgLanguageCode queries the PLURAL entity set', async () => {
+  // The singular `organization` 404s on the Web API — a live-verified trap that already cost this
+  // project once. A stub that ignores its arguments would never catch the regression, so assert the
+  // request itself.
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  const calls = [];
+  await readOrgLanguageCode('https://contoso.crm.dynamics.com', async (...args) => {
+    calls.push(args);
+    return { status: 200, data: { value: [{ languagecode: 1033 }] } };
+  });
+  assert.strictEqual(calls.length, 1, 'exactly one round trip');
+  const [envUrl, method, apiPath] = calls[0];
+  assert.strictEqual(envUrl, 'https://contoso.crm.dynamics.com');
+  assert.strictEqual(method, 'GET');
+  assert.match(apiPath, /^organizations\?/, 'PLURAL entity set — the singular form 404s');
+  assert.match(apiPath, /\$select=languagecode/, 'projects only the column it needs');
+  assert.match(apiPath, /\$top=1/, 'one row is enough; there is exactly one organization row');
+});
