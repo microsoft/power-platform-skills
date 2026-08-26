@@ -3,10 +3,11 @@
 The design system for Power Pages code sites.
 `create-site` uses it to write the experience brief and pick tokens (Phase 3), fill the plan (Phase 4), and build (Phase 5).
 `exceptional-web-design` uses it as the standard an existing site is reviewed against.
-Two sibling references complete it:
+Three sibling references complete it:
 
 - [`page-blueprints.md`](page-blueprints.md) - what goes on each page and in what order: first screen, hero patterns, narrative blueprints, section rhythm, copy.
 - [`design-critique.md`](design-critique.md) - how a site is judged from screenshots: the capture, the two-pass critique, and the rubric.
+- [`bidirectional-design.md`](bidirectional-design.md) - mixed-content, asset, component, exception, and testing rules for designs that work in both LTR and RTL.
 
 ## The bar
 
@@ -172,6 +173,7 @@ List the color tokens in the plan's `PALETTE_DATA`.
 
 Pick a deliberate pair with a clear role split: a display face with character for headlines, and a highly legible body face for reading and UI.
 Add a mono face only when the site shows data, codes, or reference numbers.
+Typography must support every configured writing script. Preserve the chosen brand character across script profiles, but do not force a Latin-only display font onto Arabic, Hebrew, Indic, CJK, or other scripts. Avoid fixed text heights, Latin-oriented letter spacing on cursive scripts, and hierarchy that depends on uppercase or italics. Use locale-appropriate quotation marks in translated content.
 
 **Ramp.**
 The hero headline is at least 3x the body size at every width, so check the `clamp()` minimum against `--text-base` (e.g., 3 x 1.0625rem = 3.1875rem).
@@ -282,6 +284,8 @@ For each, decide the container and gutter, column count, type scale (the `clamp(
 - Touch targets are at least 44x44px for primary controls and never under 24x24px (WCAG 2.2 SC 2.5.8).
 - Tables keep task completion on mobile through labeled stacked rows or horizontal scroll with a sticky first column.
 - At 1920px, cap content width and let atmosphere fill the edges; lines never stretch past `--measure`.
+- Use logical spacing, border, alignment, and inset properties so the same design follows LTR and RTL without a second stylesheet.
+- Test expanded and pseudo-opposite-direction content; buttons, tabs, validation, and headings must wrap without clipping.
 
 ## 10. Accessibility
 

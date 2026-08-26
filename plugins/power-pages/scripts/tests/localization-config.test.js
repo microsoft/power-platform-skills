@@ -8,6 +8,7 @@ const path = require('path');
 
 const {
   LOCALIZATION_CAPABILITIES,
+  classifyLocaleDirections,
   detectFramework,
   detectLocalization,
   detectSiteLanguage,
@@ -314,6 +315,7 @@ test('rejects unsafe locale syntax before BCP-47 canonicalization', () => {
 test('resolves a single locale, direction, and canonical display names', () => {
   const spanish = resolveLocale('es-es');
   assert.equal(spanish.locale, 'es-ES');
+  assert.equal(spanish.script, 'Latn');
   assert.equal(spanish.direction, 'ltr');
   assert.equal(spanish.languageName, 'Spanish');
   assert.equal(spanish.localeName, 'European Spanish');
@@ -368,6 +370,89 @@ test('resolve-locale CLI returns canonical display names for create-site', () =>
   assert.equal(output.localeName, 'Brazilian Portuguese');
   assert.equal(output.nativeLanguageName, 'português');
   assert.equal(output.nativeLocaleName, 'português (Brasil)');
+});
+
+test('resolves direction from explicit or likely writing script', () => {
+  const cases = [
+    ['ar-SA', 'Arab', 'rtl'],
+    ['az-Latn', 'Latn', 'ltr'],
+    ['az-Arab', 'Arab', 'rtl'],
+    ['ku-Latn', 'Latn', 'ltr'],
+    ['ku-Arab', 'Arab', 'rtl'],
+    ['pa-Guru', 'Guru', 'ltr'],
+    ['pa-Arab', 'Arab', 'rtl'],
+    ['sd-Deva', 'Deva', 'ltr'],
+    ['sd-Arab', 'Arab', 'rtl'],
+    ['ar-Latn', 'Latn', 'ltr'],
+    ['wo-Gara', 'Gara', 'rtl'],
+    ['phn-Phnx', 'Phnx', 'rtl'],
+  ];
+
+  for (const [locale, script, direction] of cases) {
+    const result = resolveLocale(locale);
+    assert.equal(result.valid, true, locale);
+    assert.equal(result.script, script, locale);
+    assert.equal(result.direction, direction, locale);
+  }
+});
+
+test('classifies locale sets by their resolved directions', () => {
+  assert.equal(
+    classifyLocaleDirections(['en-US', 'fr-FR']).classification,
+    'ltr-only'
+  );
+  assert.equal(
+    classifyLocaleDirections(['ar-SA', 'he-IL']).classification,
+    'rtl-only'
+  );
+  assert.equal(
+    classifyLocaleDirections(['en-US', 'ar-SA']).classification,
+    'mixed'
+  );
+});
+
+test('validates bidirectional readiness and unavailable locale manifest fields', () => {
+  const manifest = {
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'i18next',
+    packageVersion: '25.0.0',
+    defaultLocale: 'en-US',
+    locales: ['en-US', 'ar-SA'],
+    translationMethod: 'agent',
+    lastOperation: 'add',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    generatedFiles: [],
+    managedFiles: [],
+    resourcePaths: {},
+    adoptedExistingConfiguration: false,
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      findings: [],
+    },
+  };
+
+  assert.deepEqual(validateLocalizationManifestShape(manifest), []);
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      unavailableLocales: undefined,
+    }).join('\n'),
+    /Pending bidirectional remediation requires at least one unavailable locale/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: { status: 'unknown', findings: [] },
+    }).join('\n'),
+    /bidirectionalReadiness\.status must be/
+  );
 });
 
 test('detects the persisted single-site language from document attributes', (t) => {

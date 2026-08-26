@@ -17,6 +17,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Dataverse-backed validation** must stay opt-in for local runs only. Do not require live Dataverse connectivity in CI workflows or default test runs; gate it behind explicit local flags such as `--validate-dataverse-relationships`.
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
+- **Bidirectional by default** — All generated sites must follow `references/bidirectional-design.md`: resolve direction from the locale's writing script, prefer CSS logical properties, isolate mixed-direction content, use script-capable font profiles, and classify directional assets instead of mirroring everything. Intentional physical CSS requires an adjacent `/* bidi-physical: <specific reason>; verify=ltr,rtl */` directive. Run `scripts/audit-bidirectional-readiness.js` for deterministic readiness findings.
 - **Local scaffold templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during from-scratch scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
 - **Batch browser work into one script call** - every tool call re-sends the whole conversation, and each Playwright MCP `browser_navigate` also returns a full page snapshot, so per-page MCP calls multiply cost and trigger context compactions. `create-site` captures every route at both widths with one `capture-design-review.js` call and opens the screenshots in one turn; prefer that pattern whenever a skill needs the same browser work across several pages. Keep the design review inline rather than in a subagent: a fresh context re-loads every screenshot, which raises cost without improving the review.
 - **Browser review scripts** (`capture-design-review.js`, `axe-audit.js`) share their boundaries through `scripts/lib`, so add new browser work there rather than beside them:
@@ -47,6 +48,7 @@ agents/
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
   detect-framework.js          ← Reports explicit-project framework evidence without guessing ambiguous projects
+  audit-bidirectional-readiness.js ← Audits generated source for deterministic bidirectional blockers and review findings
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
@@ -57,6 +59,7 @@ scripts/
 references/                    ← Shared reference docs used by multiple skills
   odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
   bcp47-subtags.json           ← Bundled IANA Language Subtag Registry snapshot
+  bidirectional-design.md      ← Shared LTR/RTL design, typography, content, component, coordinator, and testing standard
   i18n-frameworks.md           ← Framework localization modes, packages, resources, selector behavior, and manifest schema
   dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
   framework-conventions.md     ← Framework detection, paths, route discovery
@@ -71,7 +74,7 @@ skills/
   create-site/
     SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
-    scripts/validate-site.js   ← Node script validating generated sites
+    scripts/validate-site.js   ← Validates generated sites, root locale direction, and deterministic bidirectional blockers
   exceptional-web-design/
     SKILL.md                   ← Read-only design review of an existing site (URL or folder) against the shared design references
   deploy-site/
@@ -88,7 +91,7 @@ skills/
     scripts/validate-seo.js    ← Node script validating SEO assets (robots.txt, sitemap.xml, meta tags)
   add-localization/
     SKILL.md                   ← SPA localization workflow for React, Vue, Angular, and Astro
-    scripts/validate-localization.js ← Validates manifest, locales, resources, tokens, selector, lang, and dir
+    scripts/validate-localization.js ← Validates manifest, resources, selectors, lang/dir, opposite-direction readiness, and runtime coordinators
   activate-site/
     SKILL.md                   ← Site activation/provisioning skill definition
     scripts/activate-site.js   ← Activates a site via PP API + polls status
