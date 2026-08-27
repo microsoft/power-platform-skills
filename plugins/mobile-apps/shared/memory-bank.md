@@ -18,8 +18,8 @@ This file is the per-project notebook the agent maintains across `/create-mobile
 | Working directory | |
 | Plugin version that created the project | |
 | Created | _<ISO date>_ |
-| Metro terminal id | _<background-shell id from Step 12 — `/debug-app` reads this terminal's output for symptom-driven native debugging only. If empty/dead, re-launch with `cd <working_dir> && npm run dev` and update this field._ |
-| Metro launch command | _e.g. `cd <working_dir> && npm run dev`_ |
+| Metro logs | `.powernative/metro-logs/` — sanitized source used by `/debug-app`; do not copy ephemeral values from log filenames into this file |
+| Metro launch command | `npm run dev` |
 
 ## Power Platform context
 

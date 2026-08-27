@@ -34,6 +34,10 @@ jobs:
               with:
                   node-version: ${{ matrix.node }}
 
+            - name: syntax-check-mobile-template
+              shell: bash
+              run: node --check plugins/mobile-apps/template/metro.config.js
+
             - name: run-mobile-apps-script-tests
               shell: bash
               working-directory: plugins/mobile-apps

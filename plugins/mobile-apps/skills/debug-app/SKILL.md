@@ -1,8 +1,8 @@
 ---
 name: debug-app
-description: Use when the user has finished building a mobile app, started it with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive terminal-log diagnostics — injects temporary console.log statements at data-path boundaries, reads Metro terminal output, and cleans up logs after the root cause is fixed. Otherwise polls the Metro terminal every 5s, classifies errors using an 8-category table, fixes inline or routes to the right skill, verifies each fix from terminal output, and exits after 3 consecutive clean polls. Foreground loop — blocks the conversation while running. Run only after the app is loaded.
+description: Use when the user has finished building a mobile app, started Metro with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive persisted-log diagnostics — injects temporary console.log statements at data-path boundaries, reads the sanitized `.powernative/metro-logs/` log, and cleans up logs after the root cause is fixed. Otherwise polls that log with a durable byte cursor, classifies errors using an 8-category table, fixes inline or routes to the right skill, verifies each fix from new log output, and exits after 3 consecutive clean polls. Foreground loop — blocks the conversation while running. Run only after the app is loaded.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch, mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search
 model: sonnet
 ---
 
@@ -10,42 +10,45 @@ model: sonnet
 
 # Debug App — Monitor & Fix
 
-Monitor the running app by reading the Metro dev-server terminal output, detect runtime and bundle errors, and fix them autonomously by editing the affected files (or routing to the right skill when the fix belongs in a domain like Dataverse schema or auth registration). For silent failures, inject temporary `console.log` statements at data-path boundaries, read the Metro terminal for output, then clean them up after the root cause is fixed. Modeled on the upstream `app-debugger.agent.md` pattern — foreground loop, 5-second cadence, exit on 3 consecutive clean polls.
+Monitor the running app through the project-local `.powernative/metro-logs/` files written by `metro.config.js`, detect runtime and bundle errors, and fix them autonomously by editing the affected files (or routing to the right skill when the fix belongs in a domain like Dataverse schema or auth registration). For silent failures, inject temporary `console.log` statements at data-path boundaries, read only newly appended log bytes, then clean the traces after the root cause is fixed. Modeled on the upstream `app-debugger.agent.md` pattern — foreground loop, bounded polling, exit on 3 consecutive clean polls.
 
-> **Dev-client limitation:** the standalone dev client outputs app/runtime logs, React errors, and Metro bundler output to the terminal running `npm run dev`. This includes host runtime diagnostics that use strings such as `[AuthProvider] MSAL init failed:`, `[bridge] fetch THREW for`, `[bridge] HTTP <status> for`, `[addAadAppToConnectionAcl] failed HTTP <status> for connection`, `[useConnectionRefs] could not verify connection ACLs; treating existing connections as setup-required`, and `[PAHost][ErrorBoundary] Unhandled JS error:`. There is no separate device log stream. All diagnosis happens by reading that terminal and, where needed, injecting strategic trace statements into source files.
+> **Dev-client limitation:** the standalone dev client sends app/runtime logs, React errors, host diagnostics, and Metro bundler output through Metro. The template's `metro.config.js` writes Metro terminal output and HTTP bundle failures into `.powernative/metro-logs/`; there is no separate device log source. Host diagnostics include strings such as `[AuthProvider] MSAL init failed:`, `[bridge] fetch THREW for`, `[bridge] HTTP <status> for`, `[addAadAppToConnectionAcl] failed HTTP <status> for connection`, `[useConnectionRefs] could not verify connection ACLs; treating existing connections as setup-required`, and `[PAHost][ErrorBoundary] Unhandled JS error:`.
 
 ## Subcommands (parsed from `$ARGUMENTS`)
 
 | Form | Behavior |
 |---|---|
-| `/debug-app` (no args) | **Default — terminal log-driven mode.** Run Phase 0 (startup check), enter monitor loop. Log source is the Metro terminal (`BashOutput` on the `$METRO_TERMINAL_ID` recorded in `memory-bank.md` by `/create-mobile-app` Step 12). One read covers Metro bundler errors, app/runtime log lines (including host diagnostics), and red-box stack traces. If the terminal ID is not in `memory-bank.md`, ask the user which terminal is running `npm run dev` before starting. |
+| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, locate the latest live `.powernative` Metro log by port/PID, then enter the monitor loop by reading bytes from that file. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app status` | Print current state (last poll, fixes applied this session, unresolved errors). Do NOT enter loop. |
-| `/debug-app stop` | If a loop is in progress, the user can type "stop" or this command to exit. State files preserved at `.claude/debug-app/`. |
+| `/debug-app status` | Locate the latest `.powernative` log, parse its PID/port from the filename, then print log path, dev-server port, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
+| `/debug-app stop` | Stop only the foreground debug loop and preserve `.claude/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
 
 **Dispatch rule:** if `$ARGUMENTS` is non-empty and is not one of the reserved subcommand tokens (`status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`), treat the entire string (everything after the command name; outer quotes optional) as the symptom and use symptom-driven mode. For `help` / `--help` / `-h`, print the subcommands table above and exit.
 
-**Tip — "play around then debug":** in primary mode, `BashOutput($METRO_TERMINAL_ID)` returns Metro output accumulated since the last read. So if something weird just happened, keep using the app the way you would normally — then run `/debug-app` (or `/debug-app "<what you saw>"`) and the very first cycle will see the entire history of your session, not just what arrives after the skill starts. No need to reproduce the bug under the agent's eye.
+**Tip — "play around then debug":** Metro persists recent app output in `.powernative/metro-logs/` even across chat/editor restarts. If something weird just happened, keep using the app normally, then run `/debug-app` or `/debug-app "<what you saw>"`. The first cycle reads the latest persisted log window; subsequent cycles read only bytes appended after the saved cursor.
 
 ## Core Principles
 
 - **Foreground autonomous loop** — Once started, this skill owns the conversation until 3 consecutive clean polls confirm the app is healthy, the user types `stop`, or the escalation rule trips. **Do not run other skills concurrently** — they'll queue behind the loop.
-- **Run AFTER the app is loaded** — `npm run dev` must be running and the simulator/device must have the app open. Phase 0 verifies this; the skill stops cleanly if no app is detected.
-- **Native-only runtime target** — The app must be loaded in a native dev client on a device or simulator; Metro terminal output is the log source for that native session.
-- **No web or direct Metro probes** — Do not use React Native Web, browser automation, `curl`, `fetch`, `WebFetch`, or any direct request to a Metro/localhost endpoint for runtime diagnosis. Read only the Metro terminal and source files.
+- **Run AFTER the app is loaded** — Metro must be running through `npm run dev` and the simulator/device must have the app open. Phase 0 verifies that a live `.powernative` log exists; the skill stops cleanly if no app is detected.
+- **Native-only runtime target** — The app must be loaded in a native dev client on a device or simulator; `.powernative/metro-logs/` is the authoritative log source for that native session.
+- **No web or direct Metro probes** — Do not use React Native Web, browser automation, `curl`, `fetch`, `WebFetch`, or any direct request to a Metro/localhost endpoint for runtime diagnosis. Read only the `.powernative` log and source files.
 - **No screen-by-screen verification** — Do not crawl routes or validate every screen. In symptom mode, focus only on the user-reported workflow and the terminal/source evidence needed to diagnose it.
 - **One fix at a time** — Fully resolve one issue (context → fix → type-check → reload → re-poll) before starting the next. No batching.
-- **Working-dir state** — All session state lives in `.claude/debug-app/` (gitignored): `fixes.md` for audit log, `unresolved.md` for escalations, `injected-logs.md` for tracking injected console.log statements. Survives across runs.
-- **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__microsoft-learn__microsoft_docs_search`, then general web search.
+- **Working-dir state** — Debug audit state lives in `.claude/debug-app/`: `fixes.md`, `unresolved.md`, `injected-logs.md`, and `metro-cursor.json`. Metro logs live in the already-ignored `.powernative/metro-logs/`. Both survive chat/editor restarts.
+- **The port is the log identity** — the dev-server port is the number the QR encodes, the device dials, and this skill verifies. Liveness is a socket probe (does the log's PID still hold that port?), never terminal scrollback. A `port-taken` status means the log belongs to a dead session and must not be diagnosed.
+- **Never fix history** — the log is a record of the past, so an error in it is not proof of a current problem. Errors found in the baseline window must pass the Phase 0.2.1 supersession check before any code is edited. Editing working code to chase an already-resolved error is a worse outcome than reporting nothing.
+- **Host terminal APIs are optional only** — If the current host already exposes Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative `.powernative` log cursor too.
+- **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search`, then general web search.
 
 ## Workflow — Task List First
 
 Before entering the monitor loop, write a task list and keep it up to date:
 
 ```
-- [ ] Verify dev server is running (BashOutput on Metro terminal — expect Metro banner)
-- [ ] Capture baseline terminal state (read BashOutput, note most recent activity)
-- [ ] (Symptom mode only) Phase 0.5: parse symptom → ask user to navigate → inject console.logs → read terminal → walk data path → clean up logs
+- [ ] Verify the latest `.powernative` Metro log exists and matches a live PID/port
+- [ ] Capture baseline log state (read latest log, save byte cursor)
+- [ ] (Symptom mode only) Phase 0.5: parse symptom → ask user to navigate → inject console.logs → read new log bytes → walk data path → clean up logs
 - [ ] Monitoring cycle 1: collect → classify → fix if needed
 - [ ] Monitoring cycle 2: collect → classify → fix if needed
 - [ ] Monitoring cycle 3: collect → classify → fix if needed
@@ -61,19 +64,36 @@ Mark each cycle complete (clean OR fixed) before starting the next.
 
 Before entering the loop:
 
-### 0.0 Resolve the Metro terminal
+### 0.0 Resolve the project-local Metro log
 
-The Metro terminal is the **only** log source. The dev-player routes all JS output there.
+Determine `<working_dir>` from `--working-dir` when present, otherwise use the current app root. Define:
 
-1. Read `memory-bank.md` for the `Metro terminal id:` line (written by `/create-mobile-app` Step 12).
-2. If found, call `BashOutput` against that id once. If it returns any Metro output (even just the banner), set `$METRO_TERMINAL_ID` and continue.
-3. If `memory-bank.md` has no terminal id, or `BashOutput` returns "shell not found" / "no such background shell": ask the user:
-   > "Which terminal is running `npm run dev`? I need its terminal ID to read Metro logs. If you started it in VS Code, look for the active terminal tab name."
-   Wait for the user to provide the ID, then retry `BashOutput` against the provided id. Set `$METRO_TERMINAL_ID` and continue.
-
-Record the resolved id in `fixes.md`:
+```bash
+LOG_DIR="<working_dir>/.powernative/metro-logs"
+LOG_PATH="$(ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null | head -1)"
 ```
-[<HH:MM:SS>] Log source — Metro terminal $METRO_TERMINAL_ID
+
+Parse `pid` and `port` from `basename "$LOG_PATH"`, which has the shape `metro-<timestamp>-pid-<pid>-port-<port>.log`. When `port` is numeric, optionally verify the listener with the host shell (`lsof -nP -iTCP:<port> -sTCP:LISTEN -t` on macOS/Linux, `netstat -ano -p tcp` on Windows). Do not persist terminal IDs or depend on terminal output.
+
+Branch as follows:
+
+| Status | Meaning | Action |
+|---|---|---|
+| Log exists, PID is alive, and either port is unknown or the port probe is unavailable | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
+| Log exists and PID still owns the logged port | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
+| Log exists, PID is gone, and another process owns the logged port | Do NOT diagnose from this log. Tell the user which PID holds the port and ask them to restart `npm run dev`. |
+| Log exists but PID/port contradict each other | The device may be talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
+| No log exists and `metro.config.js` does not directly import `@microsoft/power-apps-native-host/metro-logger`, or `package.json` does not require `@microsoft/power-apps-native-host` `^0.2.26` or newer | This project predates project-local Metro logging. Stop and report both missing contract pieces. Do not enter a restart loop or edit customer-owned config from `/debug-app`; the user must adopt the current template's Metro config and host dependency first. |
+| No log exists and the Metro config/dependency contract is current | Tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
+
+The port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test.
+
+If no `.powernative` log exists but the host exposes a live Metro terminal, that output may explain what is running, but do not ask for or store its terminal ID and do not enter the continuous monitor loop against it. Ask the user to restart with `npm run dev` so Metro config creates the log.
+
+Record the stable source in `fixes.md`:
+
+```text
+[<HH:MM:SS>] Log source — <logPath> (pid <pid>, port <port>)
 ```
 
 ### 0.1 Ensure state directory
@@ -83,6 +103,7 @@ mkdir -p .claude/debug-app
 touch .claude/debug-app/fixes.md
 touch .claude/debug-app/unresolved.md
 touch .claude/debug-app/injected-logs.md
+touch .claude/debug-app/metro-cursor.json
 rm -f .claude/debug-app/symptom-state    # per-session — Phase 0.5 rewrites it if symptom mode is active
 ```
 
@@ -94,38 +115,106 @@ If `fixes.md` is empty, write a session header:
 
 ### 0.2 Verify Metro bundled and the app is running
 
-Branch on the source resolved in 0.0.
+Read a bounded baseline window and return a real byte cursor:
 
-**If `$METRO_TERMINAL_ID` is set (primary path):**
+```bash
+node - "$LOG_PATH" 262144 <<'NODE'
+const fs = require('node:fs');
+const [file, maxText] = process.argv.slice(2);
+const maxBytes = Number(maxText);
+const size = fs.statSync(file).size;
+const start = Math.max(0, size - maxBytes);
+const fd = fs.openSync(file, 'r');
+const buffer = Buffer.alloc(size - start);
+const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+fs.closeSync(fd);
+process.stdout.write(JSON.stringify({
+   cursor: start,
+   nextCursor: start + bytesRead,
+   truncated: start > 0,
+   output: buffer.subarray(0, bytesRead).toString('utf8')
+}, null, 2));
+NODE
+```
 
-Call `BashOutput` on it once and scan the captured Metro output:
+Parse `output`, `cursor`, `nextCursor`, and `truncated`; use the `pid`, `port`, and `logPath` resolved in Phase 0.0. Scan `output`:
 
 - Most recent error-class line is `SyntaxError`, `Unable to resolve module`, `transform failed`, or `error: Bundling failed` → bundle is broken. Treat as a Step B "Import / Bundle" critical error and route through Step D immediately. Do NOT enter the steady-state loop until the bundle is healthy.
 - Output contains `Bundling complete` / `iOS Bundled` / `Android Bundled` with no later error-class line → Metro is healthy. Proceed.
-- Output contains a Metro banner (`Metro waiting on`, `Logs for your project`) but no native `Bundled` / `bundling` lines yet → Metro is up but no native client has connected. Tell the user:
+- Output contains a Metro banner (`Metro waiting on`, `Logs for your project`, or `› Metro:`) but no native `Bundled` / `bundling` lines yet → Metro is up but no native client has connected. Tell the user:
   > **Metro is running but no app is connected yet.** Open the app on a device or simulator, then re-run `/debug-app`.
   Stop here.
-- Output is empty, OR contains no Metro banner at all → the recorded shell is alive but Metro isn't running in it (the user repurposed the terminal). Tell the user:
-  > **Metro not detected in the recorded terminal.** Restart with `npm run dev` and re-run `/debug-app` — the new terminal id will be picked up from `memory-bank.md`.
-  Stop here.
+- Output is empty despite `status.running: true` → Metro has not emitted enough state yet. Tell the user to wait for the native URL, then re-run `/debug-app`; do not guess readiness.
 
-**If `$METRO_TERMINAL_ID` is NOT set:**
+If `truncated: true`, the baseline covers only the latest 256 KiB. Record that older history was omitted; do not claim the full session history was inspected.
 
-Ask the user:
-> "Which terminal is running `npm run dev`? Please provide the terminal ID so I can read Metro output."
+Before initializing the cursor, pass **all** classifiable entries in this initial
+window through Step B, including JS runtime errors, React warnings, network/API
+failures, native errors, and host diagnostics. Do not advance past a prior error
+just because it is not a bundle error. This preserves the promise that users can
+"play around, then debug" after a symptom already occurred.
 
-Wait for the user to reply. Set `$METRO_TERMINAL_ID` to the provided ID, call `BashOutput($METRO_TERMINAL_ID)` once, and continue with the checks above.
+### 0.2.1 Supersession — never re-fix an error the log already shows resolved
+
+The baseline window is **history, not current state**. It can contain errors that
+were already fixed, that the user resolved themselves, or that were transient.
+Fixing those is worse than doing nothing: it edits working code to chase a
+symptom that no longer exists, and the "fix" is unverifiable because the error
+cannot reproduce.
+
+So every error found in the **baseline window only** (not in later polls) is
+treated as *unconfirmed* until checked for supersession. Scan forward from the
+error line to the end of the window:
+
+| Error class | Superseded when a later line shows |
+|---|---|
+| Import / Bundle | `Bundling complete`, `iOS Bundled`, or `Android Bundled` |
+| Network / API | a 2xx for the same route/resource that previously failed |
+| JS runtime / React | a later app reload or successful bundle, and the error does not reappear after it |
+| Host diagnostic (`[AuthProvider]`, `[bridge]`, …) | a later success from the same subsystem (e.g. a token acquired after `acquireTokenSilent failed`) |
+
+Then:
+
+- **Superseded** → do NOT fix. Record it and move on:
+  ```
+  [<HH:MM:SS>] Observed (already resolved, not fixed) — <error summary> — superseded by <evidence line>
+  ```
+- **Not superseded** → the error is live. Fix it normally through Step D.
+- **Ambiguous** (no clear supersession evidence either way) → do NOT edit code yet. Ask the user whether they still see it, or wait for it to reappear in the next poll. An error that recurs after the cursor advances is confirmed live.
+
+This applies to the baseline window only. Anything appearing in a later
+`tail --cursor` poll is by definition new output and needs no supersession check.
+
+**Symptom mode overrides this.** If the user supplied a symptom, that is
+first-hand evidence the problem is current, so a matching baseline error is
+treated as live even when a later line would otherwise look like supersession.
 
 ### 0.3 Capture baseline
 
-Read the latest output from `BashOutput($METRO_TERMINAL_ID)`. Note the most recently bundled native platform (iOS / Android) and any recent runtime log lines. Append to `fixes.md`:
+Use the output from Phase 0.2. Note the most recently bundled native platform (iOS / Android) and any recent runtime log lines. Append to `fixes.md`:
 ```
 [<HH:MM:SS>] Baseline — last Metro activity: <1-line summary of most recent lines>
 ```
 
-### 0.4 Initialize cursor
+### 0.4 Initialize the durable byte cursor
 
-`BashOutput` maintains an internal stream cursor against `$METRO_TERMINAL_ID` — each call returns only output produced since the previous call. No separate cursor file is needed. The `.claude/debug-app/cursor` file is no longer used and can be ignored if present from a previous session.
+Write `.claude/debug-app/metro-cursor.json` using structured JSON:
+
+```json
+{
+   "logPath": "/absolute/project/.powernative/metro-logs/metro-<timestamp>-pid-12345-port-8081.log",
+   "pid": 12345,
+   "port": 8081,
+   "cursor": 12345,
+   "updatedAt": "<ISO timestamp>"
+}
+```
+
+Set `logPath`, `pid`, and `port` from Phase 0.0, and set `cursor` to `nextCursor` from Phase 0.2. On later invocations:
+
+- Same `logPath`, `pid`, and `port`, with the process still owning the port → reuse the saved cursor so old errors are not processed again.
+- Different `logPath`, `pid`, or `port` → a new Metro session is in play. Discard the old cursor and initialize from the latest log window.
+- `rotationLost: true` from Step A → accept the returned reset cursor and record the file shrink/replacement in `fixes.md`.
 
 ---
 
@@ -188,9 +277,9 @@ Record every injection in `.claude/debug-app/injected-logs.md`:
 ```
 
 Then tell the user:
-> "I've added diagnostic console.log statements. Please reload the app (press `r` in the Metro terminal), navigate to `<screen>`, and trigger the symptom (e.g., scroll the list, tap the button). Reply `done` when finished."
+> "I've added diagnostic console.log statements. Fast Refresh should apply them automatically. Navigate to `<screen>` and trigger the symptom (for example, scroll the list or tap the button). If the app does not refresh, reload it from the native dev-client menu. Reply `done` when finished."
 
-Wait for the user to reply, then call `BashOutput($METRO_TERMINAL_ID)` and filter for `[TRACE` lines.
+Wait for the user to reply, then run the Step A `tail --cursor` procedure, persist `nextCursor`, and filter the returned `output` for `[TRACE` lines.
 
 ### 0.5.4 Walk the data path from terminal output
 
@@ -231,7 +320,7 @@ Use the `[TRACE` lines to walk the chain:
 | `[TRACE service-response]` shows error string | Service threw — read the error; 401/403 = auth; 404 = wrong resource | Fix auth config or re-run `add-data-source` |
 | `[TRACE render]` N > 0 but list looks empty | Field name mismatch between model and screen | Fix screen field references to match the model |
 | `[TRACE handler-called]` never appears | `onPress` not wired or component not mounted | Read TSX, fix the event binding |
-| No `[TRACE` lines at all | Metro may have cached the old bundle | Ask user: stop Metro, run `npx expo start --clear`, reload |
+| No `[TRACE` lines at all | Metro may have cached the old bundle | Ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload the native app |
 
 Record the outcome in `.claude/debug-app/symptom-state` (single line: `resolved`, `flagged`, or `pending`).
 
@@ -273,11 +362,35 @@ Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the es
 
 ### Step A — Collect logs
 
-```
-BashOutput(bash_id=$METRO_TERMINAL_ID)
+Read `.claude/debug-app/metro-cursor.json`, rediscover the latest live `.powernative` log using Phase 0.0, and confirm the saved `logPath`, `pid`, and `port` still match. If any differ, return to Phase 0.2 and initialize a new baseline. Otherwise read newly appended bytes:
+
+```bash
+node - "$LOG_PATH" <saved-cursor> 262144 <<'NODE'
+const fs = require('node:fs');
+const [file, cursorText, maxText] = process.argv.slice(2);
+const cursor = Number(cursorText);
+const maxBytes = Number(maxText);
+const size = fs.statSync(file).size;
+const start = Number.isInteger(cursor) && cursor <= size ? cursor : 0;
+const fd = fs.openSync(file, 'r');
+const buffer = Buffer.alloc(Math.min(maxBytes, Math.max(0, size - start)));
+const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+fs.closeSync(fd);
+process.stdout.write(JSON.stringify({
+   cursor: start,
+   nextCursor: start + bytesRead,
+   rotationLost: start !== cursor,
+   truncated: start + bytesRead < size,
+   output: buffer.subarray(0, bytesRead).toString('utf8')
+}, null, 2));
+NODE
 ```
 
-`BashOutput` returns only output produced since the previous call against the same shell — its built-in stream cursor IS the cursor.
+Use only the returned `output` for this cycle. Immediately persist the current `logPath`, `pid`, `port`, `nextCursor`, and a new `updatedAt` to `metro-cursor.json`, even when `output` is empty or contains an error; this prevents duplicate processing after interruption and handles file replacement safely.
+
+Count a clean cycle only after observing a full 5-second interval with empty or non-error new output. If the log file changes, the PID/port check becomes contradictory, or the cursor resets because the file shrank/rotated, never count that cycle as clean.
+
+If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor in the same cycle. If `rotationLost: true`, record an explicit rotation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
 
 In the new output, surface as classifiable signal:
 - Runtime ` ERROR ` / ` WARN ` / ` LOG ` prefixes
@@ -395,7 +508,7 @@ Exit the loop. Do NOT auto-resume.
 
 > "⚠ Loop reached the iteration cap (50 cycles). Symptom may be intermittent OR a fix is regressing on every reload. See `.claude/debug-app/fixes.md` for the per-cycle log. Suggested next step: review the last 3 fixes for circular regressions, or re-run with a more specific symptom."
 
-If counter is < 3 AND the cap hasn't tripped, pause 5 seconds (`sleep 5` via Bash; on Windows without bash, `Start-Sleep -Seconds 5` via `pwsh -NoProfile -Command`), then return to Step A.
+If counter is < 3 AND the cap hasn't tripped, return to Step A on the next monitoring beat. Do not run shell `sleep` or a host-specific wait command; ordinary tool execution provides the cadence and the cursor prevents duplicate reads.
 
 ### Step D — If issues ARE found
 
@@ -403,7 +516,7 @@ Reset the consecutive-clean counter to 0. For each issue, work through the seque
 
 #### D1. Gather context
 
-Read the most recent output from `BashOutput($METRO_TERMINAL_ID)`. Note whether the log shows:
+Use the current Step A `output` block. Note whether the log shows:
 - A crash with a full stack trace (app is crashing)
 - A React error boundary message (component threw)
 - A network error or HTTP status (API/connector failure)
@@ -454,7 +567,7 @@ Append to `.claude/debug-app/fixes.md`:
 
 #### D3.1 Bundle / transform error fix recipes (Import / Bundle category)
 
-These recipes apply to errors classified as "Import / Bundle" in Step B. They are only visible in the Metro terminal (`BashOutput($METRO_TERMINAL_ID)`). Each recipe is opinionated: take the action listed if its precondition matches, otherwise fall through to the next.
+These recipes apply to errors classified as "Import / Bundle" in Step B. They are read from the persisted `.powernative` Metro log. Each recipe is opinionated: take the action listed if its precondition matches, otherwise fall through to the next.
 
 | Error pattern | Precondition | Action |
 |---|---|---|
@@ -462,7 +575,7 @@ These recipes apply to errors classified as "Import / Bundle" in Step B. They ar
 | `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
 | `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
-| `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: instruct the user to stop the Metro terminal and re-run with `npx expo start --clear`. Do NOT auto-restart Metro from the skill — it owns Metro's lifecycle (see Constraints). |
+| `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload. Never kill an unowned process. |
 | `transform failed` referencing a babel plugin (e.g., `[BABEL] ... unknown plugin "react-native-reanimated/plugin"`) | Error references `babel.config.js` | **Hand-off.** `babel.config.js` is project config (same constraint that protects `app.config.js`). Print the cited plugin and suggested fix order (e.g., "`react-native-reanimated/plugin` MUST be the LAST plugin in `babel.config.js` `plugins` array"); skip to next issue. |
 | `transform failed` without a babel reference | Generic transform failure (often a TS feature Metro's transformer can't handle) | Read the cited file, look for syntax that requires a specific TS lib (e.g., decorators, top-level await). If the issue is a known-bad pattern, surface and ask before fixing. Otherwise hand-off. |
 | `predev` script failure (e.g., `npm run generate-schemas` errored before `expo start` ran) | Bundle output shows the failure happened during the `predev` lifecycle hook | This is not a code edit — `power.config.json` or the connector setup is broken. **Hand-off:** route user to `/add-connector` (for Power Platform connectors) or `/add-dataverse` (for Dataverse). Do NOT edit `power.config.json` directly. |
@@ -490,7 +603,7 @@ If no cite can be located by step 4: log a structured note to `.claude/debug-app
 
 **Step 2 — Enrich understanding (do not skip).**
 
-- If the error contains a Microsoft-stack token (`AADSTS\d+`, `Dataverse`, `Power Platform`, `MSAL`, `Entra`, `Graph API`): query `mcp__microsoft-learn__microsoft_docs_search` with the exact code or token. A matching doc usually pins the fix exactly.
+- If the error contains a Microsoft-stack token (`AADSTS\d+`, `Dataverse`, `Power Platform`, `MSAL`, `Entra`, `Graph API`): query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` with the exact code or token. A matching doc usually pins the fix exactly.
 - Read the cited file ±15 lines for surrounding context. Note recent imports, the function signature, and any nearby `try/catch` or `useEffect` deps.
 - If the error mentions a third-party module (anything in `node_modules/` from the stack), one targeted `WebFetch` against the module's npm page or GitHub README is acceptable; do NOT do open-ended web searches in the loop.
 
@@ -535,19 +648,19 @@ After the fix is applied:
    If TS errors exist, fix them before continuing. Do not advance until type-check exits 0.
 
 2. **Wait for Metro to re-bundle (Import/Bundle fix only):**
-   For inline edits applied via D3.1, Metro auto-watches the file and triggers a re-bundle on save — no manual reload needed. Poll `BashOutput($METRO_TERMINAL_ID)` every 2s for up to 30s, watching for one of:
+   For inline edits applied via D3.1, Metro auto-watches the file and triggers a re-bundle on save. Re-run the Step A cursored tail procedure for a bounded set of checks, watching for one of:
    - `Bundling complete` / `iOS Bundled` / `Android Bundled` → success, proceed to step 4.
    - A new bundle error block (different file:line, or different message) → treat as a NEW issue and return to Step B.
    - Same error repeats → the fix didn't take. Treat as fix attempt #2 against the same error (Escalation rule applies after 2).
    - 30s elapsed with no bundling activity → Metro may be paused/wedged; surface to user, do NOT auto-restart Metro (Constraints).
 
 3. **Reload the app (all other fixes — JS Runtime, Network/API, React, etc.):**
-   Inline edits to runtime code require an app reload. Instruct the user:
-   > "Please press `r` in the Metro terminal to reload the app."
+   Fast Refresh should apply most inline edits. If no new bundle/runtime activity appears, instruct the user:
+   > "Please reload the app from the native dev-client menu, then trigger the workflow again."
 
-   Wait ~5 seconds, then call `BashOutput($METRO_TERMINAL_ID)` to confirm the specific error line is gone from the new output.
+   After the user confirms, run the Step A cursored tail procedure to check only new output.
 
-4. **Confirm the fix via terminal output.** After reload, re-read `BashOutput($METRO_TERMINAL_ID)`. If the previous error pattern is absent and no new errors appear, the fix held. If any `[INJECTED-TRACE]` lines are still present and relevant, read them to confirm the data path is now healthy. After confirming, clean up any injected logs (Phase 0.5.5 procedure).
+4. **Confirm the fix via persisted output.** If the previous error pattern is absent from newly appended log bytes and no new errors appear, the fix held. If any `[INJECTED-TRACE]` lines are relevant, use them to confirm the data path is healthy. After confirming, clean up injected logs (Phase 0.5.5).
 
 5. **Reset clean-cycle counter to 0** and return to Step A.
 
@@ -583,7 +696,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 - **One fix at a time** — fully resolve one issue (including type-check + reload + log verification) before starting the next.
 - **Always clean up injected logs** — any `// [INJECTED-TRACE]` line added during a session MUST be removed before the session ends, even if the symptom is `pending` or `flagged`. Use `grep -rn 'INJECTED-TRACE' app/ src/hooks/ src/services/` to find them.
 - **Preserve existing behavior** — fixes must be minimal and surgical. Do not refactor, rename, or change component contracts as a side effect of a bug fix.
-- **5-second pause between polls** — do not busy-loop.
+- **Bounded polling** — do not busy-loop. Every poll advances a persisted byte cursor and each cycle processes at most four 256 KiB chunks.
 - **Log every action** — before each tool call, print a one-line description of what you're about to do and why, so the user can follow along.
 
 ---
@@ -592,25 +705,25 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Phase 0 reports "Metro not detected" | `npm run dev` not running in the recorded terminal | Start `npm run dev` in a new terminal; the skill will ask for the terminal ID |
-| `BashOutput` returns "shell not found" for `$METRO_TERMINAL_ID` | The Metro terminal was killed or repurposed since `memory-bank.md` was written | Restart `npm run dev`; provide the new terminal ID when the skill asks |
+| Phase 0 reports `not-started` or `stopped` | No live `.powernative` Metro log exists | Run `npm run dev`, open the native app, then rerun `/debug-app` |
+| Phase 0 sees recent failure lines | Expo/Metro exited during startup or runtime | Read the latest log tail, fix the sanitized error, then ask the user to restart `npm run dev` |
 | Phase 0 reports "Metro running but no app connected" | Simulator/device hasn't loaded the app yet | Open the app on the simulator/device, then re-run `/debug-app` |
 | Loop appears stuck | Fix taking longer than expected (e.g., type-check on large project) | Wait — log lines should still print as the fix runs. Type `stop` to exit. |
 | Loop exits with "iteration cap reached" | Symptom is intermittent OR a fix is regressing on every reload | Inspect the last 3 entries in `fixes.md` for circularity; re-run with a more specific symptom or fix manually |
-| Same error keeps recurring after fix | Reload didn't pick up the change, or the fix targeted the wrong file | Verify with `git status`; manually reload Metro (press `r`); re-run |
-| Same error persists after fix AND `git status` shows the change saved AND type-check is clean | Stale Metro transform cache | Stop the dev server, restart with `npx expo start --clear` to drop the cache, reload, re-run `/debug-app` |
+| Same error keeps recurring after fix | Fast Refresh didn't apply the change, or the fix targeted the wrong file | Verify with `git status`; reload from the native dev-client menu; re-run |
+| Same error persists after fix AND `git status` shows the change saved AND type-check is clean | Stale Metro transform cache | Ask the user to stop Metro, rerun `npm run dev -- --clear`, reload, then rerun `/debug-app` |
 | Escalation triggered immediately | Error pattern is in a category we hand-off (auth, schema, native) | Take the suggested manual action, then re-run `/debug-app` |
 | `.claude/debug-app/fixes.md` not appearing | Phase 0 didn't run / state directory not created | Run `mkdir -p .claude/debug-app` manually, re-run skill |
 | "App is running cleanly" but the user still sees the problem | Symptom-driven mode was not used — log polling alone is blind to silent failures | Re-run as `/debug-app "<describe what you see>"` to trigger Phase 0.5 (console.log injection) |
 | Phase 0.5 reports `screen=unknown` | Symptom text didn't match any route filename | Re-run with a more specific symptom (`/debug-app "todos screen empty"` not `"data is broken"`), OR navigate to the broken screen first then re-run |
-| No `[TRACE` lines in terminal after reload | Metro cached the old bundle | Stop Metro, run `npx expo start --clear`, reload the app |
+| No `[TRACE` lines after reload | Metro cached the old bundle | Ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload the app |
 | `[INJECTED-TRACE]` lines left in code after session | Cleanup step was skipped | Run `grep -rn 'INJECTED-TRACE' app/ src/hooks/ src/services/` and remove each matching line |
 
 ---
 
 ## Notes
 
-- **Designed to be re-run** — every invocation is idempotent. State files in `.claude/debug-app/` carry forward, but the cursor advances past previously-seen logs so you don't re-process old errors.
+- **Designed to be re-run** — every invocation is idempotent. `.claude/debug-app/metro-cursor.json` advances past previously seen bytes and resets safely when a new Metro session or rotated log is detected.
 - **Honest about limits** — this is a foreground loop. While it's running, you can't run other skills. By design — the model is "build first, debug second." If you need to pause, type `stop` and resume later.
 - **No specialist agents** — upstream's `app-debugger.agent.md` delegates to `screen-builder`, `component-author`, `api-integration`, `dataverse-data-modeler` agents. We don't have all those agents in this plugin, so this skill fixes inline OR routes to skills (`/add-dataverse`, `/set-app-registration-native`, `/list-connections`, `/add-connector`). Behavior is equivalent for the categories we cover.
 - **Host diagnostics caveat** — host-prefixed diagnostics (`[PAHost]`, `[bridge]`, `[AuthProvider]`, etc.) are expected in dev-player sessions and should be treated as first-class telemetry. If these lines are absent in non-dev-player builds, that is expected and not itself a bug.
@@ -618,16 +731,16 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
   | Behavior | Upstream | This skill |
   |---|---|---|
-  | Log-driven monitor loop | yes | yes — Metro terminal (`BashOutput($METRO_TERMINAL_ID)`) is the sole source |
+   | Log-driven monitor loop | yes | yes — project-local sanitized Metro log is authoritative; host terminal APIs are optional only |
   | 8-category classification | yes | yes |
   | Verification cycle (type-check + reload + re-poll) | yes | yes |
   | Escalation after 2 attempts | yes | yes |
-  | 5s pause between polls | yes | yes |
+   | Bounded polling | yes | yes — durable byte cursor, bounded chunks |
   | Exit on 3 consecutive clean cycles | yes | yes (gated on symptom resolution when symptom-driven mode is in use) |
   | Specialist agent delegation | yes | replaced with skill routing |
   | Working-dir audit log | no | yes (additional — `.claude/debug-app/fixes.md`, `injected-logs.md`) |
   | MS Learn fallback for unknown errors | no | yes (additional) |
-  | Metro terminal as log source (sees bundler errors + Hermes console + HTTP request log) | no | yes — only source; no MCP fallback |
+   | Persisted Metro/app log source (bundler errors + Hermes console + HTTP request log) | no | yes — survives host restarts; no MCP fallback |
   | Bundle / transform error fix recipes (D3.1) | no | yes (additional) |
   | Bundle-aware verify (poll Metro for `Bundling complete`) | no | yes (additional) |
   | Best-effort autonomous fix for uncategorized errors (D3.2) | no | yes (additional) |
