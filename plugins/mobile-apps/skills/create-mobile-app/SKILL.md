@@ -87,6 +87,14 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 **Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
+After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
+```
+
+`app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
+
 ### Step 1 — Prerequisites
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
@@ -158,8 +166,13 @@ If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenan
 
 Detect the publisher prefix for the env's Default solution so the planner uses the correct prefix rather than assuming `cr_`.
 
+**Deferred execution:** do not run the query at this point. Step 2b.4 first
+classifies the run as `required` or `connector-only`; only `required` runs
+execute the block below. Connector-only runs set
+`$DETECTED_PUBLISHER_PREFIX = ""` and make no Dataverse prefix query.
+
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" "$ACTIVE_ENV_URL"
+node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID"
 ```
 
 Output is one line of JSON, e.g.:
@@ -305,6 +318,28 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 
 **Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
+Classify Dataverse planning before Step 2c and stash
+`<dataverse_planning_mode>`:
+
+- `connector-only` only when every record source and write target is an
+  explicit non-Dataverse connector/system of record, and the app needs no
+  app-owned persistent rows, Dataverse offline data, retained File/Image
+  artifact, existing Dataverse table, or Dataverse-backed native capability.
+- `required` for every other case, including ambiguity. Do not infer
+  connector-only merely because the brief names a connector.
+
+Also stash `<exact_target_facts_required> = yes` when planning depends on any
+existing/standard/managed table, reuse or extension decision, proposed-name
+collision decision, relationship target, computed column, or target
+customizability fact. Otherwise set it to `no`. This flag controls only safe
+planning degradation; it never relaxes `/add-dataverse` reconciliation.
+
+Now execute the deferred Step 1.7 publisher-prefix detection only when
+`<dataverse_planning_mode> = required`. For `connector-only`, set
+`$DETECTED_PUBLISHER_PREFIX = ""`, print
+`↷ Publisher-prefix discovery skipped — connector-only planning.`, and do not
+call `detect-publisher-prefix.js`.
+
 **Design decisions are deferred to Step 6.75** — `/design-system` (ships with this plugin) handles brand inputs, the style picker, and visual companion preference in one flow after the project is scaffolded. Do NOT ask design questions here.
 
 Set tentative defaults (used by Step 3b before `/design-system` runs):
@@ -327,7 +362,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Tables | Distinct nouns in confirmed brief | `count(unique_nouns) × [0.7, 1.3]` rounded | low — architect may merge or split |
 | Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
-| Planning min | Tables + screens | `tables × 0.3 + screens × 0.4 + 2` | low |
+| Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
@@ -345,7 +380,7 @@ Scope (proxy estimates — actual numbers come from architects):
   Approval gates  4               ← fixed (data model, native, connectors, screen plan)
 
 Time (rough — agent time only, excludes your approval latency at gates):
-  Planning      ~<low>-<high> min ← architects + your gate approvals add to this
+  Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
   Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
 
@@ -377,13 +412,19 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
-> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Total time is 5–12 minutes:
->  • Gate 1 (data model) — ~60–90s
+> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Data-model readiness is quality-first, with a 10–15 minute target:
+>  • Gate 1 (data model) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
 >  • Gate 2 (native capabilities) — ~10s (quick)
 >  • Gate 3 (connectors) — ~30–60s
 >  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
 >
-> Between gates the spinner will sit quiet — sub-agents can't stream their progress to this view. If a gate hasn't surfaced after 12 minutes, something is stuck and you should interrupt."
+> For Dataverse-required apps, factual foreground milestones will show
+> environment, inventory, candidate, detail, and timing counts within 30
+> seconds. Connector-only apps skip those metadata milestones. While the
+> architect runs, new milestone IDs from
+> `.tmp/data-model-planning-status.json` are rendered without inventing
+> percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
+> applicable milestone before interrupting."
 
 ### Step 2d — Template-only mode
 
@@ -391,11 +432,125 @@ No background scaffold pipeline is used. The template is already present in `<wo
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
 
-First, create the empty working directory so the planner has a place to write:
+First, create the working and planning-artifact directories:
 
 ```bash
-mkdir -p <working_dir>
+mkdir -p <working_dir> <working_dir>/.tmp
 ```
+
+### Step 3.0 — Foreground Dataverse planning snapshot and evidence
+
+Planning stays read-only. Branch on `<dataverse_planning_mode>`:
+
+- `connector-only` — skip every command in this section. Set `SNAPSHOT_PATH`
+  and `EVIDENCE_PATH` to empty/not supplied, print
+  `↷ Foreground planning snapshot skipped — the confirmed brief is connector-only.`, and
+  continue to planner dispatch. Connector-only planning does not perform
+  Dataverse metadata reads; the skill's existing global prerequisites remain
+  unchanged.
+- `required` — resolve the already selected environment again in the
+  foreground and create one normalized foreground planning snapshot as below. Do not make the
+  nested planner or architect rediscover the tenant.
+
+```bash
+PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID")
+ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
+ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
+test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
+  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
+}
+echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
+```
+
+Build `<DATAVERSE_CONCEPTS>` from **every domain noun and workflow family** in
+the approved brief, not a sample. Preserve multiword/header-child families such
+as `medical assessments`, `care activities`, `release events`, `custody
+transfers`, `test results`, and `evidence attachments`. Add known standard or
+required-existing logical names to `<EXPLICIT_TABLES>`. Build
+`<PROPOSED_TABLES>` from the detected publisher prefix for every clearly
+proposed custom table so collisions and missing names are explicit; leave a
+name out rather than inventing it when the concept is not yet stable.
+
+Detailed advisory discovery is quality-bounded:
+
+- Keep the complete customizable-table inventory and ranking.
+- Required exact-name tables are always detailed and do not consume advisory
+  capacity.
+- A concept credibly covered by an exact table does not receive speculative
+  advisory alternatives.
+- Every unresolved concept receives its best advisory candidate first.
+- Only then allocate second/third candidates, with at most 3 per concept and a
+  target ceiling of 40 unique advisory tables.
+- When more than 40 unresolved concepts have distinct best candidates, exceed
+  40 only enough to preserve one candidate per concept. Quality coverage takes
+  priority over the target ceiling.
+- Inventory-only alternatives remain available for the existing one-time
+  bounded exact-name expansion.
+
+```bash
+SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+EVIDENCE_PATH="<working_dir>/.tmp/dataverse-planning-evidence.md"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --output "$SNAPSHOT_PATH" \
+  --concepts "<DATAVERSE_CONCEPTS>" \
+  --tables "<EXPLICIT_TABLES>" \
+  --proposed-tables "<PROPOSED_TABLES>"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-planning-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$EVIDENCE_PATH"
+
+node -e '
+  const s=require(process.argv[1]);
+  const t=s.timings;
+  const d=s.detailLoadSummary;
+  console.log(`✓ Dataverse inventory: ${s.inventoryFacts.customizableTables} customizable + ${s.inventoryFacts.exactNameTables} bounded exact-name discoveries (${s.inventoryFacts.requiredExactNameTables} required, ${s.inventoryFacts.proposedCollisionTables} proposed collisions) (${t.inventoryRetrievalMs} ms)`);
+  console.log(`✓ Candidate selection: ${s.candidateRanking.length} concepts → ${d.attemptedCandidates} detailed candidates (${d.requiredCandidates || 0} required, ${d.advisoryCandidates || 0} advisory, ${d.exactCoveredConcepts || 0} exact-covered concepts; ${t.candidateSelectionMs} ms)`);
+  console.log(`✓ Detail loading: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
+  console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
+  console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
+' "$SNAPSHOT_PATH"
+echo "✓ Planning evidence: $EVIDENCE_PATH"
+```
+
+If environment resolution, token acquisition, inventory, required exact-name
+metadata/detail loading, parsing, or evidence rendering fails, surface the
+exact failure and **do not** treat an unreadable response as an empty inventory:
+
+- For every `required` Dataverse plan, stop planning with a visible
+  `BLOCKED: Dataverse planning metadata unavailable for exact target decisions`
+  result. Do not dispatch a snapshot-only architect and do not proceed toward
+  Dataverse mutation. The mutation workflow does not accept an unresolved
+  `Unverified` plan as an executable contract.
+- A concept-selected candidate is advisory unless it is also named by
+  `--tables`. If advisory detail metadata is unsupported, abstract, or
+  inaccessible, keep the snapshot, record it in `detailLoadFailures`, list it
+  in the evidence appendix, and continue. Explicit `--tables` and bounded
+  exact-name expansions remain required and fail closed.
+- `--proposed-tables` performs collision checks only. Missing proposed names
+  are not required-table failures and must never be selected for detail loading
+  solely because they were proposed.
+
+The snapshot script emits factual `DATAVERSE_SNAPSHOT_PROGRESS` lines after
+inventory, candidate selection, and detail loading. Print them immediately;
+never replace them with estimates or percentages. Once the architect starts,
+watch `<working_dir>/.tmp/data-model-planning-status.json` and print each new
+milestone ID once with its counts and elapsed time. The first environment or
+snapshot milestone must be visible within 30 seconds. The foreground
+orchestrator owns this rendering; the architect only owns the status artifact.
+
+For `required`, pass `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim to the planner
+prompt and every direct `data-model-architect` fallback/revision. A supplied
+matching snapshot activates the architect's `snapshot-only` path: no Bash
+discovery and no live Dataverse calls inside the agent. For `connector-only`,
+pass the mode explicitly and state that both paths are not supplied; never
+provide placeholder file paths.
+
+Benchmark method and acceptance criteria:
+[`references/dataverse-planning-benchmark.md`](references/dataverse-planning-benchmark.md).
 
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
@@ -412,7 +567,8 @@ If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-mod
 **Planner preflight (silent).** Before the full Task spawn, do a no-op `Task` probe for `mobile-app:native-app-planner` (same pattern as Step 11.0). If the probe fails with `Agent type … not found`, `tool unavailable`, or the host clearly cannot route nested agents, fall through to **inline-gate mode** (described below) without prompting. The orchestrator has the full tool surface itself — it can run the gates directly. Do not retry, do not ask the user.
 
 **Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
-> "→ Spawning planner agent. First prompt (data model) appears in ~60–90 seconds while the data-model architect analyzes your requirements. Later gates take longer — see the timing breakdown above."
+- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. Gate 1/data-model readiness is quality-first with a 10–15 minute target. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands."
+- `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
 
 Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
 
@@ -432,12 +588,23 @@ Prompt:
   Wizard answers: <Step 2 answers>
   Working directory: <absolute path of <working_dir>>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Dataverse planning mode: <required | connector-only>
+  Dataverse planning failure reason: none
+  Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Dataverse planning evidence: <absolute EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
+  Structured schema contract: <absolute
+  `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
+  NOT SUPPLIED>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
   Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
 ```
 
 The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
+On a successful `required` return, require both
+`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
+before continuing. If the receipt is missing, STOP as `BLOCKED`; this
+orchestrator must not synthesize it after the planner has returned.
 
 #### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
 
@@ -454,7 +621,18 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
    - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
 
+  **MUST forward the Dataverse planning mode in the direct architect prompt.**
+  In `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and
+  do not resolve the environment or run Dataverse discovery again. In
+  `connector-only`, state that both paths are not supplied; never invent
+  placeholder artifacts.
+
   **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+
+  In `required`, also require the direct architect to write and normalize
+  `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
+  A draft Markdown section without that sidecar is not an executable Gate 1
+  result.
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
@@ -467,13 +645,88 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode: orchestrator drafts the data model from a Dataverse OData probe (`resolve-environment.js` + table list filter on the brief's domain keywords), drafts native caps + connectors heuristically, drafts the screen graph + specs against `shared/references/screen-templates.md`, and runs the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
+5. **Record the same structured approval receipt as the planner path.** At
+   data-model acceptance, initialize
+   `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
+   contract content/hash. After each later gate is accepted, update only that
+   gate's approval record and the current plan hash; after Gate 4b, record the
+   final structured service dependencies and integrity hash. Follow
+   `agents/native-app-planner.md` Step 6 exactly. Never call the operation
+   manifest builder to create or restamp this receipt. A changed approved
+   section invalidates its record until the existing inline gate approves it
+   again.
+
+If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
 
 **Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
 Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+
+**Data-model exact-name expansion:** when the planner or direct architect
+returns exactly
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>`, sort and
+de-duplicate those names. This signal is valid only in `required` mode with a
+validated base snapshot, whether it came from the planner or the direct
+architect fallback; receiving it in `connector-only` mode is `BLOCKED`.
+Perform one bounded foreground expansion. Reuse the existing snapshot
+inventory, issue at most one exact-name metadata query for requested names
+absent from it, and do not run another broad inventory query:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --base-snapshot "$SNAPSHOT_PATH" \
+  --output "$SNAPSHOT_PATH" \
+  --tables "<exact comma-separated logical names>"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-planning-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$EVIDENCE_PATH"
+
+node -e '
+  const s=require(process.argv[1]);
+  const x=s.expansion;
+  const d=s.detailLoadSummary;
+  console.log(`✓ Expansion requested: [${x.requestedTables.join(", ")}]`);
+  console.log(`✓ Expansion loaded: [${x.loadedTables.join(", ")}]`);
+  console.log(`✓ Expansion unavailable: [${x.unavailableTables.join(", ")}]`);
+  console.log(`✓ Expansion details: ${d.attemptedCandidates} attempted, ${d.loadedCandidates} loaded, ${d.failedCandidates} failed`);
+  console.log(`✓ Expansion timing: metadata ${s.timings.inventoryRetrievalMs} ms, selection ${s.timings.candidateSelectionMs} ms, details ${s.timings.detailLoadingMs} ms, total ${s.timings.totalDurationMs} ms`);
+' "$SNAPSHOT_PATH"
+```
+
+Print the expansion's requested/loaded/unavailable names and timings
+immediately, then re-dispatch the same planner or architect once with the same
+snapshot/evidence paths. A second detailed-metadata signal is `BLOCKED`; do not
+loop, broaden concepts, or defer exact validation to mutation.
+
+**Data-model proposed-name expansion:** when the planner or direct architect
+returns exactly
+`NEEDS_CONTEXT: proposed-dataverse-names:<logical names>`, sort and de-duplicate
+those names. This signal is valid only in `required` mode with a validated
+snapshot. Perform one collision-only foreground expansion:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --base-snapshot "$SNAPSHOT_PATH" \
+  --output "$SNAPSHOT_PATH" \
+  --proposed-tables "<exact comma-separated logical names>"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-planning-evidence.js" \
+  --snapshot "$SNAPSHOT_PATH" \
+  --output "$EVIDENCE_PATH"
+```
+
+This expansion checks collisions only; it does not treat absent proposed names
+as required existing tables or load their details. Re-dispatch once. A second
+proposed-name signal is `BLOCKED`. If a collision is found and the architect
+needs compatibility facts, it may then use the separate one-time
+`detailed-dataverse-metadata` expansion for that existing table.
 
 Planner-only early-return signals are handled before the status switch: `INDUSTRY_CONFIRM_REQUESTED:` routes to Step 3.0a; `DESIGN_VIBE_REQUESTED:` routes to Step 3a. After the handoff, re-spawn the planner and process its new first line through this switch.
 
@@ -595,6 +848,22 @@ fi
 ```
 
 If mismatches are reported, sweep `native-app-plan.md` (and any auxiliary files like `.datamodel-manifest.json` if already written) replacing the wrong prefix with `${DETECTED_PUBLISHER_PREFIX}_` before Step 4. Do NOT proceed to Step 5 with a wrong-prefix plan — the sweep cost grows ~500 occurrences once services are generated.
+
+For `required`, apply the same prefix correction to
+`.tmp/dataverse-schema-contract.json`, then normalize it. Before Step 4, require
+both approved artifacts:
+
+```bash
+test -f "$WORKING_DIR/native-app-plan.md"
+test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
+  --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+```
+
+Do not fall back to parsing the Markdown ER diagram when the sidecar is missing
+or malformed; route through the existing planner/direct-architect revision
+path.
 
 ### Step 4 — Auth & environment selection
 
@@ -1148,12 +1417,109 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 
 ### Step 8 — Apply data model
 
+If `<dataverse_planning_mode> = connector-only`, verify the approved
+`## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
+exists, print `↷ Step 8 skipped — connector-only app has no Dataverse data model.`,
+skip Step 8.5 as well, and continue to Step 9. A non-empty Dataverse plan in
+this mode is a planning mismatch and must be corrected before continuing.
+
 **Print before starting:**
-> "→ [Step 8/13] Invoking /add-dataverse to create/extend tables and generate TypeScript services. This is the longest single phase — expect 2–5 minutes for a typical 4–6 table model."
+> "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
 
 **Environment pre-check (before invoking /add-dataverse):** Verify that `.resolved-environment.json` / `power.config.json` match the environment captured in Step 1. If they differ, warn the user immediately — creating tables in the wrong environment is the #1 silent breakage in this step. `/add-dataverse` Step 3a does its own check, but catching it here saves a failed attempt.
 
-Read the `## Data Model` section from `native-app-plan.md`. Invoke `/add-dataverse` with the working directory and a flag to skip its own planning (since the plan section is already approved):
+For the fast-v2 `required` path, keep the foreground planning snapshot as
+planning evidence only. It never authorizes a write. Without changing any
+approval gate, Step 8 must perform one fresh bounded reconciliation for every
+exact table in the approved structured schema; each existing table reloads
+ordinary typed columns, lookups, M:N/1:N relationships, and alternate keys.
+Create/adapt table reruns also reload and compare creation-significant table
+behavior: ownership, activities, notes, offline availability, change tracking,
+labels/schema identity, and primary-name identity.
+The exact/proposed scope also includes every effective M:N intersect entity
+name, and 1:N reuse requires complete matching `CascadeConfiguration`
+evidence. An absent or colliding intersect name, or missing/mismatched cascade
+evidence, is non-executable.
+Step 8 also binds the structured artifact to the current fully approved plan
+content hash and the gate-owned approval receipt's exact contract hash and
+service dependencies. Step 8 cannot create or refresh this receipt. Use
+resolved context and these structured artifacts, never values inferred from
+free-form Markdown:
+
+```bash
+SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
+APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
+FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
+EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
+OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
+PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
+ACTIVE_SOLUTION_UNIQUE_NAME="Default"
+
+test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
+  -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
+  -a -f "<working_dir>/native-app-plan.md"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --bind-plan "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$SCHEMA_CONTRACT"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --reconciliation-scope "$SCHEMA_CONTRACT" \
+  --output "$RECONCILIATION_SCOPE"
+
+EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
+PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --tables "$EXACT_TABLES" \
+  --proposed-tables "$PROPOSED_TABLES" \
+  --reconcile-exact \
+  --output "$EXECUTION_RECONCILIATION"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --output "$OPERATION_MANIFEST" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT"
+```
+
+The manifest builder mechanically verifies the approved `Reuse`, `Extend`,
+`Create`, `Adapt`, `Defer`, and `Unverified` decisions. It must not invent or
+change architecture decisions. Any mismatch is a non-executable verification
+conflict and returns to the orchestrator; do not add another opportunistic read
+loop or fall back to agent reconciliation. No operation may execute until:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+  --validate "$OPERATION_MANIFEST" \
+  --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --environment-id "$ACTIVE_ENV_ID" \
+  --env-url "$ACTIVE_ENV_URL" \
+  --tenant-id "$ACTIVE_TENANT_ID" \
+  --publisher-prefix "$DETECTED_PUBLISHER_PREFIX" \
+  --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
+  --publish-checkpoint "$PUBLISH_CHECKPOINT" \
+  --require-executable
+```
+
+Invoke `/add-dataverse` with the working directory, approved plan, and exact
+artifact paths:
 
 ```
 Invoke skill: /add-dataverse
@@ -1161,10 +1527,27 @@ Invoke skill: /add-dataverse
 Arguments:
   --working-dir <working_dir>
   --plan-section <native-app-plan.md#data-model>
+  --schema-contract <working_dir>/.tmp/dataverse-schema-contract.json
+  --approval-receipt <working_dir>/.tmp/mobile-plan-status.json
+  --execution-reconciliation <working_dir>/.tmp/dataverse-execution-reconciliation.json
+  --operation-manifest <working_dir>/.tmp/dataverse-operation-manifest.json
+  --publish-checkpoint <working_dir>/.tmp/dataverse-publish-pending.json
   --skip-planning   (the planner already ran)
 ```
 
-`/add-dataverse` creates Tier 0 → N tables, applies extensions, runs `npx power-apps add-data-source --api-id dataverse --org-url <envUrl> --resource-name <name>` per table from the app root, type-checks, returns.
+`/add-dataverse` validates the bindings and consumes valid phases immediately.
+Any supplied artifact/binding failure returns to this orchestrator; it must
+not silently enter standalone reconciliation. A non-executable manifest
+authorizes no metadata writes.
+The publish checkpoint is retained across schema/PublishXml failure and
+deleted only after successful publish, so a rerun retries pending publication
+even when schema writes are already idempotent.
+It creates Tier 0 → N tables, applies extensions, runs
+`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
+--resource-name <name>` per service-required table from the app root,
+type-checks, and returns. Real matched A/B runs are still required to quantify
+the end-to-end time saved; do not present local manifest timing as a guaranteed
+1–3 minute Dataverse result.
 
 After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 
@@ -1312,6 +1695,12 @@ Build two lists from the classification:
 
 **Sanity check before writing anything:** if any folder has children but no `index.tsx` row in the Screen Map, STOP and report: `BLOCKED: folder app/(app)/<folder>/ has children (<list>) but no index.tsx row in the Screen Map. The screen-planner must emit an index.tsx row for every folder.` This catches a planner mistake that would render the folder unreachable from the outer tab.
 
+Normalize every Screen Map file to its Expo route (strip `.tsx`, collapse trailing `/index`, preserve dynamic segments). If two files normalize to the same route, STOP before writing layouts. In particular, reject `<parent>/[id].tsx` together with `<parent>/[id]/<child>.tsx`; move the detail contract to `<parent>/[id]/index.tsx`.
+
+```text
+BLOCKED: duplicate Expo route <route> from <file-a> and <file-b>. Use [id]/index.tsx when a dynamic detail route owns child screens.
+```
+
 #### Step 10b.2 — Write per-folder inner `_layout.tsx` files (if any folders exist)
 
 For each entry in the Inner stacks list, create the folder if missing and write `app/(app)/<folder>/_layout.tsx` with this template:
@@ -1334,7 +1723,7 @@ Rules:
 - `headerShown: false` at the Stack level — each screen sets its own header inline via `<Stack.Screen options={{...}}>` at the top of its component (the Expo Router idiom).
 - `<Stack.Screen name="index" />` is required — without it, the folder root won't render.
 - `presentation: 'modal'` and `presentation: 'formSheet'` come from the Screen Map's Presentation column. Skip the `options` prop entirely for `default` presentation.
-- `name` for `[id].tsx` is literally `[id]` (with brackets).
+- `name` for `[id].tsx` is literally `[id]` (with brackets). When `[id]` owns child routes, create `<folder>/[id]/_layout.tsx` with `<Stack.Screen name="index" />` and child entries; do not register both `[id].tsx` and a `[id]/` folder.
 - Folder name in the function name is PascalCase (e.g. `InspectionsLayout`).
 
 **Why this must run BEFORE Step 11:** screen-builders write their files in parallel, multiple builders may target the same folder, and any of them creating `_layout.tsx` would race. The orchestrator owns these files.
@@ -1795,6 +2184,14 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
 **After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+
+Then run the canonical route-contract gate from the app root:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+```
+
+This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
 
 **Sticky tsc/build error policy (run-level).** The first time a `tsc` or `npm run build` failure surfaces in this run, ask the user once:
 

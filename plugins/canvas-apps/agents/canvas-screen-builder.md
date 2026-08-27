@@ -204,10 +204,6 @@ Do not fix unrelated pre-existing issues.
 5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
    `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
    summarize it as a total.
-6. For each Required Action, record a compact transition trace:
-   `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
-   observer -> evidence`. Mark `PASS` only when every link is present in the generated
-   formulas. Mark `BLOCKED: [missing link]` otherwise and repair it before returning.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
 the first builder returns, so return promptly rather than polishing indefinitely.
@@ -227,10 +223,6 @@ Status: Done
 
 The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
 incomplete, and the orchestrator will send the screen back.
-
-The `Functional:` section must contain exactly one trace per Required Action. A trace that
-omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
-34, or 35 says `PASS`.
 
 ## Constraints
 

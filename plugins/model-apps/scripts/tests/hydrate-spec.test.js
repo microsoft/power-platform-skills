@@ -155,3 +155,103 @@ test('hydrateSpec strips the transient solution.prefixResolved flag from the per
   assert.strictEqual(spec.app.uniqueName, 'crba3_realapp', 'the app real uniquename round-trips into spec.app.uniqueName (identity survives a rebuild)');
 });
 
+
+// -- issue #430: a sitemap URL subarea carrying a web-resource token ----------------------------
+// The Site Map Designer's "custom page backed by an HTML web resource" writes `$webresource:<name>`
+// into a URL subarea. Passing it through made validateAppSpec reject the whole spec, so
+// download-model-app.js wrote NO spec at all and the entire download -> edit -> rebuild flow was
+// blocked for the app over one unrelated nav entry.
+//
+// The fix ROUND-TRIPS it rather than dropping it: the validator accepts a token whose web resource is
+// declared in webResources[], and the download collects that name so its content is fetched.
+
+function appWithUrl(url, webResources) {
+  return {
+    app: async () => ({
+      name: 'Ops',
+      description: '',
+      siteMap: {
+        areas: [{
+          title: 'Main',
+          groups: [{
+            title: 'G',
+            subAreas: [
+              { type: 'Entity', entity: 'new_order', title: 'Orders' },
+              { type: 'URL', url, title: 'Home' },
+            ],
+          }],
+        }],
+      },
+    }),
+    pages: async () => [],
+    entities: async () => [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    webResources: async () => webResources || [],
+    solution: async () => ({ uniqueName: 'Ops', publisherPrefix: 'new' }),
+  };
+}
+
+const HOMEPAGE_WR = [{ name: 'new_homepage.html', type: 'html', contentBase64: 'PGh0bWw+' }];
+
+test('hydrateSpec ROUND-TRIPS a $webresource: URL subarea (#430)', async () => {
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', HOMEPAGE_WR));
+  const subs = spec.appShell.areas[0].groups[0].subAreas;
+  const home = subs.find((x) => x.title === 'Home');
+  assert.ok(home, 'the subarea must survive, not be dropped');
+  assert.strictEqual(home.url, '$webresource:new_homepage.html', 'the token must round-trip verbatim');
+  assert.strictEqual(spec.droppedSubareas, 0, 'nothing should be dropped');
+});
+
+test('a spec with a declared web-resource subarea PASSES validation (#430 end to end)', async () => {
+  // The actual reported symptom: validateAppSpec rejected the downloaded spec, so no file was written.
+  const spec = await hydrateSpec(appWithUrl('$webresource:new_homepage.html', HOMEPAGE_WR));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
+});
+
+test('an UNDECLARED web-resource subarea still validates — it is a live/OOB reference (#430)', () => {
+  // Deliberately NOT a hard error. The referenced resource is often managed or owned by another
+  // publisher, which download leaves as a bare reference because re-creating a foreign prefix would
+  // hard-fail a fresh build. The icon path already learned this: "a platform reference is a live/OOB
+  // value a downloaded app carries and is valid AS-IS (rejecting it broke the download→build
+  // round-trip on real apps)". Requiring declaration here would re-make that mistake.
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_o', displayName: 'O', primaryAttribute: { schemaName: 'new_name', displayName: 'N' }, columns: [] }],
+    appShell: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
+  };
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
+});
+
+test('the /WebResources/<name> form round-trips too (#430)', async () => {
+  const spec = await hydrateSpec(appWithUrl('/WebResources/new_homepage.html', HOMEPAGE_WR));
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, true, JSON.stringify(v.errors));
+});
+
+test('hydrateSpec still emits a real http(s) URL subarea (#430 must not regress links)', async () => {
+  const spec = await hydrateSpec(appWithUrl('https://contoso.example/help'));
+  const subs = spec.appShell.areas[0].groups[0].subAreas;
+  assert.ok(subs.some((x) => x.url === 'https://contoso.example/help'), 'a real link must round-trip');
+  assert.strictEqual(spec.droppedSubareas, 0);
+});
+
+test('an unexpressible scheme is DROPPED, never emitted (#430 safety)', async () => {
+  // The http(s) guard exists to stop an ARBITRARY scheme becoming a nav entry in a shipped app.
+  // Allowing the web-resource token must not weaken that.
+  for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'not a url']) {
+    const spec = await hydrateSpec(appWithUrl(url));
+    const subs = spec.appShell.areas[0].groups[0].subAreas;
+    assert.strictEqual(subs.some((x) => x.title === 'Home'), false, url + ' should be dropped');
+    assert.strictEqual(spec.droppedSubareas, 1, url + ' should be counted as dropped');
+  }
+});
+
+test('validateAppSpec rejects a javascript: subarea url outright (#430 guard intact)', async () => {
+  const spec = await hydrateSpec(appWithUrl('https://ok.example/x'));
+  spec.appShell.areas[0].groups[0].subAreas.push({ title: 'Bad', url: 'javascript:alert(1)' });
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(v.ok, false);
+  assert.ok((v.errors || []).some((e) => /http\(s\) URL or a \$webresource/.test(e)), JSON.stringify(v.errors));
+});

@@ -9,6 +9,27 @@ jobs-to-be-done surfaces checkable, fixes four crash paths, and corrects a
 smoke-eval assertion that could never pass live.
 
 ### Added
+- **Dataverse labels now use the organization's own language instead of a hardcoded
+  `1033`** ([#447](https://github.com/microsoft/power-platform-skills/issues/447)).
+  In an organization that has not provisioned 1033, `data-model` halted with
+  `The language code 1033 is not a valid language for this organization`. The build
+  resolves `organization.languagecode` once per run and threads it into every
+  label-emitting call (tables, columns, customer columns, global choices, status
+  reasons, alternate keys, relationships), and warns whenever it has to fall back.
+
+  Precedence: `--language-code` / `--languageCode` → App Spec `languageCode` (or
+  `languageCode` in the `provision-entities.js` input JSON) → the organization's
+  base language → 1033. Both CLIs accept the flag.
+
+  Two things worth knowing if you hit this. The failure is **not** all-or-nothing:
+  Dataverse accepts an unprovisioned LCID on `EntityMetadata` and
+  `PicklistAttributeMetadata` but rejects it on `DateTime` and `Memo`, so the table
+  and its Choice columns are created and the build fails a few steps later — which
+  reads like an environment problem rather than a defect. And this covers the
+  **data-model phase only**; form, dashboard and sitemap labels still come from SDK
+  serializers that hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+
 - **`verify` now proves what a persona security role GRANTS, not just that it
   exists.** The `role` check only asserted a role row carrying the SDK ownership
   marker, so a role built with the wrong access — or one whose privilege write
@@ -33,6 +54,18 @@ smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **A sitemap subarea that targets a custom web resource now round-trips**
+  ([#430](https://github.com/microsoft/power-platform-skills/issues/430)).
+  The Site Map Designer writes `$webresource:<name>` into a URL subarea; the http(s)
+  guard rejected it, so the downloaded spec failed validation and **no spec file was
+  written at all** — blocking the whole download → edit → rebuild flow for the app over
+  a single unrelated nav entry. The reference now passes validation as-is (the same
+  policy platform icon refs already use), and `download-model-app.js` additionally
+  captures the page's **content** into `webResources[]` when it can safely do so — as
+  `navRefs`, kept separate from icon refs because the icon path is image-only by design
+  and such a page is `html`. A managed or foreign resource stays a bare reference; it
+  exists in the target environment. A `javascript:`/`file:`/malformed url is still
+  rejected and dropped.
 - **Malformed specs now produce validation errors instead of raw `TypeError`s.** `validateAppSpec()`
   and `lintAppSpec()` crashed on a `null` spec, an object- or string-shaped collection
   (`entities: {}`), and `null` entries inside a collection; `preview-app` crashed when a persona

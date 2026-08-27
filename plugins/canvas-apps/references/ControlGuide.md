@@ -403,7 +403,7 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - `LayoutGap` — spacing between items
 - `LayoutOverflowY` — vertical overflow (`Scroll` for scrollable containers)
 - `FillPortions` — proportional sizing
-- `PaddingTop`/`PaddingBottom`/`PaddingLeft`/`PaddingRight` — container padding
+- `PaddingTop`/`Bottom`/`Left`/`Right` — container padding
 
 ## Troubleshooting
 

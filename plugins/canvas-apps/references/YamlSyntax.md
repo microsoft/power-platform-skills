@@ -22,13 +22,13 @@ How a `.pa.yaml` file is shaped, the syntax rules that decide whether it parses,
 
 ## File structure
 
-Each `*.pa.yaml` file should contain a single top-level object, specified using one of the following top-level keywords:
-- `App` - Represents the App object in the app. The filename for this object should be `App.pa.yaml`.
+Each '*.pa.yaml' file should contain a single top-level object. These are specified using one of the following top-level keywords:
+- `App` - Represents the 'App' object in the app. The filename for this object should be `App.pa.yaml`.
 - `EditorState` - Controls the Studio ordering of screens and local component definitions through `ScreensOrder` and `ComponentDefinitionsOrder`. Use filename `_EditorState.pa.yaml`.
 - `ComponentDefinitions` - A named-object-mapping of local component definitions. Use filename `<the component's name>.pa.yaml`.
-- `Screens` - A named-object-mapping of screens in the app. Use filename `<the screen's name>.pa.yaml`.
+- `Screens` - A named-object-mapping of screens in the app Use filename `<the screen's name>.pa.yaml`.
 
-You should ensure each top-level object is placed into its own `pa.yaml` file, using the correct top-level keyword.
+You should ensure each top-level object is placed into its own pa.yaml file, using the correct top-level keyword.
 
 ```yaml
 Screens:
