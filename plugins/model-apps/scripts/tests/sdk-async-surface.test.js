@@ -53,13 +53,18 @@ const ASYNC_SDK_METHODS = [
 // `\\s*\\??\\.\\s*` accepts optional chaining (`provision?.getArtifact(...)`) and a receiver split
 // from its method across lines; both are ordinary JS that an earlier version of this pattern
 // silently ignored.
-const CALL_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*\\??\\.\\s*(${ASYNC_SDK_METHODS.join('|')})\\s*\\(`, 'g');
+// `SEP` accepts what JavaScript actually allows between a receiver, its `.`, and the method:
+// whitespace OR a block comment. `\\s*` alone missed `provision /* note */ .getArtifact(...)`.
+// `(?:\\?\\.)?` before the argument list accepts optional INVOCATION, `getArtifact?.(...)`, which is
+// a different construct from optional MEMBER access and was previously unmatched.
+const SEP = '(?:\\s|/\\*[\\s\\S]*?\\*/)*';
+const CALL_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))${SEP}\\??\\.${SEP}(${ASYNC_SDK_METHODS.join('|')})${SEP}(?:\\?\\.)?\\(`, 'g');
 
 // Computed access — `provision['getArtifact'](...)` — needs a SEPARATE pass, because the method
 // name lives inside a string literal and the scanner below blanks strings (deliberately: a method
 // name quoted in a log message is not a call). So this pattern is matched against a
 // comments-stripped-but-strings-intact copy instead.
-const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*(?:\\?\\.)?\\s*\\[\\s*['"\`](${ASYNC_SDK_METHODS.join('|')})['"\`]\\s*\\]\\s*\\(`, 'g');
+const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))${SEP}(?:\\?\\.)?${SEP}\\[${SEP}['"\`](${ASYNC_SDK_METHODS.join('|')})['"\`]${SEP}\\]${SEP}(?:\\?\\.)?\\(`, 'g');
 
 // DESTRUCTURING these methods off the SDK is banned outright rather than tracked.
 //
@@ -80,8 +85,11 @@ const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*(?:\
 // the ban cannot afford — a binding finding is not waivable by the ordinary marker. Parameter
 // destructuring of the SDK therefore remains undetected; it is a construct nothing here would
 // plausibly write, and catching it costs more than it is worth.
+// `[^{};]` rather than `[^{}();]`: a default can be a CALL (`{ getArtifact = fallback() }`), which
+// excluding parens made invisible. Braces and semicolons stay excluded — they are what keep this
+// from matching an ordinary `for (…) { … }` block that merely mentions one of these names.
 // `=[^=>]` so `=>` is not mistaken for an assignment.
-const DESTRUCTURE_RE = new RegExp(`\\{[^{}();]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[^{}();]*\\}\\s*=[^=>]`, 'g');
+const DESTRUCTURE_RE = new RegExp(`\\{[^{};]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[^{};]*\\}\\s*=[^=>]`, 'g');
 
 // An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so IN A
 // COMMENT, either on the same line or on the line immediately above it — the latter because these
@@ -299,20 +307,21 @@ function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
  * that (a regex literal's quote opening a fake string; a template literal swallowing its own
  * interpolation), and each turned the guard into a green light over a live bug.
  *
- * A candidate is dismissed only when BOTH hold:
- *   1. the lexer blanked that offset (so it believes the text is a comment or a string), AND
- *   2. the RAW line is SYNTACTICALLY a comment line — trimmed, it begins with `//`, `/*` or the
- *      `*` of a block-comment continuation.
+ * A candidate is DISMISSED only when both hold:
+ *   1. the lexer blanked that offset, AND
+ *   2. the ENTIRE raw line is inert — either it is trimmed-`//`, or the lexer blanked every
+ *      non-whitespace character on it.
  *
- * Note what (2) deliberately does NOT include: "the match is inside quotes on this line". Deciding
- * that needs the very lexing that may have desynced, and a quote-counting shortcut is unreliable in
- * exactly the same way (`if (c) /['"]/.test(v) && provision.getArtifact('form', id)` has an odd
- * quote count before the call, so a counting rule dismisses a live call). The cost of leaving it
- * out is a false positive when a method call appears inside a string literal on a code line — rare,
- * loud, and waivable. The cost of putting it in is a silently hidden call. That is not a close call.
+ * (2) is whole-LINE on purpose. Testing only `startsWith('/*')` or `startsWith('*')` was wrong:
+ * `/* legacy *\/ provision.getArtifact(id)` starts with a block comment and then contains a LIVE
+ * call, so a prefix test dismissed it — the same class of bug as the very first line-prefix filter.
+ * Requiring the whole line to be blank means live code on the line always keeps it visible.
  *
- * Two independent signals must therefore agree before anything is dismissed. A lexer desync alone
- * cannot hide a call, because a desync happens on an ordinary CODE line, which fails (2).
+ * Deliberately NOT included: "the match is inside quotes on this line". Deciding that needs the
+ * very lexing that may have desynced, and the quote-counting shortcut fails on
+ * `if (c) /['"]/.test(v) && provision.getArtifact('form', id)` — an odd quote count before a LIVE
+ * call. The cost of leaving it out is a false positive when a call appears inside a string literal
+ * on a code line — rare, loud, waivable, and asserted below as a KNOWN accepted false positive.
  */
 function findUnawaitedCalls(raw) {
   const code = stripCommentsAndStrings(raw);
@@ -322,13 +331,52 @@ function findUnawaitedCalls(raw) {
   let candidates = 0;
 
   const lineAt = (index) => raw.slice(0, index).split('\n').length;
-  const isCommentLine = (lineText) => {
-    const trimmed = String(lineText || '').trimStart();
-    return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
+  const codeLines = code.split('\n');
+  const strLines = codeWithStrings.split('\n');
+  // A waiver must be a whole-line `//` comment AND be blanked in BOTH lexer views.
+  //
+  // The second condition closes a forge: a raw line beginning with `//` is not necessarily a
+  // comment — inside a template literal it is just text, e.g.
+  //     const note = `
+  //       // sdk-async-ok`;
+  //     provision.getArtifact('form', id);
+  // A real comment is blanked in both views; template/string text survives in the
+  // string-preserving view. Note the direction: this condition only ever REJECTS a waiver, and a
+  // rejected waiver produces a loud finding, so being wrong here is safe.
+  const waives = (lineNo, marker = OPT_OUT) => {
+    const rawLine = rawLines[lineNo - 1];
+    if (!markerInComment(rawLine, marker)) return false;
+    const inCode = codeLines[lineNo - 1];
+    const inStr = strLines[lineNo - 1];
+    return inCode !== undefined && inCode.trim() === '' && inStr !== undefined && inStr.trim() === '';
   };
-  const dismissed = (index, lineText, blankedView) => {
+  const wholeLineInert = (lineText, lineNo) => {
+    const trimmed = String(lineText || '').trimStart();
+    if (trimmed.startsWith('//')) return true;
+    const blankedLine = codeLines[lineNo - 1];
+    const lexerSaysBlank = blankedLine !== undefined && blankedLine.trim() === '';
+    // A block-comment CONTINUATION line: both the shape and the lexer must agree.
+    if (trimmed.startsWith('*') && lexerSaysBlank) return true;
+    // Otherwise decide from the RAW LINE ALONE, independently of the lexer.
+    //
+    // This matters because the lexer-derived signal is not independent of the lexer: a multi-line
+    // desync blanks the WHOLE line, so "the lexer blanked every character" agreed with itself and
+    // dismissed a live call —
+    //     if (c) /`/.test(v);
+    //      /* legacy *\/ provision.getArtifact('f', id);   <- blanked by the desync, and dismissed
+    //     const s = `ok`;
+    // Removing the complete comments from the raw line leaves `provision.getArtifact(...)`, which
+    // is code, so the line is not inert no matter what the lexer believes.
+    let s = String(lineText || '').replace(/\/\*[\s\S]*?\*\//g, ' ');
+    const lineComment = s.indexOf('//');
+    if (lineComment !== -1) s = s.slice(0, lineComment);
+    const unterminated = s.indexOf('/*');
+    if (unterminated !== -1) s = s.slice(0, unterminated);
+    return s.trim() === '';
+  };
+  const dismissed = (index, lineText, lineNo, blankedView) => {
     const blanked = blankedView[index] !== raw[index];
-    return blanked && isCommentLine(lineText);
+    return blanked && wholeLineInert(lineText, lineNo);
   };
 
   const consider = (m, kind, blankedView) => {
@@ -337,8 +385,8 @@ function findUnawaitedCalls(raw) {
     const index = m.index;
     const line = lineAt(index);
     const text = rawLines[line - 1] || '';
-    if (dismissed(index, text, blankedView)) return;
-    if (isWaiverLine(text) || isWaiverLine(String(rawLines[line - 2] || ''))) { found.waived = (found.waived || 0) + 1; return; }
+    if (dismissed(index, text, line, blankedView)) return;
+    if (waives(line - 1) || waives(line - 2)) { found.waived = (found.waived || 0) + 1; return; }
     found.push({ line, text: text.trim(), kind });
   };
 
@@ -350,11 +398,11 @@ function findUnawaitedCalls(raw) {
   for (const m of raw.matchAll(DESTRUCTURE_RE)) {
     const line = lineAt(m.index);
     const text = rawLines[line - 1] || '';
-    if (dismissed(m.index, text, code)) continue;
+    if (dismissed(m.index, text, line, code)) continue;
     // The ordinary waiver must NOT apply here: one comment would hide every call made through the
     // binding, and those call sites carry no receiver, so nothing else could ever see them. A
     // dedicated marker exists for a genuine false positive.
-    if (markerInComment(text, OPT_OUT_BINDING)) continue;
+    if (waives(line - 1, OPT_OUT_BINDING)) continue;
     found.push({ line, text: text.trim(), kind: 'destructured binding' });
   }
   found.candidates = candidates;
@@ -477,6 +525,18 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     'destructured with a rename AND a default': "const { getArtifact: read = fallback } = provision;",
     'destructured with a REST element': "const { getArtifact, ...rest } = provision;",
     'destructured with a COMPUTED key': "const { ['getArtifact']: read } = provision;",
+    // Sol round 4: constructs where NO raw candidate was produced, or both dismissal signals
+    // agreed wrongly.
+    'a comment between receiver and method (comments are whitespace in JS)':
+      "provision /* note */ .getArtifact('form', id);",
+    'a comment between method and its argument list':
+      "provision.getArtifact /* note */ ('form', id);",
+    'optional INVOCATION': "provision.getArtifact?.('form', id);",
+    'optional invocation of a computed access': "provision['getArtifact']?.('form', id);",
+    'a LIVE call on a line that merely STARTS with a block comment':
+      "if (c) /`/.test(v);\n /* legacy */ provision.getArtifact('f', id);\nconst s = `ok`;",
+    'a default that is a CALL in a destructuring pattern':
+      "const { getArtifact = fallback() } = provision;",
   };
   for (const [label, code] of Object.entries(MUST_FLAG)) {
     assert.strictEqual(check(code), true, `the matcher must flag: ${label}`);
@@ -523,7 +583,14 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), false,
     'a TRAILING comment does not waive — whether a late // is a comment cannot be decided without '
     + 'the lexing that may itself be wrong, so the waiver must be a whole-line comment');
-  assert.strictEqual(waiverCase('  x();'), false, 'no marker, no waiver');
+  // A whole-line `//` is not necessarily a comment — inside a template it is text. A forged waiver
+  // must not silence the call below it.
+  assert.strictEqual(
+    check("const note = `\n  // sdk-async-ok`;\nprovision.getArtifact('form', id);"), true,
+    'a waiver forged from TEMPLATE TEXT must not waive the call below it');
+  assert.strictEqual(
+    check("// sdk-async-ok: genuinely handed elsewhere\nprovision.getArtifact('form', id);"), false,
+    'a REAL whole-line comment waiver still works');
 });
 
 test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, with the SDK remedy)', async () => {
