@@ -136,6 +136,23 @@ test('REAL BUNDLE: a POPULATED dashboard stamps its labels at the configured LCI
   const xml = await pushedDashboard(1031);
   assert.deepStrictEqual(langsIn(xml), ['languagecode="1031"'],
     `every dashboard label must carry the configured LCID and nothing else; got ${JSON.stringify(langsIn(xml))}`);
+  // `langsIn` DEDUPES and only sees labels that carry the attribute at all, so on its own it cannot
+  // distinguish "every label is 1031" from "one label is 1031 and another has no languagecode".
+  // Count both and require them to agree, which is what the assertion above actually claims.
+  const labelCount = (xml.match(/<label\b/g) || []).length;
+  const langCount = (xml.match(/languagecode="1031"/g) || []).length;
+  assert.ok(labelCount > 0, 'a populated dashboard emits at least one label');
+  assert.strictEqual(langCount, labelCount,
+    `all ${labelCount} <label> elements must carry languagecode="1031"; only ${langCount} do`);
+  // GUARD THE GUARD: prove the counting above can actually FAIL. Delete the attribute from one
+  // label and the two counts must diverge. Without this, a change that made both counts read the
+  // same expression would look identical to a passing test — which is exactly how the tautology in
+  // header-nav-real-bundle.test.js survived review.
+  const doctored = xml.replace(/ languagecode="1031"/, '');
+  assert.notStrictEqual(
+    (doctored.match(/languagecode="1031"/g) || []).length,
+    (doctored.match(/<label\b/g) || []).length,
+    'the completeness check must detect a label whose languagecode was removed');
 });
 
 test('REAL BUNDLE: omitting languageCode leaves dashboard labels at 1033', async () => {

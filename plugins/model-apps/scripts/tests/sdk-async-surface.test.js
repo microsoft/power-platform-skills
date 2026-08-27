@@ -802,16 +802,53 @@ test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
   assert.strictEqual(sanitizeSubject('Merged PR 123:'), NO_DESCRIPTION);
   assert.strictEqual(sanitizeSubject('Merge pull request #4312 from someone/some-branch'), NO_DESCRIPTION,
     'GitHub puts the description on the body line, so a bare merge subject is entirely prefix');
+  // COLONLESS prefix-only subject. This is supported deliberately: requiring the colon left it
+  // unchanged, and the invariant test could not see the hole because it uses the same patterns as
+  // its oracle. Recorded as an exact input->output pair so the decision is visible, not implied.
+  assert.strictEqual(sanitizeSubject('Merged PR 123'), NO_DESCRIPTION,
+    'a bare "Merged PR <n>" with no colon is still entirely prefix');
+
+  // NEGATIVE CONTROLS for the colon-or-end alternation: text after the id is a real description, so
+  // the subject is prose and must survive untouched. If these ever start changing, the alternation
+  // has become too greedy.
+  for (const keep of ['Merged PR 99 rollback of the shell change', 'Merge pull request 7 from owner/ref is not this shape']) {
+    assert.strictEqual(sanitizeSubject(keep), keep, `must not fire on: ${keep}`);
+  }
   // Non-strings pass through, because `git()` records null when the call fails and null must stay
   // distinguishable from an empty subject.
   assert.strictEqual(sanitizeSubject(null), null);
 });
 
+test('sanitizeSubject strips ARBITRARILY nested prefixes, not a fixed number', () => {
+  // A capped loop looked defensive and silently reintroduced the bug past the cap: at a cap of 8,
+  // nine nested prefixes returned a value still carrying the ninth. Depths well past any plausible
+  // cap are asserted here so raising a cap can never be mistaken for fixing this.
+  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
+
+  for (const depth of [1, 2, 8, 9, 25, 100]) {
+    const nested = Array.from({ length: depth }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'real description';
+    assert.strictEqual(sanitizeSubject(nested), 'real description',
+      `depth ${depth} must strip every prefix`);
+  }
+  // Nested prefixes with NO description at the end still resolve to the placeholder.
+  const bare = Array.from({ length: 12 }, (_, i) => `Merged PR ${i + 1}:`).join(' ');
+  assert.strictEqual(sanitizeSubject(bare), NO_DESCRIPTION);
+  // Mixed tools nest too.
+  assert.strictEqual(
+    sanitizeSubject('Merged PR 5: Merge pull request 9 from owner/ref: real desc'),
+    'real desc');
+});
+
 test('sanitizeSubject output can NEVER match a merge prefix (the actual contract)', () => {
   // Case-by-case assertions only prove the cases someone thought of. The property that matters is
   // that NO input produces an output still carrying a prefix — which is what the committed
-  // PROVENANCE.json must satisfy. Asserting the property directly is what catches the next shape
-  // nobody enumerated.
+  // PROVENANCE.json must satisfy.
+  //
+  // STATED LIMIT, because it is easy to over-read this test: its oracle is MERGE_PREFIXES, the same
+  // set the implementation strips with. It therefore proves "no output matches a pattern we
+  // enumerate" — NOT "no output retains a merge prefix in some syntax nobody enumerated". A new
+  // merge-tool syntax is invisible to both halves at once. The exact input->output assertions above
+  // are what pin the enumerated shapes; this pins that stripping is exhaustive for them.
   const { sanitizeSubject, MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
 
   const corpus = [
@@ -824,8 +861,12 @@ test('sanitizeSubject output can NEVER match a merge prefix (the actual contract
     'Merge pull request #4312 from someone/some-branch: desc',
     'Merge pull request #9 from owner/ref:fix(sdk): tolerate x',
     'Merged PR 1: Merged PR 2: doubly prefixed',
+    Array.from({ length: 9 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'nine deep',
+    Array.from({ length: 40 }, (_, i) => `Merged PR ${i + 1}: `).join('') + 'forty deep',
+    'Merged PR 5: Merge pull request 9 from owner/ref: mixed nesting',
     'feat(sdk): plain',
     'fix(sdk): revert the change merged PR 99 introduced',
+    'Merged PR 99 rollback of the shell change',
     '',
     '   ',
   ];

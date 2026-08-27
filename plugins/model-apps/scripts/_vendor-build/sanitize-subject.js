@@ -24,15 +24,23 @@
 
 // Only a LEADING, well-formed prefix is removed. Anchoring matters: a subject that merely mentions
 // "merged PR 42" mid-sentence is prose, not a tool prefix, and must survive untouched.
+//
+// Each pattern ends with `(?::\s*|$)` — a colon OR end-of-string. Requiring the colon left a hole:
+// `"Merged PR 123"` (prefix, no description, no colon) was returned UNCHANGED, and the property test
+// could not see it because that test uses these same patterns as its oracle. Matching end-of-string
+// too means a bare prefix is recognized and replaced by the placeholder.
+//
+// The alternation does NOT weaken the prose guard: `"Merged PR 99 rollback"` still fails to match,
+// because after the digits the next thing must be a colon or the end, and `rollback` is neither.
 const MERGE_PREFIXES = [
   // Azure DevOps / TFS squash-merge subject. `#` is optional: not every tool emits it.
-  /^\s*Merged\s+PR\s+#?\d+\s*:\s*/i,
+  /^\s*Merged\s+PR\s+#?\d+\s*(?::\s*|$)/i,
   // GitHub merge-commit subject. `#` is optional for the same reason.
   //
   // The branch ref is `[^:\s]+`, NOT `\S+`. A greedy `\S+` swallows any colon in the ref AND the
   // one that ends it, so "…from owner/ref:fix(sdk): tolerate x" sanitized to just "tolerate x" —
   // silently deleting the part of the description that says what changed.
-  /^\s*Merge\s+pull\s+request\s+#?\d+\s+from\s+[^:\s]+\s*:?\s*/i,
+  /^\s*Merge\s+pull\s+request\s+#?\d+\s+from\s+[^:\s]+\s*(?::\s*|$)/i,
 ];
 
 // Returned when a recognized prefix consumed the entire subject (GitHub puts the description on the
@@ -45,15 +53,16 @@ function sanitizeSubject(subject) {
   if (typeof subject !== 'string') return subject;
   let out = subject;
   let matched = false;
-  // Strip to a FIXED POINT, not once. A single anchored `replace` removes one prefix, so a merge of
-  // a merge ("Merged PR 1: Merged PR 2: real description") kept the second one and returned a value
-  // that still matched the pattern — violating the contract above. Caught by the property test, not
-  // by any of the hand-written cases.
+  // Strip to a FIXED POINT, not a fixed NUMBER of passes. A single anchored `replace` removes one
+  // prefix, so a merge of a merge kept the rest and returned a value that still matched a pattern.
   //
-  // The loop is bounded: each pass must shorten the string to continue, and MAX_PASSES caps it
-  // regardless, so no input can spin here.
-  const MAX_PASSES = 8;
-  for (let pass = 0; pass < MAX_PASSES; pass++) {
+  // An earlier attempt capped this at 8 passes, which was worse than useless: it looked defensive
+  // while silently reintroducing the same bug for any subject with 9 or more nested prefixes. The
+  // cap is gone because the loop provably terminates without one — every pattern above must match at
+  // least the literal `Merged PR` / `Merge pull request` plus a digit, so a successful replacement
+  // strictly shortens the string and no pattern can match empty. `out === before` is therefore
+  // reached in at most `subject.length` passes.
+  for (;;) {
     const before = out;
     for (const re of MERGE_PREFIXES) {
       if (re.test(out)) { matched = true; out = out.replace(re, ''); }
