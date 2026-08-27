@@ -237,6 +237,27 @@ test('parses the official Firebase MCP flat app-list YAML without model rewritin
   );
 });
 
+test('accepts the official Firebase MCP empty framework metadata', () => {
+  const apps = parseFirebaseMcpAppsYaml([
+    '- name: >-',
+    '    projects/field-ops/androidApps/1:123:android:exact',
+    '  appId: 1:123:android:exact',
+    '  platform: ANDROID',
+    '  packageName: com.contoso.fieldservice',
+    '  framework: {}',
+  ].join('\n'));
+
+  assert.strictEqual(
+    apps[0].name,
+    'projects/field-ops/androidApps/1:123:android:exact',
+  );
+  assert.strictEqual(apps[0].framework, null);
+  assert.strictEqual(
+    matchFirebaseApp(apps, 'android', 'com.contoso.fieldservice').status,
+    'match',
+  );
+});
+
 test('rejects nested or tagged Firebase MCP YAML instead of interpreting it', () => {
   assert.throws(
     () => parseFirebaseMcpAppsYaml([

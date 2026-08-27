@@ -480,28 +480,55 @@ function parseFirebaseMcpAppsYaml(raw) {
   // anchors, and block scalars rather than accepting general-purpose YAML.
   const records = [];
   let current = null;
+  let expectFoldedName = false;
   for (const originalLine of raw.split(/\r?\n/)) {
     if (originalLine.trim() === '') continue;
     if (originalLine.includes('\t')) {
       throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output must not contain tabs.');
+    }
+    if (expectFoldedName) {
+      if (!/^    projects\/[A-Za-z0-9._-]+\/(?:androidApps|iosApps|webApps)\/[A-Za-z0-9:._-]+$/.test(originalLine)) {
+        throw new SafeError(
+          'unsupported-mcp-yaml',
+          'Firebase MCP app output contains an invalid folded app resource name.',
+        );
+      }
+      current.name = originalLine.trim();
+      expectFoldedName = false;
+      continue;
     }
     const recordStart = /^- ([A-Za-z][A-Za-z0-9_]*):(?: (.*))?$/.exec(originalLine);
     const property = /^  ([A-Za-z][A-Za-z0-9_]*):(?: (.*))?$/.exec(originalLine);
     if (recordStart) {
       current = {};
       records.push(current);
-      current[recordStart[1]] = parseYamlScalar(recordStart[2] || '');
+      const rawValue = recordStart[2] || '';
+      if (recordStart[1] === 'name' && rawValue.trim() === '>-') {
+        expectFoldedName = true;
+      } else {
+        current[recordStart[1]] = parseYamlScalar(rawValue);
+      }
     } else if (property && current) {
       if (Object.prototype.hasOwnProperty.call(current, property[1])) {
         throw new SafeError('duplicate-mcp-yaml-field', 'Firebase MCP app output repeats a field.');
       }
-      current[property[1]] = parseYamlScalar(property[2] || '');
+      const rawValue = property[2] || '';
+      if (property[1] === 'name' && rawValue.trim() === '>-') {
+        expectFoldedName = true;
+      } else if (property[1] === 'framework' && rawValue.trim() === '{}') {
+        current.framework = null;
+      } else {
+        current[property[1]] = parseYamlScalar(rawValue);
+      }
     } else {
       throw new SafeError(
         'unsupported-mcp-yaml',
         'Firebase MCP app output is not the expected flat app-list shape.',
       );
     }
+  }
+  if (expectFoldedName) {
+    throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output has an incomplete folded app resource name.');
   }
   if (records.length === 0) {
     throw new SafeError('invalid-mcp-yaml', 'Firebase MCP app output contains no app records.');
