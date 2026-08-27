@@ -245,8 +245,14 @@ esbuild
     const kb = (fs.statSync(OUTFILE).size / 1024).toFixed(0);
     // Hash the artifact so a reviewer can tell two bundles apart without diffing 600KB of minified
     // output, and so a rebuild from the same inputs is checkable rather than assumed.
-    const sha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(OUTFILE)).digest('hex');
-    fs.writeFileSync(PROVENANCE, `${JSON.stringify({ ...prov, allowUnreproducible: ALLOW_UNREPRODUCIBLE || undefined, bundleSha256: sha256, bundleBytes: fs.statSync(OUTFILE).size }, null, 2)}\n`);
+    // Hash the LF-NORMALISED content so the recorded value is platform-independent: git's
+    // end-of-line normalisation would otherwise make the same commit hash differently on a Windows
+    // checkout than on Linux. (vendor/.gitattributes also marks the bundle `-text`; this is the
+    // belt to that braces.)
+    const raw = fs.readFileSync(OUTFILE);
+    const normalised = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+    const sha256 = require('node:crypto').createHash('sha256').update(normalised).digest('hex');
+    fs.writeFileSync(PROVENANCE, `${JSON.stringify({ ...prov, allowUnreproducible: ALLOW_UNREPRODUCIBLE || undefined, bundleSha256: sha256, bundleBytes: normalised.length }, null, 2)}\n`);
     console.log(`BUNDLE OK -> ${OUTFILE} (${kb} KB)`);
     console.log(`  sdk commit : ${prov.commit || '(not a git checkout)'}`);
     console.log(`  sha256     : ${sha256}`);

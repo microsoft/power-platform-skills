@@ -403,8 +403,17 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   const prov = JSON.parse(fs.readFileSync(provPath, 'utf8'));
 
   const bytes = fs.readFileSync(BUNDLE);
-  const sha256 = require('node:crypto').createHash('sha256').update(bytes).digest('hex');
-  assert.strictEqual(prov.bundleBytes, bytes.length,
+  // Hash the LF-NORMALISED content, not the raw bytes.
+  //
+  // The raw bytes are not stable across platforms: git's end-of-line normalisation rewrites LF to
+  // CRLF on a Windows checkout, so the same commit yields a different size and hash than on Linux.
+  // This was not theoretical — the first version of this test passed on ubuntu and macOS and failed
+  // on windows-latest by exactly 60 bytes. `vendor/.gitattributes` marks the bundle `-text` so git
+  // stops converting it, and this normalisation keeps the assertion true even in a checkout that
+  // predates that rule or ignores it.
+  const normalised = Buffer.from(bytes.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+  const sha256 = require('node:crypto').createHash('sha256').update(normalised).digest('hex');
+  assert.strictEqual(prov.bundleBytes, normalised.length,
     'PROVENANCE.json records the size of the bundle actually committed');
   assert.strictEqual(prov.bundleSha256, sha256,
     'PROVENANCE.json records the sha256 of the bundle actually committed — re-run '
