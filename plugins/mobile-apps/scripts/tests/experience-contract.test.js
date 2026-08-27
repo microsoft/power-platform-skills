@@ -90,29 +90,40 @@ test('exact UX benchmark briefs preserve distinct product-appropriate Home contr
   assert.ok(passenger.forbiddenDefaults.includes('airline-operations'));
 
   const gym = deriveExperienceFromBrief(exactBenchmarkBriefs.gym);
-  assert.equal(gym.entryMode, 'workflow');
-  assert.equal(gym.primarySurface, 'task-led-workflow');
+  assert.equal(gym.decisionOwner, 'deterministic-hint');
+  assert.equal(gym.confidence, 'medium');
   assert.equal(gym.assetPolicy.connectivity, 'network-optional');
-  assert.notEqual(gym.primarySurface, 'capture-led-utility');
 
   const assets = deriveExperienceFromBrief(exactBenchmarkBriefs.assets);
-  assert.equal(assets.entryMode, 'overview');
-  assert.equal(assets.primarySurface, 'decision-led-overview');
+  assert.equal(assets.decisionOwner, 'deterministic-hint');
+  assert.equal(assets.confidence, 'medium');
   assert.equal(assets.assetPolicy.connectivity, 'network-optional');
-  assert.notEqual(assets.primarySurface, 'capture-led-utility');
 
   const receiving = deriveExperienceFromBrief(exactBenchmarkBriefs.offlineReceiving);
-  assert.equal(receiving.entryMode, 'workflow');
-  assert.equal(receiving.primarySurface, 'task-led-workflow');
+  assert.equal(receiving.decisionOwner, 'deterministic-hint');
+  assert.equal(receiving.confidence, 'medium');
   assert.equal(receiving.assetPolicy.connectivity, 'offline-preferred');
   assert.equal(receiving.assetPolicy.media, 'local-first');
   assert.equal(receiving.promptEvidence.assetPolicy.some((span) => span.signal === 'offline'), true);
-  assert.notEqual(receiving.primarySurface, 'capture-led-utility');
 
   for (const contract of [passenger, gym, assets, receiving]) {
     assert.equal(contract.primaryScreen.route, '/(app)/home');
     assert.deepEqual(validateExperienceContract(contract), []);
   }
+});
+
+test('repeated feature nouns cannot manufacture stronger entry-action confidence', () => {
+  const concise = deriveExperienceFromBrief('Let a user scan equipment and track maintenance issues.');
+  const repeated = deriveExperienceFromBrief('Let a user scan equipment and track maintenance issues, repairs, equipment maintenance, warranty issues, repair status, and more equipment status.');
+  assert.equal(repeated.primarySurface, concise.primarySurface);
+  assert.equal(repeated.entryMode, concise.entryMode);
+  assert.equal(repeated.confidence, concise.confidence);
+  assert.notEqual(repeated.confidence, 'high');
+
+  const assigned = deriveExperienceFromBrief('Technicians complete assigned maintenance tasks, resume the current work order, and record each finished step.');
+  assert.equal(assigned.primarySurface, 'task-led-workflow');
+  assert.equal(assigned.entryMode, 'workflow');
+  assert.ok(['medium', 'high'].includes(assigned.confidence));
 });
 
 test('offline-preferred connectivity requires explicit prompt evidence', () => {
@@ -370,7 +381,27 @@ test('shopping and warehouse contracts produce distinct seed content and media p
     ],
   }];
   const shop = deriveExperienceFromBrief(passengerShoppingBrief);
-  const warehouse = deriveExperienceFromBrief('Warehouse employees scan bins, complete cycle counts, and submit receiving assignments.');
+  const warehouseCandidate = deriveExperienceFromBrief('Warehouse employees scan bins, complete cycle counts, and submit receiving assignments.');
+  const warehouse = {
+    ...warehouseCandidate,
+    decisionOwner: 'model',
+    audience: 'employee',
+    primaryJob: 'Complete assigned warehouse work.',
+    interactionMode: 'operate',
+    contentModel: ['tasks', 'records', 'locations'],
+    primarySurface: 'task-led-workflow',
+    entryMode: 'workflow',
+    primaryScreen: { ...warehouseCandidate.primaryScreen, compositionKind: 'workflow' },
+    firstViewport: {
+      focalPoint: 'The current assigned warehouse task and its completion state',
+      regionOrder: ['context', 'feature', 'primary-action', 'supporting-content'],
+      primaryAction: 'Start assigned work',
+      contentDensity: 'balanced',
+    },
+    signatureMotifs: ['next-step-progress', 'action-state'],
+    forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'hidden-primary-action'],
+  };
+  assert.deepEqual(validateExperienceContract(warehouse), []);
   const shopRow = generateSeeds(entities, 'inventory warehouse pallet receiving', shop).get('demo_item')[0];
   const warehouseRow = generateSeeds(entities, 'inventory warehouse pallet receiving', warehouse).get('demo_item')[0];
 

@@ -332,6 +332,9 @@ test('planner delegates domain semantics to model-owned Context and executable A
   assert.match(screenPlanner, /Never hide a primary action label/);
   assert.match(builder, /Executable action bindings are mandatory/);
   assert.match(builder, /Never render an action enabled when its handler or target is missing/);
+  assert.match(planner, /Repeated domain nouns describe feature breadth; they do not become[\s\S]*extra votes for an entry action/);
+  assert.match(planner, /Select `task-led-workflow`[\s\S]*only when the brief supports[\s\S]*assigned, ordered, resumable/);
+  assert.match(planner, /actionable operational overview is valid/);
 });
 
 test('planner finalizes fixture-backed Context after Domain and before screens', () => {

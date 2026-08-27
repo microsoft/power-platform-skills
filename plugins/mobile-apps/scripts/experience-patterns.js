@@ -234,9 +234,9 @@ function signalCount(profile, signal) {
   return (profile[signal] || []).length;
 }
 
-function chooseSemanticIntent(profile, text) {
+function chooseSemanticIntent(profile) {
   const score = (weights) => Object.entries(weights)
-    .reduce((total, [signal, weight]) => total + signalCount(profile, signal) * weight, 0);
+    .reduce((total, [signal, weight]) => total + Math.min(1, signalCount(profile, signal)) * weight, 0);
   const candidates = [
     { id: 'commerce', score: score({ commerce: 3, product: 2, category: 1, cart: 2, discovery: 1, consumer: 2 }), evidence: ['commerce', 'product', 'category', 'cart', 'discovery', 'consumer'] },
     { id: 'capture', score: score({ capture: 4, employee: 1, consumer: 1 }), evidence: ['capture', 'employee', 'consumer'] },
@@ -248,17 +248,7 @@ function chooseSemanticIntent(profile, text) {
     { id: 'operation', score: score({ operation: 4, employee: 2, tracking: 1 }), evidence: ['operation', 'employee', 'tracking'] },
     { id: 'tracking', score: score({ tracking: 3, consumer: 1, employee: 1 }), evidence: ['tracking', 'consumer', 'employee'] },
   ].sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
-  let ordered = candidates;
-  const operationalJobs = String(text || '').match(/\b(?:auditing|audit|issues?|repairs?|maint[a-z]*|warrant(?:y|ies)|equipment|receiving|shipments?|quantities|expiry|confirmation)\b/gi) || [];
-  const assetOverview = /\b(?:track|tracking)\b[\s\S]{0,80}\b(?:company inventory|it assets?|ownership)\b|\b(?:company inventory|it assets?|ownership)\b[\s\S]{0,80}\b(?:track|tracking)\b/i.test(String(text || ''));
-  if (assetOverview) {
-    const tracking = candidates.find((candidate) => candidate.id === 'tracking');
-    ordered = [tracking, ...candidates.filter((candidate) => candidate !== tracking)];
-  } else if (operationalJobs.length >= 2 && ['capture', 'tracking'].includes(candidates[0].id)) {
-    const operation = candidates.find((candidate) => candidate.id === 'operation');
-    ordered = [operation, ...candidates.filter((candidate) => candidate !== operation)];
-  }
-  return { winner: ordered[0], runnerUp: ordered[1] };
+  return { winner: candidates[0], runnerUp: candidates[1] };
 }
 
 function hasSufficientIntentEvidence(intent, profile) {
@@ -378,7 +368,7 @@ function deriveExperienceFromBrief(brief, options = {}) {
   const text = String(brief || '').trim();
   if (!text) throw new Error('brief must be a non-empty string');
   const profile = collectSemanticProfile(text);
-  const { winner, runnerUp } = chooseSemanticIntent(profile, text);
+  const { winner, runnerUp } = chooseSemanticIntent(profile);
   const semanticIntent = hasSufficientIntentEvidence(winner, profile) ? winner : null;
   const fallback = semanticIntent ? null : winner.score === 0 ? chooseRule(text) : null;
   const intent = semanticIntent?.id || (fallback?.rule.id === 'browse' ? 'commerce' : fallback?.rule.id);

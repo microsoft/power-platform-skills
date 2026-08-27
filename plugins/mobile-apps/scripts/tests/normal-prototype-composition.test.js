@@ -33,12 +33,12 @@ function requiredScreen(id, route, archetype, outcome, productRole, navigation =
   };
 }
 
-function createNormalPack(context, brief, requiredScreens, keyFlowId) {
+function createNormalPack(context, brief, requiredScreens, keyFlowId, finalizeExperience = (candidate) => candidate) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'normal-prototype-composition-'));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.tmp'), { recursive: true });
   fs.mkdirSync(path.join(root, 'brand'), { recursive: true });
-  const experience = deriveExperienceFromBrief(brief);
+  const experience = finalizeExperience(deriveExperienceFromBrief(brief));
   const contextContract = resolveContextEnrichment(brief, experience);
   const preScreenJourney = resolveWorkflowJourney(brief, experience, contextContract);
   const foundation = foundationContract(experience);
@@ -108,17 +108,40 @@ test('exact flight prompt reaches a discovery composition through the normal v1 
   assert.equal(pack.screens.find((screen) => screen.id === 'ProductDetail').compositionGuidance.profile, 'record-detail');
 });
 
-test('exact gym prompt reaches priority, queue, capture, and detail profiles through the normal v1 planner path', (context) => {
+test('AI-finalized gym prompt reaches scan-first overview, queue, capture, and detail profiles through the normal v1 path', (context) => {
   const { pack } = createNormalPack(context, prompts.gym, [
     requiredScreen('Equipment', '/(app)/equipment', 'List', 'Browse equipment and maintenance state.', 'durable-destination'),
     requiredScreen('Work', '/(app)/work', 'List', 'Review issues, repairs, and upcoming maintenance.', 'durable-destination'),
     requiredScreen('ScanEquipment', '/(app)/equipment/scan', 'Modal-Sheet', 'Identify equipment and continue to its records.', 'immersive-modal', { parentRoute: '/(app)/equipment', kind: 'modal' }, [{ capability: 'barcode-scanner', mode: 'on-demand', fallbackStates: ['loading', 'permission-denied', 'unavailable', 'manual-entry'], maxViewportShare: 0.24 }]),
     requiredScreen('EquipmentDetail', '/(app)/equipment/[equipmentId]', 'Detail', 'Review maintenance, repair, and warranty details.', 'nested-detail', { parentRoute: '/(app)/equipment' }),
     requiredScreen('Profile', '/(app)/profile', 'Detail', 'Review profile and sign out.', 'global-utility'),
-  ], 'ScanEquipment');
+  ], 'ScanEquipment', (candidate) => ({
+    ...candidate,
+    decisionOwner: 'model',
+    audience: 'employee',
+    primaryJob: 'Find equipment and act on its maintenance record.',
+    interactionMode: 'operate',
+    contentModel: ['records', 'locations', 'tasks'],
+    primarySurface: 'decision-led-overview',
+    entryMode: 'overview',
+    navigationModel: 'tabs-stack',
+    primaryScreen: { ...candidate.primaryScreen, compositionKind: 'overview' },
+    firstViewport: {
+      focalPoint: 'Current gym, equipment lookup, and records needing attention',
+      regionOrder: ['context', 'primary-action', 'feature', 'supporting-content'],
+      primaryAction: 'Scan equipment',
+      contentDensity: 'balanced',
+    },
+    signatureMotifs: ['scan-entry', 'attention-queue'],
+    forbiddenDefaults: ['generic-dashboard-card-grid', 'unprioritized-metrics', 'always-mounted-scanner'],
+    visualCharacter: 'confident-utility',
+    confidence: 'high',
+    assumptions: ['Scan opens an on-demand capture route while Home retains current-gym and attention context.'],
+  }));
   assert.equal(pack.screenContractVersion, 2);
   assert.deepEqual(pack.navigation.destinations.map((destination) => destination.rootScreenId), ['Home', 'Equipment', 'Work']);
-  assert.equal(pack.screens.find((screen) => screen.id === 'Home').compositionGuidance.profile, 'priority-workspace');
+  assert.equal(pack.experience.firstViewport.primaryAction, 'Scan equipment');
+  assert.equal(pack.screens.find((screen) => screen.id === 'Home').compositionGuidance.profile, 'attention-led-overview');
   assert.equal(pack.screens.find((screen) => screen.id === 'Equipment').compositionGuidance.profile, 'operational-queue');
   assert.equal(pack.screens.find((screen) => screen.id === 'Work').compositionGuidance.profile, 'operational-queue');
   assert.equal(pack.screens.find((screen) => screen.id === 'ScanEquipment').compositionGuidance.profile, 'focused-capture');

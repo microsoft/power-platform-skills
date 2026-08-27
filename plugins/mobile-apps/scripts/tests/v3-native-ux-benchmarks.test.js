@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { deriveExperienceFromBrief } = require('../experience-patterns');
+const { deriveExperienceFromBrief, validateExperienceContract } = require('../experience-patterns');
 const { resolveContextEnrichment } = require('../resolve-context-enrichment');
 const { resolveNavigationContract } = require('../resolve-navigation-contract');
 const { resolveWorkflowJourney } = require('../resolve-workflow-journey');
@@ -70,8 +70,9 @@ function profile() {
   return screen('Profile', 'Review local role/context, preferences, help, and sign out.', 'global-utility', { route: '/(app)/profile', file: 'app/(app)/profile.tsx', parentRoute: '/(app)/home' });
 }
 
-function resolve(brief, screens, stages = null) {
-  const experience = deriveExperienceFromBrief(brief);
+function resolve(brief, screens, stages = null, finalizeExperience = (candidate) => candidate) {
+  const experience = finalizeExperience(deriveExperienceFromBrief(brief));
+  assert.deepEqual(validateExperienceContract(experience), []);
   const context = resolveContextEnrichment(brief, experience);
   const journey = resolveWorkflowJourney(brief, experience, context, { screenContract: { screens } });
   if (stages) journey.stages = stages;
@@ -129,7 +130,28 @@ test('offline receiving resolves resumable durable roots and an owned bounded ca
     screen('Confirm', 'Obtain recipient signature confirmation.', 'immersive-modal', { parentRoute: '/(app)/shipments' }),
     screen('Review', 'Review the completed reception and pending sync state.', 'bounded-flow-step', { parentRoute: '/(app)/shipments' }),
     profile(),
-  ], stages);
+  ], stages, (candidate) => ({
+    ...candidate,
+    decisionOwner: 'model',
+    audience: 'employee',
+    primaryJob: 'Complete and resume the ordered receiving workflow.',
+    interactionMode: 'operate',
+    contentModel: ['tasks', 'records', 'locations', 'media'],
+    primarySurface: 'task-led-workflow',
+    entryMode: 'workflow',
+    primaryScreen: { ...candidate.primaryScreen, compositionKind: 'workflow' },
+    firstViewport: {
+      focalPoint: 'The current receiving draft, workflow progress, and next required action',
+      regionOrder: ['context', 'feature', 'primary-action', 'supporting-content'],
+      primaryAction: 'Resume receiving',
+      contentDensity: 'balanced',
+    },
+    signatureMotifs: ['next-step-progress', 'action-state'],
+    forbiddenDefaults: ['dashboard-first-home', 'card-catalog', 'hidden-primary-action'],
+    visualCharacter: 'confident-utility',
+    confidence: 'high',
+    assumptions: [],
+  }));
   assert.equal(value.experience.assetPolicy.connectivity, 'offline-preferred');
   assert.equal(value.contract.model, 'tabs-stack');
   assert.deepEqual(value.contract.destinations.map((item) => item.label), ['Home', 'Shipments', 'Drafts']);
@@ -138,7 +160,7 @@ test('offline receiving resolves resumable durable roots and an owned bounded ca
   assertJobs(value, [/expected shipments/, /saved on this device/, /barcode/, /manual identification/, /damaged quantities/, /batch/, /expiry/, /inspection results/, /photos/, /gps/, /signature/, /pending sync/]);
 });
 
-test('gym maintenance keeps scanner subordinate to Home/Equipment/Work jobs', () => {
+test('gym maintenance uses AI-owned scan-first Home while keeping Equipment and Work durable', () => {
   const value = resolve(briefs.gym, [
     screen('Home', 'Prioritize equipment health, active issues, repairs, and upcoming maintenance across gyms.', 'durable-destination', { primary: true, route: '/(app)/home', file: 'app/(app)/home.tsx' }),
     screen('Equipment', 'Browse equipment and maintenance history across company gyms.', 'durable-destination'),
@@ -148,9 +170,32 @@ test('gym maintenance keeps scanner subordinate to Home/Equipment/Work jobs', ()
     screen('IssueDetail', 'Review and update an equipment issue.', 'nested-detail', { route: '/(app)/work/issues/[issueId]', parentRoute: '/(app)/work' }),
     screen('RepairDetail', 'Review ongoing repair status and next action.', 'nested-detail', { route: '/(app)/work/repairs/[repairId]', parentRoute: '/(app)/work' }),
     profile(),
-  ]);
+  ], null, (candidate) => ({
+    ...candidate,
+    decisionOwner: 'model',
+    audience: 'employee',
+    primaryJob: 'Find equipment and act on its maintenance record.',
+    interactionMode: 'operate',
+    contentModel: ['records', 'locations', 'tasks'],
+    primarySurface: 'decision-led-overview',
+    entryMode: 'overview',
+    navigationModel: 'tabs-stack',
+    primaryScreen: { ...candidate.primaryScreen, compositionKind: 'overview' },
+    firstViewport: {
+      focalPoint: 'Current gym, equipment lookup, and records needing attention',
+      regionOrder: ['context', 'primary-action', 'feature', 'supporting-content'],
+      primaryAction: 'Scan equipment',
+      contentDensity: 'balanced',
+    },
+    signatureMotifs: ['scan-entry', 'attention-queue'],
+    forbiddenDefaults: ['generic-dashboard-card-grid', 'unprioritized-metrics', 'always-mounted-scanner'],
+    visualCharacter: 'confident-utility',
+    confidence: 'high',
+    assumptions: ['Scan opens an on-demand capture route while Home retains current-gym and attention context.'],
+  }));
   assert.equal(value.experience.assetPolicy.connectivity, 'network-optional');
-  assert.equal(value.experience.primarySurface, 'task-led-workflow');
+  assert.equal(value.experience.primarySurface, 'decision-led-overview');
+  assert.equal(value.experience.firstViewport.primaryAction, 'Scan equipment');
   assert.equal(value.contract.model, 'tabs-stack');
   assert.equal(value.screenContract.screens.find((item) => item.id === 'Home').navigation.role, 'durable-destination');
   assert.equal(value.screenContract.screens.find((item) => item.id === 'ScanEquipment').navigation.role, 'immersive-modal');
@@ -168,7 +213,29 @@ test('company assets preserves scan, barcode print, ownership, inspection, repai
     screen('BarcodeLabel', 'Print the approved barcode label for an asset.', 'bounded-flow-step', { parentRoute: '/(app)/assets' }),
     screen('AssetDetail', 'Review ownership, warranty, inspection, repair, and status history.', 'nested-detail', { route: '/(app)/assets/[assetId]', parentRoute: '/(app)/assets' }),
     profile(),
-  ]);
+  ], null, (candidate) => ({
+    ...candidate,
+    decisionOwner: 'model',
+    audience: 'employee',
+    primaryJob: 'Understand company asset status and take the next useful action.',
+    interactionMode: 'track',
+    contentModel: ['records', 'locations', 'tasks'],
+    primarySurface: 'decision-led-overview',
+    entryMode: 'overview',
+    navigationModel: 'tabs-stack',
+    primaryScreen: { ...candidate.primaryScreen, compositionKind: 'overview' },
+    firstViewport: {
+      focalPoint: 'Asset status, inspection attention, repairs, and warranty risk',
+      regionOrder: ['context', 'feature', 'supporting-content', 'primary-action'],
+      primaryAction: 'Find an asset',
+      contentDensity: 'dense',
+    },
+    signatureMotifs: ['signal-summary', 'priority-callout'],
+    forbiddenDefaults: ['crud-triad', 'unprioritized-metrics'],
+    visualCharacter: 'minimal-refined',
+    confidence: 'high',
+    assumptions: [],
+  }));
   assert.equal(value.experience.primarySurface, 'decision-led-overview');
   assert.equal(value.experience.assetPolicy.connectivity, 'network-optional');
   assert.equal(value.contract.model, 'tabs-stack');

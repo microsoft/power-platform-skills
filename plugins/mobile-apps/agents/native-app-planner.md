@@ -174,6 +174,20 @@ judgment to finalize the same small contract in place. Set
 interpretation better covers the user's jobs, and do not introduce an industry
 preset. Preserve exact prompt-evidence spans for every selected decision.
 
+Treat deterministic ranking as candidate evidence, never as the final Home
+decision. Repeated domain nouns describe feature breadth; they do not become
+extra votes for an entry action. Separate the action a person explicitly uses
+to enter or resume the product from supporting records and downstream work.
+Select `task-led-workflow` and task-first copy only when the brief supports
+assigned, ordered, resumable, or explicitly next-task work. Maintenance,
+issues, repairs, warranty, inventory, or status vocabulary alone is not that
+evidence. A capture/search/browse action that reaches a stable record may be
+Home's primary action while task and attention modules remain supporting
+content. Conversely, do not force capture-first when ordered work is the
+explicit user job. An actionable operational overview is valid; the
+`dashboard-first-home` negative forbids an equal-weight KPI card grid, not a
+useful context + primary action + attention queue composition.
+
 Finalize:
 
 - `audience`, `primaryJob`, `interactionMode`, `contentModel`, and `entryMode`
