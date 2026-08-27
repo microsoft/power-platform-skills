@@ -342,6 +342,9 @@ test('bundled control CLI auto-detects and updates the mobile-app preference', (
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
+  assert.match(status.stdout, /does not record PAC CLI version/);
+  assert.match(status.stdout, /organization or Entra tenant IDs/);
+  assert.doesNotMatch(status.stdout, /when PAC is signed in/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {
     encoding: 'utf8',
