@@ -161,12 +161,18 @@ function calledSdkMethods() {
   // Still invisible, and deliberately not chased: a destructured or fully dynamic call. Those need
   // real data-flow analysis, and unlike the async guard — where an unguarded call CORRUPTS data —
   // the failure here is a loud TypeError at runtime, so a tripwire is proportionate.
+  // `matchAll`, not a shared `/g` regex with `exec`. The exec form is CORRECT here as written — a
+  // loop run to exhaustion gets `lastIndex` reset to 0 by the failing `exec`, verified: three files
+  // scanned in sequence find all matches and leave `lastIndex` at 0 after each. But the correctness
+  // depends entirely on nobody ever adding a `break`, `continue` or early `return` inside the loop:
+  // with one `break`, the same three files yield 2 of 5 matches instead of 5, silently. A guard whose
+  // soundness rests on an invisible invariant is one edit from being a no-op, and this one exists to
+  // catch unguarded SDK calls. `matchAll` does not touch the source regex's `lastIndex` at all.
   const re = /\b([A-Za-z_$][\w$]*)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
   const found = new Set();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
-    let m;
-    while ((m = re.exec(src)) !== null) {
+    for (const m of src.matchAll(re)) {
       if (/sdk|provision/i.test(m[1])) found.add(m[2]);
     }
   }
