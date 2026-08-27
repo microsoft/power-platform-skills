@@ -1,6 +1,6 @@
 # Telemetry control workflow
 
-The user invoked `/<plugin>:telemetry [on | off | status]` to control anonymous
+The user invoked `/<plugin>:telemetry [on | off | status]` to control
 usage telemetry for this plugin. Default to `status` when no argument is given.
 
 ## Steps
@@ -17,13 +17,18 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 
 ## What to know (for answering follow-ups)
 
-- `off` stops transmission to Microsoft. **Nothing leaves the machine.**
+- `off` stops transmission to Microsoft. **Nothing leaves the machine.** When
+  the repository telemetry configuration is enabled, the sanitized local mirror
+  remains under `~/.power-platform-skills/telemetry/<plugin>/sessions/`.
 - `on` re-enables transmission. The choice is **per-user and per-plugin** and
   takes effect on the next event (no restart).
-- **No personal data is ever collected.** Telemetry is anonymous: it records only
-  things like skill name, plugin version, OS, and Node version. It never includes
-  file paths, prompts, tool inputs, site names, URLs, credentials, usernames, or
-  hostnames.
+- Mobile Apps records start-only operational fields such as skill name, plugin
+  version, session and correlation IDs, OS/Node versions, AI-agent name/version,
+  invocation source, and a random per-project app instance ID. It never includes
+  file paths, prompts, tool inputs, site names, URLs, credentials, usernames,
+  hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+- A repository configuration with `disabled: true` is a hard-off: it writes no
+  local mirror and sends no event, regardless of the saved user preference.
 - **Automation/CI** can disable telemetry by setting the opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (for Mobile Apps,
   `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`) instead of running this

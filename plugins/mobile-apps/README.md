@@ -279,9 +279,7 @@ Example edit flows:
 
 ## Telemetry and privacy
 
-The Mobile Apps plugin includes start-only usage telemetry built on the same shared 1DS transport as Power Pages. The checked-in Mobile Apps configuration is currently `disabled: true` with a placeholder key, so it is hard-off until a dedicated Mobile Apps stream and instrumentation key are provisioned. While hard-off, it performs no telemetry shellouts, writes no local event log, and sends nothing.
-
-Once provisioned, a start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, and whether the host observed the start through `UserPromptSubmit` or `PreToolUse(Skill)`. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+The Mobile Apps plugin sends start-only usage telemetry to Microsoft. A start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, invocation source, and a random per-project app instance ID. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
 
 Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. The plugin does not emit `skill_completed`, success/failure, error, or duration data because the available hook boundary does not prove that the workflow itself completed.
 
@@ -293,7 +291,7 @@ Control the per-user transmission preference with:
 /mobile-app:telemetry on
 ```
 
-After provisioning, `off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
+`off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
 
 ## Known blockers
 

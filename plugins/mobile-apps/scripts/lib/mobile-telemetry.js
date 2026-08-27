@@ -10,7 +10,7 @@ const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 
 const agentInfo = require('./telemetry/lib/agent-info');
 const events = require('./telemetry/lib/events');
-const { fireAndForget } = require('./telemetry/lib/emit-spawn');
+const { fireAndForget } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
 const { findAppInstanceId } = require('./app-identity');
@@ -258,6 +258,7 @@ function dispatch(context, event, opts = {}) {
       configDir: context.configDir,
       fakeProbe: context.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || '',
       ikeyJsonPath: context.ikeyPath,
+      env: context.env,
     });
   } catch {
     // Telemetry is observational and must never affect a skill invocation.

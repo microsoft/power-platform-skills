@@ -223,7 +223,7 @@ test('bare nested skill emits when the session cwd is outside the mobile project
   assert.equal(records[0].data.eventInfo.invocationSource, 'pretool');
 });
 
-test('prompt hook builds the Mobile Apps CS4 envelope without real network access', (t) => {
+test('prompt hook builds the Power Apps normal-event envelope without real network access', (t) => {
   const context = fixture(t);
   const probePath = path.join(context.root, 'probe.json');
   const result = runHook('prompt', {
@@ -244,26 +244,39 @@ test('prompt hook builds the Mobile Apps CS4 envelope without real network acces
   assert.equal(probe.headers['x-apikey'], 'test-mobile-key');
   assert.ok(probe.body.endsWith('\n'));
   const envelope = JSON.parse(probe.body);
-  assert.deepEqual(Object.keys(envelope).sort(), ['data', 'iKey', 'name', 'time', 'ver']);
+  assert.deepEqual(Object.keys(envelope).sort(), ['data', 'ext', 'iKey', 'name', 'time', 'ver']);
   assert.equal(envelope.ver, '4.0');
   assert.equal(envelope.name, 'MobileAppsTestEvent');
   assert.equal(envelope.iKey, 'o:test');
-  assert.equal(envelope.data.eventName, 'skill_started');
-  assert.equal(envelope.data.eventType, 'Trace');
+  assert.equal(envelope.data.app_Name, 'powerappsclient');
+  assert.equal(envelope.data.clientType, 'PowerAppsNative');
+  assert.equal(envelope.data.clusterCategory, 'prod');
+  assert.equal(envelope.data.device_Id, 'react-native');
+  assert.equal(envelope.data.event_Name, 'skill_started');
+  assert.equal(envelope.data.session_Id, 'session-1');
   assert.equal(envelope.data.severity, 'Info');
-  assert.equal(envelope.data.pluginName, 'mobile-app');
-  assert.equal(envelope.data.pluginVersion, '0.2.0');
-  assert.equal(envelope.data.sessionId, 'session-1');
-  assert.match(envelope.data.correlationId, /^[0-9a-f-]{36}$/);
-  assert.ok(envelope.data.osName);
-  assert.ok(envelope.data.osVersion);
-  assert.match(envelope.data.nodeVersion, /^v\d+$/);
-  assert.equal(envelope.data.skillName, 'deploy');
-  assert.equal(typeof envelope.data.eventInfo, 'string');
-  assert.deepEqual(JSON.parse(envelope.data.eventInfo), {
+  assert.equal(envelope.data.timestamp, envelope.time);
+  assert.equal(envelope.ext.app.sesId, 'session-1');
+  assert.equal(envelope.ext.app.ver, '0.2.0');
+  assert.ok(envelope.ext.os.name);
+  assert.ok(envelope.ext.os.ver);
+
+  const dimensions = JSON.parse(envelope.data.customDimensions);
+  assert.equal(dimensions.pluginName, 'mobile-app');
+  assert.equal(dimensions.pluginVersion, '0.2.0');
+  assert.equal(dimensions.sessionId, 'session-1');
+  assert.match(dimensions.correlationId, /^[0-9a-f-]{36}$/);
+  assert.ok(dimensions.osName);
+  assert.ok(dimensions.osVersion);
+  assert.match(dimensions.nodeVersion, /^v\d+$/);
+  assert.equal(dimensions.skillName, 'deploy');
+  assert.deepEqual(dimensions.eventInfo, {
     invocationSource: 'prompt',
     appInstanceId: null,
   });
+  for (const legacy of ['eventName', 'eventType', 'pluginName', 'sessionId', 'skillName']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(envelope.data, legacy), false);
+  }
   for (const forbidden of [
     'orgId',
     'tenantId',
@@ -277,8 +290,20 @@ test('prompt hook builds the Mobile Apps CS4 envelope without real network acces
     'errorClass',
     'errorDescription',
   ]) {
-    assert.equal(Object.prototype.hasOwnProperty.call(envelope.data, forbidden), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(dimensions, forbidden), false);
   }
+});
+
+test('environment opt-out keeps the local mirror and suppresses transmission', (t) => {
+  const context = fixture(t);
+  const probePath = path.join(context.root, 'opted-out-probe.json');
+  const result = runHook('pretool', toolPayload(context), context, {
+    POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+  });
+
+  assert.equal(result.status, 0);
+  assert.equal(waitForEvents(context, 1).length, 1);
+  assert.equal(fs.existsSync(probePath), false);
 });
 
 test('bare command outside a mobile project emits a start', (t) => {
@@ -393,7 +418,7 @@ test('another plugin namespace and embedded command are no-ops', (t) => {
   assert.equal(fs.existsSync(logPath(context)), false);
 });
 
-test('shipped hard-off creates no telemetry artifacts', (t) => {
+test('disabled repository config creates no telemetry artifacts', (t) => {
   const context = fixture(t);
   const disabledIkey = path.join(context.root, 'disabled-ikey.json');
   fs.writeFileSync(disabledIkey, JSON.stringify({
