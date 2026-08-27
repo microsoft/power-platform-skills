@@ -108,8 +108,10 @@ test('STRESS: concurrent mutation + push of the same artifact serializes (no int
 
   // Same artifact, many writers. The SDK takes a per-artifact lock, so these must serialize; the
   // point is that the LAST write wins cleanly rather than two writes merging into a torn value.
-  await Promise.all(Array.from({ length: 20 }, (_, i) => // sdk-async-ok: concurrent by design
-    sdk.updateElement('view', id, '/columns', [{ name: `c${i}`, width: 100, order: 0 }])));
+  const contend = (i) =>
+    // sdk-async-ok: concurrent by design, the promises go to Promise.all.
+    sdk.updateElement('view', id, '/columns', [{ name: `c${i}`, width: 100, order: 0 }]);
+  await Promise.all(Array.from({ length: 20 }, (_, i) => contend(i)));
 
   const art = await sdk.getArtifact('view', id);
   assert.strictEqual(art.columns.length, 1, 'exactly one column survives — writes serialized, not merged');
@@ -125,7 +127,8 @@ test('STRESS: interleaved reads of 40 artifacts each return their OWN artifact',
   for (let i = 0; i < 40; i++) {
     ids.push(sdk.createArtifact('form', { name: `Form ${i}`, entityLogicalName: 'account', formType: 'main', status: 'draft' }).id);
   }
-  const reads = await Promise.all(ids.map((id) => sdk.getArtifact('form', id))); // sdk-async-ok: concurrent by design
+  // sdk-async-ok: concurrent by design, the promises go to Promise.all.
+  const reads = await Promise.all(ids.map((id) => sdk.getArtifact('form', id)));
   reads.forEach((art, i) => {
     assert.strictEqual(art.id, ids[i], `read ${i} returned its own artifact`);
     assert.strictEqual(art.name, `Form ${i}`, `read ${i} returned its own NAME (no cross-chain bleed)`);

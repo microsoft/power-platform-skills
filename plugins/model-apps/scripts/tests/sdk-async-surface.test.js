@@ -69,12 +69,19 @@ const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*(?:\
 // the plugin never uses, it costs nothing to avoid, and it turns an undetectable call site into a
 // detectable declaration.
 //
-// `[\\w$\\s,:]` rather than `[\\s\\S]`: the content between the braces must look like a BINDING
-// LIST (identifiers, renames, commas, newlines) and nothing else. A permissive `[\\s\\S]{0,300}?`
-// version matched an ordinary `for (let i = 0; ...) { ... }` block whose body merely mentioned one
-// of these names, which is a false positive on real source. Allowing newlines is the point —
-// destructuring patterns are routinely written across several lines.
-const DESTRUCTURE_RE = new RegExp(`\\{[\\w$\\s,:]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[\\w$\\s,:]*\\}\\s*=`, 'g');
+// `[^{}();]` rather than a narrow identifier class: a binding pattern legitimately contains
+// defaults (`= fallback`), renames, rest (`...rest`) and computed keys (`['getArtifact']`), all of
+// which a `[\w$\s,:]`-style class silently missed. Excluding braces, parentheses and semicolons is
+// what keeps it from matching an ordinary `for (…) { … }` block that merely mentions one of these
+// names — a false positive the permissive version really did produce.
+// Two anchors were tried; only the DECLARATION form survives. Anchoring on `}` followed by `,` or
+// `)` was meant to catch parameter destructuring, but it matched every mock object literal in the
+// suite (`{ name: 'getArtifact', args: [...] }` passed to a function), which is a false positive
+// the ban cannot afford — a binding finding is not waivable by the ordinary marker. Parameter
+// destructuring of the SDK therefore remains undetected; it is a construct nothing here would
+// plausibly write, and catching it costs more than it is worth.
+// `=[^=>]` so `=>` is not mistaken for an assignment.
+const DESTRUCTURE_RE = new RegExp(`\\{[^{}();]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[^{}();]*\\}\\s*=[^=>]`, 'g');
 
 // An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so IN A
 // COMMENT, either on the same line or on the line immediately above it — the latter because these
@@ -85,21 +92,35 @@ const DESTRUCTURE_RE = new RegExp(`\\{[\\w$\\s,:]*\\b(${ASYNC_SDK_METHODS.join('
 // the call below it. Requiring adjacency keeps the waiver next to the code it excuses, so it cannot
 // drift onto an unrelated call later.
 const OPT_OUT = 'sdk-async-ok';
+// A destructuring finding needs its OWN marker. The ordinary waiver must never hide a binding —
+// one comment would otherwise conceal every call made through it — but a genuine false positive
+// still needs an escape that is not "rename your variable".
+const OPT_OUT_BINDING = 'sdk-async-binding-ok';
 
-// True only when OPT_OUT appears inside a COMMENT on that line.
-//
-// The comparison must be against the STRING-PRESERVING view, not the fully blanked one. An earlier
-// version compared against the fully blanked code, where strings are blanked too — so
-// `console.log('sdk-async-ok')` looked exactly like a comment and waived the call below it, which
-// is precisely the bypass this function was added to close. The accompanying test passed anyway
-// because it called this helper with `keepStrings: true` while production passed the other view:
-// the test proved something the production path did not do.
-//
-// With the string-preserving view the distinction is unambiguous: a marker in a comment is absent
-// (comments are blanked there); a marker in a string is still present.
-function isWaiverLine(rawLine, codeWithStringsLine) {
-  return rawLine.includes(OPT_OUT) && !String(codeWithStringsLine || '').includes(OPT_OUT);
+/**
+ * True only when `marker` appears inside a real `//` COMMENT on this line.
+ *
+ * Determined from the RAW line by SYNTAX, not by comparing transformed views. Two earlier versions
+ * inferred "comment" from "present in the raw text but absent from a stripped copy", and both were
+ * wrong in the same way — anything else the stripper happened to blank also looked like a comment.
+ * First it was strings (`console.log('sdk-async-ok')`), then, after that was fixed, regex literals
+ * and template text (`const marker = /sdk-async-ok/;`). Inference from absence keeps finding new
+ * ways to be wrong, so this asks a question with a definite answer instead.
+ *
+ * Accepted shape: the line is ONLY a comment — trimmed, it starts with `//`.
+ *
+ * A TRAILING comment is deliberately not accepted. Deciding whether a `//` late in a line is a
+ * comment start or part of a string/regex requires the very lexing that may have desynced, and
+ * every shortcut tried for it was wrong in a new way. Requiring the waiver to sit on its own line
+ * makes the question unanswerable-by-ambiguity: nothing can span into a line that begins with `//`.
+ * The cost is one extra line at three call sites; the benefit is that a waiver cannot be forged.
+ */
+function markerInComment(rawLine, marker) {
+  const trimmed = String(rawLine || '').trimStart();
+  return trimmed.startsWith('//') && trimmed.includes(marker);
 }
+
+const isWaiverLine = (rawLine) => markerInComment(rawLine, OPT_OUT);
 
 /**
  * Blank out comments and string-literal TEXT, preserving every byte offset and newline so match
@@ -267,6 +288,79 @@ function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
   return out.join('');
 }
 
+/**
+ * Find every un-awaited SDK call in `raw`, returning `{ line, text, kind }` findings.
+ *
+ * DIRECTION OF FAILURE — the property that makes this trustworthy.
+ *
+ * Candidates are matched against the RAW source, and a candidate is only DISMISSED when it can be
+ * shown to be inert. Earlier versions did the opposite: they matched against a stripped copy, so
+ * any flaw in the stripper made a real call invisible. Two separate stripper flaws did exactly
+ * that (a regex literal's quote opening a fake string; a template literal swallowing its own
+ * interpolation), and each turned the guard into a green light over a live bug.
+ *
+ * A candidate is dismissed only when BOTH hold:
+ *   1. the lexer blanked that offset (so it believes the text is a comment or a string), AND
+ *   2. the RAW line is SYNTACTICALLY a comment line — trimmed, it begins with `//`, `/*` or the
+ *      `*` of a block-comment continuation.
+ *
+ * Note what (2) deliberately does NOT include: "the match is inside quotes on this line". Deciding
+ * that needs the very lexing that may have desynced, and a quote-counting shortcut is unreliable in
+ * exactly the same way (`if (c) /['"]/.test(v) && provision.getArtifact('form', id)` has an odd
+ * quote count before the call, so a counting rule dismisses a live call). The cost of leaving it
+ * out is a false positive when a method call appears inside a string literal on a code line — rare,
+ * loud, and waivable. The cost of putting it in is a silently hidden call. That is not a close call.
+ *
+ * Two independent signals must therefore agree before anything is dismissed. A lexer desync alone
+ * cannot hide a call, because a desync happens on an ordinary CODE line, which fails (2).
+ */
+function findUnawaitedCalls(raw) {
+  const code = stripCommentsAndStrings(raw);
+  const codeWithStrings = stripCommentsAndStrings(raw, { keepStrings: true });
+  const rawLines = raw.split('\n');
+  const found = [];
+  let candidates = 0;
+
+  const lineAt = (index) => raw.slice(0, index).split('\n').length;
+  const isCommentLine = (lineText) => {
+    const trimmed = String(lineText || '').trimStart();
+    return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*');
+  };
+  const dismissed = (index, lineText, blankedView) => {
+    const blanked = blankedView[index] !== raw[index];
+    return blanked && isCommentLine(lineText);
+  };
+
+  const consider = (m, kind, blankedView) => {
+    candidates++;
+    if (m[1]) return; // awaited
+    const index = m.index;
+    const line = lineAt(index);
+    const text = rawLines[line - 1] || '';
+    if (dismissed(index, text, blankedView)) return;
+    if (isWaiverLine(text) || isWaiverLine(String(rawLines[line - 2] || ''))) { found.waived = (found.waived || 0) + 1; return; }
+    found.push({ line, text: text.trim(), kind });
+  };
+
+  CALL_RE.lastIndex = 0;
+  for (const m of raw.matchAll(CALL_RE)) consider(m, 'call', code);
+  COMPUTED_RE.lastIndex = 0;
+  for (const m of raw.matchAll(COMPUTED_RE)) consider(m, 'computed', codeWithStrings);
+  DESTRUCTURE_RE.lastIndex = 0;
+  for (const m of raw.matchAll(DESTRUCTURE_RE)) {
+    const line = lineAt(m.index);
+    const text = rawLines[line - 1] || '';
+    if (dismissed(m.index, text, code)) continue;
+    // The ordinary waiver must NOT apply here: one comment would hide every call made through the
+    // binding, and those call sites carry no receiver, so nothing else could ever see them. A
+    // dedicated marker exists for a genuine false positive.
+    if (markerInComment(text, OPT_OUT_BINDING)) continue;
+    found.push({ line, text: text.trim(), kind: 'destructured binding' });
+  }
+  found.candidates = candidates;
+  return found;
+}
+
 function pluginSourceFiles() {
   const out = [];
   const walk = (dir) => {
@@ -292,42 +386,16 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   let waived = 0;
 
   for (const file of pluginSourceFiles()) {
-    // This file names the methods in prose and in the ASYNC_SDK_METHODS list; scanning it would
-    // match its own documentation. (Strings are blanked, but the list itself is real code.)
+    // This file names the methods in prose and in its own pattern definitions; scanning it would
+    // match its own documentation.
     if (path.basename(file) === path.basename(__filename)) continue;
     const raw = fs.readFileSync(file, 'utf8');
-    // Scan CODE ONLY. Offsets are preserved, so match indices still map to real line numbers, and
-    // the reported text is taken from the ORIGINAL source so a finding is readable.
-    const code = stripCommentsAndStrings(raw);
-    // Second view for computed access, where the method name must survive inside its quotes.
-    const codeWithStrings = stripCommentsAndStrings(raw, { keepStrings: true });
     scanned++;
-    const rawLines = raw.split('\n');
-    // The waiver check reads the STRING-PRESERVING view so a marker in a string cannot pose as a
-    // comment (see isWaiverLine).
-    const strLines = codeWithStrings.split('\n');
-    const record = (m, haystack) => {
-      calls++;
-      if (m[1]) return; // awaited — `await` must be ADJACENT, so `await other(); x.get(...)` still counts
-      const line = haystack.slice(0, m.index).split('\n').length;
-      const text = rawLines[line - 1] || '';
-      if (isWaiverLine(text, strLines[line - 1]) || isWaiverLine(String(rawLines[line - 2] || ''), strLines[line - 2])) { waived++; return; }
-      const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`;
-      if (!findings.includes(finding)) findings.push(finding);
-    };
-    CALL_RE.lastIndex = 0;
-    for (const m of code.matchAll(CALL_RE)) record(m, code);
-    COMPUTED_RE.lastIndex = 0;
-    for (const m of codeWithStrings.matchAll(COMPUTED_RE)) record(m, codeWithStrings);
-    DESTRUCTURE_RE.lastIndex = 0;
-    for (const m of code.matchAll(DESTRUCTURE_RE)) {
-      const line = code.slice(0, m.index).split('\n').length;
-      const text = rawLines[line - 1] || '';
-      // Deliberately NOT waivable. The waiver exists for a call whose promise is handed elsewhere;
-      // a destructured BINDING has no such justification, and allowing the waiver here would let
-      // one comment permanently hide every call made through that binding — which is undetectable
-      // by any pattern, because a bare call site carries no receiver.
-      const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: [destructured binding] ${text.trim()}`;
+    const hits = findUnawaitedCalls(raw);
+    calls += hits.candidates;
+    waived += hits.waived || 0;
+    for (const h of hits) {
+      const finding = `${path.relative(SCRIPTS_DIR, file)}:${h.line}: [${h.kind}] ${h.text}`;
       if (!findings.includes(finding)) findings.push(finding);
     }
   }
@@ -351,33 +419,11 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   // comment), and two more were found by probing it afterwards (optional chaining; computed
   // access). Pinning them here means a future "simplification" of the regex fails loudly instead of
   // quietly reopening the hole.
-  const check = (code) => {
-    const noStr = stripCommentsAndStrings(code);
-    const withStr = stripCommentsAndStrings(code, { keepStrings: true });
-    // Offsets must be preserved or every reported line number is wrong.
-    assert.strictEqual(noStr.length, code.length, 'stripping preserves byte offsets');
-    assert.strictEqual(withStr.length, code.length, 'string-preserving strip also preserves offsets');
-    // Mirror the PRODUCTION scan exactly, including which view each pattern and the waiver read.
-    // An earlier version of this helper passed `keepStrings: true` to the waiver check while
-    // production passed the other view, so the test proved a behaviour the code did not have.
-    const rawLines = code.split('\n');
-    const strLines = withStr.split('\n');
-    let flagged = false;
-    const consider = (m, haystack) => {
-      if (m[1]) return;
-      const line = haystack.slice(0, m.index).split('\n').length;
-      if (isWaiverLine(rawLines[line - 1] || '', strLines[line - 1])
-        || isWaiverLine(String(rawLines[line - 2] || ''), strLines[line - 2])) return;
-      flagged = true;
-    };
-    CALL_RE.lastIndex = 0;
-    for (const m of noStr.matchAll(CALL_RE)) consider(m, noStr);
-    COMPUTED_RE.lastIndex = 0;
-    for (const m of withStr.matchAll(COMPUTED_RE)) consider(m, withStr);
-    DESTRUCTURE_RE.lastIndex = 0;
-    if (DESTRUCTURE_RE.test(noStr)) flagged = true; // never waivable, as in production
-    return flagged;
-  };
+  // `check` calls the REAL production scanner, not a re-implementation of it. An earlier version
+  // approximated the scan and diverged from it in exactly the way that mattered (it passed a
+  // different view to the waiver check), so the test passed while production was broken. Anything
+  // this test proves is therefore a property of the shipped code.
+  const check = (code) => findUnawaitedCalls(code).length > 0;
 
   const MUST_FLAG = {
     'plain un-awaited call': "const a = provision.getArtifact('form', id);",
@@ -418,6 +464,19 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /['\"]/.test(v);\nconst a = provision.getArtifact('f', id);",
     'a call after an apostrophe that cannot be a string (unterminated on its line)':
       "const n = 5; // it's fine\nconst a = provision.getArtifact('f', id);",
+    // Sol round 3: SAME-LINE ambiguity, where the newline fallback cannot help. These are the
+    // cases that motivated inverting the scan to dismiss-only-when-provably-inert.
+    'SAME LINE: a regex after a control paren whose quote could close before the call':
+      "if (c) /['\"]/.test(v) && provision.getArtifact('form', id);",
+    'SAME LINE: division mistaken for a regex, spanning the call':
+      "const n = x++ / provision.getArtifact('form', id) / divisor;",
+    'SAME LINE: a regex containing a backtick, with a real template later on the line':
+      "if (c) /`/.test(v) && provision.getArtifact('f', id); const s = `ok`;",
+    // Sol round 3: binding forms a narrow character class silently missed.
+    'destructured with a DEFAULT': "const { getArtifact = fallback } = provision;",
+    'destructured with a rename AND a default': "const { getArtifact: read = fallback } = provision;",
+    'destructured with a REST element': "const { getArtifact, ...rest } = provision;",
+    'destructured with a COMPUTED key': "const { ['getArtifact']: read } = provision;",
   };
   for (const [label, code] of Object.entries(MUST_FLAG)) {
     assert.strictEqual(check(code), true, `the matcher must flag: ${label}`);
@@ -428,22 +487,42 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     'an awaited optional-chained call': "const a = await provision?.getArtifact('f', id);",
     'an awaited computed call': "const a = await provision['getArtifact']('f', id);",
     'the method name inside a string': "log('call getArtifact() next');",
-    'the method name inside a template literal': 'log(`use x.getArtifact(y)`);',
     'the method name inside a comment': '// see provision.getArtifact(id) for why',
     'the method name inside a regex literal': 'const re = /x\\.getArtifact\\(/;',
     'a URL whose // sits inside a string': "const u = 'https://example.com/a//b'; const a = await sdk.getArtifact('f', id);",
     'an object literal that merely mentions the name as a VALUE': "const m = { name: getArtifactLabel };",
+    'a mock object literal passed as an argument (must not read as destructuring)':
+      "calls.push({ name: 'getArtifact', args: [t, id] });",
   };
   for (const [label, code] of Object.entries(MUST_NOT_FLAG)) {
     assert.strictEqual(check(code), false, `the matcher must NOT flag: ${label}`);
   }
 
-  // The waiver must be a real COMMENT, checked against the string-preserving view — the same view
-  // production uses. Passing the fully blanked view here is what let the earlier test pass while
-  // production still honoured a marker printed from a string.
-  const waiverCase = (line) => isWaiverLine(line, stripCommentsAndStrings(line, { keepStrings: true }));
-  assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), true, 'a marker in a comment waives');
+  // ACCEPTED FALSE POSITIVES — documented, not fixed, because fixing them reopens a fail-open path.
+  //
+  // A receiver-and-method that appears inside a STRING on a CODE line is reported. Suppressing it
+  // would mean deciding "this offset is inside a string", which needs the lexing that may itself
+  // have desynced — the exact inference that hid a live call twice. So the guard reports it, and
+  // the author adds a waiver comment. A false positive costs one line; a false negative ships
+  // corrupted artifacts.
+  const ACCEPTED_FALSE_POSITIVES = {
+    'a call written inside a template literal on a code line': 'log(`use x.getArtifact(y)`);',
+  };
+  for (const [label, code] of Object.entries(ACCEPTED_FALSE_POSITIVES)) {
+    assert.strictEqual(check(code), true,
+      `this is a KNOWN, accepted false positive and must stay detected rather than be silently `
+      + `suppressed: ${label}`);
+  }
+
+  const waiverCase = (line) => isWaiverLine(line);
+  assert.strictEqual(waiverCase('  // sdk-async-ok: handed to Promise.all'), true, 'a whole-line comment waives');
   assert.strictEqual(waiverCase("  console.log('sdk-async-ok');"), false, 'a marker inside a STRING must not waive');
+  // Sol round 3: inference-from-absence also mistook regex and template text for a comment.
+  assert.strictEqual(waiverCase('  const marker = /sdk-async-ok/;'), false, 'a marker inside a REGEX must not waive');
+  assert.strictEqual(waiverCase('  const marker = `${v}sdk-async-ok`;'), false, 'a marker inside a TEMPLATE must not waive');
+  assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), false,
+    'a TRAILING comment does not waive — whether a late // is a comment cannot be decided without '
+    + 'the lexing that may itself be wrong, so the waiver must be a whole-line comment');
   assert.strictEqual(waiverCase('  x();'), false, 'no marker, no waiver');
 });
 
