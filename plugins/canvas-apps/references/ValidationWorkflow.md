@@ -79,11 +79,12 @@ mis-indented `Children:` entry, or a duplicate property key, read the rest of th
 fix every other occurrence of the same pattern in the same pass. Otherwise each one costs a
 full compile cycle and burns the convergence budget on a single defect.
 
-### Version conflicts masquerade as unknown properties
+### Creation-keyword conflicts masquerade as unknown properties
 
-Tier 2 sits above `Unknown property` for a reason. When any `Control:` value carries an
-`@version` suffix, the whole app binds to one template version, and every property that
-exists only in the *other* version is then reported as
+Tier 2 sits above `Unknown property` for a reason. When instances of a control type use
+creation keywords that disagree with the current `describe_control` response, the app may
+bind to a different template version and report every property that exists only in the
+other version as
 `Unknown property 'P' for control type 'T'` — where `T` is the internal control name, not
 the name you wrote. The properties are fine; the version pin is not.
 
@@ -95,8 +96,9 @@ Symptoms of this exact failure:
   YAML says `ModernText`.
 - One or two version diagnostics buried in the same compile output.
 
-The fix is always the same: strip every `@version` suffix from every `Control:` value in
-every file, then re-compile once. Do not edit a single property until you have done that.
+The fix is always the same: re-run `describe_control`, copy its complete creation-keyword
+block to every instance of that type, then re-compile once. Do not edit a single property
+until you have done that, and do not independently add or strip an `@version` suffix.
 
 ### Reading diagnostics
 

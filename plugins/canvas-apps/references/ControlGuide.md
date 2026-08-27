@@ -189,17 +189,18 @@ the most common single-property mistake:
 `Gallery` has `Fill` but no text properties at all — style the labels inside it, not the
 container.
 
-### Trap 3 — writing a template version on `Control:`
+### Trap 3 — deriving creation keywords from `list_controls`
 
-Never write `Control: ModernText@1.5.0`. Use the bare name that `list_controls` returned.
+`list_controls` returns the name used to query `describe_control`; it is not the authored
+YAML contract. The `Control creation keywords` block in `describe_control` is
+authoritative. Copy its `Control:` value and any required `ComponentName`,
+`ComponentLibraryUniqueName`, `Variant`, and `Layout` keywords verbatim.
 
 ## Control template versions
 
-Every control type resolves to exactly one template version per app. You do not choose it
-and you do not need to: write the bare control name everywhere and the app stays
-consistent.
-
-Writing an explicit `@version` on even one control breaks that:
+Do not add, remove, or replace an `@version` suffix yourself. If compilation reports a
+template-version conflict, re-run `describe_control` and make every instance use the
+exact `Control:` value currently returned for that type:
 
 ```text
 Another instance of control type 'ModernText' has already been referenced using a
@@ -217,12 +218,9 @@ not the one you wrote:
 Unknown property 'Color' for control type 'Text'.
 ```
 
-Those properties are valid on `ModernText`. Nothing is wrong with them. The only defect is
-the version suffix, and removing every suffix clears the entire cascade in one compile.
-
-- ✅ `Control: ModernText`
-- ❌ `Control: ModernText@1.5.0`
-- ❌ mixing `Control: Badge` in one file with `Control: Badge@1.2.0` in another
+Those properties may be valid on `ModernText`; resolve the creation-keyword mismatch
+before changing them. Do not assume the bare or versioned form is correct without
+checking `describe_control`.
 
 ## Enum type names
 
@@ -410,8 +408,9 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - **`Unknown property`:** run `describe_control` and use only the properties it returns
   for that exact control type.
 - **Many `Unknown property` errors naming a control type you never wrote** (e.g. `'Text'`
-  when your YAML says `ModernText`): a template version conflict. Strip every `@version`
-  suffix from every `Control:` value and re-compile.
+  when your YAML says `ModernText`): a template version conflict. Re-run
+  `describe_control`, copy its complete creation-keyword block to every instance of that
+  type, and re-compile.
 - **A property works on one control but not a similar one:** property support is per
   control type, and the modern React, FluentV9 and Classic families disagree. Check the
   per-control table above rather than reasoning by analogy.

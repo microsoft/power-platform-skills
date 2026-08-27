@@ -198,9 +198,11 @@ properties by analogy. Text styling in particular is spelled differently across 
 the modern React controls use `Color` and `Size`, `Badge` uses `FontColor` and `FontSize`,
 and `ModernCard` uses `TitleColor`/`TitleSize` with a single `BorderRadius`.
 
-Never plan a `Control:` value with an `@version` suffix. Use the bare name returned by
-`list_controls`. If discovery displays `Name@version`, normalize it to the substring
-before `@` in every control definition and screen brief before builders are dispatched.
+Use `list_controls` only to discover the name passed to `describe_control`. For every
+planned control type, copy the `Control:` value and all other required creation keywords
+from the `describe_control` response verbatim into the control definition and screen
+brief. Never strip an `@version` suffix or infer `ComponentName`,
+`ComponentLibraryUniqueName`, `Variant`, or `Layout` from the list result.
 
 ## 4. Size the Screens
 
@@ -448,7 +450,8 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
 - Do not embed all discovery output in the index or shared plan.
 - Every screen brief must be self-sufficient when read with the shared plan.
 - Never assign two screens the same control name prefix.
-- Never plan a `Control:` value carrying an `@version` suffix.
+- Never derive or normalize control creation keywords from `list_controls`; copy them
+  from `describe_control`.
 - When re-invoked to repair a defective brief, change only what the reported defect
   requires. Do not restructure the dispatch table, rewrite unaffected briefs, or redesign
   the app.

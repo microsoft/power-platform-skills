@@ -25,7 +25,7 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
 4. Call `sync_canvas` with that absolute working directory before reading or editing app
    files. Do not proceed if sync fails.
 
-Always use absolute paths for app files.
+Always use absolute paths for app files. Never edit `_EditorState.pa.yaml`; Studio owns it.
 
 ## Route the Request
 
@@ -82,16 +82,18 @@ CREATE and complex EDIT workflows return here after the planner finishes.
    - No two rows share a `Name Prefix`.
    - In CREATE mode the first row targets `[working directory]/Screen1.pa.yaml` with YAML key `Screen1`.
    - `## Editor State Changes` exists and contains exact final order lists or `None`.
-4. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
-   Verify each brief's assignment matches its dispatch row.
-5. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
+6. Confirm `[working directory]/canvas-app-shared.md` and every dispatch row's `Screen Brief` exists.
+   Verify each brief's assignment matches its dispatch row and includes every Action
+   Contract owned by that screen under `## Required Actions` and every scenario it
+   exercises under `## Functional Test Scenarios`.
+7. In EDIT mode, apply the `### Before builders` group of `## App Changes` to
    `[working directory]/App.pa.yaml` now. Screens bind to those collections, formulas and variables, and
    compiling them against a stale `App.pa.yaml` produces a flood of false name errors.
-6. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
+8. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
    did not, compile now and resolve every `App`-level diagnostic before dispatching.
    For EDIT mode, compile after applying the before-builder app changes and resolve
    App-level diagnostics before dispatching.
-7. Invoke `canvas-screen-builder` once per dispatch row, in waves of
+9. Invoke `canvas-screen-builder` once per dispatch row, in waves of
    **at most three**. Fire the wave's invocations together in one message, wait for that
    wave to return, then dispatch the next.
 
@@ -158,6 +160,33 @@ After all builders finish:
   destination items, same order, no extra brand/label injected into one screen's nav,
   and width formulas that fit the narrowest target. This is an app-wide check builders
   cannot perform because each sees only one screen.
+- Verify each `## Action Contracts` row end to end against the generated files: the entry
+  point is reachable, the named event is wired, and the observable result is visible
+  immediately after the action. For mutations, require an in-viewport receipt bound to the
+  returned record, changed stable ID, or deletion snapshot. Compare the handler formula,
+  declared write set, declared proof set, and receipt controls one-for-one. For create/edit,
+  every user-entered or user-selected field written by the handler needs a readable labeled
+  receipt binding. Navigation, a notification, hidden state, or a row somewhere in a longer
+  list cannot replace it. Compile success does not prove runtime usability.
+- Execute every `## Functional Test Matrix` row symbolically against the final formulas.
+  Confirm the Given state makes the entry point eligible, the When event targets the
+  declared source and stable ID, the Then values follow from the operation, and the
+  evidence formula reads that post-state. Repair the owning file when any link depends on
+  an unstated assumption or a different source/field.
+- For every primary-record list, verify each row or its immediately reachable detail renders
+  the canonical human-readable identity as full visible text. Avatar initials, icons,
+  record IDs, accessible labels, or evaluator inference cannot replace the identity.
+- When Approve and Reject/Decline are paired contracts, verify every eligible pending record
+  exposes both decisions on the same row or the same immediately reachable detail at phone
+  width. Send the owning screen back when either decision is missing; never accept a
+  single-sided review queue as a density tradeoff.
+- For every create/edit lifecycle, verify short static choices use radio buttons, visible
+  choice buttons, or a dropdown that commits by click or tap without typed filtering, then
+  trace create → bound mutation receipt → visible Edit → prepopulated form → stable-ID save
+  → bound mutation receipt with updated values. At phone width, verify identity,
+  status, and required lifecycle actions remain visible or have an immediately visible
+  overflow/detail entry. Send only the owning screen back for self-QA when any link is
+  missing.
 - Reject `QACHK-CARD-PLACEHOLDER` `PASS` when a ModernCard displays Title, Subtitle and
   Description with `Height < 180`; send that screen back for self-QA.
 - If a builder returns `Status: Blocked`, re-invoke the planner to correct that screen
@@ -188,11 +217,11 @@ After all builders finish:
    writes uses the standard control-type abbreviation followed by that screen's assigned
    name prefix, such as `conDiscNavBar` or `btnDetailBack`. This applies especially to UI
    blocks repeated on many screens — nav bars, headers, toolbars, badges.
-4. **Never write a version suffix on `Control:`.** Write `Control: ModernText`, never
-   `Control: ModernText@1.5.0`. One suffixed instance pins the whole app to a single
-   template version, and every property that exists only in the other version then fails
-   with `Unknown property '...' for control type '...'` — on controls that are perfectly
-   correct. One stray suffix can produce hundreds of them.
+4. **Copy control creation keywords from `describe_control`.** `list_controls` provides
+   the name used to query `describe_control`; it is not the authority for authored YAML.
+   Copy the returned `Control:` value and every required `ComponentName`,
+   `ComponentLibraryUniqueName`, `Variant`, and `Layout` keyword verbatim. Never strip,
+   normalize, or reconstruct those values.
 5. **Never invent an enum type name.** `describe_control` prints the exact name on the
    `Enum name:` line of each enum property. Copy it verbatim. Enum names do not follow
    from control names: `Badge.Appearance` is `BadgeCanvas.Appearance`, `Progress.Shape`
@@ -209,5 +238,6 @@ After all builders finish:
 10. Compile early and often. `App.pa.yaml` is validated before builders are dispatched,
     and again as soon as the first builder returns. Never defer the first compile until
     every file is written.
-11. Do not report completion until the workspace compiles clean or remaining diagnostics
-    are explicitly reported.
+11. Do not report completion until the workspace compiles clean and the functional
+    conformance gate passes, or remaining compile and functional defects are explicitly
+    reported.

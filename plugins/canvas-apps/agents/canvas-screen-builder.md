@@ -97,9 +97,9 @@ Do not fix unrelated pre-existing issues.
   even when they do not carry the prefix; renaming them breaks every formula that
   references them.
 - Use exact properties from the screen brief's control definitions.
-- Write the bare control name: `Control: ModernText`, never `Control: ModernText@1.5.0`.
-  A version suffix on one control makes every property of every other version report as
-  `Unknown property` across the whole app.
+- Copy each control's complete creation-keyword block from the screen brief exactly. The
+  planner sourced `Control:`, `ComponentName`, `ComponentLibraryUniqueName`, `Variant`,
+  and `Layout` from `describe_control`; do not strip, normalize, or reconstruct them.
 - Copy enum type names verbatim from the `Enum name:` line of the control definition in
   your brief. They are not derivable from the control name — `Badge.Appearance` is
   `'BadgeCanvas.Appearance'`, `ModernButton.Appearance` is `ButtonAppearance`, and
@@ -167,8 +167,9 @@ Do not fix unrelated pre-existing issues.
   file you keep re-reading is the dominant cost in this workflow and does not improve the
   result.
 - Before the first `create` or whole-file `edit`, inspect the composed YAML text itself:
-  - Every `Control:` value is bare and contains no `@`. Strip any version returned in
-    discovery or copied from existing text: `ModernBadge@1.0.0` becomes `ModernBadge`.
+  - Every control creation keyword exactly matches the screen brief. Do not alter a
+    `Control:` value or omit a required `ComponentName`, `ComponentLibraryUniqueName`,
+    `Variant`, or `Layout`.
   - Every enum qualifier exactly matches the brief's `Enum name:`. In particular, Badge
     formulas use `='BadgeCanvas.Appearance'.Filled` and
     `='BadgeCanvas.ThemeColor'.Warning`, never `BadgeAppearance.Filled` or
@@ -179,8 +180,8 @@ Do not fix unrelated pre-existing issues.
   the document server reject the write before the file exists to inspect.
 - If a whole-file write returns `failedToSave` or `ServerException`, do not submit the
   identical content again. Re-run the pre-save checks against the composed text, correct
-  every version suffix, enum qualifier, unsupported property, missing formula prefix, and
-  duplicate key in one pass, then retry the corrected whole file once.
+  every creation-keyword mismatch, enum qualifier, unsupported property, missing formula
+  prefix, and duplicate key in one pass, then retry the corrected whole file once.
 - Keep the screen proportionate: roughly 40 controls is the practical ceiling for one
   screen. If the brief demands substantially more, implement the specification faithfully
   but say so in your result so the orchestrator can decide whether to split it.
@@ -204,6 +205,10 @@ Do not fix unrelated pre-existing issues.
 5. Record an outcome for every check by number — `PASS`, `FIXED(n)` or `N/A` — as
    `${PLUGIN_ROOT}/references/QAChecks.md` § "Reporting" describes. You report the line; do not
    summarize it as a total.
+6. For each Required Action, record a compact transition trace:
+   `Action: precondition -> control.event -> source[ID] write/read -> postcondition ->
+   observer -> evidence`. Mark `PASS` only when every link is present in the generated
+   formulas. Mark `BLOCKED: [missing link]` otherwise and repair it before returning.
 
 Do not call `compile_canvas`; the orchestrator owns compilation. It compiles as soon as
 the first builder returns, so return promptly rather than polishing indefinitely.
@@ -224,13 +229,17 @@ Status: Done
 The `QA:` line must list every check in `${PLUGIN_ROOT}/references/QAChecks.md`. A return without it is
 incomplete, and the orchestrator will send the screen back.
 
+The `Functional:` section must contain exactly one trace per Required Action. A trace that
+omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
+34, or 35 says `PASS`.
+
 ## Constraints
 
 - Modify exactly one screen file.
 - Do not edit `[working directory]/App.pa.yaml` or `[working directory]/_EditorState.pa.yaml`; the top-level orchestrator owns app-level and cross-file ordering changes.
 - Never substitute a filename, YAML key, or control name prefix.
 - Never use a property absent from that control's definition.
-- Never write a version suffix on a `Control:` value.
+- Never normalize a `Control:` value supplied by the brief.
 - Never invent an enum type name, and never write an enum member that starts with a digit
   unquoted — `DecimalPrecision.'1'`, not `DecimalPrecision.1`.
 - Never leave a `ModernCard` slot unset. For text-only cards set `Image: =Blank()` and,

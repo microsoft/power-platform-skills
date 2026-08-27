@@ -16,7 +16,7 @@ are not part of the identifier.
 
 **Run first — these invalidate the whole file or the whole compile:**
 
-- Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` — `@version` suffix on a `Control:` value
+- Check 1 — `QACHK-CONTROL-CREATION-KEYWORDS` — creation keywords differ from `describe_control`
 - Check 2 — `QACHK-MISSING-FORMULA-PREFIX` — property value without the `=` prefix
 - Check 3 — `QACHK-DUPLICATE-PROPERTY-KEY` — same property key twice in one
   `Properties:` block
@@ -136,11 +136,11 @@ Never infer that a check was skipped solely from the number of controls on the s
 
 ---
 
-## Check 1 — `QACHK-CONTROL-VERSION-SUFFIX` (`Control:` value contains `@version`)
+## Check 1 — `QACHK-CONTROL-CREATION-KEYWORDS` (creation keywords differ from `describe_control`)
 
-**Problem:** Every control type resolves to exactly one template version per app. A single
-`Control: ModernText@1.5.0` anywhere in the app pins every `ModernText` instance to one
-version and reports every property belonging to the other version as unknown:
+**Problem:** `list_controls` provides discovery names, not authoritative authored YAML.
+Guessing or normalizing `Control:`, `ComponentName`, `ComponentLibraryUniqueName`,
+`Variant`, or `Layout` can select the wrong template or omit a required keyword:
 
 ```text
 Another instance of control type 'ModernText' has already been referenced using a
@@ -149,17 +149,16 @@ Unknown property 'Color' for control type 'Text'.
 Unknown property 'FontWeight' for control type 'Text'.
 ```
 
-Those properties are valid. Nothing is wrong with them. One stray suffix can produce
-hundreds of phantom diagnostics, and they name an internal control type (`'Text'`) that
-appears nowhere in the YAML — so they are extremely hard to diagnose after the fact. This
-check is cheap; run it first.
+The properties may be valid; fix the creation contract before changing them.
 
-**Detect:** For every `Control:` property, flag any value that contains an `@` character
-(e.g. `Control: Text@2.0.0`).
+**Detect:** For every control type, compare its creation keywords with the `Control
+creation keywords` block returned by `describe_control`. Flag changed `Control:` values
+and missing, added, or altered companion keywords.
 
-**Fix:** Strip the `@…` suffix, keeping only the bare control name (`Control: Text`).
+**Fix:** Copy the complete creation-keyword block from `describe_control` verbatim to
+every instance of that type. Do not independently add or strip an `@version` suffix.
 
-**Exception:** None. Always use the bare name that `list_controls` returned.
+**Exception:** None. `describe_control` is authoritative.
 
 Run this check against composed whole-screen text before its first save as well as against
 the persisted file. A rejected first write leaves no target file for normal self-QA.
