@@ -112,10 +112,12 @@ async function hydrateSpec(read) {
   // the "one unrelated nav entry blocks the whole download → edit → rebuild flow" failure #430 was
   // filed for, and it would have been reintroduced by the rule that fixed a different hole.
   //
-  // Default to the CONSERVATIVE behaviour. `emptyState` describes what such a page actually does when
-  // opened with no input — it renders without context — and does not promise a picker its already-
-  // deployed `.tsx` never had. `selector` would. The value is written into the spec visibly, with a
-  // note saying where it came from, so the author can change it rather than discover it later.
+  // Default to the CONSERVATIVE behaviour. `emptyState` does not promise a picker the already-
+  // deployed `.tsx` never had, which `selector` would. It is a prospective intent for the NEXT
+  // rebuild, not a claim about what the deployed page does today — that is genuinely unknown here,
+  // since the page was written before the field existed and implements neither behaviour explicitly.
+  // The value is written into the spec visibly, with a note saying where it came from, so the author
+  // can decide rather than discover it later.
   //
   // This deliberately does NOT weaken the rule for hand-authored specs: those do not come through
   // hydration, so an author writing a new page with `pageInput` still has to decide.

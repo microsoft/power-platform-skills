@@ -880,19 +880,35 @@ test('readProvisionedLanguages never returns a non-empty list of non-LCIDs (it w
   );
 
   // Each of these previously produced a truthy, non-empty array and would have halted a 1033 build.
-  for (const payload of [[null], [''], [-1], [0], [1.5], [Number.NaN], [{}], [[]], ['abc'], [null, undefined]]) {
+  // `Number()` coerces all of them into something that looks like an LCID: `true`->1, `[1033]`->1033,
+  // `'1e3'`->1000, `null`/`''`->0. The repo already documents why bare Number() is wrong for this
+  // (app-spec.js normalizeLanguageCode); the probe now uses that same normalizer.
+  for (const payload of [[null], [''], [-1], [0], [1.5], [Number.NaN], [{}], [[]], ['abc'],
+    [true], [false], [[1033]], ['1e3'], ['0x40D'], [' '], ['1033abc'], [null, undefined]]) {
     assert.strictEqual(await call(payload), null,
-      `payload ${JSON.stringify(payload)} yields nothing usable, which is "unknown" (null), not a real list`);
+      `payload ${JSON.stringify(payload)} yields nothing trustworthy, which is "unknown" (null)`);
   }
   // An org always has at least its base language, so an empty array is a payload we did not
   // understand -- "unknown", not "zero languages provisioned" (which would reject every LCID).
   assert.strictEqual(await call([]), null);
-  // Mixed payloads keep the values that ARE valid rather than discarding a usable answer.
-  assert.deepStrictEqual(await call([1033, null, 1031, 'x']), [1033, 1031]);
-  // Out-of-range is not an LCID; 65535 is the documented maximum and must survive.
-  assert.deepStrictEqual(await call([65536, 1033, 0, 65535]), [1033, 65535]);
-  // Numeric strings are how some payloads arrive and are still LCIDs.
+
+  // ALL-OR-NOTHING. A PARTIALLY malformed payload must NOT be silently reduced to the elements we
+  // could parse: `checkProvisioned` treats any non-empty list as COMPLETE, so handing it a shorter
+  // list makes it reject languages the org may actually have. An earlier version of this test
+  // asserted the opposite -- it codified `[1033, null, 1031, 'x'] -> [1033, 1031]` as correct, which
+  // is exactly the silent-truncation bug.
+  assert.strictEqual(await call([1033, null, 1031, 'x']), null,
+    'one unparseable element makes the WHOLE payload untrustworthy');
+  assert.strictEqual(await call([1031, null]), null);
+  assert.strictEqual(await call([1033, true]), null);
+
+  // Clean payloads still parse, including the numeric-string form and the boundary value.
+  assert.deepStrictEqual(await call([1033, 1031]), [1033, 1031]);
   assert.deepStrictEqual(await call(['1033']), [1033]);
+  assert.deepStrictEqual(await call([65535]), [65535]);
+  // Above the bound the plugin enforces (see normalizeLanguageCode) -- a policy limit shared with
+  // the App Spec and the CLI flag, not a claim about the width of a Windows LCID.
+  assert.strictEqual(await call([65536]), null);
 });
 
 // END-TO-END on the consumer: prove the fail-soft contract at the level that actually matters --

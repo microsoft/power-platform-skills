@@ -26,7 +26,12 @@ const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7:
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
 // view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
 // EXISTING views/charts without needing views[]/charts[] declared (which would else duplicate them).
-async function readDashboards(sdk, app) {
+// `warn` is optional and injected so the CLI can report WHY a dashboard could not be reconstructed.
+// Without it this function swallowed every per-dashboard failure (`catch { continue }`) and returned
+// a short list, so the subarea silently dropped and download failed downstream with "could not be
+// round-tripped" and no cause. That is a diagnosis dead-end: live, the real reason was an SDK
+// deserialization bug several layers down, and nothing surfaced it.
+async function readDashboards(sdk, app, warn) {
   const strip = (g) => String(g || '').replace(/[{}]/g, '') || undefined;
   const ids = new Map(); // dashboardId -> subarea title (fallback name)
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
@@ -39,7 +44,12 @@ async function readDashboards(sdk, app) {
   const out = [];
   for (const [id, title] of ids) {
     let art;
-    try { art = await sdk.fetchArtifact('dashboard', id); } catch { continue; }
+    // Keep going on a single unreadable dashboard — one bad artifact must not sink the whole
+    // download — but SAY SO. A dropped subarea with no stated cause is what made this untraceable.
+    try { art = await sdk.fetchArtifact('dashboard', id); } catch (e) {
+      if (typeof warn === 'function') warn(`dashboard '${title || id}' (${id}) could not be read: ${e && e.message}`);
+      continue;
+    }
     let name = title || id;
     try { const rows = await sdk.queryRecords('systemform', { select: ['name'], filter: `formid eq ${id}`, top: 1 }); if (rows && rows[0] && rows[0].name) name = rows[0].name; } catch { /* keep fallback */ }
     const tiles = [];
@@ -52,7 +62,13 @@ async function readDashboards(sdk, app) {
       else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
       else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
     }
+    // A dashboard that read cleanly but yielded no usable tile is ALSO a silent drop — the subarea
+    // disappears with nothing said. Distinguish it from the unreadable case above.
     if (tiles.length) out.push({ id, name, tiles });
+    else if (typeof warn === 'function') {
+      warn(`dashboard '${name}' (${id}) read OK but produced no recognizable tiles `
+        + `(${(art.components || []).length} component(s)); its sitemap subarea will be dropped.`);
+    }
   }
   return out;
 }
@@ -730,8 +746,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
   let dashboards = [];
   let dashboardReconstructionError = null;
+  // Per-dashboard failures are collected rather than swallowed. They are the usual cause of a
+  // "subarea could not be round-tripped" error further down, and without them that error names the
+  // subarea but not the reason, which makes it undiagnosable without a debugger.
+  const dashboardWarnings = [];
   try {
-    dashboards = await readDashboards(sdk, app);
+    dashboards = await readDashboards(sdk, app, (m) => {
+      dashboardWarnings.push(m);
+      process.stderr.write(`WARNING: ${m}\n`);
+    });
   } catch (e) {
     dashboardReconstructionError = e.message;
     process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
@@ -753,7 +776,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const spec = await hydrateSpec(read);
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
 }
 
 async function main() {
@@ -789,25 +812,34 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
       .join(', ');
     const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
-    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage} A rebuild from this spec will DROP them from the app nav.`;
+    // Per-dashboard reasons, when there are any. Naming the subarea without saying WHY it dropped
+    // sends the reader looking at their sitemap when the cause is an unreadable artifact.
+    const causeMessage = (dashboardWarnings && dashboardWarnings.length)
+      ? ` Cause: ${dashboardWarnings.join('; ')}.`
+      : '';
+    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage}${causeMessage} A rebuild from this spec will DROP them from the app nav.`;
     if (!allowLossyDownload) {
       process.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
-      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError });
+      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, ...(dashboardWarnings && dashboardWarnings.length ? { dashboardWarnings } : {}) });
       return;
     }
     process.stderr.write(`WARNING: ${message}\n`);
   }
-  const validation = validateAppSpec(spec, { profile: 'plan' });
+  // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
+  // rules become warnings, because refusing to write a description of an app that already exists
+  // leaves the author with no artifact at all (see the pageInput producer rule).
+  const validation = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
   if (!validation.ok) {
     emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
     return;
   }
+  for (const w of validation.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
   // pages that predate the field (otherwise this download would have hard-failed above and written no
   // spec at all), but the author has to know a behaviour was chosen for them so they can change it.

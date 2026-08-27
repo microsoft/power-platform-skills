@@ -286,7 +286,7 @@ function legacyPageInputRead() {
 
 test('a downloaded app that predates directEntry still produces a VALID spec (upgrade path)', async () => {
   const spec = await hydrateSpec(legacyPageInputRead());
-  const v = validateAppSpec(spec, { profile: 'plan' });
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
   assert.strictEqual(v.ok, true,
     'download validates before writing, so an invalid spec here means no file is written at all: '
     + JSON.stringify(v.errors));
@@ -298,6 +298,51 @@ test('a downloaded app that predates directEntry still produces a VALID spec (up
   assert.strictEqual(detail.directEntry.behavior, 'emptyState');
   assert.match(detail.directEntry.note, /predates directEntry/i,
     'the injected value says where it came from, so the author can review rather than discover it');
+});
+
+// The case the test above DODGES, and the one that matters more: a legacy page whose input has NO
+// producing `navigatesTo` edge at all -- it was supplied externally, or by the page's own .tsx.
+// Injecting `directEntry` does not help there, because the ORPHANED-INPUT rule fires instead and is
+// equally fatal, so download would still write no file. Reviewed and caught precisely because the
+// first test supplied a matching edge and never exercised this path.
+function legacyOrphanInputRead() {
+  const read = legacyPageInputRead();
+  return {
+    ...read,
+    // Same two pages, but Overview no longer navigates with `orderId`.
+    pages: async () => (await read.pages()).map((p) => (p.key === 'overview' ? { ...p, navigatesTo: [{ targetKey: 'detail' }] } : p)),
+  };
+}
+
+test('a legacy page whose pageInput has NO producer still downloads (authoring rule, not a deploy rule)', async () => {
+  const spec = await hydrateSpec(legacyOrphanInputRead());
+
+  // As an AUTHORED spec this is still an error -- the rule keeps its teeth for anything hand-written.
+  const authored = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(authored.ok, false, 'authoring still rejects an input nothing produces');
+  assert.ok((authored.errors || []).some((e) => /no page navigates to it with that data/.test(e)),
+    JSON.stringify(authored.errors));
+
+  // As a RECONSTRUCTION of an app that already exists, it must be writable -- with the finding
+  // surfaced, not swallowed.
+  const reconstructed = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(reconstructed.ok, true,
+    'download must still emit a spec: ' + JSON.stringify(reconstructed.errors));
+  assert.ok((reconstructed.warnings || []).some((w) => /no page navigates to it with that data/.test(w)),
+    'the finding is reported as a warning, not dropped: ' + JSON.stringify(reconstructed.warnings));
+});
+
+test('reconstructed mode relaxes ONLY the producer rule, not real structural errors', async () => {
+  // A blanket "reconstructed means anything goes" would be worse than the bug it fixes.
+  const spec = await hydrateSpec(legacyOrphanInputRead());
+  spec.appShell.areas[0].groups[0].subAreas.push({ title: 'Bad', url: 'javascript:alert(1)' });
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, false, 'a javascript: url is still fatal under reconstruction');
+
+  const spec2 = await hydrateSpec(legacyOrphanInputRead());
+  spec2.pages.find((p) => p.key === 'detail').directEntry = { behavior: 'shrug' };
+  const v2 = validateAppSpec(spec2, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v2.ok, false, 'an illegal directEntry.behavior is still fatal under reconstruction');
 });
 
 test('the defaulted directEntry is reported, not silent', async () => {

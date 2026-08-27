@@ -895,6 +895,14 @@ function validateAppSpec(spec, opts = {}) {
       // Trace each declared input back to a navigation edge that actually produces it. An input no
       // caller supplies is either a typo or a page that can ONLY ever be entered directly — both are
       // worth failing on, because the generated page would read a key nothing ever sets.
+      //
+      // EXCEPT when the spec was RECONSTRUCTED from a deployed app (`opts.reconstructed`, set by
+      // download). This is an authoring rule: it gates what you are about to create. A reconstruction
+      // describes an app that ALREADY EXISTS, and download validates before it writes — so treating
+      // it as fatal there produces no spec file at all and strands the author with nothing to edit,
+      // which is the #430 failure this release exists to fix. A page whose manifest predates the rule
+      // (input supplied externally, or from its own .tsx) hits exactly that. Reported as a warning
+      // instead: the author gets the file, the finding, and the chance to fix it.
       const produced = new Set();
       for (const other of spec.pages || []) {
         for (const nav of other.navigatesTo || []) {
@@ -903,7 +911,9 @@ function validateAppSpec(spec, opts = {}) {
       }
       const orphaned = inputKeys.filter((k) => !produced.has(k));
       if (orphaned.length) {
-        errors.push(`page '${key}': pageInput declares ${orphaned.map((k) => `'${k}'`).join(', ')} but no page navigates to it with that data — add it to the producing page's navigatesTo[].data, or drop it from pageInput.`);
+        const msg = `page '${key}': pageInput declares ${orphaned.map((k) => `'${k}'`).join(', ')} but no page navigates to it with that data — add it to the producing page's navigatesTo[].data, or drop it from pageInput.`;
+        if (opts.reconstructed) warnings.push(msg);
+        else errors.push(msg);
       }
     }
   }

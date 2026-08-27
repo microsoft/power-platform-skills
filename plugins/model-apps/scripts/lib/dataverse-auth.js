@@ -5,6 +5,9 @@
 // All operation scripts (provision-entities.js, provision-solution.js, etc.) import from this module.
 
 const { execFileSync } = require('child_process');
+// Shared with the App Spec + CLI so the provisioned-language probe and the validator cannot disagree
+// about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
+const { normalizeLanguageCode } = require('./app-spec.js');
 
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
@@ -221,15 +224,24 @@ async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
     //     "RetrieveProvisionedLanguages": [1033] }
     const list = res.data && res.data.RetrieveProvisionedLanguages;
     if (!Array.isArray(list)) return null;
-    // Filter to values that are actually LCIDs. `Number.isFinite` alone was not enough: `Number(null)`
-    // is 0 and `Number('')` is 0, both finite, so a malformed payload became a NON-EMPTY list of
-    // garbage. `checkProvisioned` treats a non-empty list as authoritative, so it would then reject
-    // every genuinely valid LCID and HALT the build — the exact opposite of this function's
-    // documented fail-soft contract. Bound matches normalizeLanguageCode's MAX_LCID.
-    const lcids = list.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 65535);
-    // Nothing usable survived (or the org reported none at all): that is "could not be determined",
-    // which is null — not "zero languages are provisioned", which would reject every LCID. Every org
-    // has at least its base language, so an empty result is always a payload we did not understand.
+    // Parse with the SAME normalizer the App Spec and the CLI flag use, rather than `Number()`.
+    // `Number()` coerces far too much and every one of these previously produced a plausible LCID:
+    //   [null] -> 0      [true] -> 1        [[1033]] -> 1033      ['1e3'] -> 1000      [''] -> 0
+    // `normalizeLanguageCode` accepts only a real integer or a digits-only string (app-spec.js), so
+    // the probe and the validator cannot disagree about what an LCID is.
+    //
+    // ALL-OR-NOTHING on purpose. `checkProvisioned` treats any non-empty list as COMPLETE and
+    // authoritative (entity-provision.js), so silently dropping the elements we could not parse would
+    // hand it a SHORTER list and make it reject languages the organization may well have. A payload
+    // we do not fully understand is "unknown" — null — not "here is the subset I liked".
+    const lcids = [];
+    for (const raw of list) {
+      const lcid = normalizeLanguageCode(raw);
+      if (!lcid) return null;
+      lcids.push(lcid);
+    }
+    // An org always has at least its base language, so an empty array is a payload we did not
+    // understand too — "unknown", not "zero languages provisioned" (which would reject every LCID).
     return lcids.length ? lcids : null;
   } catch {
     return null;

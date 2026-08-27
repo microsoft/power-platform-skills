@@ -81,6 +81,14 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   shape the builder deliberately drops, and the offline test hid it by hand-writing the XML it
   wanted to see.
 
+### Known limitations
+- **A classic dashboard does not survive `download-model-app.js`.** Build and teardown work, but the
+  vendored SDK's `fetchArtifact('dashboard', …)` throws while deserializing the `<parameters>` block
+  it itself serialized, so no tiles are recovered and the dashboard's sitemap subarea is dropped —
+  failing the whole download unless `--allow-lossy-download` is passed. Live-verified, and reproduced
+  on the previous bundle too, so it is **not** a regression from this release's SDK uptake. Download
+  now names the cause instead of dropping the subarea silently. Tracked upstream.
+
 ### Changed
 - **Vendored SDK re-taken from its merged `master`, and it now records its provenance.**
   `scripts/vendor/PROVENANCE.json` carries the upstream SHA, build mode and the bundle's own
