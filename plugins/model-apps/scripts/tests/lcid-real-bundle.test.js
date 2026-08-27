@@ -6,17 +6,21 @@
 // override. That is now `MakerSdkOptions.languageCode`, and the plugin threads a resolved LCID into
 // `createMakerSdk` (see `makeSdk` in build-model-app.js).
 //
-// COVERAGE, stated honestly: the tests below cover FORM labels and SITEMAP titles. They do NOT
-// cover DASHBOARD labels, even though the SDK parameterizes `dashboardRegistration(languageCode)`
-// the same way — an empty dashboard emits no `<labels>` at all, so there is nothing to assert
-// without a populated dashboard fixture. A re-vendor that dropped dashboard parameterization while
-// leaving form and sitemap intact would therefore pass this file. Closing that needs a dashboard
-// with real content, which is worth adding when the dashboard phase next gets attention.
+// COVERAGE: form labels, sitemap titles, AND dashboard labels are all covered below.
+//
+// The dashboard half was an open hole until now, and the reason is worth keeping: an EMPTY dashboard
+// emits no `<labels>` at all, so there was nothing to assert. It needs a POPULATED one. A re-vendor
+// that dropped dashboard parameterization while leaving form and sitemap intact would previously
+// have passed this file; it no longer can.
 //
 // Live status: the FORM half is live-verified — a form pushed against a genuinely Spanish org
 // (base language 3082) came back FROM THE SERVER with `languagecode="3082"` on every label. The
-// sitemap half is real-bundle-verified only; the live app create failed on an unrelated
-// `appmodules` error before its sitemap could be read back.
+// sitemap and dashboard halves are real-bundle-verified only. That is a real limit, not an
+// oversight: every scratch organization available here provisions 1033 ONLY (30/30 probed), and the
+// #456 guard correctly refuses to build at an LCID the org has not provisioned — so a live non-1033
+// dashboard cannot be produced without a language pack nobody has installed. Observing 1033 on a
+// 1033-only org proves nothing here, because 1033 is exactly what the OLD hardcoded serializer
+// emitted; only the non-default assertions below separate the two.
 //
 // This drives the REAL vendored bundle rather than a mock, because the whole failure mode is "the
 // mock accepts an option the bundle ignores". A mock-based test would stay green against a bundle
@@ -101,4 +105,62 @@ test('REAL BUNDLE: languageCode is a live contract — two LCIDs must not serial
   assert.notStrictEqual(a, b, 'identical input at two different LCIDs must not serialize identically');
   assert.deepStrictEqual(langsIn(a), ['languagecode="1031"']);
   assert.deepStrictEqual(langsIn(b), ['languagecode="3082"']);
+});
+
+// --- dashboards: the third serializer #455 parameterized -------------------------------------
+//
+// Pushes the payload PRODUCTION builds, via the exported `dashboardComponent`, rather than a
+// hand-copied literal. A duplicated shape would keep passing after production changed, which is the
+// failure mode this whole file exists to prevent.
+async function pushedDashboard(languageCode) {
+  const { dashboardComponent } = require(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'));
+  const { sdk, capture } = sdkAt(languageCode);
+  const art = sdk.createArtifact('dashboard', { name: 'LCID Dashboard' });
+  // A tile must carry a NAME: the name becomes the cell's <label description="…">, and a dashboard
+  // with no labelled tile emits no <labels> at all — which is exactly why this was uncoverable
+  // before. One list tile and one chart tile, so both branches of dashboardComponent are exercised.
+  const tiles = [
+    { type: 'list', name: 'Recent', targetEntity: 'account', viewId: '{11111111-1111-1111-1111-111111111111}' },
+    { type: 'chart', name: 'By Priority', targetEntity: 'account', viewId: '{11111111-1111-1111-1111-111111111111}', visualizationId: '{22222222-2222-2222-2222-222222222222}' },
+  ];
+  for (let i = 0; i < tiles.length; i++) {
+    await sdk.addElement('dashboard', art.id, '/components', dashboardComponent(tiles[i], i));
+  }
+  await sdk.pushArtifact('dashboard', art.id);
+  const write = capture.find((c) => c.body && typeof c.body.formxml === 'string');
+  assert.ok(write, 'a write carrying dashboard FormXML was issued; got ' + JSON.stringify(capture.map((c) => c.url)));
+  return write.body.formxml;
+}
+
+test('REAL BUNDLE: a POPULATED dashboard stamps its labels at the configured LCID (#455)', async () => {
+  const xml = await pushedDashboard(1031);
+  assert.deepStrictEqual(langsIn(xml), ['languagecode="1031"'],
+    `every dashboard label must carry the configured LCID and nothing else; got ${JSON.stringify(langsIn(xml))}`);
+});
+
+test('REAL BUNDLE: omitting languageCode leaves dashboard labels at 1033', async () => {
+  const xml = await pushedDashboard(undefined);
+  assert.deepStrictEqual(langsIn(xml), ['languagecode="1033"'],
+    'the SDK dashboard default LCID is unchanged, so threading the option stays opt-in');
+});
+
+test('REAL BUNDLE: two LCIDs must not serialize a dashboard identically', async () => {
+  // Same drift guard as the form case: a bundle that ignored the option would emit identical bytes.
+  const a = await pushedDashboard(1031);
+  const b = await pushedDashboard(3082);
+  assert.notStrictEqual(a, b, 'identical dashboard input at two LCIDs must not serialize identically');
+  assert.deepStrictEqual(langsIn(a), ['languagecode="1031"']);
+  assert.deepStrictEqual(langsIn(b), ['languagecode="3082"']);
+});
+
+test('REAL BUNDLE: a chart tile serializes VisualizationId, never ChartId', async () => {
+  // Belongs here because this is the only place the production tile payload is pushed through the
+  // real bundle and the resulting XML inspected. `ChartId` is rejected by the platform's dashboard
+  // FormXML schema and cost a whole phase; the mock-based test had asserted the wrong name, so the
+  // suite agreed with the bug. Asserting on the SERIALIZED bytes cannot be fooled the same way.
+  const xml = await pushedDashboard(1031);
+  assert.match(xml, /<VisualizationId>\{22222222-2222-2222-2222-222222222222\}<\/VisualizationId>/,
+    'the chart tile binds its visualization through VisualizationId');
+  assert.doesNotMatch(xml, /ChartId/,
+    'ChartId is not a legal child of <parameters> and must never be emitted');
 });

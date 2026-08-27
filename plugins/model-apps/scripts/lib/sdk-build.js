@@ -137,8 +137,9 @@ function dashboardTileOpts(spec, tile, result) {
 // addElement('dashboard', id, '/components', …). The adapter mints the cell/control ids and lays the
 // grid out from `position`; the caller supplies the classId (chart/list share the grid control id —
 // ChartGridMode disambiguates), the `<parameters>` map, and the placement. Tiles stack vertically
-// (one per row in the first section). Param keys match the Dataverse control XML (a chart tile keys
-// its visualization as `ChartId`, see DashboardAdapter / dashboard.workflow.test.ts).
+// (one per row in the first section). Param keys match the Dataverse control XML; note that a chart
+// tile keys its visualization as `VisualizationId`, NOT `ChartId` — see the comment on that line,
+// and `lcid-real-bundle.test.js`, which pushes this exact payload through the real bundle.
 function dashboardComponent(t, index) {
   const parameters = {};
   if (t.type === 'chart') {
@@ -2077,4 +2078,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
