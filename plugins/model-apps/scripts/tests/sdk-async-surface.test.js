@@ -748,21 +748,29 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   // merge-tool's PR id: unresolvable from here, and it advertises a tracker nobody reading this can
   // open. `sanitizeSubject` strips it at record time; this pins the committed artifact, which is the
   // thing that actually ships.
+  //
+  // Asserts against the sanitizer's OWN patterns rather than a local copy, so a prefix shape added
+  // there can never be one this check silently stops looking for.
+  const { MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
   assert.strictEqual(typeof prov.subject, 'string', 'the upstream commit subject is recorded');
-  assert.doesNotMatch(prov.subject, /^\s*Merged\s+PR\s+\d+/i,
-    'the recorded subject must not keep the upstream merge-tool PR prefix');
-  assert.doesNotMatch(prov.subject, /^\s*Merge\s+pull\s+request\s+#\d+/i,
-    'the recorded subject must not keep a GitHub merge-commit prefix');
+  for (const re of MERGE_PREFIXES) {
+    assert.doesNotMatch(prov.subject, re,
+      `the recorded subject must not keep an upstream merge-tool prefix (matched ${re})`);
+  }
 });
 
 // The sanitizer that produces the above. Unit-tested against the shapes the SDK's own history
 // actually emits, plus the cases where it must NOT fire — a subject that merely mentions a merge is
 // prose, and over-stripping would destroy the only human-readable part of the provenance record.
+//
+// Every id used here is SYNTHETIC. An earlier version of this test quoted the real upstream PR id as
+// its example, which reintroduced into a public file exactly the identifier the function exists to
+// remove — the fix and the test cancelling each other out.
 test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
-  const { sanitizeSubject } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
+  const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
 
   assert.strictEqual(
-    sanitizeSubject('Merged PR 16896261: feat(cds-maker-sdk): configurable authoring LCID'),
+    sanitizeSubject('Merged PR 12345678: feat(cds-maker-sdk): configurable authoring LCID'),
     'feat(cds-maker-sdk): configurable authoring LCID');
   assert.strictEqual(
     sanitizeSubject('merged pr 42 : fix(sdk): tolerate a missing label'),
@@ -771,12 +779,16 @@ test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
   assert.strictEqual(
     sanitizeSubject('Merge pull request #4312 from someone/some-branch: fix(sdk): tolerate a missing label'),
     'fix(sdk): tolerate a missing label');
-  // A bare GitHub merge subject has NO description (GitHub puts it on the body line), so the whole
-  // subject is prefix. That hits the only-a-prefix fallback below and is returned unchanged rather
-  // than emptied.
+  // The `#` is OPTIONAL — not every tool emits it, and requiring it let a real merge subject through
+  // untouched while every test stayed green.
   assert.strictEqual(
-    sanitizeSubject('Merge pull request #4312 from someone/some-branch'),
-    'Merge pull request #4312 from someone/some-branch');
+    sanitizeSubject('Merge pull request 4312 from someone/some-branch: fix(sdk): x'),
+    'fix(sdk): x');
+  // The ref is matched with [^:\s]+, not \S+. A greedy \S+ swallows a colon that belongs to the
+  // DESCRIPTION, silently deleting the part that says what changed.
+  assert.strictEqual(
+    sanitizeSubject('Merge pull request #9 from owner/ref:fix(sdk): tolerate x'),
+    'fix(sdk): tolerate x');
 
   // Must NOT fire: the prefix is anchored, so a mid-sentence mention survives verbatim.
   const prose = 'fix(sdk): revert the change merged PR 99 introduced';
@@ -784,12 +796,47 @@ test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
   const plain = 'feat(sdk): add setHeaderAndNavigationRefresh';
   assert.strictEqual(sanitizeSubject(plain), plain, 'an already-clean subject is unchanged');
 
-  // A subject that is ONLY a prefix keeps its text: an empty string reads as "provenance could not
-  // be determined", a different and more alarming claim than "the subject was unhelpful".
-  assert.strictEqual(sanitizeSubject('Merged PR 123:'), 'Merged PR 123:');
+  // A subject that is ONLY a prefix yields a neutral placeholder. Returning the ORIGINAL (the
+  // previous behaviour) put the identifier straight back and produced a value that failed the
+  // committed-provenance assertion above — the sanitizer breaking its own contract.
+  assert.strictEqual(sanitizeSubject('Merged PR 123:'), NO_DESCRIPTION);
+  assert.strictEqual(sanitizeSubject('Merge pull request #4312 from someone/some-branch'), NO_DESCRIPTION,
+    'GitHub puts the description on the body line, so a bare merge subject is entirely prefix');
   // Non-strings pass through, because `git()` records null when the call fails and null must stay
   // distinguishable from an empty subject.
   assert.strictEqual(sanitizeSubject(null), null);
+});
+
+test('sanitizeSubject output can NEVER match a merge prefix (the actual contract)', () => {
+  // Case-by-case assertions only prove the cases someone thought of. The property that matters is
+  // that NO input produces an output still carrying a prefix — which is what the committed
+  // PROVENANCE.json must satisfy. Asserting the property directly is what catches the next shape
+  // nobody enumerated.
+  const { sanitizeSubject, MERGE_PREFIXES } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
+
+  const corpus = [
+    'Merged PR 12345678: feat(sdk): x',
+    'Merged PR 123:',
+    'Merged PR 123',
+    '  merged   pr   7  :  ',
+    'Merge pull request #4312 from someone/some-branch',
+    'Merge pull request 4312 from someone/some-branch',
+    'Merge pull request #4312 from someone/some-branch: desc',
+    'Merge pull request #9 from owner/ref:fix(sdk): tolerate x',
+    'Merged PR 1: Merged PR 2: doubly prefixed',
+    'feat(sdk): plain',
+    'fix(sdk): revert the change merged PR 99 introduced',
+    '',
+    '   ',
+  ];
+
+  for (const input of corpus) {
+    const out = sanitizeSubject(input);
+    for (const re of MERGE_PREFIXES) {
+      assert.doesNotMatch(out, re,
+        `sanitizeSubject(${JSON.stringify(input)}) returned ${JSON.stringify(out)}, which still matches ${re}`);
+    }
+  }
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {

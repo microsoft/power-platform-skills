@@ -196,9 +196,10 @@ local-dev ergonomics, sample coverage, and an automated eval suite. No breaking 
   width, shared input-safety boundaries).
 
 ### Fixed
-- **Teardown leaves nothing behind** — icon and app-icon web resources are removed, cascade
+- **Teardown removes everything the app owns** — icon and app-icon web resources are removed, cascade
   failures are reported rather than silently orphaning rows, and reused/system tables are skipped
-  with a reason. Command-bar teardown is fail-closed.
+  with a reason. Command-bar teardown is fail-closed. The **publisher** is deliberately left behind:
+  it can own other solutions, so removing it is not this app's decision.
 - **Exported solutions are self-contained** — the app icon and sitemap are added to the solution.
 - **The Dataverse token is never sent to another origin** — the HTTP client refuses any request
   outside the absolute `https` org URL.
