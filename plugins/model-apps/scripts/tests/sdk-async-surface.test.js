@@ -77,11 +77,15 @@ const ASYNC_SDK_METHODS = [
 // `\\s*\\??\\.\\s*` accepts optional chaining (`provision?.getArtifact(...)`) and a receiver split
 // from its method across lines; both are ordinary JS that an earlier version of this pattern
 // silently ignored.
-// `SEP` accepts what JavaScript actually allows between a receiver, its `.`, and the method:
-// whitespace OR a block comment. `\\s*` alone missed `provision /* note */ .getArtifact(...)`.
+// Comments are whitespace in JavaScript, so `provision /* note */ .getArtifact(...)` and
+// `provision // note` + `.getArtifact(...)` are ordinary calls. They are NOT handled by widening
+// this pattern: an alternation containing `/\*[\s\S]*?\*/` inside a `*` quantifier rescans the rest
+// of the file from every position, which hung the whole test run. They are handled instead by
+// running the same pattern a second time over the COMMENT-BLANKED view, where a comment has already
+// become spaces — see the two-pass scan in findUnawaitedCalls.
 // `(?:\\?\\.)?` before the argument list accepts optional INVOCATION, `getArtifact?.(...)`, which is
-// a different construct from optional MEMBER access and was previously unmatched.
-const SEP = '(?:\\s|/\\*[\\s\\S]*?\\*/)*';
+// a different construct from optional MEMBER access.
+const SEP = '\\s*';
 const CALL_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))${SEP}\\??\\.${SEP}(${ASYNC_SDK_METHODS.join('|')})${SEP}(?:\\?\\.)?\\(`, 'g');
 
 // Computed access — `provision['getArtifact'](...)` — needs a SEPARATE pass, because the method
@@ -374,13 +378,32 @@ function findUnawaitedCalls(raw) {
     const inStr = strLines[lineNo - 1];
     return inCode !== undefined && inCode.trim() === '' && inStr !== undefined && inStr.trim() === '';
   };
+  // Reading the RAW lines above `lineNo`, is there an unclosed `/*`? Independent of the lexer.
+  const insideOpenBlockComment = (lineNo) => {
+    for (let n = lineNo - 2; n >= 0; n--) {
+      const l = rawLines[n] || '';
+      const open = l.lastIndexOf('/*');
+      const close = l.lastIndexOf('*/');
+      if (open > close) return true;   // this line opens a comment that is still open
+      if (close > open) return false;  // a comment closed above us, so we are not inside one
+    }
+    return false;
+  };
   const wholeLineInert = (lineText, lineNo) => {
     const trimmed = String(lineText || '').trimStart();
     if (trimmed.startsWith('//')) return true;
     const blankedLine = codeLines[lineNo - 1];
     const lexerSaysBlank = blankedLine !== undefined && blankedLine.trim() === '';
-    // A block-comment CONTINUATION line: both the shape and the lexer must agree.
-    if (trimmed.startsWith('*') && lexerSaysBlank) return true;
+    // A block-comment CONTINUATION line. THREE signals must agree, because two were not enough:
+    // a composed desync can blank a line that legitimately begins with `*` —
+    //     if (c) /`/.test(v);
+    //     const n = x
+    //       * provision.getArtifact('f', id);     <- multiplication, not a comment
+    //     const s = `ok`;
+    // So besides the `*` shape and the lexer, the RAW SOURCE ABOVE must show an open block comment:
+    // searching upward, a `/*` must appear before any `*/`. That check reads the raw text and does
+    // not depend on the lexer, so a desync cannot supply it.
+    if (trimmed.startsWith('*') && lexerSaysBlank && insideOpenBlockComment(lineNo)) return true;
     // Otherwise decide from the RAW LINE ALONE, independently of the lexer.
     //
     // This matters because the lexer-derived signal is not independent of the lexer: a multi-line
@@ -410,14 +433,32 @@ function findUnawaitedCalls(raw) {
     const line = lineAt(index);
     const text = rawLines[line - 1] || '';
     if (dismissed(index, text, line, blankedView)) return;
-    if (waives(line - 1) || waives(line - 2)) { found.waived = (found.waived || 0) + 1; return; }
-    found.push({ line, text: text.trim(), kind });
+    if (waives(line - 1) || waives(line - 2)) {
+      // Deduplicated by line: the two-pass scan can match the same call twice, and a doubled count
+      // would trip the "waivers must stay rare" assertion for no real reason.
+      found.waivedLines = found.waivedLines || new Set();
+      found.waivedLines.add(line);
+      return;
+    }
+    const finding = { line, text: text.trim(), kind };
+    if (!found.some((f) => f.line === line && f.kind === kind)) found.push(finding);
   };
 
+  // TWO PASSES per pattern.
+  //
+  // The RAW pass is the one that cannot be defeated by a lexer flaw. The COMMENT-BLANKED pass
+  // exists because comments are whitespace in JavaScript, so `provision /* note */ .getArtifact()`
+  // is a real call that the raw pass cannot see with a `\s*` separator — and widening the separator
+  // to include comments made the regex rescan the file from every position and hang the run.
+  // Findings are the UNION, deduplicated by line, so the extra pass can only ADD detection.
   CALL_RE.lastIndex = 0;
   for (const m of raw.matchAll(CALL_RE)) consider(m, 'call', code);
+  CALL_RE.lastIndex = 0;
+  for (const m of code.matchAll(CALL_RE)) consider(m, 'call', code);
   COMPUTED_RE.lastIndex = 0;
   for (const m of raw.matchAll(COMPUTED_RE)) consider(m, 'computed', codeWithStrings);
+  COMPUTED_RE.lastIndex = 0;
+  for (const m of codeWithStrings.matchAll(COMPUTED_RE)) consider(m, 'computed', codeWithStrings);
   DESTRUCTURE_RE.lastIndex = 0;
   for (const m of raw.matchAll(DESTRUCTURE_RE)) {
     const line = lineAt(m.index);
@@ -430,6 +471,7 @@ function findUnawaitedCalls(raw) {
     found.push({ line, text: text.trim(), kind: 'destructured binding' });
   }
   found.candidates = candidates;
+  found.waived = found.waivedLines ? found.waivedLines.size : 0;
   return found;
 }
 
@@ -561,6 +603,12 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "if (c) /`/.test(v);\n /* legacy */ provision.getArtifact('f', id);\nconst s = `ok`;",
     'a default that is a CALL in a destructuring pattern':
       "const { getArtifact = fallback() } = provision;",
+    // Sol round 5 (non-blocking, fixed anyway): a LINE comment is whitespace too, and a composed
+    // desync could satisfy the block-comment-continuation exception on a multiplication line.
+    'a LINE comment between receiver and method':
+      "provision // note\n  .getArtifact('form', id);",
+    'a multiplication line that only LOOKS like a comment continuation':
+      "if (c) /`/.test(v);\nconst n = x\n  * provision.getArtifact('f', id);\nconst s = `ok`;",
   };
   for (const [label, code] of Object.entries(MUST_FLAG)) {
     assert.strictEqual(check(code), true, `the matcher must flag: ${label}`);
@@ -577,6 +625,8 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     'an object literal that merely mentions the name as a VALUE': "const m = { name: getArtifactLabel };",
     'a mock object literal passed as an argument (must not read as destructuring)':
       "calls.push({ name: 'getArtifact', args: [t, id] });",
+    'documentation prose inside a real block comment':
+      "/**\n * See provision.getArtifact(id) for the rationale.\n */\nconst x = 1;",
   };
   for (const [label, code] of Object.entries(MUST_NOT_FLAG)) {
     assert.strictEqual(check(code), false, `the matcher must NOT flag: ${label}`);
