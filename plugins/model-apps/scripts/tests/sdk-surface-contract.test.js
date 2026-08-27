@@ -148,12 +148,27 @@ function calledSdkMethods() {
     }
   };
   walk(SCRIPTS_DIR);
-  const re = /\b(?:provision|sdk)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
+  // Receivers: any identifier that plausibly holds an SDK instance, not a two-name allow-list.
+  //
+  // A review found `provisionSdk.initWorkspace()` in build-model-app.js was invisible to the old
+  // `(provision|sdk)` pattern — the method happened to be listed anyway, via a `sdk.` call
+  // elsewhere, so nothing failed; a method used ONLY through such a receiver would have been
+  // silently unguarded. Matching any identifier containing "sdk" or "provision" (case-insensitive)
+  // covers every handle the plugin actually uses (`provision`, `sdk`, `provisionSdk`) and errs
+  // toward over-collecting: a false positive here just adds a name to SKILL_SDK_SURFACE, where the
+  // bundle check immediately proves whether it is real.
+  //
+  // Still invisible, and deliberately not chased: a destructured or fully dynamic call. Those need
+  // real data-flow analysis, and unlike the async guard — where an unguarded call CORRUPTS data —
+  // the failure here is a loud TypeError at runtime, so a tripwire is proportionate.
+  const re = /\b([A-Za-z_$][\w$]*)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
   const found = new Set();
   for (const f of files) {
     const src = fs.readFileSync(f, 'utf8');
     let m;
-    while ((m = re.exec(src)) !== null) found.add(m[1]);
+    while ((m = re.exec(src)) !== null) {
+      if (/sdk|provision/i.test(m[1])) found.add(m[2]);
+    }
   }
   return found;
 }
