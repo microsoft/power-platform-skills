@@ -49,7 +49,17 @@ const ASYNC_SDK_METHODS = [
 // SDK), so a same-named method on some unrelated object does not currently exist. If one is ever
 // introduced, it lands as a loud failure here — which is the correct direction for this trade —
 // and is resolved with the waiver below or by renaming.
-const CALL_RE = new RegExp(`(await\\s+)?\\b[A-Za-z_$][\\w$]*\\s*\\.\\s*(${ASYNC_SDK_METHODS.join('|')})\\s*\\(`, 'g');
+//
+// `\\s*\\??\\.\\s*` accepts optional chaining (`provision?.getArtifact(...)`) and a receiver split
+// from its method across lines; both are ordinary JS that an earlier version of this pattern
+// silently ignored.
+const CALL_RE = new RegExp(`(await\\s+)?\\b[A-Za-z_$][\\w$]*\\s*\\??\\.\\s*(${ASYNC_SDK_METHODS.join('|')})\\s*\\(`, 'g');
+
+// Computed access — `provision['getArtifact'](...)` — needs a SEPARATE pass, because the method
+// name lives inside a string literal and the scanner below blanks strings (deliberately: a method
+// name quoted in a log message is not a call). So this pattern is matched against a
+// comments-stripped-but-strings-intact copy instead.
+const COMPUTED_RE = new RegExp(`(await\\s+)?\\b[A-Za-z_$][\\w$]*\\s*\\??\\[\\s*['"\`](${ASYNC_SDK_METHODS.join('|')})['"\`]\\s*\\]\\s*\\(`, 'g');
 
 // An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so, either on
 // the same line or on the line immediately above it — the latter because these calls are often too
@@ -69,7 +79,7 @@ const OPT_OUT = 'sdk-async-ok';
  * String literals are blanked too, so a method name quoted in a message (or in this file's own
  * documentation of the rule) can never be mistaken for a call.
  */
-function stripCommentsAndStrings(src) {
+function stripCommentsAndStrings(src, { keepStrings = false } = {}) {
   let out = '';
   let i = 0;
   const keep = (ch) => (ch === '\n' ? '\n' : ' ');
@@ -87,6 +97,8 @@ function stripCommentsAndStrings(src) {
     }
     const q = src[i];
     if (q === '"' || q === "'" || q === '`') {
+      // The COMPUTED-access pass needs the quoted method name intact, so it opts out of blanking.
+      if (keepStrings) { out += src[i]; i++; continue; }
       out += ' ';
       i++;
       while (i < src.length) {
@@ -135,18 +147,24 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     // Scan CODE ONLY. Offsets are preserved, so match indices still map to real line numbers, and
     // the reported text is taken from the ORIGINAL source so a finding is readable.
     const code = stripCommentsAndStrings(raw);
+    // Second view for computed access, where the method name must survive inside its quotes.
+    const codeWithStrings = stripCommentsAndStrings(raw, { keepStrings: true });
     scanned++;
     const rawLines = raw.split('\n');
-    CALL_RE.lastIndex = 0;
-    for (const m of code.matchAll(CALL_RE)) {
+    const record = (m, haystack) => {
       calls++;
-      if (m[1]) continue; // awaited — `await` must be ADJACENT, so `await other(); x.get(...)` still counts
-      const line = code.slice(0, m.index).split('\n').length;
+      if (m[1]) return; // awaited — `await` must be ADJACENT, so `await other(); x.get(...)` still counts
+      const line = haystack.slice(0, m.index).split('\n').length;
       const text = rawLines[line - 1] || '';
       // The waiver is read from the ORIGINAL source, because it lives in a comment.
-      if (text.includes(OPT_OUT) || String(rawLines[line - 2] || '').includes(OPT_OUT)) { waived++; continue; }
-      findings.push(`${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`);
-    }
+      if (text.includes(OPT_OUT) || String(rawLines[line - 2] || '').includes(OPT_OUT)) { waived++; return; }
+      const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`;
+      if (!findings.includes(finding)) findings.push(finding);
+    };
+    CALL_RE.lastIndex = 0;
+    for (const m of code.matchAll(CALL_RE)) record(m, code);
+    COMPUTED_RE.lastIndex = 0;
+    for (const m of codeWithStrings.matchAll(COMPUTED_RE)) record(m, codeWithStrings);
   }
 
   // Positive assertions first: a scan that silently matched nothing would "pass" forever.
@@ -160,6 +178,55 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     + 'not throw — they silently feed a Promise to a pure helper and corrupt the artifact '
     + `(see this file's header). Add \`await\`, or annotate the line with ${OPT_OUT} if the promise `
     + `is deliberately handed elsewhere:\n  ${findings.join('\n  ')}`);
+});
+
+test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-alikes', () => {
+  // The scan above can only be trusted if its matcher is itself tested. Two of these cases were
+  // proven evasions of an earlier version of this file (aliased receiver; live code after a block
+  // comment), and two more were found by probing it afterwards (optional chaining; computed
+  // access). Pinning them here means a future "simplification" of the regex fails loudly instead of
+  // quietly reopening the hole.
+  const check = (code) => {
+    const noStr = stripCommentsAndStrings(code);
+    const withStr = stripCommentsAndStrings(code, { keepStrings: true });
+    // Offsets must be preserved or every reported line number is wrong.
+    assert.strictEqual(noStr.length, code.length, 'stripping preserves byte offsets');
+    assert.strictEqual(withStr.length, code.length, 'string-preserving strip also preserves offsets');
+    let flagged = false;
+    CALL_RE.lastIndex = 0;
+    for (const m of noStr.matchAll(CALL_RE)) if (!m[1]) flagged = true;
+    COMPUTED_RE.lastIndex = 0;
+    for (const m of withStr.matchAll(COMPUTED_RE)) if (!m[1]) flagged = true;
+    return flagged;
+  };
+
+  const MUST_FLAG = {
+    'plain un-awaited call': "const a = provision.getArtifact('form', id);",
+    'ALIASED receiver': "const c = provision; const a = c.getArtifact('f', id);",
+    'live code AFTER a block comment': "/* legacy */ const a = provision.getArtifact('f', id);",
+    'optional chaining': "const a = provision?.getArtifact('f', id);",
+    'computed access': "const a = provision['getArtifact']('f', id);",
+    'computed access via backticks': 'const a = provision[`getArtifact`](\'f\', id);',
+    'receiver split from method across lines': "const a = provision\n  .getArtifact('f', id);",
+    'promise handed to Promise.all without a waiver': "await Promise.all(ids.map((i) => sdk.getArtifact('f', i)));",
+  };
+  for (const [label, code] of Object.entries(MUST_FLAG)) {
+    assert.strictEqual(check(code), true, `the matcher must flag: ${label}`);
+  }
+
+  const MUST_NOT_FLAG = {
+    'a correctly awaited call': "const a = await provision.getArtifact('form', id);",
+    'an awaited optional-chained call': "const a = await provision?.getArtifact('f', id);",
+    'an awaited computed call': "const a = await provision['getArtifact']('f', id);",
+    'the method name inside a string': "log('call getArtifact() next');",
+    'the method name inside a template literal': 'log(`use x.getArtifact(y)`);',
+    'the method name inside a comment': '// see provision.getArtifact(id) for why',
+    'the method name inside a regex literal': 'const re = /x\\.getArtifact\\(/;',
+    'a URL whose // sits inside a string': "const u = 'https://example.com/a//b'; const a = await sdk.getArtifact('f', id);",
+  };
+  for (const [label, code] of Object.entries(MUST_NOT_FLAG)) {
+    assert.strictEqual(check(code), false, `the matcher must NOT flag: ${label}`);
+  }
 });
 
 test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, with the SDK remedy)', async () => {
