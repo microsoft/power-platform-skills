@@ -92,9 +92,18 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (on every event)
-- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Power Pages populates it with `aadObjectId`, the signed-in user's stable Entra ID / AAD directory object ID parsed from `pac auth who`, when available. The field is omitted when `pac auth who` does not surface an object ID. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Power Pages populates it with:
 
-  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schema. The only approved nested field is currently Power Pages `aadObjectId` as a string. Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+  - `aadObjectId` — the signed-in user's stable Entra ID / AAD directory object ID, parsed from `pac auth who`, when available. Omitted when `pac auth who` does not surface an object ID.
+  - `framework` — the SPA framework of the Power Pages **code site** the skill is running against, drawn from the closed set `react`, `vue`, `angular`, `astro`. Omitted unless the working directory resolves to a site with a `powerpages.config.json`.
+
+  Each key is omitted independently when its source is unavailable; `eventInfo` itself is omitted only when every key would be absent.
+
+  On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+
+  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schema. The approved nested fields are currently Power Pages `aadObjectId` (string) and `framework` (string, restricted to the closed set above — it describes the scaffold a site was built from, is shared by every site built from that scaffold, and therefore identifies no user, project, or site). Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+
+  `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
 ## What is NEVER sent
 
