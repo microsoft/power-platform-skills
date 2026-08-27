@@ -39,16 +39,69 @@ const ASYNC_SDK_METHODS = [
   'updateElement',
 ];
 
-// The only two identifiers the plugin ever binds an SDK instance to. Scanning by receiver keeps the
-// regex precise: a same-named method on some other object cannot produce a false positive, and a
-// real SDK call cannot hide behind an unusual variable name without this list being updated.
-const SDK_RECEIVERS = ['provision', 'sdk'];
+// Matching is by METHOD NAME on ANY receiver, not on an allow-list of receiver identifiers.
+//
+// An earlier version scanned only `provision.` and `sdk.`, which an adversarial review broke in one
+// line: `const client = provision; client.getArtifact(...)` is a real bug that the receiver list
+// cannot see, and no list can, because a receiver can be aliased, destructured, or passed as a
+// parameter. Matching the method name instead is sound here for a checked reason, not a hopeful
+// one: a scan of the plugin found NO local definition of any of these names (they exist only on the
+// SDK), so a same-named method on some unrelated object does not currently exist. If one is ever
+// introduced, it lands as a loud failure here — which is the correct direction for this trade —
+// and is resolved with the waiver below or by renaming.
+const CALL_RE = new RegExp(`(await\\s+)?\\b[A-Za-z_$][\\w$]*\\s*\\.\\s*(${ASYNC_SDK_METHODS.join('|')})\\s*\\(`, 'g');
 
 // An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so, either on
 // the same line or on the line immediately above it — the latter because these calls are often too
 // long for a readable trailing comment. Requiring adjacency keeps the waiver next to the code it
 // excuses, so it cannot drift onto an unrelated call later.
 const OPT_OUT = 'sdk-async-ok';
+
+/**
+ * Blank out comments and string/template literals, preserving every byte offset and newline so
+ * match indices still map to the original line numbers.
+ *
+ * Why a character scanner instead of "skip lines that start with //": the line-prefix filter was a
+ * real hole. `/* legacy *\/ provision.getArtifact(id);` starts with a comment, so a prefix filter
+ * discards the WHOLE line — including the live call after it. Conversely a naive regex strip would
+ * corrupt `'https://x'`, whose `//` is inside a string.
+ *
+ * String literals are blanked too, so a method name quoted in a message (or in this file's own
+ * documentation of the rule) can never be mistaken for a call.
+ */
+function stripCommentsAndStrings(src) {
+  let out = '';
+  let i = 0;
+  const keep = (ch) => (ch === '\n' ? '\n' : ' ');
+  while (i < src.length) {
+    const two = src.slice(i, i + 2);
+    if (two === '//') {
+      while (i < src.length && src[i] !== '\n') { out += keep(src[i]); i++; }
+      continue;
+    }
+    if (two === '/*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end === -1 ? src.length : end + 2;
+      while (i < stop) { out += keep(src[i]); i++; }
+      continue;
+    }
+    const q = src[i];
+    if (q === '"' || q === "'" || q === '`') {
+      out += ' ';
+      i++;
+      while (i < src.length) {
+        if (src[i] === '\\') { out += '  '.slice(0, Math.min(2, src.length - i)); i += 2; continue; }
+        if (src[i] === q) { out += ' '; i++; break; }
+        out += keep(src[i]);
+        i++;
+      }
+      continue;
+    }
+    out += src[i];
+    i++;
+  }
+  return out;
+}
 
 function pluginSourceFiles() {
   const out = [];
@@ -69,38 +122,29 @@ function pluginSourceFiles() {
 }
 
 test('every SDK generic-surface call in the plugin is awaited', () => {
-  // `[\s\S]*?` is deliberately NOT used: `await` must be adjacent (only whitespace/newline between
-  // it and the receiver), so `await somethingElse(); provision.getArtifact(...)` is still a finding.
-  const re = new RegExp(
-    `(await\\s+)?\\b(${SDK_RECEIVERS.join('|')})\\.(${ASYNC_SDK_METHODS.join('|')})\\s*\\(`,
-    'g'
-  );
   const findings = [];
   let scanned = 0;
   let calls = 0;
-  let inComment = 0;
   let waived = 0;
 
   for (const file of pluginSourceFiles()) {
     // This file names the methods in prose and in the ASYNC_SDK_METHODS list; scanning it would
-    // match its own documentation.
+    // match its own documentation. (Strings are blanked, but the list itself is real code.)
     if (path.basename(file) === path.basename(__filename)) continue;
-    const src = fs.readFileSync(file, 'utf8');
+    const raw = fs.readFileSync(file, 'utf8');
+    // Scan CODE ONLY. Offsets are preserved, so match indices still map to real line numbers, and
+    // the reported text is taken from the ORIGINAL source so a finding is readable.
+    const code = stripCommentsAndStrings(raw);
     scanned++;
-    const lines = src.split('\n');
-    for (const m of src.matchAll(re)) {
+    const rawLines = raw.split('\n');
+    CALL_RE.lastIndex = 0;
+    for (const m of code.matchAll(CALL_RE)) {
       calls++;
-      if (m[1]) continue; // awaited
-      const line = src.slice(0, m.index).split('\n').length;
-      const text = lines[line - 1] || '';
-      // Prose mentions a call to EXPLAIN it — this file's own header does exactly that, and so does
-      // the rebuild-idempotency test in sdk-build.test.js. A comment cannot execute, so skip it
-      // rather than force documentation to avoid naming the very API it documents. Covers `//`,
-      // `/*` and the `*` continuation lines of a block comment; a trailing comment after real code
-      // is deliberately NOT skipped, because the code before it still runs.
-      const lead = text.trimStart();
-      if (lead.startsWith('//') || lead.startsWith('/*') || lead.startsWith('*')) { inComment++; continue; }
-      if (text.includes(OPT_OUT) || String(lines[line - 2] || '').includes(OPT_OUT)) { waived++; continue; }
+      if (m[1]) continue; // awaited — `await` must be ADJACENT, so `await other(); x.get(...)` still counts
+      const line = code.slice(0, m.index).split('\n').length;
+      const text = rawLines[line - 1] || '';
+      // The waiver is read from the ORIGINAL source, because it lives in a comment.
+      if (text.includes(OPT_OUT) || String(rawLines[line - 2] || '').includes(OPT_OUT)) { waived++; continue; }
       findings.push(`${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`);
     }
   }
@@ -108,7 +152,6 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
   // Positive assertions first: a scan that silently matched nothing would "pass" forever.
   assert.ok(scanned > 50, `the scan walked the plugin source (saw ${scanned} files)`);
   assert.ok(calls > 30, `the scan found the SDK calls it is meant to guard (saw ${calls})`);
-  assert.ok(inComment > 0, 'the comment filter is exercised (documentation naming these calls exists)');
   // The waiver must stay RARE and deliberate. If this ever grows large, the rule is being routed
   // around rather than followed.
   assert.ok(waived <= 5, `only a handful of deliberate ${OPT_OUT} waivers exist (saw ${waived})`);

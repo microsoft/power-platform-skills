@@ -65,6 +65,7 @@ const SKILL_SDK_SURFACE = [
   'findTables',
   'getAiReadiness',
   'getArtifact',
+  'getSolution',
   'initWorkspace',
   'insertStatusValue',
   'publishArtifact',
@@ -73,6 +74,7 @@ const SKILL_SDK_SURFACE = [
   'removeElement',
   'removeRowSummary',
   'resolveArtifact',
+  'retrieveSetting',
   'seedRecordGraph',
   'setAppAiFeatures',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
@@ -119,18 +121,33 @@ test('CONTRACT: every SDK method the skill depends on is a function on the real 
   }
 });
 
-// Collect every `provision.<name>(` / `sdk.<name>(` identifier the two engines call. These
-// aliases are the MakerSdk instance in sdk-build.js (`provision`) and sdk-teardown.js (`sdk`).
+// Collect every `provision.<name>(` / `sdk.<name>(` identifier the plugin calls. These aliases are
+// the MakerSdk instance in sdk-build.js (`provision`) and sdk-teardown.js (`sdk`).
 // e.g. matches `provision.createTable(o)` and `await sdk.deleteTable(...)` -> 'createTable' / 'deleteTable'.
+//
+// The scan covers scripts/ RECURSIVELY, not a hand-listed set of library files. An adversarial
+// review found that the hand-listed version silently omitted two real calls made from the top-level
+// CLI scripts — `sdk.getSolution(...)` in download-model-app.js and `sdk.retrieveSetting(...)` in
+// verify-model-app.js — so the "every method the engines call is guarded" claim was false, and a
+// future bundle could drop either method with this test still green and download/verify failing at
+// runtime with a TypeError. A list of files to scan is exactly the kind of thing that rots; a walk
+// does not.
 function calledSdkMethods() {
-  const files = [
-    path.join(LIB_DIR, 'sdk-build.js'),
-    path.join(LIB_DIR, 'sdk-teardown.js'),
-    path.join(LIB_DIR, 'entity-provision.js'),
-    // artifact-intent.js is PURE (no SDK calls) by design, but scan it too so a future SDK call
-    // added to the compiler is caught by this guard rather than slipping past the mock-based tests.
-    path.join(LIB_DIR, 'artifact-intent.js'),
-  ].filter((f) => fs.existsSync(f));
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // vendor/ is the generated SDK itself; _vendor-build is the dev-only bundler; tests/ define
+        // MOCK sdk objects whose method set is deliberately not the real surface.
+        if (['vendor', '_vendor-build', 'node_modules', 'tests'].includes(entry.name)) continue;
+        walk(full);
+      } else if (entry.name.endsWith('.js')) {
+        files.push(full);
+      }
+    }
+  };
+  walk(SCRIPTS_DIR);
   const re = /\b(?:provision|sdk)\.([A-Za-z][A-Za-z0-9]*)\s*\(/g;
   const found = new Set();
   for (const f of files) {

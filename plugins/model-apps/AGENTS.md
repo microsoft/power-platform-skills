@@ -847,7 +847,18 @@ changes.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
 skill relies on behaviors that must survive. Four test files lock them — run all against every
-rebuilt bundle:
+rebuilt bundle.
+
+**Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
+writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA and subject, whether
+that package had uncommitted changes, and the bundle's own sha256. Two things make this
+load-bearing rather than bookkeeping. First, the bundler consumes the SDK's **gitignored `lib/`**,
+a build output that can be arbitrarily older than `src/` — a bundle shipped in this repo was once
+built from a stale `lib/` several commits behind its nominal source, and nothing could reveal it.
+The bundler now **refuses** (exit 3) when `lib/index.js` predates the newest `.ts` under `src/`.
+Second, "built from master" is not provenance, because master moves; the SHA is what lets a
+reviewer reproduce the artifact. Re-running the build on the same inputs must reproduce the same
+sha256 — check it.
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call

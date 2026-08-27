@@ -3,6 +3,11 @@
  *      or set POWER_PLATFORM_UX_SDK_ROOT=<path-to-ppux>
  * Not shipped. Re-run only when the SDK source changes.
  *
+ * After rebuilding, run the vendored-SDK contract tests against the new bundle:
+ *   scripts/tests/{sdk-surface-contract,sdk-async-surface,hardening2-real-bundle,vendor-sdk-smoke}.test.js
+ * sdk-async-surface is the one to read first: it pins which SDK methods are asynchronous, and an
+ * upstream change to that set is both silent and corrupting (see that file's header).
+ *
  * esbuild is pinned to an EXACT version in package.json (no `^`) on purpose. The stub plugin below
  * depends on esbuild's *internal* import-interop codegen (`__toESM` / `__copyProps`) — an
  * implementation detail with no compatibility guarantee, not a public API. That codegen does change
@@ -27,11 +32,77 @@ if (!argSdk) {
 }
 const SDK_ENTRY = path.join(argSdk, 'packages/cds-maker-sdk/lib/index.js');
 const OUTFILE = path.resolve(__dirname, '../vendor/cds-maker-sdk.cjs');
+const PROVENANCE = path.resolve(__dirname, '../vendor/PROVENANCE.json');
 const esbuild = require('esbuild');
 
 if (!fs.existsSync(SDK_ENTRY)) {
   console.error('SDK entry not found:', SDK_ENTRY);
   process.exit(2);
+}
+
+/* Record WHICH upstream source produced the committed bundle.
+ *
+ * Without this the artifact is unreproducible in practice, and that is not hypothetical: the bundle
+ * committed before this was built from a stale, gitignored `lib/` several commits behind its
+ * nominal source, and nothing in the repo could reveal that. "Built from master" is not provenance —
+ * master moves, and `lib/` is a build output that can be arbitrarily old relative to `src/`.
+ *
+ * So capture the resolved SHA, and flag a dirty or stale checkout rather than silently baking it in.
+ * `git` calls are best-effort: a source tree that is not a git checkout still builds, it is just
+ * recorded as unknown, because refusing would block a legitimate export-based workflow.
+ */
+function sdkProvenance(root) {
+  const git = (args) => {
+    try {
+      return require('node:child_process')
+        .execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .trim();
+    } catch {
+      return null;
+    }
+  };
+  const commit = git(['rev-parse', 'HEAD']);
+  // `--porcelain` limited to the SDK package: unrelated dirt elsewhere in a large monorepo must not
+  // be reported as "this bundle came from modified SDK sources".
+  const dirty = git(['status', '--porcelain', '--', 'packages/cds-maker-sdk']);
+  const entryMtime = fs.statSync(SDK_ENTRY).mtime.toISOString();
+  // A `lib/` older than the newest `src/` file means tsc was not re-run — the exact stale-build trap.
+  let newestSrc = null;
+  const srcDir = path.join(root, 'packages/cds-maker-sdk/src');
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (e.name.endsWith('.ts')) {
+        const m = fs.statSync(f).mtime;
+        if (!newestSrc || m > newestSrc) newestSrc = m;
+      }
+    }
+  };
+  try { walk(srcDir); } catch { /* no src tree: an export-based build, nothing to compare */ }
+  return {
+    commit,
+    subject: git(['log', '-1', '--format=%s']),
+    dirtySdkPackage: dirty ? dirty.split('\n').filter(Boolean).length : 0,
+    libBuiltAt: entryMtime,
+    newestSrcAt: newestSrc ? newestSrc.toISOString() : null,
+    libIsStale: !!(newestSrc && newestSrc > fs.statSync(SDK_ENTRY).mtime),
+    builtAt: new Date().toISOString(),
+  };
+}
+
+const prov = sdkProvenance(argSdk);
+if (prov.libIsStale) {
+  console.error(`REFUSING: ${SDK_ENTRY} is OLDER than the newest .ts under packages/cds-maker-sdk/src`);
+  console.error(`  lib built  : ${prov.libBuiltAt}`);
+  console.error(`  newest src : ${prov.newestSrcAt}`);
+  console.error('  Rebuild the SDK (its own `build` script) before vendoring, or the bundle will not');
+  console.error('  match the source it claims to come from. This exact trap shipped once already.');
+  process.exit(3);
+}
+if (prov.dirtySdkPackage) {
+  console.warn(`WARNING: packages/cds-maker-sdk has ${prov.dirtySdkPackage} uncommitted change(s);`);
+  console.warn('         the resulting bundle will NOT be reproducible from the recorded commit.');
 }
 
 // Transitive deps that are pulled in by the cds-* designer packages (which the headless SDK DOES
@@ -137,7 +208,14 @@ esbuild
   })
   .then(() => {
     const kb = (fs.statSync(OUTFILE).size / 1024).toFixed(0);
+    // Hash the artifact so a reviewer can tell two bundles apart without diffing 600KB of minified
+    // output, and so a rebuild from the same inputs is checkable rather than assumed.
+    const sha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(OUTFILE)).digest('hex');
+    fs.writeFileSync(PROVENANCE, `${JSON.stringify({ ...prov, bundleSha256: sha256, bundleBytes: fs.statSync(OUTFILE).size }, null, 2)}\n`);
     console.log(`BUNDLE OK -> ${OUTFILE} (${kb} KB)`);
+    console.log(`  sdk commit : ${prov.commit || '(not a git checkout)'}`);
+    console.log(`  sha256     : ${sha256}`);
+    console.log(`  provenance -> ${PROVENANCE}`);
   })
   .catch(() => {
     console.error('BUNDLE FAILED');

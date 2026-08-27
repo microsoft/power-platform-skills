@@ -60,15 +60,23 @@ test('the changed-only flow does not read SDK artifacts across runs', () => {
 test('the build engine never PUSHES an artifact kind it does not also fetch or create', () => {
   // The residual half of #469, and the one the read-side guard above does not cover.
   //
-  // `pushArtifact` reads the artifact through the same internal seam `getArtifact` uses, so a push
-  // of something cached by an EARLIER run serves that stale copy — and separately trips
-  // ARTIFACT_LANGUAGE_MISMATCH once the plugin passes `languageCode`, because the stored artifact
-  // language would disagree with the pushing SDK.
+  // `pushArtifact` reads the artifact from the workspace before serializing it, so a push of
+  // something cached by an EARLIER run pushes that earlier copy. Note it does NOT go through the
+  // same revalidating seam `getArtifact` uses — in this bundle the push path reads locally without
+  // revalidating — so a push is if anything MORE exposed to a stale copy than a read is, not less.
+  // Separately it trips ARTIFACT_LANGUAGE_MISMATCH once the plugin passes `languageCode`, because
+  // the stored artifact language would disagree with the pushing SDK.
   //
   // Both are currently unreachable only because every push is preceded, in the same run, by a fetch
   // or a create. A future batch optimisation that pushed "known clean" artifacts without re-fetching
   // would make both reachable, and no other test would notice: the whole suite runs in one session,
   // so the failure appears on a user's SECOND build, not in CI.
+  //
+  // LIMIT OF THIS CHECK, stated so it is not mistaken for more than it is: it matches at the level
+  // of artifact KIND across the whole file, not per call site or per code path. A new branch that
+  // reads before fetching is NOT caught if any other code in the file fetches that same kind, and
+  // a fully dynamic `pushArtifact(type, id)` is invisible to it. It is a cheap tripwire for the
+  // obvious regression, not a proof of the invariant.
   const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'sdk-build.js'), 'utf8');
   const pushes = [...src.matchAll(/provision\.pushArtifact\(\s*'(\w+)'/g)].map((m) => m[1]);
   assert.ok(pushes.length > 0, 'the scan found the pushArtifact calls it is meant to guard');
