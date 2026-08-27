@@ -298,11 +298,22 @@ function parseArgs(argv) {
  * `flags[kebab] ?? flags[camel]` silently prefers one and discards the other, which is the wrong
  * answer when the two disagree — the user passed both and believes one is in effect, so guessing
  * either way produces a build they did not ask for with no indication why.
+ *
+ * Comparison is on the TRIMMED string. Surrounding whitespace in a shell argument is never
+ * meaningful (`--language-code " 1031"` and `--languageCode 1031` are the same request), so
+ * treating it as a conflict would reject a pair the user got right.
+ *
+ * Value-domain equivalence is deliberately NOT collapsed: `1031` and `01031` stay a conflict even
+ * though both normalize to the same LCID downstream. This helper is domain-agnostic — it has no way
+ * to know whether a caller's flag is a number, a name, or an id where `007` differs from `7` — and
+ * the two outcomes are not symmetric. A false conflict is a loud error the user fixes in seconds; a
+ * wrong guess is a silent, wrong build. So it errs toward the loud one.
  */
 function readAliasedFlag(flags, kebab, camel) {
   const a = flags[kebab];
   const b = flags[camel];
-  if (a !== undefined && b !== undefined && String(a) !== String(b)) {
+  const same = (x, y) => String(x).trim() === String(y).trim();
+  if (a !== undefined && b !== undefined && !same(a, b)) {
     throw new Error(`--${kebab} '${a}' and --${camel} '${b}' disagree — pass only one`);
   }
   return a !== undefined ? a : b;

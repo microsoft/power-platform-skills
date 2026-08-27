@@ -52,6 +52,10 @@ if (!fs.existsSync(SDK_ENTRY)) {
  * that means, and it REFUSES unless --allow-unreproducible is passed, because a source that cannot
  * be identified cannot be audited.
  */
+/* Strip merge-tool prefixes from an upstream commit subject before it is committed here.
+ * See ./sanitize-subject.js for why, and why it lives in its own module. */
+const { sanitizeSubject } = require('./sanitize-subject.js');
+
 function sdkProvenance(root) {
   const git = (args) => {
     try {
@@ -94,7 +98,7 @@ function sdkProvenance(root) {
   try { walk(srcDir); } catch { /* no src tree: an export-based build, nothing to compare */ }
   return {
     commit,
-    subject: git(['log', '-1', '--format=%s']),
+    subject: sanitizeSubject(git(['log', '-1', '--format=%s'])),
     // null = could not determine (see above); a number = that many modified paths.
     dirtySdkPackage: dirtyRaw === null ? null : dirtyRaw.split('\n').filter(Boolean).length,
     libBuiltAt: entryMtime,
@@ -249,7 +253,8 @@ esbuild
     // Hash the LF-NORMALISED content so the recorded value is platform-independent: git's
     // end-of-line normalisation would otherwise make the same commit hash differently on a Windows
     // checkout than on Linux. (vendor/.gitattributes also marks the bundle `-text`; this is the
-    // belt to that braces.)
+    // belt to that pair of braces — either alone would do, and both together survive one being
+    // dropped by accident.)
     const raw = fs.readFileSync(OUTFILE);
     const normalised = Buffer.from(raw.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
     const sha256 = require('node:crypto').createHash('sha256').update(normalised).digest('hex');

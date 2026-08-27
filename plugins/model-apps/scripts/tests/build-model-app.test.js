@@ -726,6 +726,18 @@ test('a conflicting --language-code / --languageCode pair is rejected, not silen
   assert.strictEqual(readAliasedFlag({ 'language-code': '1031' }, 'language-code', 'languageCode'), '1031');
   assert.strictEqual(readAliasedFlag({ languageCode: '1036' }, 'language-code', 'languageCode'), '1036');
   assert.strictEqual(readAliasedFlag({}, 'language-code', 'languageCode'), undefined);
+  // Surrounding whitespace is never meaningful in a shell argument, so a pair that differs only by
+  // padding is the SAME request and must not be rejected. The un-trimmed value is still what gets
+  // returned — normalizing is the caller's job.
+  assert.strictEqual(readAliasedFlag({ 'language-code': ' 1031 ', languageCode: '1031' }, 'language-code', 'languageCode'), ' 1031 ');
+  // But value-domain equivalence stays a conflict: this helper is domain-agnostic and cannot know
+  // that '01031' and '1031' mean the same LCID (for an id flag, '007' and '7' would not). A loud
+  // error the user fixes in seconds beats a silent guess at which spelling wins.
+  assert.throws(
+    () => readAliasedFlag({ 'language-code': '1031', languageCode: '01031' }, 'language-code', 'languageCode'),
+    /disagree/,
+    'leading zeros are not collapsed — the helper has no value domain to collapse them in'
+  );
 });
 
 // #456 item 1: an EXPLICIT language override that the organization has not provisioned must fail

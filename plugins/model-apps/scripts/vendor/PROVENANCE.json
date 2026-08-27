@@ -1,6 +1,6 @@
 {
   "commit": "93ac5196ed5484120648151b0c8605ef75231301",
-  "subject": "Merged PR 16896261: feat(cds-maker-sdk): app feature settings (modern header by default), configurable authoring LCID, command bind + ordering fixes",
+  "subject": "feat(cds-maker-sdk): app feature settings (modern header by default), configurable authoring LCID, command bind + ordering fixes",
   "dirtySdkPackage": 0,
   "libBuiltAt": "2026-08-27T00:29:45.584Z",
   "newestSrcAt": "2026-08-27T00:12:30.264Z",

@@ -127,7 +127,7 @@ test('REAL BUNDLE: a NEW app gets the header/navigation refresh ON by default', 
   await sdk.pushArtifact('app', app.id);
   const setting = writes.find((w) => /appsetting/i.test(w.url) && w.body && typeof w.body.value === 'string');
   assert.ok(setting, 'pushing a new app writes an app setting unprompted; urls: ' + JSON.stringify(writes.map((w) => w.url)));
-  assert.strictEqual(setting.value === undefined ? setting.body.value : setting.body.value, '2',
+  assert.strictEqual(setting.body.value, '2',
     "the unprompted default write is the ON value '2'");
 });
 

@@ -497,8 +497,13 @@ async function main() {
   // halt fires once, before anything is constructed or written. Dry runs skip it: they perform no
   // writes, and a language read is a round trip a plan does not need.
   //
-  // Best-effort by construction — every failure mode inside resolves to the 1033 fallback with a
-  // warning, so this cannot turn a working build into a broken one.
+  // Resolution is best-effort in its *fallback* direction: an unreadable organization language, a
+  // failed probe, or a missing value all degrade to the 1033 default with a warning rather than
+  // failing the build. It is deliberately NOT best-effort in one direction — an EXPLICIT
+  // `--language-code` / spec `languageCode` that the organization has not provisioned halts here
+  // (#456), before the SDK is constructed and before any label is written. That halt is the point:
+  // Dataverse would otherwise accept some labels under the wrong language and reject others
+  // mid-build, phases away from the flag that caused it.
   const authoringLanguageCode = opts.apply
     ? await resolveAuthoringLanguage({ envUrl: env, languageCode, spec, warn: (m) => process.stderr.write(`⚠ ${m}\n`) })
     : undefined;

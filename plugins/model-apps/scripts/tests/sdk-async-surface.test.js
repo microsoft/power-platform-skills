@@ -744,6 +744,52 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   assert.strictEqual(prov.nostub, false,
     'the committed bundle was built WITH the stubs (a NOSTUB build pulls in shell packages that '
     + 'must not ship in a public repo)');
+  // The recorded subject is committed to a PUBLIC repo, so it must not carry the upstream
+  // merge-tool's PR id: unresolvable from here, and it advertises a tracker nobody reading this can
+  // open. `sanitizeSubject` strips it at record time; this pins the committed artifact, which is the
+  // thing that actually ships.
+  assert.strictEqual(typeof prov.subject, 'string', 'the upstream commit subject is recorded');
+  assert.doesNotMatch(prov.subject, /^\s*Merged\s+PR\s+\d+/i,
+    'the recorded subject must not keep the upstream merge-tool PR prefix');
+  assert.doesNotMatch(prov.subject, /^\s*Merge\s+pull\s+request\s+#\d+/i,
+    'the recorded subject must not keep a GitHub merge-commit prefix');
+});
+
+// The sanitizer that produces the above. Unit-tested against the shapes the SDK's own history
+// actually emits, plus the cases where it must NOT fire — a subject that merely mentions a merge is
+// prose, and over-stripping would destroy the only human-readable part of the provenance record.
+test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
+  const { sanitizeSubject } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
+
+  assert.strictEqual(
+    sanitizeSubject('Merged PR 16896261: feat(cds-maker-sdk): configurable authoring LCID'),
+    'feat(cds-maker-sdk): configurable authoring LCID');
+  assert.strictEqual(
+    sanitizeSubject('merged pr 42 : fix(sdk): tolerate a missing label'),
+    'fix(sdk): tolerate a missing label');
+  // A GitHub merge subject with a description after the branch ref keeps only the description.
+  assert.strictEqual(
+    sanitizeSubject('Merge pull request #4312 from someone/some-branch: fix(sdk): tolerate a missing label'),
+    'fix(sdk): tolerate a missing label');
+  // A bare GitHub merge subject has NO description (GitHub puts it on the body line), so the whole
+  // subject is prefix. That hits the only-a-prefix fallback below and is returned unchanged rather
+  // than emptied.
+  assert.strictEqual(
+    sanitizeSubject('Merge pull request #4312 from someone/some-branch'),
+    'Merge pull request #4312 from someone/some-branch');
+
+  // Must NOT fire: the prefix is anchored, so a mid-sentence mention survives verbatim.
+  const prose = 'fix(sdk): revert the change merged PR 99 introduced';
+  assert.strictEqual(sanitizeSubject(prose), prose, 'a mid-sentence mention is prose, not a prefix');
+  const plain = 'feat(sdk): add setHeaderAndNavigationRefresh';
+  assert.strictEqual(sanitizeSubject(plain), plain, 'an already-clean subject is unchanged');
+
+  // A subject that is ONLY a prefix keeps its text: an empty string reads as "provenance could not
+  // be determined", a different and more alarming claim than "the subject was unhelpful".
+  assert.strictEqual(sanitizeSubject('Merged PR 123:'), 'Merged PR 123:');
+  // Non-strings pass through, because `git()` records null when the call fails and null must stay
+  // distinguishable from an empty subject.
+  assert.strictEqual(sanitizeSubject(null), null);
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
