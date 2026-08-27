@@ -64,9 +64,20 @@ function sdkProvenance(root) {
   const commit = git(['rev-parse', 'HEAD']);
   // `--porcelain` limited to the SDK package: unrelated dirt elsewhere in a large monorepo must not
   // be reported as "this bundle came from modified SDK sources".
-  const dirty = git(['status', '--porcelain', '--', 'packages/cds-maker-sdk']);
+  //
+  // `null` means the git call FAILED (not a checkout, git missing, permissions) and is kept
+  // distinct from `0`. Conflating "unknown" with "clean" is what makes a provenance record lie, so
+  // the two are recorded differently and treated differently below.
+  const dirtyRaw = git(['status', '--porcelain', '--', 'packages/cds-maker-sdk']);
   const entryMtime = fs.statSync(SDK_ENTRY).mtime.toISOString();
   // A `lib/` older than the newest `src/` file means tsc was not re-run — the exact stale-build trap.
+  //
+  // LIMIT, stated because it is not obvious: mtime is a heuristic, not proof. A fresh clone or a
+  // `git checkout` rewrites source mtimes to NOW, so an already-correct `lib/` will look stale and
+  // the build will refuse until the SDK is rebuilt. That is the SAFE direction — it costs one
+  // rebuild and never ships an unverified artifact — but it does mean the check is conservative
+  // rather than exact. It also cannot see a `lib/` that was copied in with a fresh mtime, so it
+  // catches the accident (forgot to rebuild), not a determined mistake.
   let newestSrc = null;
   const srcDir = path.join(root, 'packages/cds-maker-sdk/src');
   const walk = (d) => {
@@ -83,10 +94,16 @@ function sdkProvenance(root) {
   return {
     commit,
     subject: git(['log', '-1', '--format=%s']),
-    dirtySdkPackage: dirty ? dirty.split('\n').filter(Boolean).length : 0,
+    // null = could not determine (see above); a number = that many modified paths.
+    dirtySdkPackage: dirtyRaw === null ? null : dirtyRaw.split('\n').filter(Boolean).length,
     libBuiltAt: entryMtime,
     newestSrcAt: newestSrc ? newestSrc.toISOString() : null,
     libIsStale: !!(newestSrc && newestSrc > fs.statSync(SDK_ENTRY).mtime),
+    // NOSTUB materially changes the OUTPUT (it disables the stub plugin, pulling the real shell/UI
+    // packages into the bundle), so a record that omitted it could not explain a hash difference.
+    nostub: !!process.env.NOSTUB,
+    esbuildVersion: require('esbuild/package.json').version,
+    nodeVersion: process.version,
     builtAt: new Date().toISOString(),
   };
 }
@@ -100,9 +117,27 @@ if (prov.libIsStale) {
   console.error('  match the source it claims to come from. This exact trap shipped once already.');
   process.exit(3);
 }
-if (prov.dirtySdkPackage) {
-  console.warn(`WARNING: packages/cds-maker-sdk has ${prov.dirtySdkPackage} uncommitted change(s);`);
-  console.warn('         the resulting bundle will NOT be reproducible from the recorded commit.');
+// A bundle whose inputs cannot be identified is not reproducible, and a reviewer has no way to tell
+// that from one that is. So these FAIL rather than warn — `--allow-unreproducible` exists for the
+// legitimate "I am iterating locally" case and records the fact in the provenance file.
+const ALLOW_UNREPRODUCIBLE = process.argv.includes('--allow-unreproducible');
+if (prov.commit === null && !ALLOW_UNREPRODUCIBLE) {
+  console.error('REFUSING: could not read a commit from the SDK source tree.');
+  console.error('  Without a commit the bundle cannot be reproduced or audited.');
+  console.error('  Vendor from a git checkout, or pass --allow-unreproducible for a local experiment.');
+  process.exit(4);
+}
+if (prov.dirtySdkPackage !== 0 && !ALLOW_UNREPRODUCIBLE) {
+  const what = prov.dirtySdkPackage === null
+    ? 'could not determine whether packages/cds-maker-sdk is clean'
+    : `packages/cds-maker-sdk has ${prov.dirtySdkPackage} uncommitted change(s)`;
+  console.error(`REFUSING: ${what}.`);
+  console.error(`  The bundle would NOT be reproducible from commit ${prov.commit || '(unknown)'}.`);
+  console.error('  Commit the SDK changes first, or pass --allow-unreproducible for a local experiment.');
+  process.exit(5);
+}
+if (ALLOW_UNREPRODUCIBLE) {
+  console.warn('WARNING: --allow-unreproducible — this bundle must NOT be committed.');
 }
 
 // Transitive deps that are pulled in by the cds-* designer packages (which the headless SDK DOES
@@ -211,7 +246,7 @@ esbuild
     // Hash the artifact so a reviewer can tell two bundles apart without diffing 600KB of minified
     // output, and so a rebuild from the same inputs is checkable rather than assumed.
     const sha256 = require('node:crypto').createHash('sha256').update(fs.readFileSync(OUTFILE)).digest('hex');
-    fs.writeFileSync(PROVENANCE, `${JSON.stringify({ ...prov, bundleSha256: sha256, bundleBytes: fs.statSync(OUTFILE).size }, null, 2)}\n`);
+    fs.writeFileSync(PROVENANCE, `${JSON.stringify({ ...prov, allowUnreproducible: ALLOW_UNREPRODUCIBLE || undefined, bundleSha256: sha256, bundleBytes: fs.statSync(OUTFILE).size }, null, 2)}\n`);
     console.log(`BUNDLE OK -> ${OUTFILE} (${kb} KB)`);
     console.log(`  sdk commit : ${prov.commit || '(not a git checkout)'}`);
     console.log(`  sha256     : ${sha256}`);
