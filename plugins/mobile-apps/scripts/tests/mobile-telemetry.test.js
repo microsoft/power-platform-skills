@@ -18,9 +18,7 @@ const TELEMETRY_CLI = path.join(
   PLUGIN_ROOT,
   'scripts',
   'lib',
-  'telemetry',
-  'lib',
-  'telemetry-config.js',
+  'mobile-telemetry-config.js',
 );
 const BUNDLED_TELEMETRY_LIB = path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'lib');
 const SHARED_TELEMETRY_LIB = path.resolve(PLUGIN_ROOT, '..', '..', 'shared', 'telemetry', 'lib');
@@ -327,7 +325,7 @@ test('bundled telemetry library is byte-identical to the canonical shared source
   }
 });
 
-test('bundled control CLI auto-detects and updates the mobile-app preference', (t) => {
+test('Mobile control wrapper updates preference with accurate disclosure', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-telemetry-control-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const env = {

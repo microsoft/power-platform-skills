@@ -95,22 +95,6 @@ test("status discloses Model Apps identifiers without claiming an Entra user obj
   assert.doesNotMatch(stdout, /anonymous/i);
 });
 
-test("status accurately discloses Mobile Apps fields", () => {
-  const dir = mkTmp();
-  const { status, stdout } = run(
-    ["--action", "status", "--plugin", "mobile-app"],
-    dir,
-    { POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "" }
-  );
-  assert.equal(status, 0);
-  assert.match(stdout, /invocation source/);
-  assert.match(stdout, /random per-project app\s+instance ID/);
-  assert.match(stdout, /does not record PAC CLI version/);
-  assert.match(stdout, /organization or Entra tenant IDs/);
-  assert.match(stdout, /or an Entra object ID/);
-  assert.doesNotMatch(stdout, /when PAC is signed in/);
-});
-
 test("status reports OFF after opt-out", () => {
   const dir = mkTmp();
   run(["--action", "off", "--plugin", "power-pages"], dir);

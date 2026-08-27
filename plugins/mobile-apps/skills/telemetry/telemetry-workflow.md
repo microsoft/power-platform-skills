@@ -7,10 +7,12 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 
 1. Read the action from `$ARGUMENTS`. It must be one of `on`, `off`, or `status`.
    If it is empty or anything else, use `status`.
-2. Run the synced CLI (it auto-detects the plugin from the plugin manifest):
+2. Run the Mobile Apps telemetry-control wrapper. It delegates preference and
+  log handling to the synced CLI, then replaces the generic PAC-aware disclosure
+  with Mobile Apps' actual identifier-free payload description:
 
    ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/telemetry/lib/telemetry-config.js" --action <action>
+  node "${PLUGIN_ROOT}/scripts/lib/mobile-telemetry-config.js" --action <action>
    ```
 
 3. Show the command's stdout to the user verbatim. Do not add or remove lines.
