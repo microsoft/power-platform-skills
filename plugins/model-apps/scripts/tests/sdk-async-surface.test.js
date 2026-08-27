@@ -119,6 +119,42 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     + `is deliberately handed elsewhere:\n  ${findings.join('\n  ')}`);
 });
 
+test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, with the SDK remedy)', async () => {
+  // `StaleArtifactError` is a NEW error class that only exists because reads became revalidating:
+  // the SDK raises it when a mutation is applied to a copy it just refreshed, because "any pointer
+  // derived from the old copy may now identify a different node". The engine has never seen it.
+  //
+  // It is reachable in production without any bug on our side: a long build can leave more than the
+  // SDK's 300s staleness window between an artifact's fetch and a later mutation, and if someone
+  // edits that artifact in Maker inside that window, the next mutation raises it.
+  //
+  // The requirement is NOT that the engine recovers — it is that it fails CLOSED and says what to
+  // do, rather than continuing and shipping a half-applied artifact. This pins that, so a future
+  // refactor of the error path cannot quietly downgrade it to a warning.
+  const { makeRunner, BuildHalt } = require(path.resolve(SCRIPTS_DIR, 'lib', 'entity-provision.js'));
+  const { SdkError } = require(BUNDLE);
+
+  const events = [];
+  const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
+  const stale = new SdkError('STALE_ARTIFACT',
+    'Cannot apply the edit at /tabs/0 to form/abc: the cached copy was stale and the server copy '
+    + 'has since changed, so any pointer derived from the old copy may now identify a different '
+    + 'node. The local copy has been refreshed — re-read the artifact, re-derive the pointer, and retry.');
+
+  await assert.rejects(
+    () => runner.run('forms', 'form "Customer"', async () => { throw stale; }),
+    (err) => {
+      assert.ok(err instanceof BuildHalt, 'a stale-artifact mutation halts the build');
+      assert.strictEqual(err.code, 'STALE_ARTIFACT', 'the SDK error code is preserved for the caller');
+      assert.match(err.message, /re-read the artifact, re-derive the pointer, and retry/,
+        'the operator is told the remedy, not just that something failed');
+      return true;
+    });
+
+  assert.ok(events.some((e) => e.status === 'error' && e.phase === 'forms'),
+    'the failure is reported on the phase, not swallowed');
+});
+
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
   const { createMakerSdk } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'async-surface-'));
