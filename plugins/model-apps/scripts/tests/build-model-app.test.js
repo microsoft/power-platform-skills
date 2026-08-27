@@ -865,6 +865,58 @@ test('readProvisionedLanguages returns null (not []) for a non-2xx response', as
   );
 });
 
+// The OTHER way this diagnostic can break a build, and the more dangerous one because the status
+// gate above does not touch it: a 2xx whose ARRAY carries values that are not LCIDs.
+//
+// `Number(null)` and `Number('')` are both 0 -- finite, so a `Number.isFinite` filter kept them.
+// The result was a NON-EMPTY list of garbage, and `checkProvisioned` treats any non-empty list as
+// authoritative (`entity-provision.js`: `if (!Array.isArray(list) || !list.length) return lcid`).
+// So a malformed payload rejected every genuinely valid LCID and HALTED the build -- the exact
+// inverse of the fail-soft contract this function documents.
+test('readProvisionedLanguages never returns a non-empty list of non-LCIDs (it would halt builds)', async () => {
+  const call = (payload) => readProvisionedLanguages(
+    'https://contoso.crm.dynamics.com',
+    async () => ({ status: 200, data: { RetrieveProvisionedLanguages: payload } })
+  );
+
+  // Each of these previously produced a truthy, non-empty array and would have halted a 1033 build.
+  for (const payload of [[null], [''], [-1], [0], [1.5], [Number.NaN], [{}], [[]], ['abc'], [null, undefined]]) {
+    assert.strictEqual(await call(payload), null,
+      `payload ${JSON.stringify(payload)} yields nothing usable, which is "unknown" (null), not a real list`);
+  }
+  // An org always has at least its base language, so an empty array is a payload we did not
+  // understand -- "unknown", not "zero languages provisioned" (which would reject every LCID).
+  assert.strictEqual(await call([]), null);
+  // Mixed payloads keep the values that ARE valid rather than discarding a usable answer.
+  assert.deepStrictEqual(await call([1033, null, 1031, 'x']), [1033, 1031]);
+  // Out-of-range is not an LCID; 65535 is the documented maximum and must survive.
+  assert.deepStrictEqual(await call([65536, 1033, 0, 65535]), [1033, 65535]);
+  // Numeric strings are how some payloads arrive and are still LCIDs.
+  assert.deepStrictEqual(await call(['1033']), [1033]);
+});
+
+// END-TO-END on the consumer: prove the fail-soft contract at the level that actually matters --
+// a build must not halt because the diagnostic returned nonsense. Asserting only on
+// readProvisionedLanguages would leave the coupling to checkProvisioned untested.
+test('a garbage provisioned-languages payload cannot halt a build', async () => {
+  const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+  const garbage = async () => readProvisionedLanguages(
+    'https://contoso.crm.dynamics.com',
+    async () => ({ status: 200, data: { RetrieveProvisionedLanguages: [null, ''] } })
+  );
+  const lc = await resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1033, provisionedLanguages: garbage });
+  assert.strictEqual(lc, 1033, 'an unreadable probe must let the explicit LCID through, not reject it');
+
+  // Control: a REAL list that genuinely lacks the LCID must still halt. If this stopped throwing,
+  // the fix above would have disabled the check rather than hardened it.
+  const real = async () => [1031, 1036];
+  await assert.rejects(
+    () => resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1033, provisionedLanguages: real }),
+    /1033 is not provisioned/,
+    'a genuine provisioned list must still be authoritative'
+  );
+});
+
 // AGENTS.md convention: test the reader ITSELF, not only an injected stub. A stub that ignores its
 // arguments would keep passing if the verb or the function name were mistyped -- and because the
 // check is fail-soft, that typo would degrade every build to "cannot verify, proceeding" in

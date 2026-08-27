@@ -808,10 +808,21 @@ async function main() {
     emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
     return;
   }
+  // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
+  // pages that predate the field (otherwise this download would have hard-failed above and written no
+  // spec at all), but the author has to know a behaviour was chosen for them so they can change it.
+  const defaulted = spec.directEntryDefaulted || [];
+  if (defaulted.length) {
+    process.stderr.write(
+      `WARNING: ${defaulted.length} page(s) declare pageInput but predate directEntry — defaulted to `
+      + `{ "behavior": "emptyState" }: ${defaulted.join(', ')}.\n`
+      + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
+    );
+  }
   const specPath = path.join(outDir, 'app-spec.json');
   preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
 }
 
 // Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.

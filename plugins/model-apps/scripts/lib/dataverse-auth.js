@@ -221,7 +221,16 @@ async function readProvisionedLanguages(envUrl, request = dataverseRequest) {
     //     "RetrieveProvisionedLanguages": [1033] }
     const list = res.data && res.data.RetrieveProvisionedLanguages;
     if (!Array.isArray(list)) return null;
-    return list.map(Number).filter((n) => Number.isFinite(n));
+    // Filter to values that are actually LCIDs. `Number.isFinite` alone was not enough: `Number(null)`
+    // is 0 and `Number('')` is 0, both finite, so a malformed payload became a NON-EMPTY list of
+    // garbage. `checkProvisioned` treats a non-empty list as authoritative, so it would then reject
+    // every genuinely valid LCID and HALT the build — the exact opposite of this function's
+    // documented fail-soft contract. Bound matches normalizeLanguageCode's MAX_LCID.
+    const lcids = list.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 65535);
+    // Nothing usable survived (or the org reported none at all): that is "could not be determined",
+    // which is null — not "zero languages are provisioned", which would reject every LCID. Every org
+    // has at least its base language, so an empty result is always a payload we did not understand.
+    return lcids.length ? lcids : null;
   } catch {
     return null;
   }
