@@ -8,15 +8,6 @@ const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config"
 const { pluginLogDir, latestSessionLog } = require("./local-log");
 
 function dataDisclosure(plugin) {
-  const fieldDisclosure =
-    plugin === "mobile-app"
-      ? "ℹ️  Usage telemetry records skill, plugin, agent, OS, Node, session, and\n" +
-        "   correlation fields, plus invocation source and a random per-project app\n" +
-        "   instance ID. Mobile Apps does not record PAC, Dataverse organization,\n" +
-        "   Entra tenant, or Entra object IDs.\n"
-      : "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +
-        "   and correlation fields, plus Dataverse organization and Entra tenant IDs\n" +
-        "   when PAC is signed in.\n";
   const pluginSpecific =
     plugin === "power-pages"
       ? "   Power Pages can also record the signed-in user's Entra object ID as\n" +
@@ -28,7 +19,9 @@ function dataDisclosure(plugin) {
         ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
         : "";
   return (
-    fieldDisclosure +
+    "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +
+    "   and correlation fields, plus Dataverse organization and Entra tenant IDs\n" +
+    "   when PAC is signed in.\n" +
     pluginSpecific +
     "   When plugin telemetry is enabled, the local diagnostic log retains the same\n" +
     "   fields even when transmission is off. A plugin whose committed telemetry\n" +

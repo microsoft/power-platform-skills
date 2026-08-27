@@ -95,20 +95,6 @@ test("status discloses Model Apps identifiers without claiming an Entra user obj
   assert.doesNotMatch(stdout, /anonymous/i);
 });
 
-test("status discloses Mobile Apps fields without PAC or Dataverse identifiers", () => {
-  const dir = mkTmp();
-  const { status, stdout } = run(
-    ["--action", "status", "--plugin", "mobile-app"],
-    dir,
-    { POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "" }
-  );
-  assert.equal(status, 0);
-  assert.match(stdout, /invocation source/);
-  assert.match(stdout, /random per-project app\s+instance ID/);
-  assert.doesNotMatch(stdout, /Usage telemetry records[^\n]*PAC/);
-  assert.doesNotMatch(stdout, /Dataverse organization and Entra tenant IDs/);
-});
-
 test("status reports OFF after opt-out", () => {
   const dir = mkTmp();
   run(["--action", "off", "--plugin", "power-pages"], dir);

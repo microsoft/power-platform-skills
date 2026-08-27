@@ -342,9 +342,6 @@ test('bundled control CLI auto-detects and updates the mobile-app preference', (
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
-  assert.match(status.stdout, /invocation source/);
-  assert.match(status.stdout, /random per-project app\s+instance ID/);
-  assert.doesNotMatch(status.stdout, /Dataverse organization and Entra tenant IDs/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {
     encoding: 'utf8',
