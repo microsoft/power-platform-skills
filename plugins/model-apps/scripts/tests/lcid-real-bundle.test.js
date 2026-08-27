@@ -132,27 +132,38 @@ async function pushedDashboard(languageCode) {
   return write.body.formxml;
 }
 
+// Does EVERY <label> element carry languagecode="<lcid>"?
+//
+// One predicate, used for both the assertion and its guard. That matters: the earlier version
+// counted `<label` occurrences against `languagecode="…"` occurrences inline, and its guard
+// re-derived those counts with its own expressions — so making the primary comparison tautological
+// (both sides counting `<label`) would have left the guard passing independently. A guard that does
+// not run the code it guards proves nothing about it.
+//
+// Inspects each label TAG rather than counting attributes document-wide, so an attribute belonging
+// to some other element cannot stand in for a missing one:
+//   <label description="Recent" languagecode="1031" />
+function allLabelsHaveLanguage(xml, lcid) {
+  const labels = String(xml || '').match(/<label\b[^>]*>/g) || [];
+  if (!labels.length) return false;
+  return labels.every((tag) => new RegExp(`languagecode="${lcid}"`).test(tag));
+}
+
 test('REAL BUNDLE: a POPULATED dashboard stamps its labels at the configured LCID (#455)', async () => {
   const xml = await pushedDashboard(1031);
   assert.deepStrictEqual(langsIn(xml), ['languagecode="1031"'],
     `every dashboard label must carry the configured LCID and nothing else; got ${JSON.stringify(langsIn(xml))}`);
   // `langsIn` DEDUPES and only sees labels that carry the attribute at all, so on its own it cannot
   // distinguish "every label is 1031" from "one label is 1031 and another has no languagecode".
-  // Count both and require them to agree, which is what the assertion above actually claims.
-  const labelCount = (xml.match(/<label\b/g) || []).length;
-  const langCount = (xml.match(/languagecode="1031"/g) || []).length;
-  assert.ok(labelCount > 0, 'a populated dashboard emits at least one label');
-  assert.strictEqual(langCount, labelCount,
-    `all ${labelCount} <label> elements must carry languagecode="1031"; only ${langCount} do`);
-  // GUARD THE GUARD: prove the counting above can actually FAIL. Delete the attribute from one
-  // label and the two counts must diverge. Without this, a change that made both counts read the
-  // same expression would look identical to a passing test — which is exactly how the tautology in
-  // header-nav-real-bundle.test.js survived review.
+  assert.ok((xml.match(/<label\b/g) || []).length > 0, 'a populated dashboard emits at least one label');
+  assert.strictEqual(allLabelsHaveLanguage(xml, 1031), true,
+    'every <label> element must carry languagecode="1031"');
+  // GUARD THE GUARD: prove that SAME predicate can FAIL. Delete the attribute from one label and it
+  // must go false. Without this, a predicate that always returned true would look identical to a
+  // passing test — which is exactly how the tautology in header-nav-real-bundle.test.js survived.
   const doctored = xml.replace(/ languagecode="1031"/, '');
-  assert.notStrictEqual(
-    (doctored.match(/languagecode="1031"/g) || []).length,
-    (doctored.match(/<label\b/g) || []).length,
-    'the completeness check must detect a label whose languagecode was removed');
+  assert.strictEqual(allLabelsHaveLanguage(doctored, 1031), false,
+    'the completeness predicate must detect a label whose languagecode was removed');
 });
 
 test('REAL BUNDLE: omitting languageCode leaves dashboard labels at 1033', async () => {

@@ -822,7 +822,8 @@ test('sanitizeSubject strips merge-tool prefixes and nothing else', () => {
 test('sanitizeSubject strips ARBITRARILY nested prefixes, not a fixed number', () => {
   // A capped loop looked defensive and silently reintroduced the bug past the cap: at a cap of 8,
   // nine nested prefixes returned a value still carrying the ninth. Depths well past any plausible
-  // cap are asserted here so raising a cap can never be mistaken for fixing this.
+  // cap are asserted here. This cannot PROVE no cap is ever reintroduced — a cap above 100 would
+  // still pass — but it catches any cap small enough that a reviewer would plausibly write it.
   const { sanitizeSubject, NO_DESCRIPTION } = require(path.resolve(__dirname, '..', '_vendor-build', 'sanitize-subject.js'));
 
   for (const depth of [1, 2, 8, 9, 25, 100]) {

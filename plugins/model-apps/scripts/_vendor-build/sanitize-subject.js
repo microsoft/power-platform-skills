@@ -61,7 +61,7 @@ function sanitizeSubject(subject) {
   // cap is gone because the loop provably terminates without one — every pattern above must match at
   // least the literal `Merged PR` / `Merge pull request` plus a digit, so a successful replacement
   // strictly shortens the string and no pattern can match empty. `out === before` is therefore
-  // reached in at most `subject.length` passes.
+  // reached in at most `subject.length + 1` passes (the +1 is the final unchanged pass that breaks).
   for (;;) {
     const before = out;
     for (const re of MERGE_PREFIXES) {
