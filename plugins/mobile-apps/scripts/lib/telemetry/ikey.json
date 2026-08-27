@@ -1,0 +1,6 @@
+{
+  "instrumentationKey": "5c3a61f48d7c4522912765ae7465ab5c-fb3d6606-fe59-4d6b-9bb1-5e993d889672-7138",
+  "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/",
+  "event_stream_name": "event",
+  "disabled": false
+}
