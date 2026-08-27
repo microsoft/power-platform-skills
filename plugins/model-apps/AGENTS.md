@@ -406,7 +406,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Default-OFF feature flags (currently connectors)
+feature-flags.json             ← Default-OFF feature flags (connectors, custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -422,6 +422,7 @@ agents/                        ← Agent definitions (invoked by skills via Task
 references/                    ← Shared reference docs
   rules.md                     ← Full code-gen rules, DataAPI types, layout patterns, common errors
   custom-api.md                ← Dataverse Custom API (Action/Function) invocation contract (loaded when the plan has ## Custom API Bindings)
+  page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
@@ -602,20 +603,28 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `connectors` | `custom-api` |
-|---|---|---|
-| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` |
-| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` |
-| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 |
-| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) |
-| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` |
+| | `connectors` | `custom-api` | `custom-telemetry` |
+|---|---|---|---|
+| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 One connectors-only nuance: at Phase 4.5 the `/genpage` orchestrator re-probes and passes the
 verbatim result as `Connectors: enabled|disabled` in every page-builder dispatch — **that dispatch
-value wins over the plan's `## Connector Bindings` section.**
+value wins over the plan's `## Connector Bindings` section.** Phase 4.7 does the same for
+`Telemetry: enabled|disabled`.
 
-Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
+`custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
+section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
+checklist above are N/A, and its Phase 4.7 "deploy phase" is nothing but the re-probe that
+produces the dispatch line. It also carries a second gate the other flags do not have: even
+when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
+asked to measure or track something. `enabled` is permission, not instruction.
+
+All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 
 - **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
   authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
@@ -624,6 +633,9 @@ Both flags currently ship **OFF**, each waiting on cross-repo dependencies:
   persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
   Note the maker-facing name is "Custom API" while the shipped wire contract stays
   `actionBindings` / `executeAction` (see `references/custom-api.md`).
+- **`custom-telemetry`** — the page telemetry facade in the UCI host runtime, the GenUX
+  authoring control (power-platform-ux), the AIBuilder CoderAgent telemetry prompt, and the
+  `GenUxEnableCustomTelemetry` ECS setting (see `references/page-telemetry.md`).
 
 ## TSX source lexer — known limits
 
