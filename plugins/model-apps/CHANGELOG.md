@@ -263,15 +263,20 @@ and corrects a smoke-eval assertion that could never pass live.
   icon makes the eval FAIL rather than silently invert into an absence check.
 
 ### Changed
-- **The vendored SDK bundle now records its provenance and refuses a stale build.**
+- **The vendored SDK bundle now records its provenance and refuses a stale or unidentifiable build.**
   `scripts/vendor/PROVENANCE.json` carries the upstream commit SHA and subject, whether
-  that package had uncommitted changes, the `lib/` and `src/` timestamps, and the
-  bundle's own sha256. "Built from master" is not provenance — master moves, and the
-  bundler consumes the SDK's gitignored `lib/`, a build output that can be arbitrarily
-  older than its sources. That is not hypothetical: the bundle shipped before this one
-  was built from a stale `lib/` several commits behind its nominal source, and nothing
-  in the repo could reveal it. The bundler now **exits 3** when `lib/index.js` predates
-  the newest `.ts` under `src/`, and warns when the SDK package is dirty.
+  that package had uncommitted changes, the `lib/` and `src/` timestamps, the build mode
+  (`NOSTUB`, esbuild and Node versions), and the bundle's own sha256. "Built from master"
+  is not provenance — master moves, and the bundler consumes the SDK's gitignored `lib/`,
+  a build output that can be arbitrarily older than its sources. That is not
+  hypothetical: the bundle shipped before this one was built from a stale `lib/` several
+  commits behind its nominal source, and nothing in the repo could reveal it. The bundler
+  now **exits 3** when `lib/index.js` predates the newest `.ts` under `src/`, **exits 4**
+  when no commit can be read, and **exits 5** when the SDK package is dirty *or* when git
+  cannot determine that it is clean — "unknown" is recorded distinctly from "clean",
+  because conflating the two is what makes a provenance record lie. A test binds the
+  recorded sha256 and size to the committed bundle, so a bundle-only change cannot leave a
+  stale record behind.
 
 - **Vendored maker SDK updated.** Three contract changes are user-visible and worth knowing before
   you upgrade:

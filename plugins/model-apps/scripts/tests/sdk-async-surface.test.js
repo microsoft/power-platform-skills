@@ -59,7 +59,7 @@ const CALL_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*\\??\\.\
 // name lives inside a string literal and the scanner below blanks strings (deliberately: a method
 // name quoted in a log message is not a call). So this pattern is matched against a
 // comments-stripped-but-strings-intact copy instead.
-const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*\\??\\[\\s*['"\`](${ASYNC_SDK_METHODS.join('|')})['"\`]\\s*\\]\\s*\\(`, 'g');
+const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*(?:\\?\\.)?\\s*\\[\\s*['"\`](${ASYNC_SDK_METHODS.join('|')})['"\`]\\s*\\]\\s*\\(`, 'g');
 
 // DESTRUCTURING these methods off the SDK is banned outright rather than tracked.
 //
@@ -68,7 +68,13 @@ const COMPUTED_RE = new RegExp(`(await\\s+)?(?:\\b[A-Za-z_$][\\w$]*|\\))\\s*\\??
 // an unrelated local function. Banning the binding is the honest alternative — it is a construct
 // the plugin never uses, it costs nothing to avoid, and it turns an undetectable call site into a
 // detectable declaration.
-const DESTRUCTURE_RE = new RegExp(`\\{[^}\\n]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[^}\\n]*\\}\\s*=`, 'g');
+//
+// `[\\w$\\s,:]` rather than `[\\s\\S]`: the content between the braces must look like a BINDING
+// LIST (identifiers, renames, commas, newlines) and nothing else. A permissive `[\\s\\S]{0,300}?`
+// version matched an ordinary `for (let i = 0; ...) { ... }` block whose body merely mentioned one
+// of these names, which is a false positive on real source. Allowing newlines is the point —
+// destructuring patterns are routinely written across several lines.
+const DESTRUCTURE_RE = new RegExp(`\\{[\\w$\\s,:]*\\b(${ASYNC_SDK_METHODS.join('|')})\\b[\\w$\\s,:]*\\}\\s*=`, 'g');
 
 // An intentionally unawaited call (e.g. handing the promise to Promise.all) must say so IN A
 // COMMENT, either on the same line or on the line immediately above it — the latter because these
@@ -80,11 +86,19 @@ const DESTRUCTURE_RE = new RegExp(`\\{[^}\\n]*\\b(${ASYNC_SDK_METHODS.join('|')}
 // drift onto an unrelated call later.
 const OPT_OUT = 'sdk-async-ok';
 
-// True only when OPT_OUT appears inside a comment on that line. Comparing the raw line against the
-// comment-blanked line is enough: anything blanked was a comment or a string, and a string
-// occurrence must NOT waive, so the marker must be absent from the code view AND present in the raw.
-function isWaiverLine(rawLine, codeLine) {
-  return rawLine.includes(OPT_OUT) && !String(codeLine || '').includes(OPT_OUT);
+// True only when OPT_OUT appears inside a COMMENT on that line.
+//
+// The comparison must be against the STRING-PRESERVING view, not the fully blanked one. An earlier
+// version compared against the fully blanked code, where strings are blanked too — so
+// `console.log('sdk-async-ok')` looked exactly like a comment and waived the call below it, which
+// is precisely the bypass this function was added to close. The accompanying test passed anyway
+// because it called this helper with `keepStrings: true` while production passed the other view:
+// the test proved something the production path did not do.
+//
+// With the string-preserving view the distinction is unambiguous: a marker in a comment is absent
+// (comments are blanked there); a marker in a string is still present.
+function isWaiverLine(rawLine, codeWithStringsLine) {
+  return rawLine.includes(OPT_OUT) && !String(codeWithStringsLine || '').includes(OPT_OUT);
 }
 
 /**
@@ -117,30 +131,50 @@ function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
   for (let k = 0; k < source.length; k++) out[k] = source[k] === '\n' ? '\n' : ' ';
   const live = (from, to) => { for (let k = from; k < to && k < source.length; k++) out[k] = source[k]; };
 
-  // A '/' starts a regex only where a VALUE may begin; after a value it is division. Tracking the
-  // last significant character is the standard cheap disambiguation and is sufficient for this code.
+  // A '/' starts a regex only where a VALUE may begin; after a value it is division.
+  //
+  // The last significant CHARACTER is not sufficient on its own: `return /['"]/.test(s)` is real
+  // code in this plugin (scripts/lib/genpage-cli.js), and after `return` the previous character is
+  // `n`, so a character-only rule reads the `/` as division and then treats the regex's quote as a
+  // string opener. So keywords are checked too.
+  //
+  // Even with that, `/` after `)` stays genuinely ambiguous without a parser. Rather than pretend
+  // otherwise, the string scanner below FAILS CLOSED: a single- or double-quoted string cannot
+  // contain a raw newline in JavaScript, so if one is hit before the closing quote the scanner has
+  // mis-lexed and reverts, leaving the text as code. That converts every possible regex
+  // misclassification from "silently erases the following lines" into "leaves them visible" — the
+  // safe direction for a guard, and the property that actually matters here.
   const REGEX_CAN_FOLLOW = '(,=:[!&|?{};+-*%~^<>';
+  const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|case|do|else|yield|await|throw)$/;
   let prev = '';
   let i = 0;
+  const regexMayStart = () => {
+    if (prev === '' || REGEX_CAN_FOLLOW.includes(prev)) return true;
+    // Look back over the code emitted so far for a keyword ending at this point.
+    const back = out.slice(Math.max(0, i - 12), i).join('').replace(/\s+$/, '');
+    return REGEX_KEYWORDS.test(back);
+  };
   // Brace depth at which each open template interpolation closes.
   const templates = [];
   let braceDepth = 0;
 
   // Consume a template literal from `i`, stopping either at its closing backtick or at the start
-  // of an interpolation (whose code the MAIN loop then scans normally).
+  // of an interpolation (whose code the MAIN loop then scans normally). Returns false when the
+  // literal never terminates, which means it was not a template at all.
   const runTemplate = () => {
     while (i < source.length) {
       if (source[i] === '\\') { i += 2; continue; }
-      if (source[i] === '`') { i++; return; }
+      if (source[i] === '`') { i++; return true; }
       if (source.slice(i, i + 2) === '${') {
         live(i, i + 2);
         i += 2;
         braceDepth++;
         templates.push(braceDepth);
-        return;
+        return true;
       }
       i++;
     }
+    return false;
   };
 
   while (i < source.length) {
@@ -155,20 +189,40 @@ function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
     }
 
     if (ch === '"' || ch === "'") {
-      const open = i++;
-      while (i < source.length) {
-        if (source[i] === '\\') { i += 2; continue; }
-        if (source[i] === ch) { i++; break; }
-        i++;
+      const open = i;
+      let j = i + 1;
+      let closed = false;
+      while (j < source.length) {
+        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '\n') break; // a quoted string cannot span a line -> we mis-lexed
+        if (source[j] === ch) { j++; closed = true; break; }
+        j++;
       }
+      if (!closed) {
+        // Not a string. Emit the quote as ordinary code and carry on from the next character, so a
+        // misread apostrophe or regex quote can never blank the lines that follow it.
+        out[i] = ch;
+        prev = ch;
+        i++;
+        continue;
+      }
+      i = j;
       if (keepStrings) live(open, i);
       prev = 'x';
       continue;
     }
 
     if (ch === '`') {
-      const open = i++;
-      runTemplate();
+      const open = i;
+      i++;
+      if (!runTemplate()) {
+        // Unterminated: treat the backtick as code rather than swallowing the rest of the file.
+        i = open;
+        out[i] = ch;
+        prev = ch;
+        i++;
+        continue;
+      }
       if (keepStrings) live(open, Math.min(i, source.length));
       prev = 'x';
       continue;
@@ -185,17 +239,20 @@ function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
       continue;
     }
 
-    if (ch === '/' && (prev === '' || REGEX_CAN_FOLLOW.includes(prev))) {
+    if (ch === '/' && regexMayStart()) {
+      const open = i;
       i++;
       let inClass = false;
+      let closed = false;
       while (i < source.length) {
         if (source[i] === '\\') { i += 2; continue; }
         if (source[i] === '[') inClass = true;
         else if (source[i] === ']') inClass = false;
-        else if (source[i] === '/' && !inClass) { i++; break; }
+        else if (source[i] === '/' && !inClass) { i++; closed = true; break; }
         else if (source[i] === '\n') break; // unterminated: not a regex after all
         i++;
       }
+      if (!closed) { i = open; out[i] = ch; prev = ch; i++; continue; }
       while (i < source.length && /[a-z]/.test(source[i])) i++; // flags
       prev = 'x';
       continue;
@@ -246,15 +303,15 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     const codeWithStrings = stripCommentsAndStrings(raw, { keepStrings: true });
     scanned++;
     const rawLines = raw.split('\n');
-    const codeLines = code.split('\n');
+    // The waiver check reads the STRING-PRESERVING view so a marker in a string cannot pose as a
+    // comment (see isWaiverLine).
+    const strLines = codeWithStrings.split('\n');
     const record = (m, haystack) => {
       calls++;
       if (m[1]) return; // awaited — `await` must be ADJACENT, so `await other(); x.get(...)` still counts
       const line = haystack.slice(0, m.index).split('\n').length;
       const text = rawLines[line - 1] || '';
-      // The waiver lives in a comment, so it is read from the ORIGINAL source — but only counts
-      // when it is genuinely a comment (see isWaiverLine).
-      if (isWaiverLine(text, codeLines[line - 1]) || isWaiverLine(String(rawLines[line - 2] || ''), codeLines[line - 2])) { waived++; return; }
+      if (isWaiverLine(text, strLines[line - 1]) || isWaiverLine(String(rawLines[line - 2] || ''), strLines[line - 2])) { waived++; return; }
       const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: ${text.trim()}`;
       if (!findings.includes(finding)) findings.push(finding);
     };
@@ -266,8 +323,11 @@ test('every SDK generic-surface call in the plugin is awaited', () => {
     for (const m of code.matchAll(DESTRUCTURE_RE)) {
       const line = code.slice(0, m.index).split('\n').length;
       const text = rawLines[line - 1] || '';
-      if (isWaiverLine(text, codeLines[line - 1])) continue;
-      const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: [destructured] ${text.trim()}`;
+      // Deliberately NOT waivable. The waiver exists for a call whose promise is handed elsewhere;
+      // a destructured BINDING has no such justification, and allowing the waiver here would let
+      // one comment permanently hide every call made through that binding — which is undetectable
+      // by any pattern, because a bare call site carries no receiver.
+      const finding = `${path.relative(SCRIPTS_DIR, file)}:${line}: [destructured binding] ${text.trim()}`;
       if (!findings.includes(finding)) findings.push(finding);
     }
   }
@@ -297,13 +357,25 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     // Offsets must be preserved or every reported line number is wrong.
     assert.strictEqual(noStr.length, code.length, 'stripping preserves byte offsets');
     assert.strictEqual(withStr.length, code.length, 'string-preserving strip also preserves offsets');
+    // Mirror the PRODUCTION scan exactly, including which view each pattern and the waiver read.
+    // An earlier version of this helper passed `keepStrings: true` to the waiver check while
+    // production passed the other view, so the test proved a behaviour the code did not have.
+    const rawLines = code.split('\n');
+    const strLines = withStr.split('\n');
     let flagged = false;
+    const consider = (m, haystack) => {
+      if (m[1]) return;
+      const line = haystack.slice(0, m.index).split('\n').length;
+      if (isWaiverLine(rawLines[line - 1] || '', strLines[line - 1])
+        || isWaiverLine(String(rawLines[line - 2] || ''), strLines[line - 2])) return;
+      flagged = true;
+    };
     CALL_RE.lastIndex = 0;
-    for (const m of noStr.matchAll(CALL_RE)) if (!m[1]) flagged = true;
+    for (const m of noStr.matchAll(CALL_RE)) consider(m, noStr);
     COMPUTED_RE.lastIndex = 0;
-    for (const m of withStr.matchAll(COMPUTED_RE)) if (!m[1]) flagged = true;
+    for (const m of withStr.matchAll(COMPUTED_RE)) consider(m, withStr);
     DESTRUCTURE_RE.lastIndex = 0;
-    if (DESTRUCTURE_RE.test(noStr)) flagged = true;
+    if (DESTRUCTURE_RE.test(noStr)) flagged = true; // never waivable, as in production
     return flagged;
   };
 
@@ -327,6 +399,25 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     'DESTRUCTURED off the SDK (banned outright — a bare call site has no receiver to match)':
       "const { getArtifact } = provision;\nconst a = getArtifact('f', id);",
     'destructured with a rename': "const { getArtifact: g } = provision;",
+    'destructured ACROSS LINES': "const {\n  getArtifact: readArtifact,\n} = provision;",
+    'destructured with a waiver comment (the ban is NOT waivable)':
+      "const { getArtifact } = provision; // sdk-async-ok\nconst a = getArtifact('f', id);",
+    'optional COMPUTED access': "const a = provision?.['getArtifact']('f', id);",
+    // The string-blanked view made a marker in a STRING look exactly like a comment, so this
+    // waived the call below it. That is a bypass anyone could have written by accident.
+    'a call whose previous line merely PRINTS the waiver marker':
+      "console.log('sdk-async-ok');\nconst a = provision.getArtifact('f', id);",
+    // A regex after `return` is real code in this plugin. Misreading it as division made the
+    // regex's quote open a fake string, blanking the following lines — the guard erasing the code
+    // it exists to inspect.
+    'a call after a regex following a KEYWORD (return)':
+      "function q(s) { return /['\"]/.test(s); }\nconst a = provision.getArtifact('f', id);",
+    'a call after a regex containing a BACKTICK':
+      "function q(s) { return /`/.test(s); }\nconst a = provision.getArtifact('f', id);",
+    'a call after a regex following a control parenthesis':
+      "if (c) /['\"]/.test(v);\nconst a = provision.getArtifact('f', id);",
+    'a call after an apostrophe that cannot be a string (unterminated on its line)':
+      "const n = 5; // it's fine\nconst a = provision.getArtifact('f', id);",
   };
   for (const [label, code] of Object.entries(MUST_FLAG)) {
     assert.strictEqual(check(code), true, `the matcher must flag: ${label}`);
@@ -347,14 +438,13 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
     assert.strictEqual(check(code), false, `the matcher must NOT flag: ${label}`);
   }
 
-  // The waiver must be a real COMMENT. `console.log('sdk-async-ok')` on the preceding line used to
-  // waive the call below it, which would let anyone silence this guard with a string.
-  assert.strictEqual(
-    isWaiverLine("  x(); // sdk-async-ok", stripCommentsAndStrings("  x(); // sdk-async-ok")),
-    true, 'a marker in a comment waives');
-  assert.strictEqual(
-    isWaiverLine("  console.log('sdk-async-ok');", stripCommentsAndStrings("  console.log('sdk-async-ok');", { keepStrings: true })),
-    false, 'a marker inside a STRING must not waive');
+  // The waiver must be a real COMMENT, checked against the string-preserving view — the same view
+  // production uses. Passing the fully blanked view here is what let the earlier test pass while
+  // production still honoured a marker printed from a string.
+  const waiverCase = (line) => isWaiverLine(line, stripCommentsAndStrings(line, { keepStrings: true }));
+  assert.strictEqual(waiverCase('  x(); // sdk-async-ok'), true, 'a marker in a comment waives');
+  assert.strictEqual(waiverCase("  console.log('sdk-async-ok');"), false, 'a marker inside a STRING must not waive');
+  assert.strictEqual(waiverCase('  x();'), false, 'no marker, no waiver');
 });
 
 test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, with the SDK remedy)', async () => {
@@ -428,6 +518,12 @@ test('the committed bundle MATCHES its recorded provenance (a bundle-only change
   assert.notStrictEqual(prov.allowUnreproducible, true,
     'a bundle built with --allow-unreproducible must never be committed');
   assert.strictEqual(prov.libIsStale, false, 'the SDK lib/ was not stale relative to its src/');
+  // NOSTUB disables the stub plugin, pulling the real shell/UI packages into the bundle. Besides
+  // being ~10x larger, those packages embed an internal ownership table that must not ship in a
+  // public repo — so a NOSTUB build is never a committable artifact.
+  assert.strictEqual(prov.nostub, false,
+    'the committed bundle was built WITH the stubs (a NOSTUB build pulls in shell packages that '
+    + 'must not ship in a public repo)');
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {

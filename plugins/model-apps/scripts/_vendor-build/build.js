@@ -48,8 +48,9 @@ if (!fs.existsSync(SDK_ENTRY)) {
  * master moves, and `lib/` is a build output that can be arbitrarily old relative to `src/`.
  *
  * So capture the resolved SHA, and flag a dirty or stale checkout rather than silently baking it in.
- * `git` calls are best-effort: a source tree that is not a git checkout still builds, it is just
- * recorded as unknown, because refusing would block a legitimate export-based workflow.
+ * The `git` calls here are best-effort and record null on failure; the CALLER below decides what
+ * that means, and it REFUSES unless --allow-unreproducible is passed, because a source that cannot
+ * be identified cannot be audited.
  */
 function sdkProvenance(root) {
   const git = (args) => {
