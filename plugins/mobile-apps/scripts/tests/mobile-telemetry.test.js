@@ -131,6 +131,26 @@ test('nested Copilot call resolves to its owning root session', (t) => {
   ], nestedSessionId), rootSessionId);
 });
 
+test('oversized partial Copilot record cannot claim a nested session', (t) => {
+  const rootSessionId = 'e58e3db3-8361-4516-ac4b-6b143c22100a';
+  const nestedSessionId = 'call_partialRecord';
+  const opts = copilotOpts(t, [{ id: rootSessionId, agentId: 'call_unrelatedAgent' }]);
+  const eventsPath = path.join(opts.copilotSessionStateDir, rootSessionId, 'events.jsonl');
+  const parseableFragment = JSON.stringify({ agentId: nestedSessionId });
+  const maxTailBytes = 4 * 1024 * 1024;
+
+  // The bounded read starts after the leading byte, making its entire tail look
+  // like valid JSON even though no newline proves that it starts at a record.
+  fs.writeFileSync(
+    eventsPath,
+    `x${parseableFragment}${' '.repeat(maxTailBytes - parseableFragment.length)}`,
+  );
+
+  const context = createTelemetryContext({ sessionId: nestedSessionId }, opts);
+  assert.ok(context);
+  assert.equal(context.sessionId, nestedSessionId);
+});
+
 test('stale Copilot state does not absorb a nested session', (t) => {
   const now = Date.now();
   const nestedSessionId = 'call_staleNestedAgent';
@@ -222,6 +242,28 @@ test('app instance id is minted once and reused by later skill runs', (t) => {
   });
 });
 
+test('app identity refuses missing or invalid Expo app.json files', (t) => {
+  const invalidProjects = [
+    { project: tempProject(t), contents: null },
+    { project: tempProject(t), contents: '{ invalid json' },
+    { project: tempProject(t), contents: '{}' },
+  ];
+
+  for (const { project, contents } of invalidProjects) {
+    const filePath = path.join(project, 'app.json');
+    if (contents !== null) fs.writeFileSync(filePath, contents);
+
+    assert.throws(
+      () => ensureAppInstanceId(project),
+      /existing, valid Expo app\.json/,
+    );
+    assert.equal(
+      fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null,
+      contents,
+    );
+  }
+});
+
 test('events outside a project carry no app identity', (t) => {
   assert.equal(findAppInstanceId(tempProject(t)), '');
 });
@@ -258,6 +300,8 @@ test('two apps in one session emit distinct app identities', (t) => {
 
   const projectA = tempProject(t);
   const projectB = tempProject(t);
+  fs.writeFileSync(path.join(projectA, 'app.json'), JSON.stringify({ expo: {} }));
+  fs.writeFileSync(path.join(projectB, 'app.json'), JSON.stringify({ expo: {} }));
   ensureAppInstanceId(projectA);
   ensureAppInstanceId(projectB);
   const a = emitFrom(projectA);
@@ -298,6 +342,9 @@ test('bundled control CLI auto-detects and updates the mobile-app preference', (
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
+  assert.match(status.stdout, /invocation source/);
+  assert.match(status.stdout, /random per-project app\s+instance ID/);
+  assert.doesNotMatch(status.stdout, /Dataverse organization and Entra tenant IDs/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {
     encoding: 'utf8',

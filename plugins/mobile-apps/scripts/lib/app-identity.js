@@ -24,8 +24,7 @@ function appJsonPath(projectRoot) {
   return path.join(path.resolve(projectRoot), APP_JSON_FILE);
 }
 
-function readAppInstanceId(projectRoot) {
-  const appJson = readJsonFile(appJsonPath(projectRoot));
+function appInstanceIdFromConfig(appJson) {
   if (!isPlainObject(appJson) || !isPlainObject(appJson.expo)) return '';
 
   const extra = appJson.expo.extra;
@@ -39,6 +38,10 @@ function readAppInstanceId(projectRoot) {
   return APP_INSTANCE_ID.test(appInstanceId) ? appInstanceId : '';
 }
 
+function readAppInstanceId(projectRoot) {
+  return appInstanceIdFromConfig(readJsonFile(appJsonPath(projectRoot)));
+}
+
 function findAppInstanceId(projectRoot = process.cwd()) {
   if (!projectRoot) return '';
   return readAppInstanceId(projectRoot);
@@ -50,25 +53,30 @@ function ensureAppInstanceId(projectRoot = process.cwd()) {
     throw new Error('Cannot create app identity outside an existing directory');
   }
 
-  const existing = readAppInstanceId(root);
-  if (existing) return existing;
-
   const filePath = appJsonPath(root);
   const appJson = readJsonFile(filePath);
-  const next = isPlainObject(appJson) ? appJson : {};
-  next.expo = isPlainObject(next.expo) ? next.expo : {};
-  next.expo.extra = isPlainObject(next.expo.extra) ? next.expo.extra : {};
-  const telemetry = isPlainObject(next.expo.extra.telemetry)
-    ? next.expo.extra.telemetry
+  // The create workflow gates on the supported Expo template before calling
+  // this helper. Refuse to manufacture a minimal config when that invariant is
+  // broken because doing so would hide scaffold damage and overwrite evidence.
+  if (!isPlainObject(appJson) || !isPlainObject(appJson.expo)) {
+    throw new Error('Cannot create app identity without an existing, valid Expo app.json');
+  }
+
+  const existing = appInstanceIdFromConfig(appJson);
+  if (existing) return existing;
+
+  appJson.expo.extra = isPlainObject(appJson.expo.extra) ? appJson.expo.extra : {};
+  const telemetry = isPlainObject(appJson.expo.extra.telemetry)
+    ? appJson.expo.extra.telemetry
     : {};
 
   const appInstanceId = crypto.randomUUID();
-  next.expo.extra.telemetry = {
+  appJson.expo.extra.telemetry = {
     ...telemetry,
     appInstanceId,
   };
 
-  fs.writeFileSync(filePath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(filePath, `${JSON.stringify(appJson, null, 2)}\n`, 'utf8');
   return appInstanceId;
 }
 

@@ -70,7 +70,13 @@ function readFileTail(filePath, maxBytes) {
     const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, start);
     const text = buffer.toString('utf8', 0, bytesRead);
     // A bounded tail can begin inside a line, so drop that partial first record.
-    return start > 0 ? text.slice(text.indexOf('\n') + 1) : text;
+    // Without a newline there is no record boundary, so none of the fragment
+    // can be trusted as a complete JSONL record even if it parses by chance.
+    if (start > 0) {
+      const firstNewline = text.indexOf('\n');
+      return firstNewline === -1 ? '' : text.slice(firstNewline + 1);
+    }
+    return text;
   } finally {
     fs.closeSync(descriptor);
   }

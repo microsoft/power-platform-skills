@@ -10,6 +10,9 @@ const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
 const { withStableDispatchCwd } = require('../../hooks/run-telemetry');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+const PLUGIN_VERSION = JSON.parse(
+  fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'),
+).version;
 const HOOKS = path.join(PLUGIN_ROOT, 'hooks');
 
 function fixture(t) {
@@ -257,13 +260,13 @@ test('prompt hook builds the Power Apps normal-event envelope without real netwo
   assert.equal(envelope.data.severity, 'Info');
   assert.equal(envelope.data.timestamp, envelope.time);
   assert.equal(envelope.ext.app.sesId, 'session-1');
-  assert.equal(envelope.ext.app.ver, '0.2.0');
+  assert.equal(envelope.ext.app.ver, PLUGIN_VERSION);
   assert.ok(envelope.ext.os.name);
   assert.ok(envelope.ext.os.ver);
 
   const dimensions = JSON.parse(envelope.data.customDimensions);
   assert.equal(dimensions.pluginName, 'mobile-app');
-  assert.equal(dimensions.pluginVersion, '0.2.0');
+  assert.equal(dimensions.pluginVersion, PLUGIN_VERSION);
   assert.equal(dimensions.sessionId, 'session-1');
   assert.match(dimensions.correlationId, /^[0-9a-f-]{36}$/);
   assert.ok(dimensions.osName);
