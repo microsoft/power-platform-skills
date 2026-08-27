@@ -18,6 +18,30 @@
 // Each of those is a wrong-artifact outcome on a real org with a 2xx status and a green build.
 // Only 4 of the plugin's ~1590 tests caught the original breakage, because most engine paths are
 // covered through mocks that resolve synchronously. So the scan below is the real gate.
+//
+// ---------------------------------------------------------------------------------------------
+// WHAT THIS GUARD IS, AND IS NOT.
+//
+// It is a TRIPWIRE for the realistic regression — someone adds `provision.getArtifact(...)` and
+// forgets the `await` — not a proof. It is built to fail in the safe direction: candidates are
+// matched against the RAW source and only dismissed when two INDEPENDENT signals agree, so a flaw
+// in its lexer produces a false positive (loud, waivable) rather than a hidden call.
+//
+// It is not sound, and cannot be made sound with regular expressions. Four rounds of adversarial
+// review each found new constructs, and the residual known limits are:
+//   * PARAMETER destructuring — `function use({ getArtifact }) { getArtifact(id); }`. No textual
+//     anchor distinguishes an ObjectPattern from an ObjectExpression, so trying to catch it flagged
+//     every mock object literal in the suite. An AST distinguishes them; a regex cannot.
+//   * A receiver reached through a value the scanner cannot follow (returned from a function,
+//     stored in an array, rebound conditionally).
+//   * A call written inside a string or template on a code line is REPORTED (an accepted false
+//     positive, asserted below so nobody "fixes" it by reopening the dismissal path).
+// The exhaustive version needs a JavaScript parser. That is deliberately not done here: the plugin
+// ships with no runtime dependencies and CI runs `node scripts/run-tests.js` with no install step,
+// so adding a parser is a larger change than this belongs in. Tracked in
+// https://github.com/microsoft/power-platform-skills/issues/475, where the corpus below doubles as
+// the acceptance suite for the replacement.
+// ---------------------------------------------------------------------------------------------
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
