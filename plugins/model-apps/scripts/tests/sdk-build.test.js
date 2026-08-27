@@ -967,7 +967,13 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   const chart = tileComps.find((t) => t.type === 'chart');
   assert.strictEqual(chart.parameters.TargetEntityType, 'new_ticket', 'entity derived from the view');
   assert.ok(chart.parameters.ViewId, 'view id resolved');
-  assert.ok(chart.parameters.ChartId, 'chart visualization id resolved');
+  // `VisualizationId`, NOT `ChartId`. This assertion previously named the wrong parameter, so the
+  // suite agreed with a bug that failed the whole dashboards phase on a real environment with a
+  // 400: "The element 'parameters' has invalid child element 'ChartId'". A mock cannot validate
+  // FormXML against the platform schema, so the wire NAME has to be pinned explicitly here.
+  assert.ok(chart.parameters.VisualizationId, 'chart visualization id resolved');
+  assert.strictEqual(chart.parameters.ChartId, undefined,
+    'the rejected `ChartId` spelling is not emitted (it is not a legal <parameters> child)');
   const list = tileComps.find((t) => t.type === 'list');
   assert.strictEqual(list.name, 'Recent');
   assert.ok(list.parameters.ViewId);

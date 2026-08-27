@@ -129,6 +129,18 @@ and corrects a smoke-eval assertion that could never pass live.
   GitHub Copilot CLI or Claude Code host when a newer version is available.
 
 ### Fixed
+- **Dashboard chart tiles no longer fail the whole `dashboards` phase.** A chart tile emitted
+  `ChartId`, which the platform's FormXML schema rejects — it is not a legal child of
+  `<parameters>` — so the phase died with:
+
+  > The element 'parameters' has invalid child element 'ChartId'. List of possible elements
+  > expected: 'ViewId, IsUserView, … VisualizationId, …'
+
+  The correct name is `VisualizationId`, which is what `download-model-app.js` already read, so a
+  dashboard could not round-trip through download → rebuild either. Found by a live build; the
+  mock-based test had asserted the wrong name, so the suite agreed with the bug. Both are corrected,
+  and the test now also asserts that `ChartId` is *not* emitted.
+
 - **Rebuilds no longer duplicate sub-grids or skip field removals** — the plugin now
   awaits the maker SDK's asynchronous artifact surface.
 

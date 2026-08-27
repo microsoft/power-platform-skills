@@ -142,8 +142,16 @@ function dashboardTileOpts(spec, tile, result) {
 function dashboardComponent(t, index) {
   const parameters = {};
   if (t.type === 'chart') {
+    // `VisualizationId`, NOT `ChartId`. The platform validates dashboard FormXML against a schema
+    // that enumerates the legal children of `<parameters>`, and `ChartId` is not one of them:
+    //   The element 'parameters' has invalid child element 'ChartId'. List of possible elements
+    //   expected: 'ViewId, IsUserView, ... VisualizationId, ...'
+    // A chart tile therefore failed the whole dashboards phase with a 400. Caught by a live build;
+    // the mock-based test had asserted the wrong name, so the suite agreed with the bug.
+    // `download-model-app.js` already reads `VisualizationId`, so this also makes a dashboard
+    // round-trip through download -> rebuild instead of losing its chart binding.
     parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
-    parameters.ChartId = t.visualizationId; parameters.ChartGridMode = 'Chart';
+    parameters.VisualizationId = t.visualizationId; parameters.ChartGridMode = 'Chart';
   } else if (t.type === 'list') {
     parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
     parameters.IsUserView = 'false'; parameters.ChartGridMode = 'Grid'; parameters.RecordsPerPage = '10';

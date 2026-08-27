@@ -923,6 +923,10 @@ node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --
 
 AI features are **admin-gated** — preflight readiness with `node scripts/ai-preflight.js --env <envUrl>`.
 Prefer a scratch env; always tear down probes (`teardown-model-app.js --apply`) to leave 0 leftovers.
+Teardown needs `--allow-destructive` as well as `--apply`, and it deliberately leaves **one** thing
+behind: the **publisher**. A publisher can own other solutions in the environment, so deleting it is
+not this app's decision to make — the same fail-safe reasoning that keeps an `external` web resource.
+Expect a clean environment afterwards *except* for `<prefix>publisher`.
 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks
