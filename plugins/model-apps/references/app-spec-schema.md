@@ -266,6 +266,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   recommended pattern for "Technician ↔ Work Order with a Role".
 
 ## webResources[] (optional — client-side logic)
+
 ```jsonc
 [ { "name": "new_ticket.js", "displayName": "Ticket Scripts", "type": "js",
     "content": "var Ticket={onLoad:function(ctx){},onPriority:function(ctx){}};" } ]
@@ -275,6 +276,21 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
   app folder at build time), or `contentBase64` (for binary types).
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
+- **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
+  resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
+  and the old script keeps running. Delete the web resource (or tear down) and rebuild to change it —
+  note it cannot be deleted while a command or form handler still references it.
+- **Never hardcode Choice (option-set) values in the script.** Values like `100000003` are assigned
+  per publisher, so a literal that is correct in one environment silently selects nothing in another —
+  and a `setValue` with an unknown value fails quietly. Resolve by label instead:
+  ```js
+  function setChoiceByLabel(formCtx, attr, label) {
+    var a = formCtx.getAttribute(attr);
+    var hit = (a.getOptions() || []).filter(function (o) { return o.text === label; })[0];
+    if (hit) { a.setValue(hit.value); }
+    return !!hit;
+  }
+  ```
 - **`external`** *(optional, download-emitted)* — set `true` on an entry that **download** re-declared
   because a sitemap nav icon referenced a custom image web resource **by path** (see appShell icons
   below). The build **creates it if missing, reuses it if present** (idempotent, no overwrite), so the

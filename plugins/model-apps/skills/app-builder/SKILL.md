@@ -59,7 +59,14 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   scannable at a glance for one line of spec. It is per-*column*, so set it once on the column, not
   on each view. **Preview:** on an environment where it is not provisioned the build skips it and
   everything else still deploys, so it is always safe to include.
-- **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
+- **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS).
+  Two rules when writing that JS, both learned from buttons that deployed perfectly and then did
+  nothing: a command handler is handed the record (`function doThing(primaryControl)`) — the build
+  supplies the parameter, so write that signature; and **never hardcode Choice values** like
+  `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
+  (see `references/app-spec-schema.md` → webResources). Note also that command and web-resource
+  **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
+  script means deleting it first.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
   the requirement is field-level and declarative — it is visible in the maker, survives solution
