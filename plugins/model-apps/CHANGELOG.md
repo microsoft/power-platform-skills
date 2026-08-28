@@ -5,7 +5,36 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.5.0
+## [Unreleased] — 2.5.1
+
+Takes the vendored SDK up again: business-rule presence operators now work, the AI form-fill family
+is controllable per capability, and on/off is read with the platform's real semantics rather than a
+"non-zero means on" guess.
+
+### Added
+- **Presence operators for business rules.** `ContainsData` / `DoesNotContainData` were gated because
+  they compiled to XAML the platform answered with `HTTP 500 — Error generating UiData`. The compiler
+  emitted an empty parameter array where a null one is required; fixed upstream and re-verified live,
+  so all four operators now deploy.
+- **The AI form-fill family is controllable per capability** — the assist toolbar
+  (`formFill`), edit-form predictions (`formFillSuggestions`), smart paste (`formFillSmartPaste`) and
+  file upload (`formFillFiles`), instead of one flag that only ever governed the toolbar.
+
+### Fixed
+- **AI on/off was read wrongly.** The form-fill family uses `0 = platform default`, `1 = disabled`,
+  `2 = enabled`, so treating any non-zero value as "on" reported a deliberately **disabled** feature
+  as enabled — and reported `0` as off when it actually means "defer to flighting". Readiness is now
+  codec-aware and says "unknown" where the platform says "default".
+- **Multi-condition business rules are rejected at the spec gate.** The compiler supports exactly one
+  clause, so such a spec used to validate and then fail part-way through the build.
+- **A malformed `businessRules` no longer crashes validation** with a raw `TypeError` instead of
+  naming the field.
+- **Duplicate-cleanup warnings no longer assert a cause they cannot know** — a permission or
+  throttling failure was reported as a wedged platform row, sending readers to fix the wrong thing.
+- **Column visualizations no longer survive teardown on a table the spec keeps** (`existing: true`),
+  which left a renderer applied to somebody else's table.
+
+## [2.5.0]
 
 Takes up the current maker SDK, adds modern-shell and navigation controls, labels Dataverse
 metadata in the organization's own language instead of a hardcoded 1033, makes persona roles
