@@ -366,9 +366,8 @@ const KIND_HANDLERS = {
       // creates, so no foreign app can own buttons on it. Scoped to `contextvalue` (the entity the
       // command is bound to) for the same reason.
       //
-      // CHILDREN FIRST: a flyout's buttons hang off an intervening group row, and deleting a parent
-      // that still has children is rejected. `_parentappactionid_value` is null on top-level rows,
-      // so ordering by "has a parent" descending deletes leaves, then groups, then anchors.
+      // CHILDREN FIRST: see the depth computation below — a flyout hierarchy is three levels deep,
+      // so ordering has to be by real ancestor depth, not by "has a parent".
       let rows = [];
       try {
         rows = await sdk.queryRecords('appaction', {
@@ -381,12 +380,34 @@ const KIND_HANDLERS = {
         // resource simply reports its dependency, which is the pre-existing behaviour.
         rows = [];
       }
-      const depth = (r) => (r && r._parentappactionid_value ? 0 : 1); // 0 = child, deleted first
+      // DEEPEST FIRST, by real ancestor depth. A flyout is three levels — anchor (no parent), an
+      // intervening group (parent = anchor), then the buttons (parent = group) — so
+      // `_parentappactionid_value` is set on BOTH the group and the leaves. Sorting merely by "has a
+      // parent" puts them in the same bucket in arbitrary order, which can delete the group while its
+      // buttons still hang off it; Dataverse rejects deleting a parent that still has children.
+      // (Observed while resetting a command bar by hand: a leaf came back 404 because its group had
+      // already gone — the platform happened to cascade, which is luck, not ordering.)
+      //
+      // So walk the parent pointers to a true depth and delete the deepest rows first.
+      const byId = new Map((rows || []).map((r) => [r.appactionid, r]));
+      const depthOf = (r) => {
+        let d = 0;
+        let cur = r;
+        // Bounded by the row count so a cyclic/self-referential pointer cannot spin forever.
+        for (let i = 0; i < byId.size + 1 && cur && cur._parentappactionid_value; i += 1) {
+          cur = byId.get(cur._parentappactionid_value);
+          d += 1;
+        }
+        return d;
+      };
       const leaves = (rows || [])
         .slice()
-        .sort((a, b) => depth(a) - depth(b))
+        .sort((a, b) => depthOf(b) - depthOf(a))
         .map((r) => ({ id: r.appactionid, entity: target.entity, kind: 'row' }));
-      return [...bar, ...leaves];
+      // Rows BEFORE the bar: the individual rows are the ones holding the web-resource dependency,
+      // and deleting them first makes the outcome deterministic instead of depending on whatever the
+      // bar delete happens to cascade.
+      return [...leaves, ...bar];
     },
     del: (sdk, item) => (item.kind === 'row'
       ? sdk.deleteRecord('appaction', item.id)
