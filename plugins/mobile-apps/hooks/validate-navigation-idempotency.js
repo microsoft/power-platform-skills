@@ -112,12 +112,41 @@ function hasNavigation(content) {
 
 function hasNavigationTapGuard(content) {
   const lockMention = /\bisNavigating\b/.test(content);
-  if (!lockMention) return false;
+  if (lockMention) {
+    const earlyReturn = /if\s*\(\s*isNavigating\s*\)\s*return/.test(content);
+    const setTrue = /setIsNavigating\s*\(\s*true\s*\)/.test(content);
+    const setFalse = /setIsNavigating\s*\(\s*false\s*\)/.test(content);
+    if (earlyReturn && setTrue && setFalse) return true;
+  }
 
-  const earlyReturn = /if\s*\(\s*isNavigating\s*\)\s*return/.test(content);
-  const setTrue = /setIsNavigating\s*\(\s*true\s*\)/.test(content);
-  const setFalse = /setIsNavigating\s*\(\s*false\s*\)/.test(content);
-  return earlyReturn && setTrue && setFalse;
+  const refDeclarations = [...content.matchAll(
+    /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*useRef\s*(?:<[^>]+>)?\(\s*false\s*\)/g,
+  )];
+  return refDeclarations.some((match) => {
+    if (!/(navigat|redirect|transition|route)/i.test(match[1])) return false;
+    const refName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const earlyReturn = new RegExp(`if\\s*\\(\\s*${refName}\\.current\\s*\\)\\s*return`);
+    const setTrue = new RegExp(`${refName}\\.current\\s*=\\s*true`);
+    const setFalse = new RegExp(`${refName}\\.current\\s*=\\s*false`);
+    if (!earlyReturn.test(content) || !setTrue.test(content)) return false;
+
+    const guardedAction = new RegExp(
+      `if\\s*\\(\\s*${refName}\\.current\\s*\\)\\s*return[\\s\\S]{0,500}?`
+      + `${refName}\\.current\\s*=\\s*true[\\s\\S]{0,1200}?`
+      + 'router\\.(?:push|navigate|replace)\\s*\\(',
+    );
+    if (!guardedAction.test(content)) return false;
+
+    if (setFalse.test(content)) return true;
+
+    // A permanent one-shot lock is safe only for terminal callback redirects.
+    // Reusable push/navigate handlers must release their lock after the action.
+    const oneShotRedirect = new RegExp(
+      `if\\s*\\(\\s*${refName}\\.current\\s*\\)\\s*return[\\s\\S]{0,500}?`
+      + `${refName}\\.current\\s*=\\s*true[\\s\\S]{0,1200}?router\\.replace\\s*\\(`,
+    );
+    return oneShotRedirect.test(content);
+  });
 }
 
 function buildBlockMessage(filePath, errors, warnings) {
@@ -140,7 +169,7 @@ function buildBlockMessage(filePath, errors, warnings) {
   lines.push('Required fixes:');
   lines.push('  - Singleton routes must use `router.navigate(...)`, not `router.push(...)`.');
   lines.push('  - Async save flows must use a submit lock (`isSubmitting` or `isPending`) and disabled busy CTA.');
-  lines.push('  - Primary navigation actions should use an `isNavigating` lock to prevent iOS duplicate transitions.');
+  lines.push('  - Primary navigation actions should use a resettable `isNavigating`/ref lock. Permanent one-shot refs are only for terminal `router.replace(...)` callbacks.');
 
   return lines.join('\n');
 }
@@ -188,7 +217,7 @@ if (require.main === module) {
     }
 
     if (hasNavigation(content) && !hasNavigationTapGuard(content)) {
-      warnings.push('Navigation calls found with no clear `isNavigating` duplicate-tap guard.');
+      warnings.push('Navigation calls found with no clear state lock or one-shot ref guard.');
     }
 
     if (errors.length > 0) {

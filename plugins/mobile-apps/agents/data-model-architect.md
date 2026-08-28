@@ -3,7 +3,7 @@ name: data-model-architect
 description: Use when an orchestrator needs a Dataverse data model proposed (existing-table reuse, new tables in dependency-tier order, Mermaid ER diagram) for embedding in native-app-plan.md. Read-only — proposes, never mutates. Called by native-app-planner and /edit-app; not invoked directly by users.
 user-invocable: false
 color: cyan
-model: sonnet
+
 tools:
   - Read
   - Write

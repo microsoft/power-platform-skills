@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "provider": "Unsplash",
+  "license": "https://unsplash.com/license",
+  "rules": {
+    "allowedHost": "images.unsplash.com",
+    "fixedPhotoIdsOnly": true,
+    "allowRandomEndpoints": false,
+    "contentReviewRequired": true,
+    "defaultWidth": 1200,
+    "defaultHeight": 900
+  },
+  "images": [
+    {
+      "id": "furniture-stool",
+      "tags": ["furniture", "stool", "homeware", "product", "retail"],
+      "alt": "Plain wooden stool on a blue background",
+      "cdnUrl": "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1503602642458-232111445657",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "accessory-watch",
+      "tags": ["watch", "accessory", "product", "retail", "catalog"],
+      "alt": "Minimal wristwatch photographed as a product",
+      "cdnUrl": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1523275335684-37898b6baf30",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "ceramics-set",
+      "tags": ["ceramics", "homeware", "vessels", "product", "retail"],
+      "alt": "Neutral ceramic vessels arranged on a white shelf",
+      "cdnUrl": "https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1610701596007-11502861dcfa",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "apparel-rail",
+      "tags": ["apparel", "clothing", "fashion", "retail", "catalog"],
+      "alt": "Curated clothing collection on a retail rail",
+      "cdnUrl": "https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "food-table",
+      "tags": ["food", "meal", "restaurant", "hospitality", "catalog"],
+      "alt": "Colourful prepared dishes arranged on a table",
+      "cdnUrl": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1504674900247-0877df9cc836",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "architecture-home",
+      "tags": ["property", "building", "architecture", "home", "site"],
+      "alt": "Modern building exterior in daylight",
+      "cdnUrl": "https://images.unsplash.com/photo-1487958449943-2429e8be8625?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1487958449943-2429e8be8625",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "construction-site",
+      "tags": ["construction", "inspection", "site", "field", "safety"],
+      "alt": "Active construction site with structural framing",
+      "cdnUrl": "https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1504307651254-35680f356dfd",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "warehouse-logistics",
+      "tags": ["warehouse", "logistics", "inventory", "shipping", "operations"],
+      "alt": "Warehouse aisle prepared for logistics operations",
+      "cdnUrl": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "plant-pot",
+      "tags": ["plant", "garden", "homeware", "product", "retail"],
+      "alt": "Small succulent in a plain turquoise pot",
+      "cdnUrl": "https://images.unsplash.com/photo-1485955900006-10f4d324d411?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1485955900006-10f4d324d411",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "learning-books",
+      "tags": ["learning", "education", "course", "books", "library"],
+      "alt": "Books arranged for study and learning",
+      "cdnUrl": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "workspace-desk",
+      "tags": ["workspace", "office", "project", "productivity", "service"],
+      "alt": "Calm modern workspace with desk and natural light",
+      "cdnUrl": "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1497366754035-f200968a6e72",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    },
+    {
+      "id": "finance-calculator",
+      "tags": ["finance", "budget", "expense", "accounting", "analytics"],
+      "alt": "Calculator and financial planning materials on a desk",
+      "cdnUrl": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c",
+      "contentReview": "No visible logo, watermark, readable product label, or identifiable face."
+    }
+  ]
+}

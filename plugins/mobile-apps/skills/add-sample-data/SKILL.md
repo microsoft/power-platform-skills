@@ -165,10 +165,20 @@ For each selected table, generate N rows. Match values to column names + types:
 | **Choice (Picklist)** | **Query options first** (Step 4b), then pick from valid integer values. |
 | **MultiSelect Choice** | Pick 1-3 valid values per row from the option set. |
 | **Lookup** | Reference a record from the parent table that was (or will be) inserted in this run. Track parent GUIDs from Step 5's POST responses. |
+| **Image URL (String / URL)** | For explicit record-media columns such as `imageurl`, `photourl`, `thumbnailurl`, `coverurl`, or `avatarurl`, choose a fixed HTTPS URL from [`sample-image-cdn-catalog.json`](../../shared/references/sample-image-cdn-catalog.json) that matches the record subject. Populate visual records by default; never use a random-image endpoint. |
 | **Image / File** | Default: skip — leave null. If media seeding is enabled and the column is business data (product image, inspection evidence, NC proof), use generated/synthetic local files from `assets/sample-*` and record provenance. Never upload decorative UI hero assets to Dataverse. |
 
 **Media seeding policy (business data only, only if needed):**
 
+- **Remote record imagery is the default for explicit image-URL text columns.** If a planned list, discovery, gallery, card, map callout, or detail screen declares `media.role` as `essential` or `supportive`, seed the bound URL/Text media column for every displayed sample record, up to the table's media cap. This path does not require binary upload.
+- Read [`sample-image-cdn-catalog.json`](../../shared/references/sample-image-cdn-catalog.json), match by the record's subject and visual purpose, and rotate through distinct entries so the first viewport does not repeat one image. Use the catalog's exact `cdnUrl`; do not construct an Unsplash search/source URL or use a random placeholder service.
+- Use only catalog entries with the required `contentReview` safety note. If
+  an entry is missing that field, skip it rather than assuming the remote
+  image is brand-neutral.
+- Only use fixed `https://images.unsplash.com/photo-...` URLs from the bundled catalog unless the user supplied an approved CDN. Preserve the catalog attribution and license values in `assets/sample-media/asset-manifest.json`.
+- A visual record table with a compatible URL/Text column is not complete until at least `min(3, seeded record count)` rows have non-empty image URLs. If fewer than three rows are seeded, all rows need a URL. Include the URL column in the Step 4c preview.
+- If the plan requires visible record imagery but the schema has neither a URL/Text media column nor an Image column, report the missing media binding instead of hiding it with UI-only hardcoded images. Do not add a column from this skill.
+- Keep an app-local fallback illustration or neutral media block for offline/broken-CDN states. CDN content improves sample realism but must not be the only usable rendering path.
 - Default: do not seed binary media. Seed metadata rows and leave Image/File columns null unless the screen plan or user request requires visible sample media.
 - Seed Dataverse images/files only when the image belongs to a record users inspect in list/detail screens: product photos, evidence, attachments, signatures, issue proof. Do NOT seed Home hero, splash, app icon, empty-state art, or decorative detail backgrounds.
 - Prefer generated/synthetic assets with no logos, no real product labels, no faces, no watermarks, and no competitor branding. If the user supplies approved assets, use those and record their source.
@@ -177,9 +187,24 @@ For each selected table, generate N rows. Match values to column names + types:
 - For product/channel apps, product images are core sample data when product list/detail screens are visual, but they are capped. Generate and upload only a representative subset; use local placeholders or null image fields for the rest.
 - Maintain `assets/images/asset-manifest.json` or `assets/sample-media/asset-manifest.json` with file, purpose, source/license, and safety notes.
 
+**CDN manifest entry shape:**
+
+```json
+{
+  "record": "Studio Stool",
+  "column": "cr3e9_imageurl",
+  "url": "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=1200&h=900&q=82",
+  "purpose": "product list and detail photography",
+  "source": "https://images.unsplash.com/photo-1503602642458-232111445657",
+  "license": "https://unsplash.com/license",
+  "safety": "Fixed catalog image; no logo, watermark, or user data"
+}
+```
+
 **Media volume limits (HARD):**
 
 - Product/catalog tables: upload images for at most **min(6, record count)** records by default. If records are category-based, choose 1-2 per category until the cap is reached. All remaining records rely on local placeholder thumbnails or empty-state fallback.
+- URL/Text media columns: populate at most **min(8, record count)** rows per table. Prefer six distinct catalogue images before reusing a URL; the first three visible records must not share the same image.
 - Evidence/attachment tables: upload sample files for at most **30% of parent records**, capped at **5 files total per table**. Metadata rows can still exist without file bytes.
 - User/avatar/equipment/site images: upload at most **3 per table** unless the user explicitly asks for a larger visual demo.
 - Never create more than **10 generated media files total** in one `/add-sample-data` run without explicit user approval.

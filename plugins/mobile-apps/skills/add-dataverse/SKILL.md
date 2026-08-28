@@ -1085,9 +1085,15 @@ After all tables are verified, write the manifest to the project root using the 
 }
 ```
 
-`metadataId` and `solution` are required for `status: "new"` or `"extended"` entries — they're how Step 5a distinguishes "we own this on a re-run" from "name collision." Reused tables can omit both.
+`metadataId` and `solution` are required for `status: "new"` or `"extended"`
+entries — they're how Step 5a distinguishes "we own this on a re-run" from
+"name collision." Reused tables use `status: "reused"` and can omit both.
 
-Include only tables confirmed in Step 6c. Do NOT include tables reused with no schema changes.
+Include every app-used/service-required table confirmed in Step 6c, including
+tables reused with no schema changes. Reused entries preserve the verified
+logical/display name and the available column/relationship inventory needed
+by sample-data and offline-profile planning. This manifest is the
+materialized app data-source contract, not only a schema-mutation receipt.
 
 ### Step 7 — Inspect generated files
 

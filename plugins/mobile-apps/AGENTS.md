@@ -32,18 +32,24 @@ hooks/                         ← Telemetry start hooks plus validators invoked
 
 ## Template source
 
-The Expo template snapshot ships bundled inside this plugin at `template/`. It is synced from `pa-wrap-tools-1` / `pa-wrap-tools` `main`, `templates/expo-app-standalone/`. `/create-mobile-app` does not silently copy the bundled template over a user's folder; it expects a fresh installed template working directory and applies these preparation edits there:
+The Expo template snapshot ships bundled inside this plugin at `template/`. It is synced from `pa-wrap-tools-1` / `pa-wrap-tools` `main`, `templates/expo-app-standalone/`. `/create-mobile-app` does not silently copy the bundled template over a user's folder; it expects a fresh installed template working directory and invokes `scripts/prepare-mobile-template.js` for deterministic, rollback-safe preparation:
 
 | Edit | Purpose |
 |---|---|
 | `app.config.js`: `name`, `slug` | Replace `'Power Apps Dev Player'` / `'powerapps-dev-player'` with wizard answers |
 | `package.json`: `name` | Replace `'powerapps-dev-app'` with the app slug |
-| Delete `power.config.json` | `npx power-apps init` regenerates for the user's environment |
-| Reset `src/generated/` + `src/hooks/` | Remove any example stubs — `npx power-apps add-data-source` repopulates |
-| `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` props | Screens render under brand tokens, not upstream defaults |
-| `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
+| Remove only an empty `power.config.json` placeholder | Preserve a populated config; `scripts/initialize-mobile-app.js` skips initialization only when both environment and app display name match |
+| Remove recognized legacy example hooks/query client | Clean old samples without overwriting current shared helpers or touching generated output |
+| Seed missing shared helpers | Create the component/hook/utility/token structure while preserving every existing destination byte |
+| `app/_layout.tsx`: structurally add host themes, `tamaguiConfig`, and `SafeAreaProvider` | Preserve custom navigation, provider props, offline-profile wiring, and generation `@ts-ignore` boundaries; routes own their safe-area edges |
+| `tsconfig.json`: merge bare + wildcard `@/` aliases | Resolve `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and `@/native` without deprecated `baseUrl` |
 
-Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
+`src/generated/` is owned exclusively by Power Apps data-source and schema generation. Template preparation must never create, reset, delete, or overwrite generated models, services, schemas, or barrels. Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
+
+`.datamodel-manifest.json` includes every confirmed app-used/service-required
+Dataverse table, including reuse-as-is entries. This lets sample-data and
+offline-profile workflows consume one materialized data-source contract even
+when a plan performs no schema mutation.
 
 ## Guiding Principles
 
