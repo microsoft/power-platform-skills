@@ -475,6 +475,17 @@ const KIND_HANDLERS = {
     },
     del: (sdk, item) => sdk.deleteWebResource(item.id),
   },
+  // Clear a column visualization on a table that teardown deliberately KEEPS. Setting 'None' deletes
+  // the backing `controlconfiguration` row; the SDK converges rather than erroring when there is
+  // nothing to clear, so a re-run is safe. On an environment where the preview is not provisioned
+  // every call 404s — tolerated as "nothing to remove" rather than a teardown failure.
+  columnVisualization: {
+    async resolve(sdk, target) {
+      return [{ id: `${target.entityLogical}.${target.columnLogical}`, entityLogical: target.entityLogical, columnLogical: target.columnLogical }];
+    },
+    del: (sdk, item) => sdk.setColumnVisualization(item.entityLogical, item.columnLogical, 'None'),
+    tolerateNotFound: true,
+  },
   table: {
     // Only tear down tables THIS build created. Skip (never delete):
     //  · a table the spec explicitly flags as pre-existing (`existing: true`) — a reused custom
@@ -636,6 +647,25 @@ function planTeardown(spec) {
     for (const schema of selectSummaryTables(spec)) {
       const logical = String(schema).toLowerCase();
       steps.push({ kind: 'aiSummary', phase: 'ai-summaries', label: `row summary ${logical}`, target: { entityLogicalName: logical } });
+    }
+  }
+  // Column visualizations on tables that SURVIVE teardown. A visualization is a
+  // `controlconfiguration` row bound to the attribute, so it is removed with the column when the
+  // table is deleted — but a table marked `existing: true` (or a system table) is deliberately kept,
+  // and its columns keep whatever renderer this spec applied. That is residue on somebody else's
+  // table, so clear it explicitly. Emitted BEFORE the tables phase because a table this spec DOES
+  // own would take its configurations with it, making the step redundant there.
+  for (const e of spec.entities || []) {
+    if (e.existing !== true) continue;
+    const logical = String(e.schemaName).toLowerCase();
+    for (const c of e.columns || []) {
+      if (!c || !c.schemaName || c.visualization === undefined || c.visualization === 'None') continue;
+      steps.push({
+        kind: 'columnVisualization',
+        phase: 'data-model',
+        label: `column visualization ${logical}.${String(c.schemaName).toLowerCase()}`,
+        target: { entityLogical: logical, columnLogical: String(c.schemaName).toLowerCase() },
+      });
     }
   }
   // Tables in REVERSE topological order: topoOrderEntities lists parents-before-children (build

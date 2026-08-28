@@ -1516,11 +1516,16 @@ async function runSdkBuild(spec, opts = {}) {
         for (const extra of legacyDupes) {
           try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
           let removed = false;
-          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          let why = '';
+          // Capture the REAL reason instead of asserting one. A 403 (no delete privilege), a 429, or
+          // a transport failure look identical to the wedged-row case from the outside, and a warning
+          // that names the wrong cause sends the reader to Maker to hand-delete a row they actually
+          // lack rights to touch.
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch (e) { why = (e && e.message) ? String(e.message).replace(/\s+/g, ' ').slice(0, 200) : String(e); }
           if (typeof opts.warn === 'function') {
             opts.warn(removed
               ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
-              : `business rule "${rule.name}": a duplicate left by an earlier build (${extra.workflowid}) could not be removed — it is wedged by the platform fault that created it. Delete it in Maker so only one copy of the rule runs. See issue #482.`);
+              : `business rule "${rule.name}": a duplicate left by an earlier build (${extra.workflowid}) could not be removed (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
           }
         }
         // Reuse — but a rule that EXISTS is not necessarily a rule that RUNS. A deployed rule left in
@@ -1604,11 +1609,15 @@ async function runSdkBuild(spec, opts = {}) {
           // is also asynchronous, so a row that refuses it now may become deletable shortly after.
           try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
           let removed = false;
-          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          let why = '';
+          // Report the REAL failure rather than asserting the wedged-row cause: a 403, 429 or
+          // transport error is indistinguishable from outside, and naming the wrong one misdirects
+          // whoever reads the warning.
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch (e) { why = (e && e.message) ? String(e.message).replace(/\s+/g, ' ').slice(0, 200) : String(e); }
           if (typeof opts.warn === 'function') {
             opts.warn(removed
               ? `business rule "${rule.name}": removed a duplicate the SDK's fallback created (${extra.workflowid})`
-              : `business rule "${rule.name}": the SDK's fallback created a duplicate (${extra.workflowid}) that could not be removed automatically — it is wedged by the same platform fault. Delete it in Maker (or after its deactivation completes) so only one copy of the rule runs. See issue #482.`);
+              : `business rule "${rule.name}": the SDK's fallback created a duplicate (${extra.workflowid}) that could not be removed automatically (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
           }
         }
       });

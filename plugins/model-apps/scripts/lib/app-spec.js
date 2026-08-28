@@ -788,6 +788,14 @@ function validateAppSpec(spec, opts = {}) {
 
     if (!Array.isArray(r.conditions) || !r.conditions.length) {
       errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the compiler emits as an empty rule that silently never fires)`);
+    } else if (r.conditions.length > 1) {
+      // The XAML compiler supports EXACTLY ONE clause — `bodyXml` reads `clauses[0]` and the adapter
+      // throws `this increment supports a single clause (got N); multi-clause AND/OR is a follow-up`.
+      // LIVE-MEASURED: a two-clause rule fails to deploy while a one-clause rule succeeds on the same
+      // org in the same run, so without this gate a multi-condition spec validates and then dies
+      // mid-build. Model an AND by putting the second test in the rule's own scope, or author two
+      // rules.
+      errors.push(`${label}: only ONE condition is supported (got ${r.conditions.length}) — the business-rule compiler emits a single clause; author separate rules instead of a multi-condition AND/OR`);
     }
     for (const c of r.conditions || []) {
       if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }

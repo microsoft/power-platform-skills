@@ -1232,3 +1232,38 @@ test('command teardown proceeds with the bar when the row listing fails', async 
   const items = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'new_ticket', ownsTable: true });
   assert.deepStrictEqual(items.map((i) => i.id), ['bar-1']);
 });
+
+test('a column visualization on a RETAINED table is cleared at teardown', () => {
+  // A visualization is a controlconfiguration row bound to the attribute, so it goes with the table
+  // when the table is deleted. A table flagged `existing: true` is deliberately KEPT, and its
+  // columns would otherwise keep a renderer this spec applied — residue on somebody else's table.
+  const spec = fullSpec();
+  spec.entities.push({
+    schemaName: 'account', displayName: 'Account', pluralName: 'Accounts', existing: true,
+    primaryAttribute: { schemaName: 'name', displayName: 'Name' },
+    columns: [{ schemaName: 'new_score', displayName: 'Score', type: 'Integer', visualization: 'StarRating' }],
+  });
+  const steps = planTeardown(spec, {});
+  const viz = steps.filter((s) => s.kind === 'columnVisualization');
+  assert.strictEqual(viz.length, 1, `expected one clear step, got ${JSON.stringify(viz.map((v) => v.label))}`);
+  assert.strictEqual(viz[0].target.entityLogical, 'account');
+  assert.strictEqual(viz[0].target.columnLogical, 'new_score');
+  // Before the tables phase: a table we DO own takes its configurations with it, so ordering the
+  // clear after the delete would just 404.
+  const tableIdx = steps.findIndex((s) => s.kind === 'table');
+  assert.ok(steps.indexOf(viz[0]) < tableIdx, 'the clear must precede the tables phase');
+});
+
+test('a visualization on a table THIS spec owns needs no clear step', () => {
+  // It is removed with the table; emitting a step would be a redundant call that 404s.
+  const spec = fullSpec();
+  spec.entities[0].columns = [{ schemaName: 'new_score', displayName: 'Score', type: 'Integer', visualization: 'StarRating' }];
+  assert.strictEqual(planTeardown(spec, {}).filter((s) => s.kind === 'columnVisualization').length, 0);
+});
+
+test('clearing a visualization writes None through the SDK', async () => {
+  const calls = [];
+  const sdk = { setColumnVisualization: async (e, c, v) => { calls.push([e, c, v]); } };
+  await KIND_HANDLERS.columnVisualization.del(sdk, { entityLogical: 'account', columnLogical: 'new_score' });
+  assert.deepStrictEqual(calls, [['account', 'new_score', 'None']]);
+});

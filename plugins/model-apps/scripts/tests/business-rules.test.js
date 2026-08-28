@@ -459,3 +459,46 @@ test('a rule with an activated copy present is NOT reported as duplicated', asyn
   const c = r.checks.find((x) => x.kind === 'business-rule');
   assert.strictEqual(c.present, true, `an active rule with its activated copy must PASS; detail: ${c.detail}`);
 });
+
+// --- #488 follow-ups -----------------------------------------------------------------------------
+
+test('a multi-condition rule is rejected at the gate, not mid-build', () => {
+  // MEASURED against the SDK compiler and live: `businessRuleXaml.ts` throws
+  // "this increment supports a single clause (got N); multi-clause AND/OR is a follow-up", and
+  // `bodyXml` only ever reads clauses[0]. Live on a real org a two-clause rule failed to deploy
+  // while a one-clause rule succeeded in the same run — so without this gate a multi-condition spec
+  // validates and then dies part-way through the build.
+  const errs = errorsFor([{
+    ...RULE,
+    conditions: [
+      { field: 'new_status', operator: 'Equals', value: 'Closed', dataType: 'Picklist' },
+      { field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' },
+    ],
+  }]);
+  assert.ok(errs.some((e) => /only ONE condition is supported/.test(e)), `expected a single-clause error, got ${JSON.stringify(errs)}`);
+});
+
+test('one condition still validates', () => {
+  assert.deepStrictEqual(errorsFor([RULE]), []);
+});
+
+test('an object-valued businessRules is a validation error, not a TypeError', () => {
+  // spec-shape normalises collections so a malformed spec fails at the gate with a message naming
+  // the field. `businessRules`/`conditions`/`actions` were missing from that map, so an object where
+  // an array belongs reached a raw `for...of` and threw.
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  const spec = specWith([]);
+  spec.businessRules = { name: 'not an array' };
+  const res = validate(spec); // must not throw
+  assert.ok(Array.isArray(res.errors));
+  assert.ok(res.errors.length > 0, 'a malformed businessRules must be reported');
+});
+
+test('object-valued conditions/actions are reported, not thrown', () => {
+  const { validateAppSpec: validate } = require('../lib/app-spec.js');
+  for (const field of ['conditions', 'actions']) {
+    const spec = specWith([{ ...RULE, [field]: { bad: true } }]);
+    const res = validate(spec); // must not throw
+    assert.ok(Array.isArray(res.errors) && res.errors.length > 0, `${field} must be reported`);
+  }
+});
