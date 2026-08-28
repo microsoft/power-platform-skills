@@ -527,7 +527,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
   "appConfig": {
     "enabled": true,
     "serverRowLimit": 2000,
-    "/* BEGIN OFFLINE-CONFIG-WORKAROUND */": "remove when SDK gaps are fixed upstream — tracked in plugins/mobile-apps/template (instanceUrl) + PowerApps-Client (useDda + entitiesIncluded). Bracket exists so the future cleanup diff is mechanical.",
+    "/* BEGIN OFFLINE-CONFIG-WORKAROUND */": "remove when SDK gaps are fixed upstream — tracked in microsoft/power-platform-skills/plugins/mobile-apps/template#main (instanceUrl) + PowerApps-Client (useDda + entitiesIncluded). Bracket exists so the future cleanup diff is mechanical.",
     "useDda": false,
     "entitiesIncluded": ["<logicalName-1>", "<logicalName-2>", "..."],
     "instanceUrl": "<envUrl>",
