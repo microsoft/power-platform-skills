@@ -1,14 +1,14 @@
 {
-  "commit": "b17bd3da66121a620c8cb1b198a7aaab6b6a0eed",
-  "subject": "feat(cds-maker-sdk): Business Process Flow (BPF) authoring - all phases (create/activate/edit/structure/flow/security)",
+  "commit": "ae1be504c8bedf330d1f22c4a6b65f3cd37e59cd",
+  "subject": "feat(cds-maker-sdk): AI form-fill capability settings + forms can carry a description",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-28T16:33:04.842Z",
-  "newestSrcAt": "2026-08-28T16:28:40.376Z",
+  "libBuiltAt": "2026-08-28T21:26:21.902Z",
+  "newestSrcAt": "2026-08-28T21:23:52.676Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-28T16:34:11.012Z",
-  "bundleSha256": "0168206487969d69f01f843c1cfa3b751c018271b320d64017f880a17c466b86",
-  "bundleBytes": 687133
+  "builtAt": "2026-08-28T21:26:41.230Z",
+  "bundleSha256": "f4ff93b5d0985286f4a3f4275088b01333ad0768e5fde4f62862f2748376e899",
+  "bundleBytes": 688045
 }

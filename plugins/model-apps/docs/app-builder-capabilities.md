@@ -36,8 +36,9 @@ apart deliberately.
 ### Business rules — ✅ verified live
 - `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
   (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on a
-  condition over the record (`Equals` · `DoesNotEqual`). `ContainsData`/`DoesNotContainData` are
-  rejected at the spec gate — the XAML they compile to makes the platform 500 on activation.
+  condition over the record (`Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`).
+  The presence pair was blocked until the compiler stopped emitting an empty parameter list where
+  the platform requires a null one (#481); fixed upstream, re-verified live.
 - Compiled to classic workflow XAML by the vendored SDK and activated on create. The supported slice
   is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
   rule naming a column that does not exist is rejected up front rather than deploying and never firing.

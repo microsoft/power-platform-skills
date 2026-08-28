@@ -379,25 +379,23 @@ const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 // there was anything to clear.
 const COLUMN_VISUALIZATIONS = ['None', 'RadialDial', 'LineChart', 'HeatMap', 'StarRating'];
 
-// Business rules. These MIRROR the vendored SDK's supported slice — but NARROWER, and the gap is
-// deliberate: the SDK advertises four operators and only two of them survive contact with the
-// platform.
+// Business rules. These MIRROR the vendored SDK's supported slice.
 //
-// LIVE-MEASURED 2026-08-27. `ContainsData` and `DoesNotContainData` compile to XAML the platform
-// cannot process: every attempt answers
-//   HTTP 500 ... Error generating UiData for workflow: <name>
-// Isolated across six probes on a real org — it fails on a Text column and on a Memo column, with
-// the action on the same field or a different one, and in both directions (`DoesNotContainData`
-// too). `Equals` and `DoesNotEqual` succeed in the same probes, so it is the presence operators
-// specifically, not the rule shape. Offering an operator that reliably 500s is worse than not
-// offering it, so they are rejected at the spec gate with a message pointing at the tracking issue.
-// Re-widen here (and in the schema doc) once the compiler is fixed upstream.
-const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual'];
-// Recognised by the SDK but not usable: kept separate so validation can explain WHY rather than
-// just listing them as unknown.
-const BUSINESS_RULE_BLOCKED_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
-// Operators that take NO value: they test presence, so a `value` would be meaningless. Retained
-// because the mapper still handles them correctly — only the platform side is broken.
+// `ContainsData` / `DoesNotContainData` were blocked here for a while: they compiled to XAML the
+// platform could not process, answering `HTTP 500 ... Error generating UiData for workflow`. Root
+// cause (#481) was in the compiler, not the rule shape — for a valueless operator it emitted an
+// EMPTY parameter array, `[New Object() { }]`, where every server-authored rule writes
+// `<x:Null x:Key="Parameters" />`. An empty Object[] is not null, and the UiData generator cannot
+// render it.
+//
+// Fixed upstream and vendored here. RE-VERIFIED LIVE against the new bundle on a real org: all four
+// operators now push successfully in one run (previously the two presence operators failed 500 while
+// `Equals` succeeded in the same run).
+const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual', 'ContainsData', 'DoesNotContainData'];
+// Nothing is blocked at present. Kept (empty) so a future platform-side breakage can be re-declared
+// here with an explanation, rather than being folded into "unknown operator".
+const BUSINESS_RULE_BLOCKED_OPERATORS = new Set();
+// Operators that take NO value: they test presence, so a `value` would be meaningless.
 const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
 // action type -> the field carrying its payload. `null` = no payload (none currently).
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };

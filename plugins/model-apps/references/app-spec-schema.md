@@ -450,12 +450,13 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   ] }
 ```
 
-- **Operators**: `Equals` · `DoesNotEqual`, and both must carry a `value`.
-  `ContainsData` / `DoesNotContainData` are **rejected**: the SDK compiles them to XAML the platform
-  answers with `HTTP 500 — Error generating UiData`, live-measured on every column type and in both
-  directions, while the two comparison operators succeed in the same run. Tracked as
-  [#481](https://github.com/microsoft/power-platform-skills/issues/481); to test presence, compare
-  the field to the value you care about instead.
+- **Operators**: `Equals` · `DoesNotEqual` (both must carry a `value`), and the presence operators
+  `ContainsData` · `DoesNotContainData` (which must **not** carry one — they test presence, so a
+  value would be meaningless).
+  The presence pair was rejected for a while: the compiler emitted an empty parameter array where
+  the platform requires a null one, and every attempt answered `HTTP 500 — Error generating UiData`
+  ([#481](https://github.com/microsoft/power-platform-skills/issues/481)). Fixed upstream and
+  re-verified live — all four operators now deploy in a single run.
 - **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
   (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
   string `"false"` is truthy and would invert the intent, so it is rejected.

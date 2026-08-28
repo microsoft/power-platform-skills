@@ -75,15 +75,17 @@ test('operators and actions are constrained to the slice the SDK can compile', (
   }
 });
 
-test('presence operators are rejected — they compile to XAML the platform 500s on', () => {
-  // LIVE-MEASURED: `ContainsData` / `DoesNotContainData` answer "Error generating UiData" (HTTP 500)
-  // on every column type and in both directions, while Equals/DoesNotEqual succeed in the same run.
-  // The error must name the platform failure, not pretend the operator is unrecognised — an author
-  // reaching for ContainsData has written something reasonable that we simply cannot deploy.
+test('presence operators are ACCEPTED now that the compiler emits a null parameter list', () => {
+  // These were blocked while the compiler emitted an EMPTY parameter array for a valueless operator
+  // (`[New Object() { }]`) where every server-authored rule writes `<x:Null x:Key="Parameters" />`.
+  // An empty Object[] is not null, and the UiData generator answered HTTP 500 on it (#481).
+  //
+  // Fixed upstream and re-verified LIVE on a real org with the vendored bundle: all four operators
+  // push successfully in one run, where previously the two presence operators failed 500 while
+  // `Equals` succeeded alongside them.
   for (const operator of ['ContainsData', 'DoesNotContainData']) {
     const errs = errorsFor([{ ...RULE, conditions: [{ field: 'new_notes', operator }] }]);
-    assert.ok(errs.some((e) => /is not usable/.test(e) && /Error generating UiData/.test(e) && /issues\/481/.test(e)),
-      `${operator} must be rejected with the platform reason: ${JSON.stringify(errs)}`);
+    assert.deepStrictEqual(errs, [], `${operator} must now validate: ${JSON.stringify(errs)}`);
   }
 });
 
@@ -189,6 +191,51 @@ test('REAL BUNDLE: the mapped rule compiles to XAML naming the authored columns'
   // The assertion that matters: a well-formed but EMPTY rule would satisfy everything above.
   assert.match(classic.body.xaml, /new_status/, 'the condition column reaches the compiled XAML');
   assert.match(classic.body.xaml, /new_notes/, 'the action column reaches the compiled XAML');
+});
+
+test('REAL BUNDLE: a valueless operator compiles to a NULL parameter list, never an empty array', async () => {
+  // The precise shape of the #481 fix. The compiler used to emit `[New Object() { }]` for a
+  // valueless operator where every server-authored rule writes `<x:Null x:Key="Parameters" />`; an
+  // empty Object[] is not null, and the UiData generator answered HTTP 500 on it.
+  //
+  // Pinned against the shipped bundle because the symptom is a server-side 500 that no test over our
+  // own code could reproduce — the XAML is the only observable that predicts it.
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-null-'));
+  dirs.push(dir);
+  const calls = [];
+  const sdk = createMakerSdk({
+    workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async () => ({ status: 200, headers: {}, body: { value: [] } }),
+      post: async (url, body) => {
+        calls.push({ url, body });
+        if (/WithWfomJson/i.test(url)) return { status: 400, headers: {}, body: { error: { code: '0x80040216' } } };
+        return { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} };
+      },
+      patch: async () => ({ status: 204, headers: {}, body: {} }),
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    },
+  });
+  sdk.initWorkspace();
+
+  const def = businessRuleDef({
+    name: 'Presence Rule', entity: 'new_ticket',
+    conditions: [{ field: 'new_notes', operator: 'ContainsData' }],
+    actions: [{ type: 'SetVisibility', field: 'new_owner', visible: false }],
+  });
+  const art = sdk.createArtifact('businessRule', def);
+  await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+  await sdk.pushArtifact('businessRule', art.id);
+
+  const classic = calls.find((c) => /\/workflows$/.test(String(c.url)));
+  assert.ok(classic, 'the classic row is written');
+  const xaml = String(classic.body.xaml || '');
+  assert.ok(xaml.includes('<x:Null x:Key="Parameters" />'),
+    'a valueless operator must emit a NULL parameter list');
+  assert.ok(!/x:Key="Parameters">\[New Object\(\) \{ \}\]/.test(xaml),
+    'an EMPTY Object[] is exactly what made the platform 500');
 });
 
 // --- peer-review findings: verified and fixed ---------------------------------------------------

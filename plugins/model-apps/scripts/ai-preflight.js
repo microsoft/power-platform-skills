@@ -17,15 +17,22 @@ const path = require('node:path');
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
   formFill: {
-    // Deliberately NOT "Form fill". `FormFillBarUXEnabled` governs only the form fill assist
-    // TOOLBAR — one capability of AI form fill assistance. The SDK's own type docs name three
-    // siblings this flag does not touch: `FormFillFileUploadEnabled` (file upload),
-    // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form
-    // predictions). Labelling it "Form fill" overclaims in both directions — it reports a feature
-    // as unavailable when a user may well have smart paste working, and it implies enabling it
-    // turns the whole family on.
+    // `FormFillBarUXEnabled` is the assist TOOLBAR only. The SDK now models the whole AI form-fill
+    // family, so each capability is reported separately rather than one label implying all four.
     label: 'Form fill assist toolbar',
-    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features. Note this is the toolbar only — smart paste (FormPredictSmartPasteEnabled), file upload (FormFillFileUploadEnabled) and edit-form predictions (FormPredictEnabled) are separate settings this does not enable.`,
+    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillSuggestions: {
+    label: 'Form fill predictions (edit forms)',
+    action: (f) => `Enable "AI form fill predictions" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillSmartPaste: {
+    label: 'Form fill smart paste',
+    action: (f) => `Enable "Smart paste" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+  },
+  formFillFiles: {
+    label: 'Form fill from files',
+    action: (f) => `Enable "Form fill from files" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
   },
   nlSearch: {
     label: 'Natural language search',
@@ -131,7 +138,7 @@ async function main() {
       if (!setting) continue; // `summaries` is not a per-app on/off setting
       if (appLookup.error) { effective[key] = { error: `app scope unknown: ${appLookup.error}` }; continue; }
       const res = await effectiveSettingValue(read, appModuleId, setting);
-      effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value) };
+      effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value, key) };
     }
     if (appLookup.error) {
       process.stderr.write(`\nWarning: could not resolve app '${app}' (${appLookup.error}); reporting readiness gates only.\n`);

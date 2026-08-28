@@ -267,14 +267,15 @@ test('REAL BUNDLE: a wrongly-shaped condition compiles an EMPTY rule rather than
 // guarded if something compares it to the BUNDLE.
 test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', () => {
   const src = fs.readFileSync(BUNDLE, 'utf8');
-  // The map is emitted as, e.g.:
-  //   var xV={formFill:"FormFillBarUXEnabled",nlSearch:"NLGridSearchSetting",
-  //           nlChart:"NLChartDataVisualizationSetting",m365:"m365copilotmodelappenabled"}
-  // The GATE map carries an extra `summaries` key between nlChart and m365 (the per-app map has no
-  // summaries entry — row summaries are configured through configureRowSummary, not a flag), so the
-  // optional group is required to match BOTH. Anchor on the `formFill` key rather than the minified
-  // variable name, which changes every build.
-  const m = /\{formFill:"[^"]+",nlSearch:"[^"]+",nlChart:"[^"]+",(?:summaries:"[^"]+",)?m365:"[^"]+"\}/g;
+  // The maps are emitted as, e.g.:
+  //   {formFill:"FormFillBarUXEnabled",formFillSuggestions:"FormPredictEnabled",
+  //    formFillSmartPaste:"FormPredictSmartPasteEnabledOnByDefault",formFillFiles:"...",
+  //    nlSearch:"NLGridSearchSetting",nlChart:"...",m365:"..."}
+  // The GATE map additionally carries `summaries` (the per-app map has none — row summaries are
+  // configured through configureRowSummary, not a flag). Anchor on the `formFill` key rather than
+  // the minified variable name, which changes every build, and accept any key set after it so a new
+  // capability is caught by the deepEqual below rather than silently skipped by the regex.
+  const m = /\{formFill:"[^"]+"(?:,[A-Za-z0-9_]+:"[^"]+")+\}/g;
   const maps = [...src.matchAll(m)].map((x) => x[0]);
   assert.ok(maps.length >= 2, `expected both the gate and per-app maps in the bundle, found ${maps.length}`);
 
