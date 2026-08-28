@@ -112,6 +112,11 @@ function loadPreflightCli({ parseResult, readiness, sdkThrows = null }) {
         },
       };
     }
+    // Script-relative requires must resolve against the SCRIPT, not this test file — the CLI lives
+    // in scripts/ and its siblings are one directory up from tests/.
+    if (id.startsWith('./')) {
+      return require(path.join(path.dirname(scriptPath), id));
+    }
     return require(id);
   };
   customRequire.main = {};
@@ -179,6 +184,96 @@ test('ai-preflight CLI reports all-enabled status without admin actions', async 
   });
 
   await harness.main();
-  assert.match(harness.stderr.join(''), /All AI features are enabled/);
+  assert.match(harness.stderr.join(''), /All AI features are available \(enabled, or already in effect\)/);
   assert.ok(harness.events.some((e) => e.type === 'getAiReadiness' && Object.keys(e.opts).length === 0));
+});
+
+// --- "in effect" reporting: the gate is NOT the whole truth -----------------------------------
+// Live-measured on a real environment: the readiness gate `EnableNLGridSearch` reads "false" while
+// the feature's actual setting `NLGridSearchSetting` is "2" at ENVIRONMENT scope, so NL grid search
+// runs in every app on that org. Reporting it as disabled — and telling an admin to switch it on —
+// is wrong, and it is what this suite previously locked in.
+const { effectiveSettingValue, settingIsOn } = require('../lib/ai-app-settings.js');
+
+test('a gate-off feature that is ON at environment scope reports as in effect, with no admin action', () => {
+  const readiness = {
+    formFill: { enabled: false, setting: 'FormFillBarUXEnabled', value: '0' },
+    nlSearch: { enabled: false, setting: 'EnableNLGridSearch', value: 'false' },
+  };
+  const effective = {
+    formFill: { value: '0', scope: 'default', on: false },
+    nlSearch: { value: '2', scope: 'environment', on: true },
+  };
+  const r = runPreflight(readiness, effective);
+  const nl = r.features.find((f) => f.feature === 'nlSearch');
+  assert.strictEqual(nl.inEffect, true);
+  assert.strictEqual(nl.effectiveScope, 'environment');
+  assert.strictEqual(nl.effectiveValue, '2');
+  // Only the genuinely-off feature earns an admin action.
+  assert.strictEqual(r.adminActions.length, 1);
+  assert.match(r.adminActions[0], /Form fill/);
+});
+
+test('an UNREADABLE effective value never counts as in effect', () => {
+  // Fail-closed: "could not look" must not suppress a real admin action, which would leave an
+  // operator with no indication that anything needs doing.
+  const readiness = { nlSearch: { enabled: false, setting: 'EnableNLGridSearch', value: 'false' } };
+  const r = runPreflight(readiness, { nlSearch: { error: 'the setting definition could not be read: 401' } });
+  assert.ok(!r.features.find((f) => f.feature === 'nlSearch').inEffect);
+  assert.strictEqual(r.adminActions.length, 1);
+});
+
+test('omitting the effective map preserves the previous gate-only behaviour', () => {
+  const readiness = { nlSearch: { enabled: false, setting: 'EnableNLGridSearch', value: 'false' } };
+  const r = runPreflight(readiness);
+  assert.strictEqual(r.adminActions.length, 1);
+  assert.ok(!r.features.find((f) => f.feature === 'nlSearch').inEffect);
+});
+
+test('settingIsOn reads Dataverse string values, not JS truthiness', () => {
+  // Every one of these is a trap: "0" and "false" are truthy strings in JS.
+  assert.strictEqual(settingIsOn('0'), false);
+  assert.strictEqual(settingIsOn('false'), false);
+  assert.strictEqual(settingIsOn('1'), true);
+  assert.strictEqual(settingIsOn('2'), true);       // NL grid search uses 2, not 1
+  assert.strictEqual(settingIsOn('true'), true);
+  assert.strictEqual(settingIsOn(''), undefined);
+  assert.strictEqual(settingIsOn(undefined), undefined);
+  assert.strictEqual(settingIsOn('yes'), undefined); // unparseable => indeterminate, never a guess
+});
+
+test('effectiveSettingValue prefers app scope, then environment, then the default', async () => {
+  const def = [{ settingdefinitionid: 'def-1', defaultvalue: '0' }];
+  const reader = (appRows, envRows) => ({
+    queryRecords: async (entity) => {
+      if (entity === 'settingdefinition') return def;
+      if (entity === 'appsetting') return appRows;
+      if (entity === 'organizationsetting') return envRows;
+      throw new Error(`unexpected entity ${entity}`);
+    },
+  });
+
+  assert.deepStrictEqual(
+    await effectiveSettingValue(reader([{ value: '9' }], [{ value: '2' }]), 'app-1', 'S'),
+    { value: '9', scope: 'app' });
+  assert.deepStrictEqual(
+    await effectiveSettingValue(reader([], [{ value: '2' }]), 'app-1', 'S'),
+    { value: '2', scope: 'environment' });
+  assert.deepStrictEqual(
+    await effectiveSettingValue(reader([], []), 'app-1', 'S'),
+    { value: '0', scope: 'default' });
+  // No app in scope: skip the app layer entirely rather than erroring.
+  assert.deepStrictEqual(
+    await effectiveSettingValue(reader([], [{ value: '2' }]), null, 'S'),
+    { value: '2', scope: 'environment' });
+});
+
+test('effectiveSettingValue reports a setting the environment does not declare as unsupported', async () => {
+  // Distinct from "off": there is no admin action that would satisfy it, so the caller must be able
+  // to say so precisely instead of alleging a missing override.
+  const read = { queryRecords: async () => [] };
+  const r = await effectiveSettingValue(read, 'app-1', 'm365copilotmodelappenabled');
+  assert.ok(r.error);
+  assert.strictEqual(r.unsupported, true);
+  assert.strictEqual(r.value, undefined);
 });

@@ -58,6 +58,11 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   version is available, with the update command for your host.
 
 ### Fixed
+- **AI preflight no longer reports a running feature as disabled.** The readiness gate and a
+  feature's actual setting are different rows, so a gate reading off did not mean the feature was
+  off — NL search and NL charts were reported as unavailable while both were in effect. Preflight now
+  resolves the effective value (app override → environment → default), says which scope enabled it,
+  and stops emitting an admin action for a feature that is already on.
 - **Rebuilds no longer duplicate sub-grids or skip field removals.** The vendored SDK's artifact
   surface became **asynchronous** upstream (`getArtifact`, `addElement`, `updateElement`,
   `removeElement`, `moveElement`, `findElements`, `queryTree`). Un-awaited, that fails *silently*:
