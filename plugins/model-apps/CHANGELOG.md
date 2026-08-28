@@ -58,6 +58,12 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   version is available, with the update command for your host.
 
 ### Fixed
+- **Command buttons now actually run.** A JS command was created with no on-click parameters, so the
+  function was invoked with no arguments — the near-universal `function doThing(primaryControl)` shape
+  threw on its first property access and the button silently did nothing. Nothing server-side showed
+  it: the build, the deployed rows and `--verify` all looked correct, and the error appeared only in
+  the browser console. Buttons now receive the standard parameters for their location
+  (`MainTab` → PrimaryControl; grid/subgrid → SelectedControl), overridable via `parameters`.
 - **Business rules no longer mistake the platform's activated copy for a duplicate.** Activating a
   rule makes Dataverse create a second `workflows` row (`type 2`, parented to the definition) — normal
   for any activated process. Build, verify and teardown queried without `type eq 1`, so the build

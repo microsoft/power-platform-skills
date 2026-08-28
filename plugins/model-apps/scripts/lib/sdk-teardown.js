@@ -354,9 +354,45 @@ const KIND_HANDLERS = {
         return { items: [], skipReason: "command bar on an existing/external table is not deleted — the SDK deletes the whole bar and cannot scope to this spec's buttons (per-button delete unsupported); remove it manually if intended" };
       }
       const items = await sdk.resolveArtifact('command', { entity: target.entity });
-      return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));
+      const bar = (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity, kind: 'bar' }));
+
+      // The bar delete does NOT remove the individual `appaction` rows. LIVE-MEASURED: after a
+      // teardown that deleted the table itself, five appaction rows for that entity survived, and
+      // the three leaf buttons still referenced the form-JS web resource — which then could not be
+      // deleted ("referenced by 3 other components", componenttype 10344 = modern command). So the
+      // stranded rows are what blocked the web resource, not a platform dependency leak.
+      //
+      // Safe only because this branch already requires `ownsTable`: the table is one this spec
+      // creates, so no foreign app can own buttons on it. Scoped to `contextvalue` (the entity the
+      // command is bound to) for the same reason.
+      //
+      // CHILDREN FIRST: a flyout's buttons hang off an intervening group row, and deleting a parent
+      // that still has children is rejected. `_parentappactionid_value` is null on top-level rows,
+      // so ordering by "has a parent" descending deletes leaves, then groups, then anchors.
+      let rows = [];
+      try {
+        rows = await sdk.queryRecords('appaction', {
+          select: ['appactionid', '_parentappactionid_value'],
+          filter: `contextvalue eq '${odataLit(target.entity)}'`,
+          top: 200,
+        });
+      } catch {
+        // Best-effort: if the rows cannot be listed, the bar delete below still runs and the web
+        // resource simply reports its dependency, which is the pre-existing behaviour.
+        rows = [];
+      }
+      const depth = (r) => (r && r._parentappactionid_value ? 0 : 1); // 0 = child, deleted first
+      const leaves = (rows || [])
+        .slice()
+        .sort((a, b) => depth(a) - depth(b))
+        .map((r) => ({ id: r.appactionid, entity: target.entity, kind: 'row' }));
+      return [...bar, ...leaves];
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.entity),
+    del: (sdk, item) => (item.kind === 'row'
+      ? sdk.deleteRecord('appaction', item.id)
+      : sdk.deleteRemoteArtifact('command', item.entity)),
+    // A row the bar delete already removed reads as gone, not as a failure.
+    tolerateNotFound: true,
   },
   form: {
     async resolve(sdk, target) {

@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { commandDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
@@ -2788,4 +2788,66 @@ test('app.headerNavigationRefresh must be a boolean', () => {
     const v = validateAppSpec(spec);
     assert.ok(!(v.errors || []).some((e) => /headerNavigationRefresh/.test(e)), `${good} must be accepted`);
   }
+});
+
+// --- command buttons must be HANDED the record (live-measured) ----------------------------------
+//
+// `onclickeventjavascriptparameters` null means the function is invoked with NO arguments, so the
+// near-universal handler shape `function doThing(primaryControl) { primaryControl.getAttribute(…) }`
+// throws on its first property access and the button silently does nothing. Reported by a user as
+// "nothing happens when I press Escalate"; the build, the deployed rows and `--verify` all looked
+// perfect, because the failure is client-side only.
+//
+// The codes come from the platform's own maker-authored commands on a live org:
+//   form (location 0)    [{"type":5}]               PrimaryControl
+//   grid (location 1)    [{"type":12},{"type":24}]  SelectedControl + SelectedControlSelectedItemIds
+test('a JS command defaults to receiving the primary control', () => {
+  const spec = {
+    webResources: [{ name: 'x.js', type: 'js', content: '//' }],
+    commands: [{ entity: 'new_t', label: 'Go', library: 'x.js', function: 'Ns.go' }],
+  };
+  const def = commandDef('new_t', spec.commands, { 'x.js': 'wr-1' });
+  const control = def.commandBars[0].groups[0].controls[0];
+  assert.strictEqual(control.action.parameters, '[{"type":5,"value":null}]',
+    'without this the handler is called with no arguments and the button does nothing');
+});
+
+test('flyout CHILDREN also receive the primary control', () => {
+  // The children are the actual buttons a user clicks; missing parameters there is the same bug.
+  const cmds = [{
+    entity: 'new_t', label: 'Set status', type: 'FlyoutAnchor',
+    children: [{ label: 'Closed', library: 'x.js', function: 'Ns.close' }],
+  }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  const child = def.commandBars[0].groups[0].controls[0].children[0];
+  assert.strictEqual(child.action.parameters, '[{"type":5,"value":null}]');
+});
+
+test('a grid command gets the grid shape, not the form one', () => {
+  const cmds = [{ entity: 'new_t', label: 'Bulk', location: 'HomeTab', library: 'x.js', function: 'Ns.bulk' }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  assert.strictEqual(def.commandBars[0].groups[0].controls[0].action.parameters,
+    '[{"type":12,"value":null},{"type":24,"value":null}]');
+});
+
+test('an explicit parameters value always wins, including empty', () => {
+  // An author with a genuinely argument-less function must be able to say so.
+  const cmds = [
+    { entity: 'new_t', label: 'A', library: 'x.js', function: 'Ns.a', parameters: '[{"type":99,"value":1}]' },
+    { entity: 'new_t', label: 'B', library: 'x.js', function: 'Ns.b', parameters: '' },
+  ];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  const [a, b] = def.commandBars[0].groups[0].controls;
+  assert.strictEqual(a.action.parameters, '[{"type":99,"value":1}]');
+  assert.strictEqual(b.action.parameters, '');
+});
+
+test('a flyout ANCHOR has no action at all', () => {
+  // The anchor only opens the menu; giving it parameters would imply a handler it does not have.
+  const cmds = [{
+    entity: 'new_t', label: 'Menu', type: 'FlyoutAnchor',
+    children: [{ label: 'One', library: 'x.js', function: 'Ns.one' }],
+  }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  assert.strictEqual(def.commandBars[0].groups[0].controls[0].action, undefined);
 });

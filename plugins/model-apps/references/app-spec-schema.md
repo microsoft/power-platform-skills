@@ -390,8 +390,24 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   { "label": "Reject",  "library": "new_order.js", "function": "Order.reject" } ] }
 ```
 - A button's on-click calls `function` in the declared `library` web resource (both lint-enforced) —
-  this is what makes it **functional** (not a structural-only button). `parameters` (optional) passes a
-  raw arg string.
+  this is what makes it **functional** (not a structural-only button).
+- **Your function is handed the record automatically.** The build passes the standard command
+  parameters for the button's location, so the usual handler shape works as written:
+  ```js
+  function escalate(primaryControl) {
+    primaryControl.getAttribute('new_priority').setValue(100000003);
+    primaryControl.data.save();
+  }
+  ```
+  Defaults by location — `MainTab` → `PrimaryControl`; `ContextualTab` → `SelectedControl`;
+  `HomeTab` → `SelectedControl` + `SelectedControlSelectedItemIds`. Override with `parameters`
+  (a raw JSON string, e.g. `'[{"type":5,"value":null}]'`); pass `""` for a function that genuinely
+  takes no arguments. **Without a parameter the function is invoked with no arguments**, so
+  `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
+  in the browser console, and the build, the deployed rows and `--verify` all still look correct.
+- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
+  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
+  and rebuild.
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
 - **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library

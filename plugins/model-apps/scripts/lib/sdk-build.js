@@ -175,14 +175,41 @@ function dashboardComponent(t, index) {
 // Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
 const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
 
-// Build one command control: a button, or a flyout/split-button carrying nested `children`. Each
+// What a JS command must be handed so its function can do anything.
+//
+// `onclickeventjavascriptparameters` is a JSON array of `{type,value}` CrmParameter descriptors. When
+// it is null the function is invoked with NO arguments — so the near-universal handler shape
+// `function doThing(primaryControl) { primaryControl.getAttribute(...) }` throws on its first
+// property access and the button silently does nothing. The error surfaces only in the browser
+// console, which is exactly how this shipped unnoticed: the build, the server-side state and
+// `--verify` all look perfect.
+//
+// LIVE-MEASURED from the platform's own maker-authored commands on a real org (the numeric codes are
+// not documented in the SDK, which passes the string through verbatim):
+//   location 0 (form)   -> [{"type":5}]              e.g. AppCommon.KnowledgeArticle…markInternalOpenDialog
+//                                                         …discard, …translateArticle — all type 5
+//   location 1 (grid)   -> [{"type":12},{"type":24}] e.g. AppCommon.KnowledgeArticle.GridCommandActions.markInternal
+//   location 2 (subgrid)-> [{"type":12}]             e.g. …relateCategoryFromSubGridStandard
+// So 5 = PrimaryControl, 12 = SelectedControl, 24 = SelectedControlSelectedItemIds.
+//
+// MainTab is the form command bar (live-verified: our MainTab buttons deploy with `location` 0).
+// HomeTab/ContextualTab are mapped to the grid/subgrid shapes by the same correspondence; those two
+// are inferred from the classic ribbon meanings rather than live-verified, so an author who needs
+// something else can still override with an explicit `parameters` string.
+const COMMAND_DEFAULT_PARAMETERS = {
+  MainTab: '[{"type":5,"value":null}]',
+  ContextualTab: '[{"type":12,"value":null}]',
+  HomeTab: '[{"type":12,"value":null},{"type":24,"value":null}]',
+};
+
+
 // control gets a GUID `id` with `command` set to the same id (the appactionid). A button with a
 // `library` + `function` gets a functional JS on-click action bound to the created web resource;
 // `hidden`/`disabled` set static visibility. A flyout/split container (type FlyoutAnchor|SplitButton)
 // carries `children` instead of an action — the SDK's CommandAdapter synthesizes the required
 // intervening Group between a flyout and its buttons (Dataverse forbids a button parented directly
 // to a flyout). Throws if a referenced web resource wasn't created.
-function buildCommandControl(c, webResources) {
+function buildCommandControl(c, webResources, location = 'MainTab') {
   const id = randomUUID();
   const type = c.type || 'Button';
   const control = { id, type, label: c.label, command: id };
@@ -191,12 +218,18 @@ function buildCommandControl(c, webResources) {
     const wrId = webResources[c.library];
     if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
     control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
-    if (c.parameters !== undefined) control.action.parameters = c.parameters;
+    // Default the parameters when the author did not say. A JS command with none is handed nothing
+    // and cannot act on the record — see COMMAND_DEFAULT_PARAMETERS. An explicit value (including
+    // an empty string, for a genuinely argument-less function) always wins.
+    control.action.parameters = c.parameters !== undefined
+      ? c.parameters
+      : (COMMAND_DEFAULT_PARAMETERS[location] || COMMAND_DEFAULT_PARAMETERS.MainTab);
   }
   if (c.hidden) control.hidden = true;
   if (c.disabled) control.disabled = true;
   if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
-    control.children = c.children.map((ch) => buildCommandControl(ch, webResources));
+    // Children live on the same command bar as their anchor, so they inherit its location.
+    control.children = c.children.map((ch) => buildCommandControl(ch, webResources, location));
   }
   return control;
 }
@@ -213,7 +246,7 @@ function commandDef(entityLogical, cmds, webResources) {
   for (const c of cmds) {
     const location = c.location || 'MainTab';
     if (!byLocation.has(location)) byLocation.set(location, []);
-    byLocation.get(location).push(buildCommandControl(c, webResources));
+    byLocation.get(location).push(buildCommandControl(c, webResources, location));
   }
   const commandBars = [...byLocation.entries()].map(([location, controls]) => ({
     location,
@@ -2283,4 +2316,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, businessRuleDef, businessRuleFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
