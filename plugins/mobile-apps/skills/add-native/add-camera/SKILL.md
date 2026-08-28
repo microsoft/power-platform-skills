@@ -19,7 +19,7 @@ model: sonnet
 
 Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
 
-This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the upstream `pa-wrap-tools/templates/expo-app-standalone` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
+This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the `plugins/mobile-apps/template` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
 
 Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
 
@@ -50,7 +50,7 @@ If any file is missing, report and STOP — this skill requires an initialized P
 Both `expo-camera` and `expo-image-picker` must already be in `package.json`. Do **not** install them — if they're missing, the upstream template hasn't shipped them yet, and this skill STOPs.
 
 ```bash
-node -e "const p = require('./package.json'); const need = ['expo-camera','expo-image-picker']; const missing = need.filter(m => !p.dependencies?.[m]); if (missing.length) { console.error('MISSING from package.json: ' + missing.join(', ') + '. The upstream template must ship these for /add-native camera to run. Do NOT install them yourself — file an issue at the template repo (pa-wrap-tools/templates/expo-app-standalone) instead.'); process.exit(1); } console.log('OK: both modules present');"
+node -e "const p = require('./package.json'); const need = ['expo-camera','expo-image-picker']; const missing = need.filter(m => !p.dependencies?.[m]); if (missing.length) { console.error('MISSING from package.json: ' + missing.join(', ') + '. The upstream template must ship these for /add-native camera to run. Do NOT install them yourself — file an issue at the template repo (plugins/mobile-apps/template) instead.'); process.exit(1); } console.log('OK: both modules present');"
 ```
 
 If the check fails, STOP. Print the error verbatim. Do not run `npx expo install`. Do not edit `app.config.js`. Tell the user the template version they scaffolded from doesn't include the camera modules — they need to wait for a newer template release or open a request upstream.

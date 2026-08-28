@@ -20,7 +20,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Fresh-template working-directory mode
 
-This skill assumes the user already has a **fresh** `pa-wrap-tools/templates/expo-app-standalone` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
 **Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `expo-app-standalone` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
 
@@ -31,7 +31,7 @@ Use these markers:
 | Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
 | Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
 | Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`. |
+| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
 
 This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
 
@@ -82,10 +82,10 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 - If `memory-bank.md` exists and the user confirms resume, resume as documented above.
 - If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`.
+- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
 - If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
 After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
 
