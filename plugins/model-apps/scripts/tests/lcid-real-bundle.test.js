@@ -34,6 +34,19 @@ const assert = require('node:assert');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const dirs = [];
@@ -86,7 +99,7 @@ test('REAL BUNDLE: omitting languageCode preserves the previous 1033 behaviour e
 test('REAL BUNDLE: the sitemap title LCID follows the configured language too (#455)', async () => {
   // The sitemap is the other half of #455 — <Titles><Title LCID="…"> was hardcoded alongside FormXML.
   const { sdk, capture } = sdkAt(1036);
-  const app = sdk.createArtifact('app', { name: 'LCID App' });
+  const app = sdk.createArtifact('app', { name: 'LCID App', iconWebResourceId: APP_ICON_ID });
   await sdk.pushArtifact('app', app.id);
   const write = capture.find((c) => c.body && typeof c.body.sitemapxml === 'string');
   assert.ok(write, 'a write carrying sitemap XML was issued; got ' + JSON.stringify(capture.map((c) => c.url)));

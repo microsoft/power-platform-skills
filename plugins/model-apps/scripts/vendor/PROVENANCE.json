@@ -1,14 +1,14 @@
 {
-  "commit": "93ac5196ed5484120648151b0c8605ef75231301",
-  "subject": "feat(cds-maker-sdk): app feature settings (modern header by default), configurable authoring LCID, command bind + ordering fixes",
+  "commit": "4d67987633e11e8beb47be1f0137c0a1c78b30d5",
+  "subject": "feat(cds-maker-sdk): business-rule authoring, workspace recovery, app-icon type fix, and live platform invariants",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-27T00:29:45.584Z",
-  "newestSrcAt": "2026-08-27T00:12:30.264Z",
+  "libBuiltAt": "2026-08-28T01:11:44.972Z",
+  "newestSrcAt": "2026-08-28T01:06:19.572Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-27T00:29:58.851Z",
-  "bundleSha256": "fba6dca897a61ace358b025770b29f5d2c07d5d21eb931e8b5fef8b1cacaef6d",
-  "bundleBytes": 638629
+  "builtAt": "2026-08-28T01:12:17.577Z",
+  "bundleSha256": "e9f44680884e6bfc3b753981a752cf5ee28af3a6a3ab7d125a35a55cfa585128",
+  "bundleBytes": 659098
 }

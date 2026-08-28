@@ -13,6 +13,20 @@ const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 // The migration's pure intent helpers, used to drive the generic surface in the CONTRACT tests below.
 const { formEventsRegionIntent, findFieldCellPointer } = require('../lib/artifact-intent.js');
 
+// Every app the PLUGIN creates carries an icon: `ensureAppIcon` (sdk-build.js) resolves the author's
+// `spec.app.icon` or generates an SVG web resource, and `appDef` passes its id as
+// `iconWebResourceId`. These tests drive the SDK directly, so they must supply one too or they are
+// exercising a path production never takes.
+//
+// The SDK now REQUIRES it: `appmodule.webresourceid` is a required attribute, and when no explicit id
+// is given it auto-resolves an IMAGE web resource (PNG/JPG/GIF/ICO/SVG) and throws
+// `APP_ICON_UNRESOLVED` if the environment has none. Previously it fell back to ANY unmanaged web
+// resource — which on an org whose images are all managed returned a JAVASCRIPT file, and the platform
+// rejected the create with an opaque "dependent component WebResource does not exist". Failing fast
+// with a clear message is the better behaviour; these tests just have to stop relying on the old
+// silent fallback. A synthetic id is right here — the mock transport never dereferences it.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
+
 // Track temp workspace dirs created by the smoke tests and remove them once the suite finishes,
 // so repeated runs don't leak directories into the test runner's temp folder.
 const tempDirs = [];
@@ -289,7 +303,7 @@ test('CONTRACT: free-text sitemap titles/URLs are XML-escaped, not rejected (a s
   };
   const sdk = createMakerSdk({ workspacePath: ws, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_escapp', description: spec.app.description, siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'special-char titles/URLs must serialize, not throw');
   assert.ok(sitemapXml, 'the sitemap was serialized and posted');
   assert.match(sitemapXml, /&amp;/, 'ampersands in titles/URLs are escaped');
@@ -582,7 +596,7 @@ test('CONTRACT: a platform-ref VectorIcon on an Entity subarea reaches the seria
   };
   const sdk = createMakerSdk({ workspacePath: mkTempWorkspace('sdk-vecicon-'), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
   sdk.initWorkspace();
-  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components });
+  const art = sdk.createArtifact('app', { name: spec.app.name, uniqueName: 'new_vecapp', description: '', siteMap: def.siteMap, components: def.components, iconWebResourceId: APP_ICON_ID });
   await assert.doesNotReject(sdk.pushArtifact('app', art.id), 'the smoke spec must push without a component-verification refusal');
 
   assert.ok(sitemapXml, 'the sitemap was serialized and posted');
@@ -622,7 +636,7 @@ test('CONTRACT: the vendored SDK does NOT filter a bare Fluent VectorIcon — ap
   const siteMap = { areas: [{ id: 'area_0', title: 'Main', groups: [{ id: 'g0', title: 'G', subAreas: [
     { id: 's0', title: 'Orders', type: 'Entity', entity: 'new_torder', vectorIcon: 'Grid' },
   ] }] }] };
-  const art = sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] } });
+  const art = sdk.createArtifact('app', { name: 'Raw Token', uniqueName: 'new_rawtoken', description: '', siteMap, components: { forms: [], views: [], charts: [] }, iconWebResourceId: APP_ICON_ID });
   await sdk.pushArtifact('app', art.id);
   assert.match(sitemapXml, /<SubArea[^>]*Entity="new_torder"[^>]*VectorIcon="Grid"/, 'the bundle serializes a bare token when handed one — so the plugin must not hand it one');
 });

@@ -21,6 +21,12 @@ const fs = require('node:fs');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const APP_ID = '11111111-1111-1111-1111-111111111111';
+// Every app the PLUGIN creates carries an icon (`ensureAppIcon` -> `appDef.iconWebResourceId`), and
+// the SDK now REQUIRES one: it auto-resolves an IMAGE web resource and throws `APP_ICON_UNRESOLVED`
+// when the org has none. It used to fall back to ANY unmanaged web resource, which on an org whose
+// images are all managed returned a JAVASCRIPT file and made the platform reject the create with an
+// opaque error. These tests drive the SDK directly, so they must pass an icon like production does.
+const APP_ICON_ID = '11111111-2222-3333-4444-555555555555';
 const dirs = [];
 
 // The setting write is an upsert keyed by (settingdefinitionid, parentappmoduleid), so the SDK first
@@ -120,7 +126,7 @@ test('REAL BUNDLE: a NEW app gets the header/navigation refresh ON by default', 
   // build honours `false` instead of skipping it. If a future SDK flips this default, this test is
   // what tells us before a user's app silently changes appearance.
   const { sdk, writes } = sdkWithCapture();
-  const app = sdk.createArtifact('app', { name: 'Default App', uniqueName: 'cr_defaultapp' });
+  const app = sdk.createArtifact('app', { name: 'Default App', uniqueName: 'cr_defaultapp', iconWebResourceId: APP_ICON_ID });
   assert.strictEqual(app.headerAndNavigationRefresh, true,
     'the SDK defaults the app artifact field to true');
 
@@ -135,7 +141,7 @@ test('REAL BUNDLE: setting headerAndNavigationRefresh false on the app writes th
   // The opt-out path. '1' is OFF for this tri-state; if this ever wrote '2' or nothing, an author
   // asking for the classic experience would silently get the new one.
   const { sdk, writes } = sdkWithCapture();
-  const app = sdk.createArtifact('app', { name: 'Off App', uniqueName: 'cr_offapp', headerAndNavigationRefresh: false });
+  const app = sdk.createArtifact('app', { name: 'Off App', uniqueName: 'cr_offapp', headerAndNavigationRefresh: false, iconWebResourceId: APP_ICON_ID });
   assert.strictEqual(app.headerAndNavigationRefresh, false, 'the explicit false survives onto the artifact');
 
   await sdk.pushArtifact('app', app.id);
