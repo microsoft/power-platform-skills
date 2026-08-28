@@ -99,6 +99,18 @@ apart deliberately.
   *in effect via the environment/default setting*, and **suppresses the admin action**, so nobody is
   sent to the admin centre to switch on something already running. A value it cannot read never
   counts as in effect, so a genuine action is never hidden.
+- **Form fill is a real "off", not a naming mix-up** (measured 2026-08-28). Unlike NL search, the
+  gate and the per-app setting share one name — `FormFillBarUXEnabled` — confirmed against the
+  SDK's own `AI_GATE`/per-app maps, so there is no second setting hiding a different answer. It
+  reads `0` at org *and* app scope, its whole family is off (`FormFillFileUploadEnabled`,
+  `FormPredictEnabled`, `FormPredictSmartPasteEnabled`), and it is `0` on **all 12** test orgs
+  scanned. What IS on everywhere is `EnableFormInsights` (with `EnableFormInsightsAppSetting` = 2)
+  — AI form/row insights, which renders a Copilot card on the form and is easily read as form fill.
+- **The setting names are now pinned against the bundle.** Nothing previously did: every test
+  hardcoded the same strings the source does, so an upstream rename would have left the suite green
+  while the build wrote to a setting that no longer exists — the same shape as the
+  `success`→`saved` rename that silently disarmed the 412 guard. `sdk-uptake-contract.test.js`
+  compares `AI_APP_SETTING` to the SDK's map and asserts the gate/per-app names stay distinct.
 
 ### Edit flow (download → edit → rebuild) — ✅ verified live
 - `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This does not currently work end to end:** live-verified 2026-08-27, the vendored SDK's `fetchArtifact('dashboard', …)` throws `Cannot read properties of null (reading 'length')` while deserializing the `<parameters>` block it itself serialized, so no tiles are recovered and the subarea is dropped — which then fails the whole download unless `--allow-lossy-download` is passed. Reproduced on the current **and** the previous bundle, so it is not a regression from the SDK uptake; tracked upstream. Download now names the cause instead of silently dropping the subarea. **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, and solution round-trip; **dashboards, forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec.

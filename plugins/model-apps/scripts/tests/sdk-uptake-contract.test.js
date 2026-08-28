@@ -239,3 +239,50 @@ test('REAL BUNDLE: a wrongly-shaped condition compiles an EMPTY rule rather than
   assert.doesNotMatch(classic.body.xaml, /lvz_status/, 'the guessed shape contributes NO condition');
   assert.doesNotMatch(classic.body.xaml, /lvz_notes/, 'and NO action');
 });
+
+// ---------------------------------------------------------------------------------------------
+// 3. The AI setting NAMES the build writes to, pinned against the bundle's own maps.
+//
+// Discovered while chasing a report that form fill was enabled when our probe read it as off. The
+// names turned out to be correct — but NOTHING was checking that. Every existing test hardcoded the
+// same strings the source does, so an upstream rename would leave the whole suite green while the
+// build wrote to a setting that no longer exists, and the feature would silently never turn on.
+//
+// That is the exact failure this uptake already suffered once: `PushResult.success` was renamed to
+// `saved`, and the guard reading `success === false` simply stopped firing. A constant is only
+// guarded if something compares it to the BUNDLE.
+test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', () => {
+  const src = fs.readFileSync(BUNDLE, 'utf8');
+  // The map is emitted as, e.g.:
+  //   var xV={formFill:"FormFillBarUXEnabled",nlSearch:"NLGridSearchSetting",
+  //           nlChart:"NLChartDataVisualizationSetting",m365:"m365copilotmodelappenabled"}
+  // The GATE map carries an extra `summaries` key between nlChart and m365 (the per-app map has no
+  // summaries entry — row summaries are configured through configureRowSummary, not a flag), so the
+  // optional group is required to match BOTH. Anchor on the `formFill` key rather than the minified
+  // variable name, which changes every build.
+  const m = /\{formFill:"[^"]+",nlSearch:"[^"]+",nlChart:"[^"]+",(?:summaries:"[^"]+",)?m365:"[^"]+"\}/g;
+  const maps = [...src.matchAll(m)].map((x) => x[0]);
+  assert.ok(maps.length >= 2, `expected both the gate and per-app maps in the bundle, found ${maps.length}`);
+
+  const parse = (s) => Object.fromEntries([...s.matchAll(/(\w+):"([^"]+)"/g)].map((x) => [x[1], x[2]]));
+  const parsed = maps.map(parse);
+
+  // The GATE map and the PER-APP map are deliberately different for nlSearch and nlChart — that
+  // difference is the whole reason `AI_APP_SETTING` exists as its own constant. Identify the
+  // per-app map as the one whose nlSearch is NOT the gate name.
+  const appMap = parsed.find((p) => p.nlSearch !== 'EnableNLGridSearch');
+  assert.ok(appMap, 'could not identify the per-app setting map in the bundle');
+
+  const { AI_APP_SETTING } = require('../lib/ai-app-settings.js');
+  assert.deepStrictEqual(AI_APP_SETTING, appMap);
+
+  // And pin the distinction itself: if these ever collapse to the same name, the "gate is not the
+  // setting" logic in verify and preflight becomes dead code and should be revisited deliberately.
+  const gateMap = parsed.find((p) => p.nlSearch === 'EnableNLGridSearch');
+  assert.ok(gateMap, 'could not identify the gate map in the bundle');
+  assert.notStrictEqual(gateMap.nlSearch, appMap.nlSearch, 'gate and per-app names must stay distinct for nlSearch');
+  assert.notStrictEqual(gateMap.nlChart, appMap.nlChart, 'gate and per-app names must stay distinct for nlChart');
+  // formFill and m365 legitimately share one name; pinned so a future divergence is noticed.
+  assert.strictEqual(gateMap.formFill, appMap.formFill);
+  assert.strictEqual(gateMap.m365, appMap.m365);
+});
