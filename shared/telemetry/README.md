@@ -10,7 +10,7 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
+`skill_started` usage telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -92,17 +92,29 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (on every event)
-- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload. Power Pages populates it with `aadObjectId` (the signed-in user's Entra ID / AAD directory object id, parsed from `pac auth who`) when available; the field is omitted when `pac auth who` doesn't surface an object id. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects — the Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Power Pages populates it with:
+
+  - `aadObjectId` — the signed-in user's stable Entra ID / AAD directory object ID, parsed from `pac auth who`, when available. Omitted when `pac auth who` does not surface an object ID.
+  - `framework` — the SPA framework of the Power Pages **code site** the skill is running against, drawn from the closed set `react`, `vue`, `angular`, `astro`. Omitted unless the working directory resolves to a site with a `powerpages.config.json`.
+
+  Each key is omitted independently when its source is unavailable; `eventInfo` itself is omitted only when every key would be absent.
+
+  On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+
+  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schema. The approved nested fields are currently Power Pages `aadObjectId` (string) and `framework` (string, restricted to the closed set above — it describes the scaffold a site was built from, is shared by every site built from that scaffold, and therefore identifies no user, project, or site). Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+
+  `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
 ## What is NEVER sent
 
 File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
 
-The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
+The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
 ## Privacy posture
 
-- **Default-on.** Anonymous telemetry is enabled by default. No first-run prompt.
+- **Default-on.** Usage telemetry is enabled by default. No first-run prompt.
+- **Identifiers.** When PAC is signed in, events can include the Dataverse organization GUID (`orgId`), Entra tenant GUID (`tenantId`), and, for Power Pages, the signed-in user's Entra object ID (`eventInfo.aadObjectId`). The local diagnostic mirror retains the same fields.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
 - **Opt out for automation** via the per-plugin opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.

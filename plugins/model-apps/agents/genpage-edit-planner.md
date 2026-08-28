@@ -32,6 +32,8 @@ You will be invoked by the `/genpage` skill with a prompt that includes:
 - The working directory (absolute path)
 - The plugin root directory (`${PLUGIN_ROOT}`)
 - The app-id and page-id of the page being edited
+- The environment URL (`envUrl`) of the environment being edited — you never resolve this
+  yourself; echo it back verbatim if you have to request connector discovery
 - The download directory: `<working-dir>/<page-id>/`
 
 ---
@@ -119,11 +121,32 @@ Ask questions via `AskUserQuestion`, one at a time:
    behavior, or preservation constraints not yet covered.
 
 > **Connector data changes** (SharePoint, weather, Office 365, SQL, custom REST):
-> if the edit adds, replaces, or removes connector-backed data, capture it in the
-> plan's `### Connector Changes` below. Do **not** run connector discovery here —
-> the orchestrator delegates that to the `genpage-connector-builder` agent (which
-> owns the feature gate). Preserving or clearing existing connectors needs no
-> discovery.
+> Do **not** run connector discovery here — the orchestrator delegates that to the
+> `genpage-connector-builder` agent (which owns the feature gate).
+>
+> - **Preserving or clearing** existing connectors needs no discovery: capture it
+>   in the plan's `### Connector Changes` and continue.
+> - **Adding or replacing** a connector-backed source that the orchestrator did not
+>   already discover — i.e. the need surfaced in *your* clarification, so your
+>   prompt carries the "preserve" action and `none — omit --connectors` — you must
+>   **stop and return**
+>
+>   ```json
+>   { "action": "connector_discovery_required", "intent": "<the source(s) implied>",
+>     "resolvedAction": "edit", "envUrl": "<the environment URL you were given>" }
+>   ```
+>
+>   Do **not** write the edit plan. If you proceed instead, the apply step will
+>   generate `queryConnectorTable` / `executeConnectorOperation` calls while upload
+>   still omits `--connectors`, shipping a page whose connector calls have **no
+>   deployed binding**. The orchestrator will run discovery and re-invoke you with a
+>   real connector contract and upload-file status.
+
+> **Custom API changes** (Dataverse Action/Function / plug-in logic): if the edit adds,
+> replaces, or removes a server-side Custom API call, capture it in the plan's `### Custom
+> API Changes` below. Do **not** run Custom API discovery here — the orchestrator delegates
+> that to the `genpage-customapi-builder` agent (which owns the `custom-api` feature gate).
+> Preserving or clearing existing Custom API bindings needs no discovery.
 
 Mark "Analyze existing page" task complete.
 
@@ -148,6 +171,10 @@ Enter plan mode (`EnterPlanMode`) with:
 ### Connector Changes
 - [none | add <source> | replace <logicalName> with <source> | remove <logicalName>]
   (the orchestrator delegates any add/replace/remove to genpage-connector-builder)
+
+### Custom API Changes
+- [none | add <operation> | replace <name> with <operation> | remove <name>]
+  (the orchestrator delegates any add/replace/remove to genpage-customapi-builder)
 
 ### Preservation Constraints
 - [What must remain unchanged — feature preservation, specific behaviors]

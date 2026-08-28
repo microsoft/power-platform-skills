@@ -1,69 +1,65 @@
 ---
 name: route-environments
-description: Manage environment resolution — check which environment you create flows in by default, list available environments, and set your working environment. Use when the user asks about environments, their default environment, where to create flows, or switching environments.
+description: Check Power Platform environment routing status and understand default environment resolution. Use when the user asks about environment routing, developer environments, or new maker landing. Routing is configured in the admin center, not here. NOT for listing flows or managing connections.
 user-invocable: true
-argument-hint: "[list|check|set]"
+argument-hint: "[check|explain]"
 allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment
 model: opus
 ---
 
-# Environment Resolution
+# Environment Routing Manager
 
-You are helping the user understand and manage which Power Automate environment
-they work in — where their flows are created, where they should build new ones,
-and how to switch between environments.
+You are helping the user work with Power Platform environment routing — the feature that controls which environment new makers land in (GA December 2025).
 
 > Uses the **FlowAgent MCP tools** (`resolve_environment`, `list_environments`,
-> `set_current_env`, `get_current_env`).
+> `set_current_env`), referred to by bare name. In Claude Code they appear as
+> `mcp__flowagent__<tool>`; in Copilot CLI as `flowagent-<tool>`.
 
-## Step 1: Understand what the user needs
+## Step 1: Check Current State
 
-- **"Which environment am I in?"** → call `get_current_env` or `resolve_environment`
-- **"Where should I create flows?"** → help them pick the right environment
-- **"What environments do I have?"** → call `list_environments`
-- **"Switch my environment"** → call `set_current_env`
+Call `resolve_environment` to see how the user's default environment resolves
+(routing → poll → fallback).
 
-## Step 2: List and explain environments
+## Step 2: Determine Operation
 
-Call `list_environments` and present a clear summary:
+### Check Routing Status
+Explain that environment routing redirects new makers from the default environment to a designated developer environment.
 
-| Environment | Type | Location | Notes |
-|-------------|------|----------|-------|
-| ... | Default / Developer / Sandbox / Production | ... | ... |
+Key facts:
+- Generally available since December 2025
+- Most tenants scope routing with `specificGroups` rather than tenant-wide
+- Common uses: steering new makers to developer environments, Copilot Studio isolation
 
-Help the user identify:
-- **Default environment** — shared, not recommended for production flows
-- **Developer environments** — personal, ideal for building and testing
-- **Production/Sandbox** — team environments for deployed flows
+### List Environments
+Call `list_environments` (use the `query` param to filter by name).
 
-## Step 3: Set the working environment
+Show environment types and help the user identify:
+- Their default environment
+- Any developer/sandbox environments
+- Environment with Dataverse linked
 
-If the user wants to create flows in a specific environment, call
-`set_current_env` with that environment ID. This pins all subsequent
-FlowAgent operations to that environment (no need to pass `--env` each time).
-
-**Recommendation for new users**: If they have a Developer environment, suggest
-using that. If not, suggest they ask their admin to provision one, or use the
-default environment for simple personal automations.
+### Resolve Default Environment
+Help the user understand which environment they'd land in by calling
+`resolve_environment`.
 
 ## Guidance
 
-- `resolve_environment` shows how the environment resolves (routing → poll → fallback)
-- `set_current_env` changes the session default — it does NOT change tenant-level routing
-- Tenant-level environment routing (which env new makers land in by default) is
-  configured at the admin level in `admin.powerplatform.microsoft.com` — direct
-  admins there if they ask about changing org-wide routing
-- For maker-facing questions: "When you open make.powerautomate.com, your default
-  environment determines where new flows are created"
+- Environment routing is configured at the **tenant admin** level in the Power Platform admin center
+- It cannot be configured here — direct the user to `admin.powerplatform.microsoft.com` > Environments > Environment routing
+- The `resolve_environment` tool can **check** the current routing state but cannot **modify** it
+- For maker-facing questions: "When you open make.powerautomate.com, environment routing determines which environment you see first"
 
 ## Decision Tree
 
 ```
-User asks about environments?
-├── "Which environment am I in?" → get_current_env / resolve_environment
-├── "What environments exist?" → list_environments with summary table
-├── "Where should I build?" → Recommend Developer env; set_current_env
-├── "Switch to X environment" → set_current_env
-├── "How do I create a new environment?" → Direct to PPAC admin center
-└── "What is environment routing?" → Explain: determines default for new makers
+User asks about environment routing?
+├── "What is it?" → Explain: redirects new makers from default to dev env
+├── "Is it enabled?" → resolve_environment to check
+├── "How do I enable it?" → Direct to PPAC admin center
+├── "Which environment am I in?" → list_environments + resolve_environment
+└── "What environments exist?" → list_environments with details
 ```
+
+## References
+
+- [CLI Command Reference](../../references/cli-reference.md) — Environment commands

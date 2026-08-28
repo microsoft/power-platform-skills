@@ -1,0 +1,7 @@
+{
+  "pageId": "<GENPAGE_ID>",
+  "name": "Overview",
+  "files": ["page.tsx", "page.js", "config.json", "prompt.txt"],
+  "config": { "dataSources": [], "model": "" },
+  "prompt": "A responsive cards overview page"
+}

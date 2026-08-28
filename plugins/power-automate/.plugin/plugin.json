@@ -1,6 +1,6 @@
 {
   "name": "power-automate",
-  "version": "2.2.0",
+  "version": "3.0.4",
   "description": "Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server — connection lifecycle, surgical edits, copy across environments, run management, and validated expressions.",
   "author": {
     "name": "Microsoft",

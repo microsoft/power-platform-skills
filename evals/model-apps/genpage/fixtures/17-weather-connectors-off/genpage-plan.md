@@ -15,8 +15,9 @@ D:\Projects\power-platform-skills\plugins\model-apps
 ## Environment
 
 - Active Profile: maker@contoso.onmicrosoft.com
-- Environment URL: https://contoso-dev.crm10.dynamics.com/
+- URL: https://contoso-dev.crm10.dynamics.com/
 - App: Operations Hub (aa112233-1122-1122-1122-aabbccdd1234)
+- Languages: English (1033) only
 - Solution: Default
 - Publisher Prefix: new
 
@@ -56,6 +57,14 @@ No connector bindings.
 
 ### Seattle Weather
 
+
+- **Purpose:** Weather dashboard showing temperature, conditions, and humidity with 5-day forecast
+- **Entities:** (mock data)
+- **Needs caching:** false
+- **Key Features:** Weather KPI cards and 5-day forecast rendered from inline mock weather data because connectors are disabled.
+- **Layout:** Responsive KPI card row with forecast cards below; no 100vh/100vw.
+- **Data Binding:** Inline mock currentConditions object and weeklyForecast array; no host fetch.
+- **Interactions:** Selectable forecast cards update local detail state only.
 - **File:** weather-dashboard.tsx
 - **Data:** inline mock arrays — `weeklyForecast` (5 records) + `currentConditions` object
 - **Components:**

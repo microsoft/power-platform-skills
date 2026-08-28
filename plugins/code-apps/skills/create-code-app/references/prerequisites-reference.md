@@ -26,10 +26,10 @@ When using plan mode, include these in `allowedPrompts`:
     { "tool": "Bash", "prompt": "scaffold power apps template (npx degit)" },
     { "tool": "Bash", "prompt": "install npm dependencies" },
     { "tool": "Bash", "prompt": "build for production (npm run build)" },
-    { "tool": "Bash", "prompt": "initialize power apps project (npx power-apps init)" },
-    { "tool": "Bash", "prompt": "list connections (npx power-apps list-connections)" },
-    { "tool": "Bash", "prompt": "add data sources (npx power-apps add-data-source)" },
-    { "tool": "Bash", "prompt": "deploy to power platform (npx power-apps push)" }
+    { "tool": "Bash", "prompt": "initialize power apps project (pa app init)" },
+    { "tool": "Bash", "prompt": "list connections (pa connection list)" },
+    { "tool": "Bash", "prompt": "add data sources (pa app add data-source)" },
+    { "tool": "Bash", "prompt": "deploy to power platform (pa app push)" }
   ]
 }
 ```

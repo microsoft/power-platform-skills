@@ -1,0 +1,14 @@
+{
+  "commit": "b17bd3da66121a620c8cb1b198a7aaab6b6a0eed",
+  "subject": "feat(cds-maker-sdk): Business Process Flow (BPF) authoring - all phases (create/activate/edit/structure/flow/security)",
+  "dirtySdkPackage": 0,
+  "libBuiltAt": "2026-08-28T16:33:04.842Z",
+  "newestSrcAt": "2026-08-28T16:28:40.376Z",
+  "libIsStale": false,
+  "nostub": false,
+  "esbuildVersion": "0.28.1",
+  "nodeVersion": "v22.13.1",
+  "builtAt": "2026-08-28T16:34:11.012Z",
+  "bundleSha256": "0168206487969d69f01f843c1cfa3b751c018271b320d64017f880a17c466b86",
+  "bundleBytes": 687133
+}

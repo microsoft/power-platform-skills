@@ -1,9 +1,15 @@
 # Model Apps Plugin — Architecture
 
-How `/genpage` is wired together. One page, ASCII diagrams. For per-component
-behavioral specs, see `AGENTS.md`.
+The **wiring / flow reference** for both skills, as one page of ASCII diagrams. They are two
+**independent** flows, documented here in order — `/genpage` (page generation) below, then
+`/app-builder` (intent → whole model-driven app via the headless `cds-maker-sdk`). Neither is a
+stage of the other; document order is not a pipeline. For **per-component behavioral specs**, the canonical file tree, conventions, and
+build/test, see [`../AGENTS.md`](../AGENTS.md). The App Spec contract is
+[`../references/app-spec-schema.md`](../references/app-spec-schema.md); the app-builder skill is
+[`../skills/app-builder/SKILL.md`](../skills/app-builder/SKILL.md); the capabilities doc/TODO is
+[`app-builder-capabilities.md`](app-builder-capabilities.md).
 
-## High-level flow
+## /genpage — high-level flow
 
 ```
                       User invokes /genpage
@@ -27,12 +33,11 @@ behavioral specs, see `AGENTS.md`.
             │      ┌────────────────────────┐                 │
             │      │  scripts/ (Node CLIs)  │                 │
             │      │  check-auth.js         │                 │
-            │      │  create-table.js       │                 │
-            │      │  add-column.js         │                 │
-            │      │  create-relationship.js│                 │
-            │      │  create-record.js      │                 │
-            │      │  create-solution.js    │                 │
+            │      │  provision-entities.js │                 │
+            │      │ provision-solution.js  │                 │
             │      │  dataverse-request.js  │                 │
+            │      │  lib/entity-provision  │                 │
+            │      │  lib/provision-input   │                 │
             │      └─────────────┬──────────┘                 │
             │                    │                            │
             │                    v                            │
@@ -45,11 +50,14 @@ behavioral specs, see `AGENTS.md`.
                               (machine-readable contract)
 ```
 
-The orchestrator never inlines planner/builder logic — it dispatches via
-`Task` and waits for the agent to return. The plan document is the contract:
-the planner writes it; subsequent phases (and other agents) read it.
+The orchestrator dispatches planner/builder work via `Task` and waits for the agent
+to return, rather than reimplementing it. The one documented exception is the
+**single-page fast path** (SKILL Phase 5b): when the plan has exactly one page, the
+orchestrator inlines the page-builder workflow instead of paying for a subagent.
+The plan document is the contract either way: the planner writes it; subsequent
+phases (and other agents) read it.
 
-## Edit flow
+## /genpage — edit flow
 
 ```
                       User invokes /genpage (edit intent)
@@ -88,7 +96,7 @@ the planner writes it; subsequent phases (and other agents) read it.
                   pac model genpage upload --page-id ...
 ```
 
-## Working directory layout
+## /genpage — working directory layout
 
 Every `/genpage` run creates a kebab-case working directory with this layout:
 
@@ -107,54 +115,7 @@ The deployed artifact is just `<page>.tsx`. Everything else is local-dev
 scaffolding that helps the developer keep iterating without re-running the
 full skill.
 
-## Where the plugin lives
-
-```
-plugins/model-apps/
-├── .plugin/plugin.json                <-- version, name, keywords
-├── AGENTS.md / CLAUDE.md              <-- agent guidance (this is the source)
-├── README.md                          <-- user-facing intro
-├── CHANGELOG.md                       <-- Keep-a-Changelog
-├── docs/
-│   └── architecture.md                <-- this file
-├── skills/
-│   └── genpage/
-│       ├── SKILL.md                   <-- orchestrator phases (always loaded)
-│       ├── edit-flow.md               <-- conditional: edit path
-│       └── verify-flow.md             <-- conditional: browser verify path
-├── agents/
-│   ├── genpage-planner.md
-│   ├── genpage-entity-builder.md
-│   ├── genpage-page-builder.md
-│   └── genpage-edit-planner.md
-├── references/                        <-- read on demand by agents
-│   ├── rules.md                       <-- code-gen rules (page-builder hot path)
-│   ├── plan-schema.md                 <-- plan doc contract
-│   ├── data-caching.md                <-- Rule 15 on-mount fetch: de-dupe + cache
-│   ├── localization.md                <-- multi-language + RTL pattern
-│   ├── supported-dependencies.md      <-- v2.2: package.json input list
-│   ├── troubleshooting.md             <-- deploy / runtime / env issues
-│   └── verified-icons.txt             <-- ~5000 Fluent icon names
-├── samples/                           <-- 11 sample .tsx files (1-11)
-└── scripts/
-    ├── check-auth.js                  <-- pre-flight: az + pac + WhoAmI
-    ├── dataverse-request.js           <-- generic Web API wrapper
-    ├── create-table.js
-    ├── add-column.js
-    ├── create-relationship.js
-    ├── create-record.js
-    ├── create-solution.js
-    ├── add-to-solution.js
-    ├── generate-page-manifest.js      <-- v2.2: writes package.json + genpage.d.ts
-    ├── regenerate-verified-icons.js
-    ├── launch-playwright-mcp.js
-    ├── lib/
-    │   ├── dataverse-auth.js          <-- shared az auth + HTTP helpers
-    │   └── supported-dependencies.js  <-- v2.2: deps single source of truth
-    └── tests/                         <-- node --test coverage
-```
-
-## The plan document as a contract
+## /genpage — the plan document as a contract
 
 The planner writes `genpage-plan.md` once. Every later phase reads it; nothing
 else passes state.
@@ -174,7 +135,119 @@ Key sections the orchestrator and other agents rely on:
 The schema is enforced by `references/plan-schema.md` and validated by
 `evals/model-apps/genpage/run-layer-1.js`.
 
+## /app-builder — build pipeline
+
+Intent → deployed model-driven app. The **authoring flow runs in the main conversation loop** (not a
+`Task` subagent — headless agents can't reach the user for `AskUserQuestion` / plan mode), then a
+deterministic, idempotent, narrated SDK build. Create and **edit share one path**.
+
+```
+                     User invokes /app-builder
+                              │
+                              v
+              ┌────────────────────────────┐   STAGE: author  (main loop)
+              │ Phase 1 — authoring        │   references/authoring-flow.md
+              │  env select (pac auth/org) │   DESIGN-ONLY: App Spec in confirmed
+              │  L(a0): personas + jobs    │   levels — no .tsx emitted here.
+              │  L(a):  data model         │   → early + full spec-lint gates
+              │  L(b):  artifacts +        │   → plan-mode approval (single build gate)
+              │    page-intents + design   │   → write-app-spec-doc.js renders the
+              │  L(c):  access (privs)     │     readable model-app-plan.md
+              └──────────────┬─────────────┘
+                             │  app-spec.json (machine contract) + model-app-plan.md
+                             │
+                             v
+              ┌────────────────────────────┐   STAGE: data  (engine run 1)
+              │ Data pre-build             │   build-model-app.js --stage data --apply
+              │  solution + data-model     │   → tables exist for type-gen
+              │  (NOT sample-data yet)     │   13 phases unchanged; this run covers:
+              │                            │     solution · data-model
+              └──────────────┬─────────────┘
+                             │
+                             v
+              ┌────────────────────────────┐   STAGE: generate-pages  (main loop + agents)
+              │ Generate pages             │   pac model genpage generate-types → RuntimeTypes.ts
+              │  generate-types +          │   write-page-plan.js projects the spec into
+              │  write-page-plan.js +      │   app-builder-page-plan.md (NOT genpage-plan.md —
+              │  page-builder agents       │   that name is /genpage's own state)
+              │  (Task — parallel)         │   PAGEREF_<key> for cross-page nav; the durable
+              │                            │   <app>_pagemanifest carries semantics
+              └──────────────┬─────────────┘
+                             │  promote-intent-pages.js: all-or-nothing intent → tsx
+                             v
+   ┌───────────────────────────────────────────────────────────────────┐
+   │ Full idempotent build  build-model-app.js --apply --verify        │  STAGES: ui · app · publish · verify
+   │  (engine run 2 — full; rediscovers data-model, then continues)   │
+   │  13 phases:                                                        │
+   │    solution · data-model · sample-data                (data)      │
+   │    web-resources · views · charts · forms ·                       │
+   │    commands · dashboards                               (ui)        │
+   │    app-shell · pages [upload + PAGEREF_ resolve +                  │
+   │      sitemap finalize] · ai-features                  (app)       │
+   │    publish                                             (publish)   │
+   │  bounded parallelism; emits [n/total] events + BuildHalt gate     │
+   │  --verify: auto-reconciles spec vs deployed after apply           │
+   └──────────────┬────────────────────────────────────────────────────┘
+                  │  ALL Dataverse access via the vendored headless SDK
+                  v          scripts/vendor/cds-maker-sdk.cjs
+   ┌────────────────────────┐   (metadata cached under <app-folder>/.maker-workspace/)
+   │ Verify & iterate       │   STAGE: verify — verify-model-app.js re-checks
+   │                        │   (read-only; non-zero on anything missing)
+   └────────────────────────┘
+
+   Edit  = same path:  download-model-app.js  pulls a deployed app → editable spec → re-run full build
+                       (sitemap-authoritative enumeration: MEMBERSHIP = app sitemap GenPageId set;
+                        each page's pageId kept in the downloaded spec — edit-snapshot;
+                        fetches <app>_pagemanifest fail-closed, reverse-normalizes PAGEREF_ placeholders;
+                        recovers the app's real unmanaged solution, excluding Active/Default/Basic).
+   Cleanup =           teardown-model-app.js  reverse-of-build, classifier-safe, dry-run by default
+                       (skips restricted system solutions Active/Default/Basic — never 400s on them).
+```
+
+**Stage → engine-phase legend:**
+
+| Stage | Executes in | Engine phases |
+|---|---|---|
+| **author** | main loop | *(none — design-only)* |
+| **data** | run 1 (schema) + run 2 (rows) | `solution` · `data-model` (run 1); `sample-data` (run 2) |
+| **generate-pages** | main loop + agents | *(none — writes .tsx files)* |
+| **ui** | run 2 | `web-resources` · `views` · `charts` · `forms` · `commands` · `dashboards` |
+| **app** | run 2 | `app-shell` · `pages` · `ai-features` |
+| **publish** | run 2 | `publish` |
+| **verify** | run 2 or standalone | *(reconcile pass)* |
+
+`--stage <data|ui|app|publish>` on `build-model-app.js` maps a stage to its phase range.
+**Apply-safe only for `data`** — the full build (run 2) is always a full idempotent run, not a
+`--from/--to` range.
+
+**Safety:** destructive ops fail-closed without `--allow-destructive` (`op-diff.js`).
+`--non-interactive`/autopilot mode suppresses prompts only — it never bypasses safety gates.
+The durable `<app>_pagemanifest` web resource carries page semantics across download and rebuild.
+
+**Three-authority page identity (pages phase):** generative-page management consults three
+authorities — all matching by id, never by display name:
+(1) **IDENTITY** — the `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own
+`pages[].pageId` outranks it. (2) **EXISTENCE** — env-wide `pac model genpage list` (no
+`--app-id`): decides create-vs-reuse; enables crash-safe convergence (a page present in the env
+after a crash is reused, never re-created). (3) **MEMBERSHIP** — the app's sitemap `GenPageId`
+set, read via `fetchSitemap` (`scripts/lib/sitemap-pages.js`, fail-closed and discriminated: a
+valid-but-page-less sitemap is `{ ok:true, ids:[] }`; a missing component or unreadable XML is
+`{ ok:false, reason }` — never collapsed to empty). Membership alone drives placement, download
+enumeration, and verify. The build halts on safety violations (`pages-removed`,
+`pages-shared-across-apps`, `pages-identity-conflict`, `pages-manifest-corrupt`,
+`pages-existence-failed`, `pages-sitemap-read-failed`, `pages-shared-check-failed`) rather than
+proceeding with potentially wrong state. See
+[`references/app-spec-schema.md`](../references/app-spec-schema.md) → `## pages[]`.
+
+The plugin owns **judgment** (spec validation, choice/status resolution, candidate selection, prompt
+authoring); the vendored SDK owns the **deterministic Dataverse mechanics** (create/query/delete,
+`seedRecordGraph`, `enrichDefaultViews`, AI settings/row-summaries, artifact resolve/cascade). Each
+script's behavioral spec is in [`../AGENTS.md`](../AGENTS.md); the App Spec shape is
+[`../references/app-spec-schema.md`](../references/app-spec-schema.md).
+
 ## Eval suite
+
+### /genpage — 3-layer suite
 
 Three layers, graded against captured fixtures:
 
@@ -191,3 +264,37 @@ runners are stateless — they read fixtures, grep + structural-check, write
 results. CI can run both in seconds. Layer 3 (UX rubric) stays manual.
 
 See `evals/model-apps/genpage/EVAL_GUIDE.md` for the full grading flow.
+
+### /app-builder — offline structural harness
+
+A data-driven, **offline** eval harness under `evals/model-apps/app-builder/`
+(sibling of `genpage/`). It grades **structural per-stage facts** — not `.tsx`
+snapshots — using the plugin's own pure primitives and requires no live env.
+
+```
+evals/model-apps/app-builder/
+  evals.json                     <-- data-driven cases + per-stage assertions
+  fixtures/<n>-<slug>/
+    app-spec.json                <-- the spec under test
+  lib/
+    fixture-loader.js            <-- loads each fixture's app-spec.json
+    facts.js                     <-- per-stage fact computation (schema-facts.js etc.)
+    assertions.js                <-- assertion text → check function registry
+  run-app-builder.js             <-- TAP v13 runner (run from repo root)
+  EVAL_GUIDE.md                  <-- grading guide (companion to genpage/EVAL_GUIDE.md)
+  tests/
+    facts.test.js                <-- offline unit tests
+    run-app-builder.test.js      <-- e2e harness tests
+```
+
+Per-stage oracles: `author` (`validateAppSpec`+`lintAppSpec`), `plan` (`planFor`),
+`data` (`schema-facts.js` — normalized tables/columns/relationships), `ui`
+(view/chart/form intent facts), `app` (`appDef` sitemap facts + nav graph),
+`verify` (`verifySpec` reconcile). Run from the repo root:
+
+```bash
+node evals/model-apps/app-builder/run-app-builder.js
+```
+
+See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md)
+for the full grading flow.

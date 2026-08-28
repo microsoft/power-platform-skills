@@ -2,8 +2,7 @@
 
 // General-purpose Dataverse OData Web API wrapper with built-in auth + retry.
 // Use this as an escape hatch when a higher-level operation script
-// (create-table.js / add-column.js / create-relationship.js / create-record.js /
-//  add-to-solution.js) does not cover what you need.
+// (provision-entities.js / provision-solution.js) does not cover what you need.
 //
 // Usage:
 //   node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers]
@@ -44,6 +43,10 @@ async function main() {
 
   let timeout = undefined;
   if (flags.timeout !== undefined) {
+    if (typeof flags.timeout !== 'string') {
+      process.stderr.write('--timeout must include a positive millisecond value (for example, --timeout 60000)\n');
+      process.exit(1);
+    }
     const parsed = Number(flags.timeout);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);

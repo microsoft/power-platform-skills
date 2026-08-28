@@ -67,18 +67,18 @@ Run the `/list-connections` skill. Find the connector in the output. If none exi
 
 ```bash
 # Non-tabular connectors (Teams, Azure DevOps, etc.)
-npx power-apps add-data-source -a <connector-api-name> -c <connection-id>
+pa app add data-source --connector <connector-api-name> -c <connection-id>
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) -- also need dataset and table
-npx power-apps add-data-source -a <connector-api-name> -c <connection-id> -d '<dataset>' -t '<table>'
+pa app add data-source --connector <connector-api-name> -c <connection-id> -d '<dataset>' --table '<table>'
 ```
 
 **Parameter reference:**
 
-- `-a` (apiId) -- connector name (e.g., `sharepointonline`, `teams`)
+- `--connector` (apiId) -- connector name (e.g., `sharepointonline`, `teams`). On the flat `power-apps` binary this is `--api-id`/`-a`.
 - `-c` (connectionId) -- **required** for all non-Dataverse connectors. Get from `/list-connections`.
 - `-d` (dataset) -- required for tabular datasources (e.g., SharePoint site URL, SQL database). Not needed for Dataverse.
-- `-t` (table) -- table/list name for tabular datasources (e.g., SharePoint list, Dataverse table logical name)
+- `--table` (table) -- table/list name for tabular datasources (e.g., SharePoint list, Dataverse table logical name). On the flat `power-apps` binary this is `--resource-name`/`-t`.
 
 ### Step 4: Inspect & Configure
 

@@ -4,7 +4,7 @@
 // Captures a /genpage working directory into an eval fixture folder.
 //
 // Copies the agent-produced artifacts (.tsx, RuntimeTypes.ts, workflow-log.md,
-// genpage-plan.md, genpage-edit-plan.md, entity-creation-log.md) into
+// genpage-plan.md, genpage-edit-plan.md, genpage-entity-creation-log.md) into
 // evals/model-apps/genpage/fixtures/<eval-id>-<slug>/, skipping local-dev
 // scaffolding (package.json, genpage.d.ts) and build artifacts (node_modules,
 // dist, *.log).

@@ -1,0 +1,42 @@
+# Functional unit tests for the mobile-apps plugin across supported operating
+# systems and Node versions. These scripts spawn Azure CLI shims and manipulate
+# filesystem paths, so cross-platform coverage protects real behavior.
+name: mobile-apps-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/mobile-apps/**"
+            - ".github/workflows/mobile-apps-script-tests.yml"
+
+jobs:
+    test-mobile-apps-scripts:
+        name: test-mobile-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-mobile-apps-script-tests
+              shell: bash
+              working-directory: plugins/mobile-apps
+              run: node --test scripts/tests/*.test.js

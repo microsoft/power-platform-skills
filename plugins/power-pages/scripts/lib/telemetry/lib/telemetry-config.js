@@ -7,12 +7,29 @@ const path = require("node:path");
 const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config");
 const { pluginLogDir, latestSessionLog } = require("./local-log");
 
-const ANONYMITY =
-  "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
-  "   operational fields like skill name, plugin version, OS/Node versions,\n" +
-  "   PAC CLI and agent versions, and Dataverse org/tenant IDs when available.\n" +
-  "   It never includes file paths, prompts, tool inputs, site names, URLs,\n" +
-  "   credentials, usernames, or hostnames.";
+function dataDisclosure(plugin) {
+  const pluginSpecific =
+    plugin === "power-pages"
+      ? "   Power Pages can also record the signed-in user's Entra object ID as\n" +
+        "   eventInfo.aadObjectId when PAC exposes it, and the SPA framework of the\n" +
+        "   Power Pages code site being worked in as eventInfo.framework when detected.\n" +
+        "   The framework is one of react, vue, angular, or astro and describes the\n" +
+        "   scaffold only — it is never a site name or path.\n"
+      : plugin === "model-apps"
+        ? "   Model Apps excludes the signed-in user's Entra object ID.\n"
+        : "";
+  return (
+    "ℹ️  Usage telemetry records skill, plugin, PAC, agent, OS, Node, session,\n" +
+    "   and correlation fields, plus Dataverse organization and Entra tenant IDs\n" +
+    "   when PAC is signed in.\n" +
+    pluginSpecific +
+    "   When plugin telemetry is enabled, the local diagnostic log retains the same\n" +
+    "   fields even when transmission is off. A plugin whose committed telemetry\n" +
+    "   config has disabled: true is hard-disabled and writes no log.\n" +
+    "   Events do not include file paths, prompts, tool inputs, site names,\n" +
+    "   Dataverse URLs, credentials, usernames, or hostnames."
+  );
+}
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);
@@ -74,14 +91,14 @@ function main() {
     const on = effectiveTelemetryChoice(dir, plugin) !== "off"; // default ON; honors env override when no stored choice
     if (on) {
       out(`Telemetry (${plugin}): ON`);
-      out(ANONYMITY);
+      out(dataDisclosure(plugin));
       emitLogLocations(dir, plugin);
     } else {
       out(`Telemetry (${plugin}): OFF — nothing is transmitted.`);
       out(`The local diagnostic log is kept whenever telemetry is enabled for this plugin, even when transmission is OFF (opt-out stops transmission only).`);
       emitLogLocations(dir, plugin);
       out(`Re-enable with /${plugin}:telemetry on (an environment opt-out, if set, takes precedence and this command cannot override it).`);
-      out(ANONYMITY);
+      out(dataDisclosure(plugin));
     }
     process.exit(0);
   }
@@ -103,7 +120,7 @@ function main() {
   } else {
     out(`Telemetry (${plugin}): ON`);
   }
-  out(ANONYMITY);
+  out(dataDisclosure(plugin));
   process.exit(0);
 }
 

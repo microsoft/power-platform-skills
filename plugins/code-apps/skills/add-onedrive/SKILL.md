@@ -27,7 +27,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 Run the `/list-connections` skill. Find the OneDrive for Business connection in the output. If none exists, direct the user to create one using the environment-specific Connections URL — construct it from the active environment ID in context (from `power.config.json` or a prior step): `https://make.powerapps.com/environments/<environment-id>/connections` → **+ New connection** → search for the connector → Create.
 
 ```bash
-npx power-apps add-data-source -a onedriveforbusiness -c <connection-id>
+pa app add data-source --connector onedriveforbusiness -c <connection-id>
 ```
 
 ### Step 3: Configure

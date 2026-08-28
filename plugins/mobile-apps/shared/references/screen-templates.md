@@ -52,14 +52,14 @@ Use these pattern names when the user's app has dashboard or workflow behavior. 
 
 ### Calendar pattern keys (Calendar / schedule / appointment screens)
 
-Calendar management screens should use `react-native-calendars` when the package is present. These keys let the planner specify the expected calendar surface without inlining implementation details into every screen spec.
+Calendar management screens should use `react-native-calendars` when the approved screen plan lists it under `JavaScript Dependencies`. It is installed into the individual app on demand rather than bundled in the template. These keys let the planner specify the expected calendar surface without inlining implementation details into every screen spec.
 
 | Key | Use when | Required layout pieces |
 |---|---|---|
 | `expandable-calendar-agenda` | Personal/team/POS calendar management views where users move between month context and daily agenda | `CalendarProvider`, `ExpandableCalendar`, `AgendaList`, selected-date state, marked dates/count dots, pull-to-refresh agenda rows, empty day state |
 | `month-agenda` | Appointment list screens that need month selection plus rows below | `Calendar` or compact `CalendarList`, marked dates, selected day header, agenda `FlatList`, create/view appointment CTA |
 | `calendar-list-range` | Users browse date ranges across multiple months | `CalendarList`, range or multi-dot marking, sticky selected-range summary, rows filtered by visible date/range |
-| `timeline-day-list` | The template does not include `react-native-calendars`, or the app intentionally wants a lightweight schedule timeline | Horizontal date chip strip, date-grouped `FlatList`, today shortcut, empty day state |
+| `timeline-day-list` | The app intentionally wants a lightweight schedule timeline without adding a calendar dependency | Horizontal date chip strip, date-grouped `FlatList`, today shortcut, empty day state |
 
 For TWEED-style field-sales calendars, use `expandable-calendar-agenda` for Personal, Team, and POS calendar views, and `month-agenda` for appointment lists.
 
