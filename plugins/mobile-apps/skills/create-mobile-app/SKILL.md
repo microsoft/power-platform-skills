@@ -899,7 +899,7 @@ Then apply these **safe idempotent** prep steps:
 4. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
 5. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
 6. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
-7. Verify `app/_layout.tsx` imports `app.json` and passes `expo.extra.appInsightsConfig` to `PowerAppsProvider` only when `enabled` is true. The fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`.
+7. Verify `app/_layout.tsx` imports `app.json` and passes it to `PowerAppsProvider` through `appConfig`. The host reads `expo.extra.appInsightsConfig` and enforces its `enabled` opt-in because the fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`.
 8. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
 
 Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
@@ -1038,14 +1038,10 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <PowerAppsProvider
+        appConfig={appConfig}
         msalConfig={authConfig.msal}
         powerConfig={powerConfig}
         schemaMap={schemaMap}
-        appInsightsConfig={
-          appConfig.expo.extra.appInsightsConfig.enabled
-            ? appConfig.expo.extra.appInsightsConfig
-            : undefined
-        }
         tamaguiConfig={tamaguiConfig}
         defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
         theme={lightTheme}
@@ -1066,7 +1062,7 @@ Key points:
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
-- Import `app.json` and pass `expo.extra.appInsightsConfig` explicitly only when `enabled` is true. This is required in the fixed Dev Player, where the loaded app's extras are not available through `Constants.expoConfig`. Never print the connection string, copy it to `memory-bank.md`, or include it in a summary.
+- Import `app.json` and pass it through the `appConfig` prop. `PowerAppsProvider` reads `expo.extra.appInsightsConfig` and enforces its `enabled` opt-in; this explicit app-config boundary is required because the fixed Dev Player does not expose the loaded app's extras through `Constants.expoConfig`. Never print the connection string, copy it to `memory-bank.md`, or include it in a summary.
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
 Write the file directly when applying this fix.
@@ -1336,7 +1332,7 @@ Update `<working_dir>/app.json` so `expo.extra.appInsightsConfig` contains:
 }
 ```
 
-Preserve all other existing `app.json` fields. `app/_layout.tsx` passes this configuration explicitly to `PowerAppsProvider` only when `enabled` is true.
+Preserve all other existing `app.json` fields. `app/_layout.tsx` passes the complete file through `PowerAppsProvider`'s `appConfig` prop, and the host enables Application Insights only when this configuration has `enabled: true`.
 
 The app uses `@microsoft/applicationinsights-web` with the React Native manual-device plugin. The first runtime event is `PowerAppsNative.ApplicationStarted`, which gives the creator a deterministic ingestion check after loading the app in Dev Player.
 

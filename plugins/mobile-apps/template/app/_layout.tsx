@@ -29,14 +29,10 @@ try {
 export default function RootLayout() {
   return (
     <PowerAppsProvider
+      appConfig={appConfig}
       msalConfig={authConfig.msal}
       powerConfig={powerConfig}
       schemaMap={schemaMap}
-      appInsightsConfig={
-        appConfig.expo.extra.appInsightsConfig.enabled
-          ? appConfig.expo.extra.appInsightsConfig
-          : undefined
-      }
       tamaguiConfig={tamaguiConfig}
       offlineProfile={offlineProfile}
     >

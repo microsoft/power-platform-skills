@@ -41,7 +41,7 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 | Delete `power.config.json` | `npx power-apps init` regenerates for the user's environment |
 | Reset `src/generated/` + `src/hooks/` | Remove any example stubs — `npx power-apps add-data-source` repopulates |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` props | Screens render under brand tokens, not upstream defaults |
-| `app.json` + `app/_layout.tsx`: `expo.extra.appInsightsConfig` | Explicitly pass enabled Application Insights configuration because fixed Dev Player does not expose loaded-app extras through `Constants.expoConfig` |
+| `app.json` + `app/_layout.tsx`: `appConfig` | Pass the complete generated app configuration once so the host can resolve opt-in Application Insights settings inside fixed Dev Player |
 | `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
