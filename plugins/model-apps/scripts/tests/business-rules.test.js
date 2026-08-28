@@ -75,15 +75,21 @@ test('operators and actions are constrained to the slice the SDK can compile', (
   }
 });
 
-test('presence operators must not carry a value, and comparison operators must', () => {
-  // Two different authoring mistakes, both of which compile to something the author did not mean.
-  assert.ok(errorsFor([{ ...RULE, conditions: [{ field: 'new_notes', operator: 'ContainsData', value: 'x' }] }])
-    .some((e) => /tests presence, so it must not carry a value/.test(e)));
+test('presence operators are rejected — they compile to XAML the platform 500s on', () => {
+  // LIVE-MEASURED: `ContainsData` / `DoesNotContainData` answer "Error generating UiData" (HTTP 500)
+  // on every column type and in both directions, while Equals/DoesNotEqual succeed in the same run.
+  // The error must name the platform failure, not pretend the operator is unrecognised — an author
+  // reaching for ContainsData has written something reasonable that we simply cannot deploy.
+  for (const operator of ['ContainsData', 'DoesNotContainData']) {
+    const errs = errorsFor([{ ...RULE, conditions: [{ field: 'new_notes', operator }] }]);
+    assert.ok(errs.some((e) => /is not usable/.test(e) && /Error generating UiData/.test(e) && /issues\/481/.test(e)),
+      `${operator} must be rejected with the platform reason: ${JSON.stringify(errs)}`);
+  }
+});
+
+test('comparison operators must carry a value', () => {
   assert.ok(errorsFor([{ ...RULE, conditions: [{ field: 'new_status', operator: 'Equals' }] }])
     .some((e) => /needs a value/.test(e)));
-  for (const operator of ['ContainsData', 'DoesNotContainData']) {
-    assert.deepStrictEqual(errorsFor([{ ...RULE, conditions: [{ field: 'new_notes', operator }] }]), []);
-  }
 });
 
 test('a boolean action payload must be a real boolean', () => {
@@ -137,9 +143,11 @@ test('businessRuleDef maps onto the SDK node shape (clauses + trueBranch), not t
   assert.ok(rc.trueBranch.every((a) => a.id && a.displayName), 'every action carries an id and a label');
 });
 
-test('a presence operator maps with no value at all', () => {
-  // Emitting `value: undefined` would still add the key; the compiler treats a present-but-empty
-  // value differently from an absent one.
+test('a presence operator still MAPS correctly (the mapper is fine; the platform is not)', () => {
+  // Kept because the block is a platform limitation, not a mapping bug — when #481 is fixed the
+  // operator can be re-enabled in validation without touching businessRuleDef. Emitting
+  // `value: undefined` would still add the key, and the compiler treats present-but-empty
+  // differently from absent.
   const def = businessRuleDef({ ...RULE, conditions: [{ field: 'new_notes', operator: 'ContainsData' }] });
   assert.deepStrictEqual(Object.keys(def.rootCondition.clauses[0]).sort(), ['field', 'id', 'operator', 'valueType']);
 });

@@ -380,8 +380,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
   "conditions": [             // ALL must hold (ANDed)
     { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
-  ],
-  "actions": [
+  ],  "actions": [
     { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
     { "type": "LockUnlock",          "field": "new_owner",  "lock": true },
     { "type": "SetBusinessRequired", "field": "new_reason", "required": true },
@@ -389,8 +388,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   ] }
 ```
 
-- **Operators**: `Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`. The last two test
-  presence, so they must **not** carry a `value`; the first two must.
+- **Operators**: `Equals` · `DoesNotEqual`, and both must carry a `value`.
+  `ContainsData` / `DoesNotContainData` are **rejected**: the SDK compiles them to XAML the platform
+  answers with `HTTP 500 — Error generating UiData`, live-measured on every column type and in both
+  directions, while the two comparison operators succeed in the same run. Tracked as
+  [#481](https://github.com/microsoft/power-platform-skills/issues/481); to test presence, compare
+  the field to the value you care about instead.
 - **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
   (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
   string `"false"` is truthy and would invert the intent, so it is rejected.

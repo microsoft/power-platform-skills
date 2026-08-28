@@ -365,15 +365,25 @@ const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 //   emptyState — render an explanatory empty state ("open a row from X to see its detail").
 const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 
-// Business rules. These MIRROR the vendored SDK's supported slice exactly — deliberately, because
-// the SDK throws a ValidationError for anything outside it and a spec-level error naming the field
-// is far more useful than that throw surfacing mid-build.
+// Business rules. These MIRROR the vendored SDK's supported slice — but NARROWER, and the gap is
+// deliberate: the SDK advertises four operators and only two of them survive contact with the
+// platform.
 //
-// The slice is not arbitrary: measured across the rules on a live org, these four actions cover
-// 44 of 45 real instances, and these four operators are the complete set that corpus uses.
-// See the SDK's `adapters/businessRuleXaml.ts` (OPERATORS / ACTIONS) — if that widens, widen here.
-const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual', 'ContainsData', 'DoesNotContainData'];
-// Operators that take NO value: they test presence, so a `value` would be meaningless.
+// LIVE-MEASURED 2026-08-27. `ContainsData` and `DoesNotContainData` compile to XAML the platform
+// cannot process: every attempt answers
+//   HTTP 500 ... Error generating UiData for workflow: <name>
+// Isolated across six probes on a real org — it fails on a Text column and on a Memo column, with
+// the action on the same field or a different one, and in both directions (`DoesNotContainData`
+// too). `Equals` and `DoesNotEqual` succeed in the same probes, so it is the presence operators
+// specifically, not the rule shape. Offering an operator that reliably 500s is worse than not
+// offering it, so they are rejected at the spec gate with a message pointing at the tracking issue.
+// Re-widen here (and in the schema doc) once the compiler is fixed upstream.
+const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual'];
+// Recognised by the SDK but not usable: kept separate so validation can explain WHY rather than
+// just listing them as unknown.
+const BUSINESS_RULE_BLOCKED_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
+// Operators that take NO value: they test presence, so a `value` would be meaningless. Retained
+// because the mapper still handles them correctly — only the platform side is broken.
 const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
 // action type -> the field carrying its payload. `null` = no payload (none currently).
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
@@ -756,7 +766,13 @@ function validateAppSpec(spec, opts = {}) {
       if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }
       checkField(c.field, 'condition');
       if (!BUSINESS_RULE_OPERATORS.includes(c.operator)) {
-        errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+        // Name the platform failure rather than pretending the operator is unrecognised: an author
+        // who reaches for ContainsData has written something reasonable that we cannot deploy.
+        if (BUSINESS_RULE_BLOCKED_OPERATORS.has(c.operator)) {
+          errors.push(`${label}: operator '${c.operator}' is not usable — the SDK compiles it to XAML the platform rejects with "Error generating UiData" (HTTP 500), live-measured on every column type. Use ${BUSINESS_RULE_OPERATORS.join(' or ')}, or test the value directly. Tracking: https://github.com/microsoft/power-platform-skills/issues/481`);
+        } else {
+          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+        }
         continue;
       }
       const valueless = BUSINESS_RULE_VALUELESS_OPERATORS.has(c.operator);

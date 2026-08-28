@@ -1440,7 +1440,7 @@ async function runSdkBuild(spec, opts = {}) {
     for (const rule of spec.businessRules || []) {
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
-        select: ['workflowid'],
+        select: ['workflowid', 'statecode'],
         // category 2 = Business Rule. Scoped to the entity as well as the name so a same-named rule
         // on a DIFFERENT table is not mistaken for this one.
         filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
@@ -1448,7 +1448,31 @@ async function runSdkBuild(spec, opts = {}) {
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
       if (existingId) {
-        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);
+        // Reuse — but a rule that EXISTS is not necessarily a rule that RUNS. A deployed rule left in
+        // Draft (statecode 0) is inert, and "exists, so skip" would report success over an app whose
+        // logic silently does nothing. Live-hit: a rule deactivated out-of-band stayed Draft across a
+        // rebuild. So reconcile the one thing that is cheap and safe to converge — its state.
+        const wantActive = (rule.status || 'Active') === 'Active';
+        const isActive = existing[0].statecode === 1;
+        if (wantActive && !isActive) {
+          // Best-effort, NOT a build halt. A rule can be wedged in a state where the platform refuses
+          // both activation and deletion ("Invalid operation - You cannot activate or deactivate this
+          // business rule") — live-observed on a row the SDK's bound member left behind after faulting
+          // during UiData generation (#482). Failing the phase there would make one broken pre-existing
+          // rule block the whole app from building, which is worse than an inert rule. The warning
+          // says so, and `--verify` reports the rule as not active.
+          try {
+            await provision.updateRecord('workflow', existingId, { statecode: 1, statuscode: 2 });
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (existed in Draft — activated)`);
+          } catch (e) {
+            if (typeof opts.warn === 'function') {
+              opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but is DRAFT and could not be activated (${e && e.message}). It will not run. Delete it and rebuild to recreate it cleanly.`);
+            }
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists but is DRAFT — could not activate)`);
+          }
+        } else {
+          runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);
+        }
         result.created.businessRules[`${entityLogical}|${rule.name}`] = existingId;
         continue;
       }
@@ -1461,6 +1485,41 @@ async function runSdkBuild(spec, opts = {}) {
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+
+        // DE-DUPLICATE. The SDK tries the supported bound member first and falls back to a classic
+        // `workflows` row on a qualifying 400 — a design that assumes the 400 means "nothing was
+        // written". LIVE-MEASURED, that assumption does not hold: the platform commits the row and
+        // THEN faults generating its UiData, so the fallback writes a SECOND copy of the same rule.
+        // Both end up Active, and two identical rules fire on the table.
+        //
+        // Observed as two rows ~5s apart in a single run, one with a server-assigned id and one with
+        // the client-generated id the classic POST supplies. Tracking:
+        // https://github.com/microsoft/power-platform-skills/issues/482
+        //
+        // Scope is deliberately tight: only rules matching THIS rule's exact name and entity, and
+        // only ones that are not the id the push returned. That cannot touch a rule this build did
+        // not just author.
+        const dupes = await provision.queryRecords('workflow', {
+          select: ['workflowid', 'statecode'],
+          filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
+          top: 50,
+        });
+        const extras = (dupes || []).filter((w) => String(w.workflowid).toLowerCase() !== String(pushed.id).toLowerCase());
+        for (const extra of extras) {
+          // Deactivate and delete are attempted INDEPENDENTLY. The orphan is often wedged — the
+          // platform answers "Invalid operation - You cannot activate or deactivate this business
+          // rule" for a row whose UiData generation faulted — and an earlier version wrapped both in
+          // one try, so a failed deactivate meant the delete was never even attempted. Deactivation
+          // is also asynchronous, so a row that refuses it now may become deletable shortly after.
+          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
+          let removed = false;
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          if (typeof opts.warn === 'function') {
+            opts.warn(removed
+              ? `business rule "${rule.name}": removed a duplicate the SDK's fallback created (${extra.workflowid})`
+              : `business rule "${rule.name}": the SDK's fallback created a duplicate (${extra.workflowid}) that could not be removed automatically — it is wedged by the same platform fault. Delete it in Maker (or after its deactivation completes) so only one copy of the rule runs. See issue #482.`);
+          }
+        }
       });
     }
   }
