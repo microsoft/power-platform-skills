@@ -698,6 +698,19 @@ New skill (migrates a traditional Power Pages site from Bootstrap 3 to Bootstrap
 | `migrate-bootstrap:7.2.upload` | gate | final | 7.2 | First outward-facing change — *"Upload `<MIGRATED_FOLDER>` to `<ENV_NAME>`?"* — publishes the Bootstrap 5 site and auto-enables the runtime flag. | nothing |
 
 ---
+
+### 6.32 `migrate-webapi-selectall` (4 calls / 3 gates + 1 data prompt)
+
+Reviews traditional and code/SPA sites for deprecated Web API wildcard fields settings, derives least-privilege columns from every call chain, and applies only a complete approved migration.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `migrate-webapi-selectall:2.confirm-scope` | gate | plan | 2 | Confirms all configuration scopes, wildcard and explicit counts, and source batches before schema retrieval. | draft migration report |
+| Phase 3 environment URL | sub-prompt | — | 3.1 | Collects the environment URL only when project and PAC context cannot resolve it. This is read-only metadata input and grants no write consent. | draft migration report |
+| `migrate-webapi-selectall:4.apply-plan` | gate | consent | 4 | Approves every wildcard replacement, required source projection, selected explicit hardening, and local edits. No partial wildcard option is offered. | reviewed migration report |
+| `migrate-webapi-selectall:7.deploy` | gate | final | 7 | Approves one independently verified deployment to the displayed environment and profile. Repeat for another target. | local migration |
+
+---
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

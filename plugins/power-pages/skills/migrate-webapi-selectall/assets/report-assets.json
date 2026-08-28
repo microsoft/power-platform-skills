@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "output": "migration-report.html",
+      "template": "migration-report-template.html",
+      "format": "html",
+      "phase": "inventory"
+    },
+    {
+      "output": "batch-ledger.csv",
+      "template": "batch-ledger-template.csv",
+      "format": "csv",
+      "phase": "large-scale"
+    },
+    {
+      "output": "table-identifiers.txt",
+      "template": "table-identifiers-template.txt",
+      "format": "line-list",
+      "phase": "schema"
+    },
+    {
+      "output": "table-column-evidence.csv",
+      "template": "table-column-evidence-template.csv",
+      "format": "csv",
+      "phase": "large-scale"
+    },
+    {
+      "output": "wildcard-configurations.csv",
+      "template": "wildcard-configurations-template.csv",
+      "format": "csv",
+      "phase": "large-scale"
+    },
+    {
+      "output": "explicit-configurations.csv",
+      "template": "explicit-configurations-template.csv",
+      "format": "csv",
+      "phase": "large-scale"
+    },
+    {
+      "output": "api-call-coverage.csv",
+      "template": "api-call-coverage-template.csv",
+      "format": "csv",
+      "phase": "large-scale"
+    },
+    {
+      "output": "verification-ledger.csv",
+      "template": "verification-ledger-template.csv",
+      "format": "csv",
+      "phase": "verification"
+    }
+  ]
+}

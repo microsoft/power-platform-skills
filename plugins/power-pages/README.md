@@ -38,7 +38,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 33 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and Bootstrap 3→5 migration. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -399,6 +399,17 @@ Migrates a traditional Power Pages site (Liquid web templates, not code sites) f
 - Non-destructive: the engine writes a new `<folder>V5` copy and never edits the source
 - AI-assisted per-category fixes for grid, navbar, panel/card, and page-header changes
 - Uploads (auto-enabling the Bootstrap 5 runtime flag) and verifies the flip via `pac-log.txt`
+
+#### `/migrate-webapi-selectall`
+
+> "Replace every wildcard Web API fields setting with the columns my site actually uses"
+
+Reviews every authored Power Pages Web API source call and response consumer, maps entity sets through Dataverse metadata, and replaces deprecated `Webapi/<table>/fields = *` values with evidence-backed explicit columns. Compiled and generated output is excluded. Works with both traditional/Liquid sites and React, Vue, Angular, or Astro code sites.
+
+- Reports every wildcard with its exact proposed fix and every already-explicit configuration
+- Adds missing `$select` projections where normal record reads relied on implicit selection
+- Uses bounded, resumable review batches and complete CSV appendices for 100,000+ configurations
+- Verifies all configuration scopes and deployment profiles contain zero wildcards
 
 ### Support
 
