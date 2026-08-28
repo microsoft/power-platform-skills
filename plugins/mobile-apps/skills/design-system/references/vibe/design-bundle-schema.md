@@ -99,7 +99,9 @@ The builder reads the block once at Step 1 (after reading its assigned screen sp
 - `empty_state` → which empty-state template to use
 - `accent_color` → resolved into `$accentBase`
 
-If `## Design Direction` is absent, the builder uses today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`.
+If `## Design Direction` is absent, the builder uses the approved Product
+Experience plus the neutral defaults from `mobile-design-philosophy.md` and
+`screen-templates.md`.
 
 ## Conditional reading (the play-out contract)
 
@@ -111,7 +113,7 @@ If "## Design Direction" section exists:
   Parse the bundle into a config object
   Use config values as defaults for design decisions
 Else:
-  Use existing industry-inferred defaults
+  Use Product Experience + neutral semantic defaults
 ```
 
 This is the only integration point between the internal style picker and the rest of the system. If `## Design Direction` is absent, existing agents fall back to the `Else` branch automatically.

@@ -203,11 +203,33 @@ Cap relevance scoring at the top 10 candidates to keep token usage bounded.
 **Print before starting:**
 > "→ Inferring required entities from requirements brief…"
 
-From the user's requirements, list the entities the app needs. For each entity, list:
+Read `${PLUGIN_ROOT}/shared/references/product-experience-compiler.md`. When
+provided, read the approved scope from:
+
+- `<working_dir>/.tmp/product-scope-contract.json`
+- `<working_dir>/.tmp/product-experience-contract.json`
+
+Infer persistence from approved core/supporting jobs, not from distinct nouns in
+the brief. Descriptive concepts, UI labels, statuses, filters, temporary
+checkout state, derived values, and one-off presentation data are not tables.
+
+For each candidate entity, list:
 
 - **Purpose** — one line
+- **Scope role** — `core`, `supporting`, or `deferred`
+- **Owning product job** — the job that requires persistence
+- **Lifecycle justification** — at least one of independent lifecycle,
+  independent ownership/security, repeated children, independent
+  query/reporting, offline boundary, explicit history/audit, or M:N
 - **Fields needed** — name, type, required?
 - **Relationships** — to other entities in this list or to standard tables
+
+If no lifecycle justification applies, do not create a table. Use a Choice or
+parent column, local/static configuration, derived view-model value, or
+transient UI state and record that decision in `### Scope Decisions`.
+
+Deferred jobs may reuse an already-required table, but they must not introduce
+new tables or columns in this run.
 
 Standard table mappings to bias toward:
 
@@ -223,6 +245,17 @@ For every `Reuse` decision, add `Service required: yes|no`. Use `yes` whenever a
 
 Update progress milestone `requirements-inferred` with the required-entity
 count and elapsed time.
+
+### Table budget
+
+Use the adaptive target and maximum from the approved product scope. The budget
+applies to new or adapted app-owned tables, not verified reused standard
+tables. Exceeding the target requires a one-line lifecycle justification per
+extra table. Exceeding the maximum returns:
+
+`NEEDS_CONTEXT: product scope approval required for <N> new tables`
+
+Do not weaken this rule by converting unnecessary tables to `Extend`.
 
 ## Step 5 — Reconcile Target and Score Reuse / Extend / Create / Adapt / Defer / Unverified
 
@@ -286,12 +319,12 @@ Classify every planned column before finalizing its table decision:
 Build a table:
 
 ```markdown
-| Required entity | Decision | Existing match | Target evidence | Column decisions | Why |
-|---|---|---|---|---|---|
-| Customer profile | Reuse | `contact` | 200; exact standard table verified | Reuse: fullname, emailaddress1 | Standard table and required columns exist |
-| Job site | Create | — | 404; verified custom prefix | Create inline: cr123_name, cr123_address | No matching custom or standard table for this concept |
-| Inspection report | Extend | `cr123_inspection` | 200; customizable + can create attributes | Reuse: cr123_name; Create: cr123_photo | Same concept; one custom column is missing |
-| Required managed asset | Defer | — | 404 for required-existing dependency | Defer: all dependent fields | Install/import the owning solution; never recreate it. Left out of this run, not a blocker |
+| Required entity | Scope role / owning job | Lifecycle justification | Decision | Existing match | Target evidence | Column decisions | Why |
+|---|---|---|---|---|---|---|---|
+| Customer profile | supporting / identify customer | independent identity | Reuse | `contact` | 200; exact standard table verified | Reuse: fullname, emailaddress1 | Standard table and required columns exist |
+| Job site | supporting / schedule inspection | independently queried location | Create | — | 404; verified custom prefix | Create inline: cr123_name, cr123_address | Reused across inspections and queried independently |
+| Inspection report | core / complete inspection | independent lifecycle + audit | Extend | `cr123_inspection` | 200; customizable + can create attributes | Reuse: cr123_name; Create: cr123_photo | Same concept; one custom column is missing |
+| Required managed asset | deferred / future asset administration | independent lifecycle | Defer | — | 404 for required-existing dependency | Defer: all dependent fields | Install/import the owning solution; left out of this run |
 ```
 
 In snapshot-only mode, keep `Target evidence` concise: cite the relevant
@@ -332,7 +365,11 @@ dependency-tier counts.
 **Print before starting:**
 > "→ Auditing planned screens for supported cross-entity read paths…"
 
-**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gate 4a/4b lands.
+**Run condition:** execute this step when EITHER (a)
+`<working_dir>/_screens_section.md` exists at this point in the workflow OR
+(b) you were invoked with `mode: cross-entity-audit`. **Skip silently
+otherwise** — the orchestrator re-spawns you after the internal screen
+compiler completes.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
@@ -343,7 +380,10 @@ code, so this audit never proposes generated formula metadata.
 
 **Algorithm:**
 
-1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first (graph-only mode after Gate 4a). If absent, parse `<working_dir>/native-app-plan.md` and extract the `## Screens` section. Walk every per-screen spec and collect every `related_entity_fields` block.
+1. **Read the screen plan.** Look for `<working_dir>/_screens_section.md` first
+   during graph compilation. If absent, parse
+   `<working_dir>/native-app-plan.md` and extract the `## Screens` section.
+   Walk every per-screen spec and collect every `related_entity_fields` block.
 
 2. **Per entry, branch on `recommends`:**
 
@@ -388,9 +428,11 @@ Before writing, scan the requirements for artifact signals and encode the storag
 | Generated PDF, export report, print report, evidence packet, certificate PDF | Ask/preserve whether it is retained. Retained PDFs use a File column on the parent or a child Evidence/Attachment table. Transient PDFs need no Dataverse column. |
 | Upload PDF, attach file, import document | Use a File column or child Attachment table with lookup to the parent |
 | View/open PDF | Model a durable HTTPS URL when the app has one; native PDF viewer 0.2.9+ also supports local `file://` URIs. `content://`, `blob:`, and `http://` remain unsupported. |
+| Sourced product, catalogue, property, venue, equipment, or course imagery | Use one URL/Text column such as `<prefix>_imageurl` when the authoritative value is an existing HTTPS CDN URL. Use a Dataverse Image column only when the app owns upload/capture. Decorative hero or background art is presentation, not schema. |
 | Track location, background GPS, follow route, breadcrumb, field-worker location | Do not model an app-owned Dataverse table for the control. Record only the prerequisite: the geolocation control's Dataverse target table must already exist before the control is used. Default entity set is `msdyn_locationrecords` with the `msdyn_*` field map; for a custom table, every column named in the wrapper's `fieldMap` must exist. If the table or mapped columns are missing, block `geolocation` until the geolocation-control table provisioning/setup mechanism has created them; do not model File/Image columns for this control. |
 
 Never model retained PDF bytes as long text/base64. File columns store PDF content. Signature PNGs may use Image columns when the generated service supports image payloads; otherwise use File columns or child Evidence rows.
+Do not create both an Image column and an image-URL column for the same single-media need. Choose the storage boundary from the source of truth: remote/sourced media uses URL/Text; app-owned capture/upload uses Image/File.
 
 Write the section to a file in the working directory named `_dm_section.md` (the planner reads and embeds it). Use this exact structure:
 
@@ -412,9 +454,14 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 
 ### Target Reconciliation
 
-| Required entity | Decision | Existing match | Target evidence | Column decisions | Why |
-|---|---|---|---|---|---|
-| ... | ... | ... | ... | ... | ... |
+| Required entity | Scope role / owning job | Lifecycle justification | Decision | Existing match | Target evidence | Column decisions | Why |
+|---|---|---|---|---|---|---|---|
+| ... | ... | ... | ... | ... | ... | ... | ... |
+
+### Scope Decisions
+
+- <concept> -> <Choice | parent column | local config | derived view model | transient state>, because <no independent persistence boundary>
+- Deferred jobs introduce no new schema in this run.
 
 ### Decision Rationale
 
@@ -450,7 +497,7 @@ erDiagram
 
 1. **Tier 0** — `cr123_jobsite` (no dependencies)
 2. **Tier 1** — `cr123_inspection` (lookups: contact, jobsite)
-3. **Extensions** — add `cr123_photourl` (Image) to existing `cr123_inspection` if it already exists
+3. **Extensions** — add `cr123_photo` (Image) to existing `cr123_inspection` if it already exists
 
 ### Risks and Scope Boundaries
 - <only decision-changing risks, projection requirements, migration boundaries, or security/integration coupling>

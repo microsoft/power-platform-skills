@@ -29,7 +29,7 @@ Cost: ~3-8k tokens
 Failure:
   - File missing → STOP with clear error
   - Doc vague → 2 clarifying questions
-  - Doc contradicts industry → flag + ask
+  - Doc contradicts the approved Product Experience or accessibility constraints → flag + ask
 ```
 
 ### `--logo <path>`

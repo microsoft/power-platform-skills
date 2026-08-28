@@ -1,0 +1,272 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Product Scope Contract",
+  "description": "Which jobs ship now, which support them, which are deferred, and the adaptive screen/table budgets that follow from the declared product complexity. Budgets are review budgets, not universal low caps.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "contractType",
+    "experienceRevision",
+    "productComplexity",
+    "complexityJustification",
+    "coreJobs",
+    "supportingJobs",
+    "deferredJobs",
+    "screenBudget",
+    "screens",
+    "newTableBudget",
+    "newTables",
+    "dataEntities"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractType": { "const": "product-scope" },
+    "experienceRevision": { "$ref": "#/definitions/revision" },
+    "productComplexity": { "enum": ["focused", "standard", "complex", "multi-role", "exceptional"] },
+    "complexityJustification": { "type": "string", "minLength": 20, "maxLength": 400 },
+    "coreJobs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": { "$ref": "#/definitions/coreJob" }
+    },
+    "supportingJobs": { "type": "array", "maxItems": 30, "items": { "$ref": "#/definitions/job" } },
+    "deferredJobs": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "required": ["id", "statement", "deferralReason"],
+        "properties": {
+          "id": { "$ref": "#/definitions/slug" },
+          "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
+          "deferralReason": { "type": "string", "minLength": 10, "maxLength": 240 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "screenBudget": {
+      "type": "object",
+      "required": ["target", "max"],
+      "properties": {
+        "target": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "max": { "type": "integer", "minimum": 1, "maximum": 60 },
+        "rationale": { "type": "string", "maxLength": 300 }
+      },
+      "additionalProperties": false
+    },
+    "screens": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "purpose", "userFacing", "pattern", "jobIds", "justification"],
+        "properties": {
+          "id": { "$ref": "#/definitions/slug" },
+          "route": { "type": "string", "pattern": "^/" },
+          "title": { "type": "string", "minLength": 2, "maxLength": 60 },
+          "purpose": { "type": "string", "minLength": 10, "maxLength": 240 },
+          "userFacing": { "type": "boolean" },
+          "pattern": {
+            "description": "Composition family. The list/detail/create/edit/form values are the generic record patterns whose repetition per entity is what scope validation guards against.",
+            "enum": [
+              "list",
+              "detail",
+              "create",
+              "edit",
+              "form",
+              "discovery",
+              "workflow-step",
+              "overview",
+              "queue",
+              "feed",
+              "map",
+              "schedule",
+              "conversation",
+              "capture",
+              "comparison",
+              "confirmation",
+              "settings",
+              "infrastructure"
+            ]
+          },
+          "entity": { "type": "string", "minLength": 2, "maxLength": 80 },
+          "jobIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": { "$ref": "#/definitions/slug" },
+            "uniqueItems": true
+          },
+          "justification": { "type": "string", "minLength": 15, "maxLength": 300 },
+          "compositionNote": { "type": "string", "maxLength": 240 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "newTableBudget": {
+      "type": "object",
+      "required": ["target", "max"],
+      "properties": {
+        "target": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "max": { "type": "integer", "minimum": 0, "maximum": 40 },
+        "rationale": { "type": "string", "maxLength": 300 }
+      },
+      "additionalProperties": false
+    },
+    "newTables": {
+      "type": "array",
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "required": ["name", "jobIds", "lifecycleJustification"],
+        "properties": {
+          "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+          "jobIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": { "$ref": "#/definitions/slug" },
+            "uniqueItems": true
+          },
+          "lifecycleJustification": {
+            "type": "object",
+            "required": ["reasons", "statement"],
+            "properties": {
+              "reasons": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 7,
+                "items": {
+                  "enum": [
+                    "independent-lifecycle",
+                    "independent-ownership-or-security",
+                    "repeated-child-records",
+                    "independent-querying-or-reporting",
+                    "offline-synchronization-boundary",
+                    "explicit-history-or-audit",
+                    "many-to-many-relationship"
+                  ]
+                },
+                "uniqueItems": true
+              },
+              "statement": { "type": "string", "minLength": 15, "maxLength": 300 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dataEntities": {
+      "description": "Every noun the planner considered, with how it is realized. Supporting and reference entities are expected to have no dedicated screen.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": ["name", "role", "realization"],
+        "properties": {
+          "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+          "role": { "enum": ["primary", "supporting", "reference"] },
+          "realization": {
+            "enum": [
+              "new-table",
+              "existing-table",
+              "choice-column",
+              "parent-column",
+              "child-rows",
+              "connector-source",
+              "local-configuration",
+              "view-model-only",
+              "transient-ui-state"
+            ]
+          },
+          "screenIds": {
+            "type": "array",
+            "maxItems": 12,
+            "items": { "$ref": "#/definitions/slug" },
+            "uniqueItems": true
+          },
+          "note": { "type": "string", "maxLength": 240 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "exceptionalJustification": {
+      "description": "Required only when the contract exceeds the absolute 20 user-facing screen ceiling.",
+      "type": "object",
+      "required": ["statement", "independentRoles", "independentJourneys"],
+      "properties": {
+        "statement": { "type": "string", "minLength": 40, "maxLength": 600 },
+        "independentRoles": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 10,
+          "items": { "type": "string", "minLength": 3, "maxLength": 80 },
+          "uniqueItems": true
+        },
+        "independentJourneys": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 12,
+          "items": { "type": "string", "minLength": 3, "maxLength": 120 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 60 },
+    "surface": {
+      "description": "A job may be satisfied by a whole screen or by a smaller surface. Coverage never requires a new route.",
+      "type": "object",
+      "required": ["kind", "screenId"],
+      "properties": {
+        "kind": { "enum": ["screen", "section", "sheet", "modal", "flow-step", "contextual-action"] },
+        "screenId": { "$ref": "#/definitions/slug" },
+        "detail": { "type": "string", "maxLength": 200 }
+      },
+      "additionalProperties": false
+    },
+    "job": {
+      "type": "object",
+      "required": ["id", "statement", "actor", "outcome", "surface"],
+      "properties": {
+        "id": { "$ref": "#/definitions/slug" },
+        "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
+        "actor": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "outcome": { "type": "string", "minLength": 5, "maxLength": 240 },
+        "surface": { "$ref": "#/definitions/surface" },
+        "evidence": { "type": "string", "maxLength": 300 }
+      },
+      "additionalProperties": false
+    },
+    "coreJob": {
+      "type": "object",
+      "required": ["id", "statement", "actor", "outcome", "criticality", "surface", "criticalSteps"],
+      "properties": {
+        "id": { "$ref": "#/definitions/slug" },
+        "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
+        "actor": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "outcome": { "type": "string", "minLength": 5, "maxLength": 240 },
+        "criticality": { "enum": ["critical", "important"] },
+        "surface": { "$ref": "#/definitions/surface" },
+        "criticalSteps": {
+          "description": "Ordered step ids the workflow journey must cover for this job to be complete.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": { "$ref": "#/definitions/slug" },
+          "uniqueItems": true
+        },
+        "evidence": { "type": "string", "maxLength": 300 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

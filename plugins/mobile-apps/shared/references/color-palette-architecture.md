@@ -132,15 +132,15 @@ Tamagui's default `$red10`, `$green10`, `$yellow10` are saturated for maximum vi
 
 ### When to desaturate
 
-| Industry | Desaturation | Reason |
+| Product Experience evidence | Desaturation | Reason |
 |---|---|---|
-| Field / Ops | None (keep full saturation) | Status colors must pop in bright outdoor light |
-| Finance | 20% desaturation | Conservative palette, trust signals |
-| Healthcare | 15% desaturation | Warm palette, nothing should alarm |
-| Education | 10% desaturation | Bright but not aggressive |
-| Enterprise / Productivity | 20% desaturation | Professional, understated |
-| E-commerce | Standard | Brand colors dominate anyway |
-| Editorial / Content | 25% desaturation | Whisper, don't shout |
+| high-visibility context, frequent interruption, urgent tempo | None | Status cues must remain visible at a glance |
+| high decision risk, restrained personality, trust emphasis | 20% | Conservative and dependable |
+| reassuring tone, human support, moderate risk | 15% | Warm without feeling alarming |
+| energetic progress, expressive personality | 10% | Bright without becoming aggressive |
+| dense status/data emphasis | 20% | Reduces distraction in information-heavy layouts |
+| essential product/media emphasis | Standard | Brand and imagery carry the hierarchy |
+| editorial/reading emphasis | 25% | Content should speak louder than status color |
 
 ### How to desaturate in Tamagui
 
@@ -159,11 +159,13 @@ Apply by spreading into your light and dark theme definitions.
 
 ---
 
-## Industry-Default Palettes
+## Contextual Palette Examples
 
-Pre-built palette configs. Use these when the user specifies an industry but not a specific brand color.
+Pre-built palette examples for explicit user selection or for Product
+Experience dimensions that independently support the stated rationale. Do not
+select them from industry labels alone.
 
-### Finance
+### Trust-critical restrained
 
 ```
 Surface base: cool gray (H=220, S=5%)
@@ -173,7 +175,7 @@ Status: desaturated 20%
 - Conservative, trust-building. Blue accent used sparingly for interactive elements only.
 - Dark mode: true dark surfaces (not warm), blue accent brightens 15%.
 
-### Healthcare
+### Reassuring human-centered
 
 ```
 Surface base: warm cream (H=35, S=12%)
@@ -183,7 +185,7 @@ Status: desaturated 15%
 - Warm, non-clinical. Sage accent feels calming without the institutional blue.
 - Dark mode: warm dark surfaces (hsl(35, 8%, 8%)), accent lightens slightly.
 
-### Field / Ops
+### High-visibility operational
 
 ```
 Surface base: neutral gray (H=0, S=0%)
@@ -193,7 +195,7 @@ Status: full saturation
 - High contrast for outdoor readability. Orange accent is highly visible.
 - Dark mode: OLED-friendly (#000000 base option), accent stays bright.
 
-### Education
+### Energetic progress
 
 ```
 Surface base: near-white (H=0, S=0%)
@@ -203,7 +205,7 @@ Status: desaturated 10%
 - Clean, bright, energetic. Blue accent works for interactive and gamification elements.
 - Dark mode: slightly warm dark (#121215), accent brightens.
 
-### Productivity
+### Dense focused work
 
 ```
 Surface base: cool neutral (H=220, S=3%)
@@ -213,7 +215,7 @@ Status: desaturated 20%
 - Near-monochrome. Accent used at strict 10% ratio. Dense layouts need minimal color distraction.
 - Dark mode: true neutral dark (#121212), accent barely shifts.
 
-### E-commerce / Consumer
+### Media-led discovery
 
 ```
 Surface base: true white (H=0, S=0%)
@@ -291,6 +293,8 @@ const customConfig = {
 
 ## Integration
 
-- **`design-planning.md` Step 1c** decides whether to use a custom palette and which industry default to start from
+- **`design-planning.md` Step 1c** decides whether to use a custom palette from
+  Product Experience dimensions or explicit brand input; industry is
+  vocabulary/context only
 - **`tamagui-custom-tokens.md`** covers the mechanics of wiring tokens into `tamagui.config.ts` — refer to that file for the full config setup
 - **`tamagui-component-recipes.md`** "Named palette tokens" recipe provides the copy-paste implementation block

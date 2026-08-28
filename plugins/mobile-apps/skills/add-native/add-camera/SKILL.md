@@ -286,6 +286,14 @@ const styles = StyleSheet.create({
 
 Scanner rendering rule: do **not** put overlay UI as `CameraView` children. Expo Camera can render incorrectly when React children are nested inside the native camera preview. The generated control renders the camera as one layer and renders `overlay` / `children` as a sibling absolute layer above it.
 
+Scanner placement rule: mount `BarcodeScannerView` only on a dedicated
+full-screen scanner route or modal. Never embed it in `app/(app)/home.tsx`.
+Home may navigate to the scanner with a visible CTA, including in scan-first
+apps. The approved per-screen spec must declare
+`Scanner surface: dedicated-full-screen`, Operational pattern
+`scan-geofence-gate`, and Presentation `default` or `modal`; otherwise stop and
+return the plan to the screen planner.
+
 Scan mutation rule: the generated control has an internal one-shot scan lock so rapid `onBarcodeScanned` callbacks cannot double-submit. Screens should still set `paused=true` before navigating or mutating data, then reset `paused=false` and change `resetKey` when the screen regains focus. This makes returning to the scanner reliable after a successful scan.
 
 Scan-gate business rule: for QR lookup flows, resolve the scanned code against the target entity first (for example, `Test Item`). If the lookup misses, show a clear inline `Item does not exist` message and keep scanner flow in-place. Do not auto-create `Unknown` scan rows unless the approved plan explicitly requires that fallback behavior.

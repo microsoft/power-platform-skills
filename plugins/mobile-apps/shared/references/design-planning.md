@@ -1,18 +1,28 @@
 # Design Planning Reference
 
-Shared logic for inferring and planning the visual design system for a Power Apps mobile app. Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+Shared logic for planning the visual design system for a Power Apps mobile app.
+Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+
+Read
+[`product-experience-compiler.md`](product-experience-compiler.md) first.
+Industry supplies vocabulary and content examples only. It must never
+automatically select palette, typography, density, radius, Home composition, or
+a direction preset.
 
 Mobile-first rules apply throughout — no CSS variables, no Google Fonts, no keyframes. Everything maps to Tamagui tokens, `expo-font`, and `react-native-reanimated`.
 
 ---
 
-## Default Stack
+## Least-Assumptive Baseline
 
-The bundled Expo template already ships a complete, production-ready design baseline. **If no design keywords are detected and the user did not specify an aesthetic, use the default and skip Step 3c's confirmation question entirely.**
+When no brand or explicit aesthetic is supplied, materialize the approved UX
+DNA using a neutral `polished-operational` expression. The result is still a
+complete app-specific design system; it is not an inspection preset or a bare
+Tamagui default.
 
 | Layer | Default | Where it lives |
 |---|---|---|
-| Aesthetic | Clean + Professional | — |
+| Visual personality | Polished operational | Product Experience contract |
 | Font | Inter | `@tamagui/font-inter` (already in template) |
 | Theme | System light/dark auto-switch | `app/_layout.tsx` `useColorScheme()` |
 | Tokens | Tamagui `defaultConfig` | `tamagui.config.ts` (already in template) |
@@ -20,11 +30,13 @@ The bundled Expo template already ships a complete, production-ready design base
 | Animation | Platform-native transitions only | Expo Router default |
 | Border radius | Medium (`$4` Tamagui default) | — |
 
-Default = **`tamagui-design-system: add-aliases`** (the always-run minimum). Record `## Design` with the full inferred-from-industry block plus that line. There is no skip path — see the execution mapping below. Screen-builders depend on `$surface*` and `$accent*` aliases existing on every project, so this minimum invocation is non-negotiable.
+Always write the full `## Product Experience` and `## Design` blocks and
+materialize semantic aliases. Screen-builders depend on `$surface*` and
+`$accent*` aliases existing on every project.
 
 ---
 
-## Step 1 — Keyword Detection
+## Step 1 — Independent Signal Detection
 
 Scan requirements and wizard answers. Map matches to design decisions.
 
@@ -39,21 +51,23 @@ Scan requirements and wizard answers. Map matches to design decisions.
 | custom font name (e.g. "use Outfit", "we use DM Sans") | Install that font via `expo-font` |
 | "no animations", "reduce motion" | Disable all animations, add `reduceMotion` config |
 
-### Industry detection
+### Product-experience dimensions
 
-Also scan for industry signals and record the industry in `## Design`. This drives visual language, emotional design, and density decisions per [mobile-design-philosophy.md](mobile-design-philosophy.md) Sections 7 and 12.
+Resolve visual decisions from independent fields:
 
-| If requirements mention… | Industry | Visual language |
-|---|---|---|
-| "inspection", "field", "safety", "audit", "checklist", "ops", "maintenance" | Field / Ops | High contrast, large targets, offline-ready, camera-forward |
-| "finance", "banking", "payments", "transactions", "accounts", "ledger" | Finance | Blue palette, conservative type, generous whitespace, trust signals |
-| "health", "wellness", "patient", "medical", "clinic", "care" | Healthcare | Warm approachable palette, friendly type, compassionate microcopy |
-| "learning", "education", "course", "student", "training", "quiz" | Education | Bright playful palette, gamification, streak/progress patterns |
-| "productivity", "tasks", "projects", "workflow", "CRM", "tickets" | Productivity | Minimal near-monochrome, dense layout, strong grid, quick-actions |
-| "sales", "catalog", "products", "orders", "inventory", "retail" | E-commerce | Brand-forward color, product imagery, frictionless CTAs |
-| "IoT", "sensors", "telemetry", "dashboard", "monitoring" | Tech / IoT | Dark option with accent gradients, data-dense cards, real-time indicators |
+| Product Experience field | Design consequence |
+|---|---|
+| Visual personality | Overall expression and composition budget |
+| Content emphasis | Image/object/data/relationship/task/timeline hierarchy |
+| Operating context | Target size, contrast, density, and reach constraints |
+| Interaction tempo | Progressive disclosure, shortcuts, and motion restraint |
+| Decision risk | Trust signals, confirmation, and evidence prominence |
+| Media strategy | Image ratio, source, and stable fallback geometry |
+| First viewport | Dominant region order and primary-action placement |
+| Accessibility priorities | Type scale, touch targets, contrast, and alternatives |
 
-If no industry signal is detected, default to **Productivity** (the most common Power Platform use case).
+Industry is recorded separately for vocabulary. It does not choose a row in a
+style table.
 
 ### User stage detection
 
@@ -65,25 +79,18 @@ If no industry signal is detected, default to **Productivity** (the most common 
 
 Default: **Returning user** (most Power Platform apps are for trained staff).
 
-If **no keywords match** → default to the **Productivity** industry, apply its aesthetic direction (Refined Minimal), and write a full `## Design` section with rationale. Never write just "default (Clean + Professional)" — always explain the industry inference and what it drives.
+If no visual keywords match, preserve the Product Experience dimensions and use
+the least-assumptive polished-operational expression. Never infer Productivity,
+Field/Ops, or any other design preset from missing input.
 
 ---
 
 ## Step 1b — Aesthetic Direction
 
-After keyword/industry detection, determine the aesthetic direction. This shapes *every* visual choice. See [mobile-design-philosophy.md](mobile-design-philosophy.md) Section 13 for full details.
-
-| Industry | Default aesthetic direction |
-|---|---|
-| Field / Ops | Industrial / Utilitarian — high contrast, monospace data, edge-to-edge rows |
-| Finance | Refined Minimal — conservative, generous whitespace, trust signals |
-| Healthcare | Soft / Organic — warm surfaces, rounded type, friendly tone |
-| Education | Bold / Expressive — bright palette, playful type, gamified elements |
-| Productivity | Refined Minimal (default) — neutral, dense, monospace for data values |
-| E-commerce | Bold / Expressive — brand-forward color, prominent CTAs |
-| Tech / IoT | Industrial / Utilitarian — dark option, data-dense, monospace |
-
-Override if the user explicitly names a different direction ("I want something warm and friendly" for a field app → Soft / Organic instead of Industrial).
+Choose a direction from explicit brand/aesthetic input or materialize one from
+the approved visual personality and content emphasis. An operational product
+may be premium or editorial; a consumer product may intentionally use utility
+styling. Do not use industry as a lookup key.
 
 ---
 
@@ -94,7 +101,7 @@ Decide whether to build a custom color palette or use Tamagui defaults. Full pal
 | Input | Palette action |
 |---|---|
 | User provides hex brand color | Build 3-variant accent scale (deep/base/soft) + tinted surface scale from brand hue |
-| User names an industry, no brand color | Use industry-default palette from `color-palette-architecture.md` |
+| Product Experience has no brand color | Build a restrained accessible semantic palette appropriate to the approved personality and content emphasis |
 | User says "minimal" or "clean" | Near-monochrome: single accent at strict 10% usage, desaturated status colors |
 | User says "warm" or "organic" | Warm-tinted surfaces (cream/sand base), warm accent |
 | No input (default) | Standard Tamagui tokens, no custom palette needed |
@@ -112,7 +119,9 @@ Record the palette decision in `## Design`.
 
 ## Step 1d — Copy Tone Selection
 
-Select a copy tone profile based on industry + aesthetic direction. Full tone reference with example strings → see [typography-and-tone.md](typography-and-tone.md).
+Select a copy tone profile from the approved visual personality, primary user,
+interaction tempo, and explicit brand voice. Full tone reference with example
+strings → see [typography-and-tone.md](typography-and-tone.md).
 
 | Tone | Voice | Button style | Empty state style | Error style |
 |---|---|---|---|---|
@@ -121,7 +130,8 @@ Select a copy tone profile based on industry + aesthetic direction. Full tone re
 | **Utilitarian** | Terse, no fluff, status-focused | Shortest verb ("Save", "Capture") | Minimal ("No items") | Status + retry ("Load failed. Retry.") |
 | **Editorial** | Calm, considered, no emoji ever | Verbs as statements ("Begin writing") | Invitational ("What will you write about?") | Understated ("We couldn't load this.") |
 
-**Industry defaults:** Enterprise/Productivity/Finance → Professional. Field/Ops → Utilitarian. Healthcare(patient)/Education/Consumer → Warm. Content/Creative → Editorial.
+Tone follows the approved visual personality, primary user, and interaction
+tempo. Industry terminology may influence vocabulary but does not select tone.
 
 **Universal microcopy rules (all tones):**
 - No exclamation marks in UI text
@@ -155,13 +165,17 @@ Only used when deviating from default. Map the user's aesthetic + mood to concre
 
 ## Step 3 — Build the `## Design` Section
 
-### If default (no deviations):
+### If no explicit brand or aesthetic input:
 
 ```markdown
 ## Design
 
-Default stack — no customization needed.
-- Industry rationale: <one sentence — e.g. "Detected as productivity/enterprise app; Refined Minimal is the standard for trained-staff internal tools">
+Product-experience-derived baseline.
+- Product rationale: <one sentence tying the expression to primary user, goal, operating context, and content emphasis>
+- Visual personality: polished-operational
+- Content emphasis: <from Product Experience>
+- First viewport: <from Product Experience>
+- Signature experience: <from Product Experience>
 - Aesthetic: Clean + Professional
 - Aesthetic direction: Refined Minimal
 - Font: Inter (template default)
@@ -172,7 +186,7 @@ Default stack — no customization needed.
 - Tokens: Tamagui defaultConfig
 - Palette: default (no custom palette)
 - Animation: Platform-native transitions only
-- Industry: <detected or "productivity">
+- Industry context: <vocabulary only; does not select design>
 - User stage: returning (default)
 - Copy tone: Professional
 - Emotional design: standard confirmations, no custom peak moments
@@ -206,8 +220,11 @@ Default stack — no customization needed.
 - Palette: <default | custom: surface=warm cream, accent=ochre triad> (see color-palette-architecture.md)
 - Default theme: <system auto | light forced | dark forced>
 - Animation style: <none | spring | slow-fade | gentle-ease>
-- Industry: <detected industry>
-- Visual language: <from industry detection — e.g., "warm approachable palette, friendly microcopy">
+- Industry context: <vocabulary only>
+- Visual personality: <approved personality>
+- Content emphasis: <approved emphasis>
+- Operating context: <approved context>
+- Visual language: <materialization of personality + emphasis + context>
 - User stage: <new | returning | power>
 - Copy tone: <Professional | Warm | Utilitarian | Editorial> (see typography-and-tone.md)
 - Emotional design: <peak moments to celebrate — e.g., "form completion summary, inspection streak counter">
@@ -231,6 +248,9 @@ Include the `## Design` section in the screen-planner prompt so per-screen specs
 
 ```
 Approved design:
+- Visual personality: polished-operational
+- Content emphasis: task-led
+- Operating context: one-handed, intermittent connectivity
 - Aesthetic direction: Refined Minimal
 - Font: Inter (default)
 - Typography: single-family, weight differentiation
@@ -240,8 +260,8 @@ Approved design:
 - Palette: default
 - Theme: system light/dark
 - Animation: none
-- Industry: field/ops
-- Visual language: high contrast, large targets, camera-forward
+- Industry context: inspection (vocabulary only)
+- Visual language: high contrast and large targets because the operating context requires them
 - User stage: returning
 - Copy tone: Utilitarian
 - Emotional design: celebrate inspection completion with summary card
@@ -251,15 +271,16 @@ Per-screen specs MUST use Tamagui primitives (XStack, YStack, Text, Button) with
 token-based styling ($color, $background, $space.*) — never hardcoded hex or px values.
 Animation: only add if design section specifies a style.
 Color: follow the 60/30/10 rule (see mobile-design-philosophy.md Section 5).
-Industry patterns: apply visual language from mobile-design-philosophy.md Section 12.
+Product patterns: apply only patterns that serve approved product jobs and
+operating constraints.
 Aesthetic direction: apply from mobile-design-philosophy.md Section 13.
 Layout: question whether cards are needed — see Section 14 (edge-to-edge rows for dense lists).
 Data values: use fontFamily="$mono" for IDs, timestamps, currency, coordinates.
 Peak moments: note which screens have task-completion flows that deserve celebration.
 Anti-patterns: ensure no items from Section 16 checklist are present.
-Universal patterns: screen-builder will read universal-patterns.md for industry-specific
-patterns (sparklines for finance, offline sync for field, etc.). Include the industry in
-per-screen specs so the builder knows which sections to apply.
+Universal patterns: screen-builder will read universal-patterns.md. Include the
+approved job/context that justifies each selected pattern; do not include one
+merely because an industry keyword matched.
 ```
 
 ---

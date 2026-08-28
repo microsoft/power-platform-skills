@@ -13,14 +13,18 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 ## When NOT to use
 
 - The user has already specified a brand reference app or design system (no need for a 3-up picker — go straight to that)
-- The plan declares an industry that maps unambiguously to one direction AND the user said "use the industry default" (one preview is enough)
+- The approved Product Experience already specifies a complete visual
+  personality and the user does not want alternatives
 - Sub-skill of another skill that's already in plan mode (would create a duplicate gate)
 
 ## Inputs
 
 - `working_dir` — absolute path to the project root (must contain `native-app-plan.md`)
 - Optional: `target_screen` — screen name to render (defaults to the most representative; see Step 2)
-- Optional: `default_direction` — `inspection | saas | product` to highlight as the recommended pick (defaults to keyword-inferred from app name + purpose)
+- Optional: `default_direction` — `inspection | saas | product` to highlight
+  as the recommended pick. Derive it from the approved visual personality,
+  content emphasis, density, operating context, and media role; never from
+  industry or raw prompt keywords.
 - Optional: `sub_step_mode` — `true` when invoked by `/design-system`. Changes behavior:
   - Still renders `_design_vibe.html` and asks the user
   - Returns picked direction + merged dimensions to caller
@@ -46,7 +50,7 @@ Before doing anything else, load the direction bundles. These are the source of 
 
 - [`design-directions.md`](./design-directions.md) — overview + reference-app gestalts
 - [`direction-inspection.md`](./direction-inspection.md) — full Inspection bundle (dark slate + safety orange — outdoor-only opt-in)
-- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — MVP default for zero-click flow, NOT shown in 3-up picker)
+- [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — explicit inspection-oriented option, not a global default)
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
 - [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan
@@ -120,14 +124,16 @@ Required sections:
 - `## Project` (for app name + description)
 - `## Screens` → `### Screen Map` (so we know what to render)
 
-If `## Screens` is missing the plan hasn't reached Gate 4 yet. STOP with: `BLOCKED: native-app-plan.md has no ## Screens section. Run /create-mobile-app at least through Gate 4 first.`
+If `## Screens` is missing, screen compilation has not completed. STOP with:
+`BLOCKED: native-app-plan.md has no ## Screens section. Run
+/create-mobile-app through Gate 2 and screen compilation first.`
 
 **Pick the representative screen** to render in the 3-up. Heuristic, in order:
 
-1. The first List screen in the Screen Map (lists show density + row style + accent + typography in one frame — best vehicle for design comparison)
-2. Else the first Detail screen (shows surface treatment + hierarchy)
-3. Else the Home / dashboard screen
-4. Else the first non-baseline screen (skip Login, OAuth, Splash)
+1. The screen that contains the Product Experience signature interaction
+2. Else the primary journey entry/core-workflow screen
+3. Else the primary journey outcome screen
+4. Else the first non-baseline user-facing screen
 
 Print the choice: `→ [design-system:vibe] Rendering "<screen_name>" in 3 directions.`
 
@@ -136,20 +142,23 @@ If the user passed `target_screen` explicitly, use that instead.
 ## Step 2 — Pick the recommended default direction
 
 **Print before starting:**
-> "→ [design-system:vibe] Inferring recommended direction from app description…"
+> "→ [design-system:vibe] Deriving an optional direction highlight from the approved Product Experience…"
 
 If `default_direction` was passed in the prompt, use it.
 
-Otherwise scan `## Project` description and `## Design` industry (if present) for keywords:
+Otherwise derive the highlighted direction from the independent Product
+Experience dimensions:
 
-| Keywords | Recommended direction |
+| Product Experience evidence | Recommended direction |
 |---|---|
-| inspection, field, work order, delivery, audit, site visit, route, dispatch, technician, asset | **Inspection** |
-| tracker, request, approval, internal, dashboard, report, employee, helpdesk, expense, time, leave | **SaaS** |
-| consumer, customer, premium, engagement, experience, learning, wellness, onboarding, exec dashboard | **Product** |
-| Anything else | **SaaS** (safest default for a Power Apps audience) |
+| high-visibility operating context, capture/evidence emphasis, large-target density, urgent tempo | **Inspection** |
+| restrained visual personality, data/status emphasis, dense or balanced information, steady workflow | **SaaS** |
+| expressive/editorial personality, discovery or relationship emphasis, essential/supportive media | **Product** |
+| mixed or low-confidence evidence | no highlighted default |
 
-The recommendation only **highlights** one card in the picker — the user can still pick any. Do not skip showing all three.
+Industry and raw prompt keywords must not participate. The recommendation only
+**highlights** one card; the user can still pick any. When evidence is mixed,
+show all three without a recommendation.
 
 ## Step 3 — Render the 3-up `_design_vibe.html`
 
@@ -435,13 +444,18 @@ If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with scr
 
 This skill's only side-effect on shared state is **one block** written into `native-app-plan.md`. Existing agents check for it conditionally:
 
-- `agents/screen-planner.md` — if `## Design Direction` exists, use its values as defaults for per-screen Density / Surface / Restraint fields. Otherwise fall back to today's industry-inferred logic.
-- `agents/screen-builder.md` — if `## Design Direction` exists, read `list_style`, `motion`, `tone`, `primary_action_shape` and apply them when choosing row/component patterns from the user's screen spec. Samples remain code/API references only. Otherwise use today's defaults.
+- `agents/screen-planner.md` — consumes Product Experience and Product Scope,
+  then records per-screen refinements without selecting style from industry.
+- `agents/screen-builder.md` — consumes Product Experience, the screen build
+  pack, and the materialized design system. Samples remain code/API references
+  only.
 
 If this skill folder is removed:
-1. The orchestrator's Gate 4 falls back to its existing single-preview flow (no `## Design Direction` block ever gets written)
-2. screen-planner and screen-builder's `if (block exists)` conditions evaluate false → behave exactly as today
-3. No other file change required
+1. The design-system skill materializes the approved Product Experience
+   directly without showing alternative directions.
+2. Screen planner and builder continue to use the Product Experience and build
+   packs.
+3. No industry-derived fallback is introduced.
 
 ## Notes
 

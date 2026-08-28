@@ -79,6 +79,12 @@ Home should usually contain: a compact context header, one current/next item car
 
 The structure is generic, but the content must be domain-specific: inspection apps show assignment/progress/defects; learning apps show next lesson/streak/progress; finance apps show balance/due items/recent activity; healthcare apps show next appointment/tasks; CRM apps show pipeline/follow-ups. Do not copy a field-ops dashboard shape into domains where another current-state summary is more natural.
 
+Home may launch a scan flow, but it never contains the live camera or barcode
+viewfinder. Put `CameraView` / `BarcodeScannerView` on a dedicated full-screen
+route or modal so permissions, retry, manual entry, processing, and back
+navigation stay contained. Even in a scan-first app, Home uses a visible scan
+CTA and remains a useful current-state summary.
+
 ---
 
 ## 4. Touch & Interaction

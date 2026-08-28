@@ -24,6 +24,10 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - `route` — the Expo Router route path (e.g., `/(app)/inspections`)
 - `target_file` — the absolute path of the file to write (e.g., `<working_dir>/app/(app)/inspections.tsx`)
 - `plan_path` — absolute path to `<working_dir>/native-app-plan.md`
+- `product_experience_path` — absolute path to
+  `<working_dir>/.tmp/product-experience-contract.json`
+- `screen_build_pack_path` — absolute path to
+  `<working_dir>/.tmp/compiled-screen-build-pack.json`
 
 ## Hard Rules
 
@@ -46,7 +50,12 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
 - **HARD RULE — Route Intent Matrix + tap idempotency.** Navigation APIs are NOT interchangeable. Apply this matrix exactly: (1) **singleton destinations** (`/(app)/workout/form`, `/(app)/recovery/form`, `/login`, and any route the plan marks singleton) use `router.navigate(...)`, never `router.push(...)`; (2) **entity detail drill-down** routes use `router.push(...)`; (3) **auth/guard redirects** use `router.replace(...)`. Any primary navigation CTA (`Start`, `Continue`, `Open`, `Next`) must be double-tap safe: lock with `isNavigating`, early-return when true, set lock before calling router, and unlock in `finally` (or after transition callback). On iOS this prevents duplicate transitions and accidental double stack entries.
 
-- **HARD RULE — Profile owns sign-out, but is not sign-out-only.** Every generated app has a Profile screen at `/(app)/profile`. If your assigned screen is Profile, render the planned app-specific profile sections first, then a visible text button labeled `Sign out` exactly where the spec places it. Use `signOut` from `useAuth()`; do not call `npx power-apps logout`, clear storage manually, or invent a custom auth service. Confirm before signing out, then call `signOut()` and `router.replace('/login')`. Non-Profile screens must not add sign-out actions.
+- **HARD RULE — the planned auth-exit surface owns sign-out.** Implement
+  sign-out only when this screen's spec contains `Sign-out affordance`. It may
+  be a Profile/Account screen or an account/settings sheet owned by another
+  screen. Use `signOut` from `useAuth()`; confirm, then call `signOut()` and
+  `router.replace('/login')`. Never add a dedicated Profile route solely for
+  sign-out, and never add sign-out to an unassigned screen.
 
 - **HARD RULE — `useLocalSearchParams<{}>` type for THIS screen MUST be the EXACT union from the Navigation Contracts row, not a synthesized "what this screen needs" type.** The planner enforces param-union: every param ANY sender pushes to your route is listed in the contracts table for your route. Your `useLocalSearchParams<{}>` declaration MUST include every one of those params (path params required, query params optional with `?`). Even if your screen's content only uses some of them, the OTHERS are still received from senders and must be declared so they're typed correctly — undeclared params are silently dropped at runtime, breaking the senders.
 
@@ -70,17 +79,35 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 
   **Verification (post-scaffold):** the doctor `node scripts/check-routes.js` parses every `router.push` / `router.replace` / `<Link href=>` and every `useLocalSearchParams<{}>` across `app/` and reports drift. Run it after any hand-edit. Wired into `package.json` as `npm run check-routes`.
 - **Your layout comes from your spec + design fields — NOT from the samples.** The sample files (`screen-list.tsx`, `screen-detail.tsx`, `screen-form.tsx`) exist to show you correct Tamagui API, import patterns, and TypeScript idioms. Read them for *how to write code*, not *what to build*. Every screen's structure, density, hierarchy, and visual emphasis must come from Step 1 (spec) + Steps 1a–1c (design fields). A screen that looks like the sample with a different entity name is a failure — even if it compiles and passes the quality checklist.
+- **The screen build pack is the implementation contract.** Read the Product
+  Experience and this screen's entry from `compiled-screen-build-pack.json` before
+  choosing layout. The pack's required jobs, first viewport, hierarchy,
+  primary action, media, trust signals, signature interaction, states, and
+  forbidden defaults must all be visible in the implementation. A generic
+  CRUD shell is not an acceptable substitute.
+- **Contract revisions must match.** Run
+  `node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" --project-root
+  "<working_dir>" --check` before writing. If the Product Experience,
+  Product Scope, or Workflow Journey hash in the pack does not match its
+  current sidecar, return
+  `BLOCKED [<screen_name>]: screen build pack is stale — recompile contracts`.
+  Never silently build from stale planner prose.
 - **Required reading before writing any TSX.** You MUST load these from the plugin root:
   - `${PLUGIN_ROOT}/shared/references/mobile-design-philosophy.md` — visual hierarchy, spacing rhythm, touch zones, quality bar (read FIRST — this shapes all decisions)
   - `${PLUGIN_ROOT}/shared/references/mobile-ui-patterns.md` — archetype rules, required states, lists/forms patterns
   - `${PLUGIN_ROOT}/shared/references/screen-templates.md` — long-form archetype details for the archetype your spec declares
   - `${PLUGIN_ROOT}/shared/references/accessibility-checklist.md` — universal a11y rules
+  - `${PLUGIN_ROOT}/shared/references/product-experience-compiler.md` —
+    Product Experience, journey, enrichment, and build-pack semantics
   - The matching sample for your archetype — **read for code patterns and API only, not as a layout template**:
     - List → `${PLUGIN_ROOT}/shared/samples/screen-list.tsx`
     - Detail → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
     - Form → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
   - For component snippets: `${PLUGIN_ROOT}/shared/references/tamagui-component-recipes.md`
-  - **If the plan's `## Design` section names an industry**, also read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and apply the relevant sections per the "When to Use This Document" table at the bottom. For example: finance → Sections 2, 3, 5, 6, 7, 19, 20; field/ops → Sections 8, 9, 10, 14, 15, 23, 24. Skip this file only if the plan says "Industry: productivity" with no further industry signal.
+  - Read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` only when the
+    Product Experience or build pack names a relevant interaction pattern.
+    Industry is vocabulary/context only and must not select the composition or
+    visual style.
   - **If the plan's `## Design` section specifies a non-default font pairing or non-Professional copy tone**, also read:
     - `${PLUGIN_ROOT}/shared/references/typography-and-tone.md` — font pairing configs, tone profiles with example copy per archetype
     - `${PLUGIN_ROOT}/shared/references/color-palette-architecture.md` — named palette model, dark mode inversion rules (only if plan specifies custom palette)
@@ -217,6 +244,7 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
 - **Custom camera URI uploads to Dataverse Image columns use base64 update, not File/Blob upload.** For `takePhoto()` / `pickImage()` URI flows in native screens, read the local URI as base64 (Expo file APIs) and call `Service.update(recordId, { [imageColumnName]: base64 })`. Do not coerce RN camera URIs into browser-style `File`/`Blob` upload payloads for this path.
 
 - **Dataverse image rendering rule (detail/list screens).** If a screen displays a Dataverse Image column, include the real image/base64 field in `select` and render a `data:image/<mime>;base64,...` URI when base64 is present. Do not rely on guessed URL/display pseudo-fields alone.
+- **Remote record image URL rule.** If a screen pack binds sourced media to an explicit URL/Text field, include that exact field in `select` and render it only when it is a valid `https://` URL. Use the pack's media fallback on a missing, non-HTTPS, offline, or failed image; never hardcode sample CDN URLs in the component or reinterpret a File/Image column as a URL.
 
 - **Native capabilities: use `src/native/` wrappers, NOT raw Expo modules.** `/add-native` creates typed wrappers under `src/native/` (e.g., `camera.ts`, `cameraUpload.ts`, `secureStore.ts`, `documentPicker.ts`, `pdfReport.ts`, `pdfViewer.ts`, `penInput.ts`, `geolocation.ts`). For non-Dataverse native workflows, always import from these wrappers — never import `expo-camera`, `expo-image-picker`, `expo-document-picker`, `expo-print`, `expo-secure-store`, `expo-file-system`, `expo-sharing`, `@microsoft/power-apps-native-pdf-viewer`, `@microsoft/power-apps-native-pen-input`, or `@microsoft/power-apps-native-bglocation` directly in screen files. The wrappers handle permissions, iOS/Android platform differences, URL validation, and return discriminated-union results (`{ ok: true, ... } | { ok: false, reason }`). If a wrapper doesn't exist yet, write the screen with the expected import path and a `// TODO(native-not-yet-added): run /add-native <capability> to create src/native/<wrapper>.ts` comment. For `camera.ts`, use `/add-native camera`; for `barcodeScanner.tsx`, use `/add-native barcode-scanner`; for `pdfReport.ts`, use `/add-native pdf-report`; for `pdfViewer.ts`, use `/add-native pdf-viewer` or `/add-native @microsoft/power-apps-native-pdf-viewer`; for `penInput.ts`, use `/add-native pen-input` or `/add-native @microsoft/power-apps-native-pen-input`; for `geolocation.ts`, use `/add-native geolocation` or `/add-native @microsoft/power-apps-native-bglocation`. **`expo-notifications` and `expo-haptics` are NOT available** — per AGENTS.md §2 and the HARD RULE below for haptics. If the plan tells you to use an unavailable capability, return `NEEDS_CONTEXT` — do not import it.
 
@@ -257,6 +285,17 @@ You will be invoked by `/create-mobile-app` Step 11 or `/edit-app` screen-rebuil
   Pass both `paused={scannerPaused}` and `resetKey={scanResetKey}` to `BarcodeScannerView`. Do not rely on `enabled`, `isPending`, or `setPaused(true)` alone; the ref lock is what stops duplicate Dataverse writes in the same JS tick. If the screen also has manual code entry, route it through the same guarded mutation path.
 
 - **Scanner business contract (scan-gate flows).** If the workflow is a lookup gate (e.g., scan QR to find Test Item), verify existence first. If not found, show a clear inline `Item does not exist` state and stay on scanner. Do not auto-create `Unknown` scan events unless the approved per-screen spec explicitly requires that fallback.
+
+- **Scanner placement contract (HARD).** A screen may mount
+  `BarcodeScannerView` only when its own per-screen spec declares
+  `Scanner surface: dedicated-full-screen`, Operational pattern
+  `scan-geofence-gate`, and Presentation `default` or `modal`. The target file
+  must not be `app/(app)/home.tsx`. If any condition is missing, return
+  `BLOCKED [<screen_name>]: live scanner requires a dedicated-full-screen
+  scanner spec and route`; do not silently embed or reinterpret the viewfinder.
+  Home may contain a visible scan CTA that navigates to the approved scanner
+  route. Never import or render raw `CameraView` in a screen; the dedicated
+  scanner route uses `BarcodeScannerView` from `src/native/barcodeScanner`.
 
 - **Scanner loader placement.** Processing feedback belongs inside the scanner preview overlay (`overlay` prop on `BarcodeScannerView`) as a spinner-only layer. Do not render a separate loading card/panel above the scanner preview.
 
@@ -428,8 +467,12 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 **Functional fields:**
 - **Domain layout decisions** — read this block FIRST (added by screen-planner). It answers: what data fields matter most, what is the visual emphasis, and what makes this screen different from a generic CRUD screen. These answers are binding — they override any generic "use the sample" instinct. If this block is absent, derive the answers yourself from the entity name + archetype before writing any JSX.
 - **Role** (when present) — gates which controls render for which persona. Combine with the UX contract: e.g. `Role: Supervisor` on an override screen → render the PIN gate; `Role: Inspector (edit) / Supervisor (read)` → hide edit chevrons / submit CTA when the signed-in user is a Supervisor. The role itself does not generate auth code (that lives in shared `useAuth()`); it tells you which conditional UI branches the spec expects. If absent, treat the screen as open to all signed-in users.
-- **Profile content** (Profile screen only) — app-specific sections to render above sign-out. Use any generated services named in the Data field for persisted user/role/preference context; otherwise render local/static app context from the spec. Do not collapse Profile into a single sign-out button.
-- **Sign-out affordance** (Profile screen only) — binding placement and label for sign-out. Use the skeleton's `handleSignOut` when present, or implement the same confirmed `useAuth().signOut` + `router.replace('/login')` flow locally. Do not move sign-out to Home, drawer, header, overflow menus, or any business-data screen.
+- **Profile content** (only when planned) — app-specific account sections to
+  render above sign-out.
+- **Sign-out affordance** (exactly one planned owner) — binding placement and
+  label for sign-out. Use the skeleton's `handleSignOut` when present, or
+  implement the same confirmed `useAuth().signOut` +
+  `router.replace('/login')` flow locally. Do not duplicate it elsewhere.
 - Row style override (List screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the style that best communicates the entity's key fields. Do NOT default to generic cards.
 - Hero type override (Detail screens) — if omitted, inherit from `### Shared Conventions`; if no shared default exists, pick the hero that fits the entity.
 - Layout delta — combine the screen-specific layout delta with the archetype pattern, Shared Conventions, and Design Direction. A compact spec is intentional; absence of universal chrome/layout rules is not a missing requirement.
@@ -450,13 +493,31 @@ Read `<plan_path>`. Locate the per-screen spec for your `screen_name` under `## 
 - User actions (buttons, forms, navigation targets)
 - Animations (enter transition, list stagger, state transitions, press feedback)
 
-**Design fields (per-screen — OVERRIDE-ONLY; absence = inherit from `## Design Direction`):**
+**Experience fields (per-screen — build pack first, then plan override):**
 
-The planner emits these fields ONLY when a screen intentionally breaks from the app-level default. **If a field is absent from your spec, that is by design — read the corresponding value from the plan's `## Design Direction` block (Step 1a) and apply that.** Do NOT treat absence as a gap or `BLOCKED` reason; the inheritance is the contract.
+The compiler emits required experience evidence for every screen. Read this
+screen's build pack first. A per-screen plan field may refine a value, but it
+must not remove a required journey job, primary action, trust signal, media
+role, signature interaction, state, or forbidden default from the build pack.
 
-Compact specs are expected. Before reporting `NEEDS_CONTEXT`, first check `### Shared Conventions`, `## Design Direction`, `brand/design-system.md`, the archetype references, and universal builder rules. Only block when a genuinely app-specific fact is missing (service, route, lookup binding, destructive behavior, required native capability, or user-facing copy that cannot be inferred from the entity/domain).
+Compact specs are expected. Before reporting `NEEDS_CONTEXT`, first check the
+build pack, Product Experience, `### Shared Conventions`, `## Design`,
+`brand/design-system.md`, the archetype references, and universal builder
+rules. Only block when a genuinely app-specific fact is missing.
 
-- **Visual emphasis** (if present) — overrides the emphasis implied by Question 2 in your Domain layout decisions block. If absent, derive from the domain block.
+- **First viewport** — implement the build pack's exact information priority;
+  do not spend the first viewport on a generic title plus empty whitespace.
+- **Primary action** — preserve its label, placement priority, next route, and
+  disabled behavior.
+- **Required media and trust signals** — place them where the pack specifies.
+  Do not replace required product imagery, totals, status provenance, delivery
+  context, progress, or confirmation evidence with generic icons.
+- **Signature interaction** — implement the product-specific interaction in
+  the pack; it is not optional polish.
+- **Forbidden defaults** — verify none appear, especially generic
+  List/Form/Detail substitution, repeated card composition, unsupported
+  claims, or hidden critical journey steps.
+- **Visual emphasis** (if present) — overrides the app-level content emphasis.
 - **Density mode** (if present) — `sparse` / `comfortable` / `dense`. If absent, use `## Design Direction → density`.
 - **Surface style** (if present) — `flat` / `subtle-depth` / `strong-cards` / `editorial`. If absent, use the app-level surface treatment from `## Design`.
 - **Restrained or expressive** (if present) — default is `restrained`; only ~1–2 screens per app are tagged `expressive`. If absent, treat as `restrained`.
@@ -474,22 +535,31 @@ Also read `<working_dir>/app/(app)/home.tsx` for **code idioms only** — how sa
 
 Apply the **Tamagui × Expo scope rule** from Hard Rules above. The Expo `building-native-ui` skill (if available) is the source of truth for navigation, gestures, sheets, modals, search bars, native tabs, and library preferences. Tamagui replaces inline `style={{...}}` and bare `<View>` containers in those examples — nothing else.
 
-## Step 1a — Read `## Design Direction` (if present)
+## Step 1a — Read Product Experience and screen build pack
 
-After reading your per-screen spec, also check `<plan_path>` for a `## Design Direction` section. **If it exists**, parse the YAML-style bundle and use these values as defaults wherever the per-screen spec is silent:
+Read `<product_experience_path>` and locate this screen by its route or screen
+ID in `<screen_build_pack_path>`. Then read `<plan_path>` `## Product
+Experience`, `## Design`, and this screen's spec.
 
-- `list_style` (`card-with-status-stripe` / `row-with-chevron` / `sentence`) → which row pattern family to adapt from the user's spec and design direction. Use `shared/samples/` only for API/import idioms, never as copyable layout/content.
-- `motion` (`none` / `subtle` / `liberal-tasteful`) → which animations from the vocabulary are allowed; clamps how many `FadeInUp` staggers, whether parallax is permitted
-- `tone` (`direct` / `professional` / `conversational`) → button labels, error copy, empty-state copy register
-- `status_saturation` (`full` / `desaturated` / `monochrome-plus-accent`) → status pill style
-- `primary_action_shape` (`rectangular` / `rectangular-bottom-pinned` / `pill`) + `primary_action_position` → button placement and shape
-- `empty_state` (`icon-sentence-bigbutton` / `icon-explanation-ghostbutton` / `type-led`) → which empty-state template to use
-- `accent_color` → applied through `$accentBase`
-- `heading_font` / `body_font` → font family on titles vs body
+Apply Product Experience dimensions independently:
+- visual personality and content emphasis choose hierarchy and composition
+- density and operating context choose spacing, control size, and scanability
+- tempo and risk choose confirmation, progress, recovery, and trust treatment
+- media role determines whether imagery is dominant, supporting, evidence, or
+  absent
+- first viewport and signature experience come directly from the build pack
+- industry changes vocabulary and familiar concepts only
 
-Per-screen spec values always win. The Design Direction bundle is the *fallback* for fields the per-screen spec didn't pin.
+Use the classified assumptions in the pack:
+- `safe-presentation` may be implemented directly
+- `sample` may populate preview/development states but cannot drive production
+  behavior
+- `schema-backed` must map to the named service or field
+- `proposed-requires-approval` must not be implemented unless the plan records
+  approval and backing data/capability
 
-**If no `## Design Direction` section exists**, use today's defaults from `mobile-design-philosophy.md` and `screen-templates.md`. Do not block on its absence.
+If the Product Experience or build pack is missing in a new create flow,
+return `BLOCKED`; do not choose a style from industry or raw prompt keywords.
 
 ## Step 1b — Read brand/design-system.md (MANDATORY if present)
 
@@ -520,13 +590,16 @@ Check if `<working_dir>/brand/design-system.md` exists.
 
 5. **## Motion** — follow the motion policy. If "Forbidden: spring bounces" → do not use spring animations.
 
-**If it does NOT exist**, fall back to today's behavior: read `## Design Direction` from the plan only. Do not block on its absence.
+**If it does NOT exist**, a new Product Experience Compiler create flow is
+`BLOCKED`. For an older app edited without compiler sidecars, use the existing
+plan design section and report `DONE_WITH_CONCERNS` so the orchestrator can
+offer migration.
 
 **Priority order (highest wins):**
 1. `brand/design-system.md` ## Negatives (absolute — never violated)
 2. `brand/design-system.md` ## Components, ## Palette, ## Typography
-3. Per-screen spec values from the plan
-4. `## Design Direction` bundle defaults
+3. Required Product Experience and screen-build-pack evidence
+4. Per-screen spec refinements from the plan
 5. `mobile-design-philosophy.md` defaults
 
 ## Step 1c — Translate Design Fields to Code Decisions
@@ -645,6 +718,11 @@ Apply to every `Button`, `Input`, `TextArea`, and grouped content `YStack` on th
 | functional | Standard Expo Router tab bar and stack header. No custom header components. `headerShown: true` with default styling. Chrome is invisible by design — users don't notice it |
 | atmospheric | Large title on tab-root screens: `headerLargeTitle: true` in `Stack.Screen options`. Stack headers use `headerTransparent: true` on detail screens. Pass `contentInsetAdjustmentBehavior="automatic"` to `ScrollView` so content scrolls under the large title |
 | cinematic | Detail screens: `headerShown: false` — build the back button inline in the screen. Tab bar hidden on detail screens: add `tabBarStyle: { display: 'none' }` to `Stack.Screen options`. Content fills to safe-area edges (`pt={insets.top}`). Navigation chrome must not compete with content |
+
+For a Drawer folder root, preserve the orchestrator-owned header and
+`DrawerToggleButton` regardless of navigation mood. Cinematic header hiding is
+allowed only on pushed child/detail screens that provide their own back
+affordance; it must never make a top-level Drawer destination unreachable.
 
 ---
 
@@ -948,8 +1026,15 @@ Before finishing the screen, mentally verify:
 16. **Copy tone** — if plan specifies a tone profile, all UI copy (empty states, errors, buttons, confirmations) matches that tone. Check examples in screen-templates.md "Copy Tone by Archetype" tables. No exclamation marks, no emoji, no "Submit"/"OK".
 17. **Section spacing** — content-heavy screens (detail, onboarding) use `gap="$8"` to `gap="$10"` between major sections per mobile-design-philosophy.md Section 11. Dense lists use tight spacing with separators.
 18. **Card borders** — cards use background fill difference (`bg="$color2"` on `$background`), NOT `borderWidth={1}` on everything. Borders are only for list item separators (`borderBottomWidth={0.5}`) and inputs. If every surface has a border, strip them and use fill contrast instead.
-19. **Status color saturation + contrast** — for non-field apps, status pills use desaturated colors (e.g., `bg="$green3" color="$green10"` not `bg="$green9" color="white"`). Never use white text on yellow/orange status fills (`bg="$yellow9" color="white"` fails often); use `bg="$yellow3" color="$yellow11"` / `bg="$orange3" color="$orange11"` or a much darker fill. Only field/ops apps keep full saturation for outdoor visibility, and even then the foreground/background pair must be AA.
-20. **Palette warmth** — if the plan specifies a custom palette or industry, surfaces and text must use the named palette tokens (not raw grays like `#f5f5f5`/`#1a1a1a`). Even default Tamagui tokens have hue tinting — use `$background`/`$color2`/`$color12`, never hardcoded hex gray.
+19. **Status color saturation + contrast** — follow the Product Experience
+    operating context and risk level. Use desaturated semantic pairs by
+    default (for example `bg="$green3" color="$green10"`), and use stronger
+    saturation only when the approved context requires high-visibility status
+    cues. Never use white text on yellow/orange fills; every pair must meet AA.
+20. **Palette warmth** — surfaces and text use the approved design-system
+    tokens, not raw grays or industry-derived colors. Even neutral Tamagui
+    tokens have hue tinting — use `$background`/`$color2`/`$color12`, never
+    hardcoded hex gray.
 21. **Dark mode quality** — dark mode is a designed inversion, not a raw swap. Background should be near-black with hue tint (not pure `#000`), text should be warm cream (not pure `#fff`), accent colors brighten, and shadows are replaced with surface elevation (`$color3` on `$color2`). See `color-palette-architecture.md` dark mode rules.
 22. **FlatList has `keyExtractor`** using a stable ID field, never the index.
 23. **Lists have pull-to-refresh** via `<RefreshControl />` calling the same loader as `useFocusEffect`.
@@ -965,6 +1050,7 @@ Before finishing the screen, mentally verify:
     ```
     Reject an undefined result before calling `Service.get`, `Service.update`, `Service.delete`, `Service.upload`, or `Service.download*`. `enabled: !!rawId`, a generic RFC UUID validator, and checks for only `'undefined'` / `'null'` are forbidden. Dataverse sequential GUIDs do not guarantee RFC version bits. Bug killed: valid Dataverse IDs rejected locally and HTTP 400 `table(undefined)` after create-then-navigate.
 25. **Scanner Dataverse writes are locked and reset on focus.** Any scanner callback that creates/updates Dataverse rows, uploads evidence, or navigates to a created record uses a `useRef` in-flight lock plus `paused` state, passes `paused` and `resetKey` to `BarcodeScannerView`, resets lock/paused/resetKey inside `useFocusEffect`, and routes manual code entry through the same guarded mutation. Bug killed: rapid QR callbacks creating duplicate or broken scan rows, and scanner stuck when returning from detail.
+25. **Live scanners require an explicit dedicated route contract.** A screen using `BarcodeScannerView` declares `Scanner surface: dedicated-full-screen`, Operational pattern `scan-geofence-gate`, Presentation `default` or `modal`, and is not `app/(app)/home.tsx`. Raw `CameraView` never appears in screen code. Bug killed: permission-heavy camera UI embedded in Home, details, dashboards, or partial sheets.
 25. **Camera evidence screens show a visible Take picture action.** Any evidence/photo capture flow has a first-class `Take picture` / `Take evidence photo` button wired to `takePhoto()` from `src/native/camera`. Gallery/upload/file picker actions may exist only as secondary siblings, never as the only visible capture path. Bug killed: evidence screen where camera capture exists technically but users cannot find it.
 26. **Create / update payloads NEVER include server-managed columns.** Forbidden keys in any `*Service.create({...})` or `*Service.update({...})` object literal: `ownerid`, `owneridtype`, `statecode`, `statuscode`, `importsequencenumber`, `overriddencreatedon`, `timezoneruleversionnumber`, `utcconversiontimezonecode`, `versionnumber`, `createdon`, `modifiedon`, `createdby`, `modifiedby`. If the generated model type marks them required, put the unavoidable cast inside the narrow write helper — never emit junk like `ownerid: ''` or `statecode: 0` to satisfy the type. Bug killed: every HTTP 400 on save.
 26. **Dates serialize via `.toISOString()`** to Dataverse and display via `Intl.DateTimeFormat(undefined, {...})` — never `.toString()` / `.toLocaleString()` without options.
@@ -974,8 +1060,15 @@ Before finishing the screen, mentally verify:
 30. **Skeleton wrapper matches populated wrapper** — same insets, padding, gap. No layout jump on data arrival.
 31. **Brand negatives** — if `brand/design-system.md` exists, re-read `## Negatives` and verify the screen violates NONE of them. This is a hard gate — do not return DONE if any negative is violated.
 32. **Brand token usage** — if `brand/design-system.md` exists, verify that NO raw hex values appear in the TSX. Tamagui layout primitives use `$token` syntax (`$surface0`, `$accentBase`, etc.). Raw React Native elements (e.g. `ActivityIndicator`, `StyleSheet`) use values from `useThemeTokens()` (e.g. `theme.accentBase`, `theme.surface0`) — never hardcode hex literals.
-33. **Domain differentiation** — could this screen belong to a different app unchanged? If yes, it is too generic. The row style, hero element, empty state copy, and visual emphasis must reflect the actual entity and domain. A status-stripe card on an inspection list looks different from a stat-card row on a project list — verify the entity-specific fields are surfaced prominently, not buried.
-34. **Dashboard/workflow patterns** — if the spec includes `Operational pattern: <key>`, look up the required layout pieces in [`shared/references/screen-templates.md`](../shared/references/screen-templates.md) under "Operational pattern keys" and implement that contract — NOT a generic CRUD shell. Same lookup applies to `Row style:` (List screens) and `Hero type:` (Detail screens). The reference is the source of truth for every catalogue key the spec emits; never improvise a different layout for a known key.
+33. **Product differentiation** — could this screen belong to a different app
+    unchanged? If yes, it is too generic. The hierarchy, first viewport,
+    content, empty state, primary action, trust evidence, and signature
+    interaction must satisfy this screen's build pack.
+34. **Journey/workflow patterns** — implement the Workflow Journey step and
+    build-pack composition, not a generic CRUD shell. If the pack references a
+    known interaction pattern, use the matching
+    [`shared/references/screen-templates.md`](../shared/references/screen-templates.md)
+    contract without replacing the product-specific hierarchy.
 35. **Color tokens are explicit** — grep your TSX before returning DONE: `grep -E '(color|bg|borderColor)="\$[a-z]+"' <file>` and verify EVERY match resolves to a token you saw in `tamagui.config.ts` at Step 2c. Any `$color` / `$bg` / `$primary` / `$text` (un-suffixed shorthand or stock guess) is an automatic fail — fix to a numbered (`$color12`) or brand-aliased (`$brandText`) token before returning. **This is the #1 silent-render bug in the plugin's history.**
 36. **Button themes are not semantic shortcuts.** Grep your TSX for `theme="active"`, `theme="primary"`, and similar generic theme names. If the theme name was not present in `tamagui.config.ts`, replace it with explicit tokens (`bg`, `color`, `borderColor`) or a shared component. Primary CTAs must never look disabled because a guessed theme fell back to a neutral surface.
 37. **No raw hex outside `brand/tokens.ts`** — grep `grep -E '#[0-9a-fA-F]{3,8}' <file>` should return zero matches in your screen file. If you find one: replace with the corresponding `$token` for Tamagui primitives, or with `theme.<tokenName>` for raw RN elements.
@@ -986,6 +1079,14 @@ Before finishing the screen, mentally verify:
 42. **Dynamic type and one-handed reach** — never set `allowFontScaling={false}` on readable text. Common actions stay reachable near the bottom or in native bottom chrome; top-right actions are secondary and have an accessible fallback.
 43. **Navigation/submit idempotency checks** — navigation handlers and submit handlers are duplicate-tap safe. Primary nav CTA uses `isNavigating` lock and submit CTA uses `isSubmitting`/`isPending` lock with disabled state + label swap; failed saves do not pop/replace.
 44. **Buttons never silently no-op.** If an action depends on required state (`record`, `id`, selected row, loaded service data), either guarantee that state exists before rendering the button, or render the button disabled with a visible reason. Do not write handlers like `if (!record) return;` on an enabled visible button.
+45. **Build-pack evidence is complete.** Check every required job, first
+    viewport element, hierarchy item, primary action, media role, trust signal,
+    signature interaction, and state from this screen's build pack. Missing
+    evidence is a generation failure even when TypeScript compiles.
+46. **Assumptions stay in bounds.** Sample and unapproved proposed data do not
+    control production actions, totals, eligibility, inventory, pricing,
+    delivery, compliance, or status. Production behavior is schema-backed or
+    explicitly approved.
 
 ### Operational UX rules (control density + trust)
 

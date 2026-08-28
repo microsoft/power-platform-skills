@@ -1,0 +1,299 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Product Experience Contract (UX DNA)",
+  "description": "Semantic description of who uses a mobile app, what they repeatedly need to accomplish, and the conditions of use. Authored by the planner as a structured sidecar; validated and hashed deterministically. Domain vocabulary names things but never selects design.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "contractType",
+    "productName",
+    "primaryUser",
+    "primaryGoal",
+    "primaryIntent",
+    "workflowShape",
+    "operatingContext",
+    "sessionPattern",
+    "informationDensity",
+    "interactionTempo",
+    "decisionRisk",
+    "contentEmphasis",
+    "collaborationMode",
+    "visualPersonality",
+    "mediaStrategy",
+    "accessibilityPriorities",
+    "firstViewport",
+    "signatureExperience",
+    "forbiddenDefaults",
+    "promptEvidence",
+    "confidence",
+    "assumptions",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractType": { "const": "product-experience" },
+    "productName": { "type": "string", "minLength": 2, "maxLength": 80 },
+    "domainVocabulary": {
+      "description": "Nouns and verbs the product should use in labels. Naming only: never an input to palette, typography, density, composition, or a design preset.",
+      "type": "array",
+      "maxItems": 25,
+      "items": { "type": "string", "minLength": 2, "maxLength": 60 },
+      "uniqueItems": true
+    },
+    "primaryUser": {
+      "type": "object",
+      "required": ["role", "proficiency", "situation"],
+      "properties": {
+        "role": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "proficiency": { "enum": ["first-time", "occasional", "practiced", "expert", "mixed"] },
+        "situation": { "type": "string", "minLength": 10, "maxLength": 240 },
+        "secondaryUsers": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "type": "string", "minLength": 3, "maxLength": 80 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "primaryGoal": { "type": "string", "minLength": 10, "maxLength": 240 },
+    "primaryIntent": {
+      "enum": ["discover", "decide", "transact", "capture", "monitor", "coordinate", "learn", "resolve", "create", "comply"]
+    },
+    "workflowShape": {
+      "enum": [
+        "single-step",
+        "linear-sequence",
+        "branching-sequence",
+        "hub-and-spoke",
+        "continuous-monitoring",
+        "exploratory-browse",
+        "queue-driven",
+        "cyclical-recurring"
+      ]
+    },
+    "operatingContext": {
+      "type": "object",
+      "required": ["environment", "connectivity", "interruptionLevel"],
+      "properties": {
+        "environment": {
+          "enum": ["seated-desk", "indoor-mobile", "field-outdoor", "in-vehicle", "on-the-floor", "at-home", "mixed"]
+        },
+        "connectivity": { "enum": ["always-online", "intermittent", "offline-first", "unknown"] },
+        "interruptionLevel": { "enum": ["low", "moderate", "high"] },
+        "handsAvailable": { "enum": ["two-hands", "one-hand", "gloved", "hands-busy"] },
+        "notes": { "type": "string", "maxLength": 240 }
+      },
+      "additionalProperties": false
+    },
+    "sessionPattern": {
+      "type": "object",
+      "required": ["frequency", "duration", "resumability"],
+      "properties": {
+        "frequency": { "enum": ["many-per-day", "daily", "weekly", "occasional", "one-off"] },
+        "duration": { "enum": ["seconds", "one-to-three-minutes", "five-to-fifteen-minutes", "extended"] },
+        "resumability": { "enum": ["must-resume", "helpful-to-resume", "not-needed"] }
+      },
+      "additionalProperties": false
+    },
+    "informationDensity": { "enum": ["sparse", "balanced", "dense"] },
+    "interactionTempo": { "enum": ["deliberate", "steady", "brisk", "rapid"] },
+    "decisionRisk": {
+      "type": "object",
+      "required": ["level"],
+      "properties": {
+        "level": { "enum": ["low", "moderate", "high", "critical"] },
+        "drivers": {
+          "type": "array",
+          "maxItems": 6,
+          "items": { "type": "string", "minLength": 4, "maxLength": 160 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "contentEmphasis": {
+      "type": "object",
+      "required": ["primary"],
+      "properties": {
+        "primary": { "$ref": "#/definitions/emphasisKind" },
+        "secondary": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "$ref": "#/definitions/emphasisKind" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "collaborationMode": {
+      "enum": ["solo", "hand-off", "shared-team", "supervised-approval", "public-community"]
+    },
+    "visualPersonality": {
+      "type": "object",
+      "required": ["tone", "expressiveness", "rationale"],
+      "properties": {
+        "tone": { "enum": ["quiet", "warm", "confident", "energetic", "playful", "precise", "editorial"] },
+        "expressiveness": { "enum": ["restrained", "moderate", "expressive"] },
+        "rationale": { "type": "string", "minLength": 20, "maxLength": 240 }
+      },
+      "additionalProperties": false
+    },
+    "mediaStrategy": {
+      "type": "object",
+      "required": ["necessity", "types", "capture", "fallback"],
+      "properties": {
+        "necessity": { "enum": ["essential", "supportive", "incidental", "none"] },
+        "types": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "enum": ["photo", "illustration", "video", "map", "chart", "avatar", "document-preview", "icon-only", "audio"]
+          },
+          "uniqueItems": true
+        },
+        "capture": { "enum": ["user-captured", "sourced", "generated", "none"] },
+        "fallback": { "type": "string", "minLength": 5, "maxLength": 200 }
+      },
+      "additionalProperties": false
+    },
+    "accessibilityPriorities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "enum": [
+          "large-touch-targets",
+          "high-contrast",
+          "glove-friendly",
+          "one-handed-reach",
+          "screen-reader-first",
+          "reduced-motion",
+          "sunlight-legibility",
+          "plain-language",
+          "color-independent-status",
+          "voice-input",
+          "captioned-media"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "firstViewport": {
+      "type": "object",
+      "required": ["focalQuestion", "regionOrder", "primaryAction"],
+      "properties": {
+        "focalQuestion": { "type": "string", "minLength": 10, "maxLength": 160 },
+        "regionOrder": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 6,
+          "items": {
+            "enum": ["context", "status", "focal-content", "primary-action", "supporting-content", "navigation", "alerts"]
+          },
+          "uniqueItems": true
+        },
+        "primaryAction": { "type": "string", "minLength": 3, "maxLength": 100 },
+        "promise": { "type": "string", "maxLength": 200 }
+      },
+      "additionalProperties": false
+    },
+    "signatureExperience": {
+      "type": "object",
+      "required": ["name", "description", "whyNotGeneric"],
+      "properties": {
+        "name": { "type": "string", "minLength": 3, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 20, "maxLength": 300 },
+        "whyNotGeneric": { "type": "string", "minLength": 20, "maxLength": 300 }
+      },
+      "additionalProperties": false
+    },
+    "forbiddenDefaults": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 5, "maxLength": 120 },
+      "uniqueItems": true
+    },
+    "promptEvidence": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "items": {
+          "type": "object",
+          "required": ["text", "source"],
+          "properties": {
+            "text": { "type": "string", "minLength": 3, "maxLength": 300 },
+            "source": { "enum": ["user-prompt", "clarifying-answer", "uploaded-reference", "existing-artifact"] },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "required": ["overall", "byDimension"],
+      "properties": {
+        "overall": { "enum": ["high", "medium", "low"] },
+        "byDimension": {
+          "type": "object",
+          "additionalProperties": { "enum": ["high", "medium", "low"] }
+        }
+      },
+      "additionalProperties": false
+    },
+    "assumptions": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["dimension", "statement", "classification"],
+        "properties": {
+          "dimension": { "type": "string", "minLength": 3, "maxLength": 60 },
+          "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
+          "classification": { "$ref": "#/definitions/dataClassification" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "source": { "enum": ["brief", "brief-plus-reference", "reference-override"] },
+    "referenceOverride": {
+      "type": "object",
+      "required": ["fidelity", "preservationIntent"],
+      "properties": {
+        "fidelity": { "enum": ["directional", "high", "strict-structural"] },
+        "preservationIntent": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 3, "maxLength": 120 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "emphasisKind": {
+      "enum": [
+        "imagery",
+        "quantitative-data",
+        "long-form-text",
+        "mixed-media",
+        "map-spatial",
+        "schedule-temporal",
+        "conversation",
+        "form-entry",
+        "status-signals"
+      ]
+    },
+    "dataClassification": {
+      "enum": ["safe-presentation", "sample", "schema-backed", "proposed-requires-approval"]
+    }
+  },
+  "additionalProperties": false
+}

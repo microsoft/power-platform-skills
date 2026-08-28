@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "provider": "Unsplash",
+  "license": "https://unsplash.com/license",
+  "rules": {
+    "allowedHost": "images.unsplash.com",
+    "fixedPhotoIdsOnly": true,
+    "allowRandomEndpoints": false,
+    "defaultWidth": 1200,
+    "defaultHeight": 900
+  },
+  "images": [
+    {
+      "id": "footwear-cobalt",
+      "tags": ["footwear", "shoe", "trainer", "product", "retail"],
+      "alt": "Bright athletic shoe on a clean background",
+      "cdnUrl": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1542291026-7eec264c27ff"
+    },
+    {
+      "id": "accessory-watch",
+      "tags": ["watch", "accessory", "product", "retail", "catalog"],
+      "alt": "Minimal wristwatch photographed as a product",
+      "cdnUrl": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1523275335684-37898b6baf30"
+    },
+    {
+      "id": "audio-headphones",
+      "tags": ["audio", "headphones", "electronics", "product", "retail"],
+      "alt": "Over-ear headphones on a bright surface",
+      "cdnUrl": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e"
+    },
+    {
+      "id": "apparel-rail",
+      "tags": ["apparel", "clothing", "fashion", "retail", "catalog"],
+      "alt": "Curated clothing collection on a retail rail",
+      "cdnUrl": "https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3"
+    },
+    {
+      "id": "food-table",
+      "tags": ["food", "meal", "restaurant", "hospitality", "catalog"],
+      "alt": "Colourful prepared dishes arranged on a table",
+      "cdnUrl": "https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1504674900247-0877df9cc836"
+    },
+    {
+      "id": "architecture-home",
+      "tags": ["property", "building", "architecture", "home", "site"],
+      "alt": "Modern building exterior in daylight",
+      "cdnUrl": "https://images.unsplash.com/photo-1487958449943-2429e8be8625?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1487958449943-2429e8be8625"
+    },
+    {
+      "id": "construction-site",
+      "tags": ["construction", "inspection", "site", "field", "safety"],
+      "alt": "Active construction site with structural framing",
+      "cdnUrl": "https://images.unsplash.com/photo-1504307651254-35680f356dfd?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1504307651254-35680f356dfd"
+    },
+    {
+      "id": "warehouse-logistics",
+      "tags": ["warehouse", "logistics", "inventory", "shipping", "operations"],
+      "alt": "Warehouse aisle prepared for logistics operations",
+      "cdnUrl": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d"
+    },
+    {
+      "id": "vehicle-detail",
+      "tags": ["vehicle", "automotive", "fleet", "asset", "transport"],
+      "alt": "Modern vehicle photographed from the front quarter",
+      "cdnUrl": "https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1492144534655-ae79c964c9d7"
+    },
+    {
+      "id": "learning-books",
+      "tags": ["learning", "education", "course", "books", "library"],
+      "alt": "Books arranged for study and learning",
+      "cdnUrl": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1497633762265-9d179a990aa6"
+    },
+    {
+      "id": "workspace-desk",
+      "tags": ["workspace", "office", "project", "productivity", "service"],
+      "alt": "Calm modern workspace with desk and natural light",
+      "cdnUrl": "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1497366754035-f200968a6e72"
+    },
+    {
+      "id": "finance-calculator",
+      "tags": ["finance", "budget", "expense", "accounting", "analytics"],
+      "alt": "Calculator and financial planning materials on a desk",
+      "cdnUrl": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=1200&h=900&q=82",
+      "source": "https://images.unsplash.com/photo-1554224155-8d04cb21cd6c"
+    }
+  ]
+}

@@ -1,0 +1,335 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Screen Build Pack Contract",
+  "description": "Per-screen implementation contract consumed by screen builders and the HTML experience preview. Binds to the experience, scope, and journey revisions it was compiled from.",
+  "type": "object",
+  "required": ["schemaVersion", "contractType", "experienceRevision", "scopeRevision", "journeyRevision", "packs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractType": { "const": "screen-build-pack" },
+    "experienceRevision": { "$ref": "#/definitions/revision" },
+    "scopeRevision": { "$ref": "#/definitions/revision" },
+    "journeyRevision": { "$ref": "#/definitions/revision" },
+    "packs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": [
+          "screenId",
+          "purpose",
+          "userQuestion",
+          "firstViewport",
+          "hierarchy",
+          "primaryActions",
+          "secondaryActions",
+          "trustSignals",
+          "decisionSupport",
+          "media",
+          "context",
+          "states",
+          "navigation",
+          "signatureInteraction",
+          "forbiddenDefaults",
+          "dataAssumptions",
+          "previewContent",
+          "composition"
+        ],
+        "properties": {
+          "screenId": { "$ref": "#/definitions/slug" },
+          "route": { "type": "string", "pattern": "^/" },
+          "purpose": { "type": "string", "minLength": 10, "maxLength": 240 },
+          "userQuestion": { "type": "string", "minLength": 10, "maxLength": 160 },
+          "firstViewport": {
+            "type": "object",
+            "required": ["regionOrder", "focalContent", "primaryAction"],
+            "properties": {
+              "regionOrder": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 6,
+                "items": {
+                  "enum": ["context", "status", "focal-content", "primary-action", "supporting-content", "navigation", "alerts"]
+                },
+                "uniqueItems": true
+              },
+              "focalContent": { "type": "string", "minLength": 5, "maxLength": 200 },
+              "primaryAction": { "type": "string", "minLength": 3, "maxLength": 100 }
+            },
+            "additionalProperties": false
+          },
+          "hierarchy": {
+            "type": "object",
+            "required": ["dominant", "supporting"],
+            "properties": {
+              "dominant": { "type": "string", "minLength": 3, "maxLength": 120 },
+              "supporting": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 6,
+                "items": { "type": "string", "minLength": 3, "maxLength": 120 },
+                "uniqueItems": true
+              },
+              "deprioritized": {
+                "type": "array",
+                "maxItems": 6,
+                "items": { "type": "string", "minLength": 3, "maxLength": 120 },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "primaryActions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": { "$ref": "#/definitions/action" }
+          },
+          "secondaryActions": { "type": "array", "maxItems": 6, "items": { "$ref": "#/definitions/action" } },
+          "trustSignals": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "required": ["label", "classification"],
+              "properties": {
+                "label": { "type": "string", "minLength": 3, "maxLength": 120 },
+                "classification": { "$ref": "#/definitions/dataClassification" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "decisionSupport": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "required": ["label", "classification"],
+              "properties": {
+                "label": { "type": "string", "minLength": 3, "maxLength": 120 },
+                "classification": { "$ref": "#/definitions/dataClassification" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "media": {
+            "type": "object",
+            "required": ["role"],
+            "properties": {
+              "role": { "enum": ["essential", "supportive", "incidental", "none"] },
+              "treatment": { "type": "string", "maxLength": 200 },
+              "source": { "enum": ["user-captured", "sourced", "generated", "none"] },
+              "fallback": { "type": "string", "maxLength": 200 }
+            },
+            "additionalProperties": false
+          },
+          "context": {
+            "type": "object",
+            "required": ["contextualData"],
+            "properties": {
+              "vocabulary": {
+                "type": "array",
+                "maxItems": 12,
+                "items": { "type": "string", "minLength": 2, "maxLength": 60 },
+                "uniqueItems": true
+              },
+              "contextualData": {
+                "type": "array",
+                "maxItems": 10,
+                "items": {
+                  "type": "object",
+                  "required": ["label", "classification"],
+                  "properties": {
+                    "label": { "type": "string", "minLength": 2, "maxLength": 120 },
+                    "classification": { "$ref": "#/definitions/dataClassification" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "states": { "$ref": "#/definitions/stateSet" },
+          "navigation": {
+            "type": "object",
+            "required": ["incoming", "outgoing"],
+            "properties": {
+              "incoming": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 2, "maxLength": 80 },
+                "uniqueItems": true
+              },
+              "outgoing": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "type": "string", "minLength": 2, "maxLength": 80 },
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
+          },
+          "signatureInteraction": {
+            "type": "object",
+            "required": ["name", "description"],
+            "properties": {
+              "name": { "type": "string", "minLength": 3, "maxLength": 80 },
+              "description": { "type": "string", "minLength": 15, "maxLength": 300 }
+            },
+            "additionalProperties": false
+          },
+          "forbiddenDefaults": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 5, "maxLength": 120 },
+            "uniqueItems": true
+          },
+          "dataAssumptions": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "required": ["statement", "classification"],
+              "properties": {
+                "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
+                "classification": { "$ref": "#/definitions/dataClassification" },
+                "productionCritical": { "type": "boolean" },
+                "approved": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "previewContent": {
+            "description": "Product-specific sample content used only by the pre-build HTML approval preview.",
+            "type": "object",
+            "required": ["headline", "supportingText"],
+            "properties": {
+              "eyebrow": { "type": "string", "minLength": 2, "maxLength": 80 },
+              "headline": { "type": "string", "minLength": 5, "maxLength": 140 },
+              "supportingText": { "type": "string", "minLength": 10, "maxLength": 240 },
+              "heroMediaLabel": { "type": "string", "minLength": 3, "maxLength": 100 },
+              "metrics": {
+                "type": "array",
+                "maxItems": 6,
+                "items": { "$ref": "#/definitions/previewPair" }
+              },
+              "records": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "required": ["title", "subtitle"],
+                  "properties": {
+                    "title": { "type": "string", "minLength": 2, "maxLength": 100 },
+                    "subtitle": { "type": "string", "minLength": 2, "maxLength": 140 },
+                    "meta": { "type": "string", "maxLength": 100 },
+                    "badge": { "type": "string", "maxLength": 50 },
+                    "mediaLabel": { "type": "string", "maxLength": 100 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "fields": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "required": ["label", "value"],
+                  "properties": {
+                    "label": { "type": "string", "minLength": 2, "maxLength": 80 },
+                    "value": { "type": "string", "minLength": 1, "maxLength": 120 },
+                    "hint": { "type": "string", "maxLength": 140 }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "summaryRows": {
+                "type": "array",
+                "maxItems": 8,
+                "items": { "$ref": "#/definitions/previewPair" }
+              }
+            },
+            "additionalProperties": false
+          },
+          "composition": {
+            "type": "object",
+            "required": ["kind", "rationale"],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "list",
+                  "detail",
+                  "create",
+                  "edit",
+                  "form",
+                  "discovery",
+                  "workflow-step",
+                  "overview",
+                  "queue",
+                  "feed",
+                  "map",
+                  "schedule",
+                  "conversation",
+                  "capture",
+                  "comparison",
+                  "confirmation",
+                  "settings"
+                ]
+              },
+              "rationale": { "type": "string", "minLength": 15, "maxLength": 300 },
+              "repeatJustification": {
+                "description": "Required when several screens intentionally share one composition signature.",
+                "type": "string",
+                "minLength": 20,
+                "maxLength": 300
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "definitions": {
+    "revision": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength": 2, "maxLength": 60 },
+    "dataClassification": {
+      "enum": ["safe-presentation", "sample", "schema-backed", "proposed-requires-approval"]
+    },
+    "action": {
+      "type": "object",
+      "required": ["label", "outcome"],
+      "properties": {
+        "label": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "outcome": { "type": "string", "minLength": 5, "maxLength": 200 },
+        "targetScreenId": { "$ref": "#/definitions/slug" }
+      },
+      "additionalProperties": false
+    },
+    "previewPair": {
+      "type": "object",
+      "required": ["label", "value"],
+      "properties": {
+        "label": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "value": { "type": "string", "minLength": 1, "maxLength": 100 }
+      },
+      "additionalProperties": false
+    },
+    "stateSet": {
+      "type": "object",
+      "required": ["loading", "empty", "error", "populated"],
+      "properties": {
+        "loading": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "empty": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "error": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "populated": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "offline": { "type": "string", "minLength": 3, "maxLength": 200 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

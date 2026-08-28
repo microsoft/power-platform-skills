@@ -150,9 +150,7 @@ The owning mobile workflow checks these rules explicitly with the contrast and s
 
 - Power Apps / Dynamics 365 / Microsoft-stack inspection apps
 - Field-ops apps where the demo audience is enterprise IT / stakeholders (not field workers)
-- Apps that need to look polished out-of-the-box for first-run impressions
 - Inspection / asset-tracking / equipment apps with status-driven workflows
-- ~70% of mobile-app traffic (the new MVP default)
 
 ## When this misfits
 
@@ -160,4 +158,5 @@ The owning mobile workflow checks these rules explicitly with the contrast and s
 - Consumer-facing marketplaces with photo content → use `--direction product` or a brand-specific spec
 - Long-form content / reading apps → use `--direction product` (editorial typography)
 - Apps that need celebration / playful motion → use `--direction product`
-- Aviation / airline apps → carve-out exists, use `--direction airline` (FlightCheck preset)
+- Aviation / airline apps → use an approved brand or a
+  product-experience-derived Inspection, SaaS, Product, or hybrid direction
