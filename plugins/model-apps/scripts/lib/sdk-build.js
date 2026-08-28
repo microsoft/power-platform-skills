@@ -1493,15 +1493,24 @@ async function runSdkBuild(spec, opts = {}) {
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
 
-        // DE-DUPLICATE. The SDK tries the supported bound member first and falls back to a classic
-        // `workflows` row on a qualifying 400 — a design that assumes the 400 means "nothing was
-        // written". LIVE-MEASURED, that assumption does not hold: the platform commits the row and
-        // THEN faults generating its UiData, so the fallback writes a SECOND copy of the same rule.
-        // Both end up Active, and two identical rules fire on the table.
+        // DE-DUPLICATE — belt-and-braces now that the SDK fixes this at source.
         //
-        // Observed as two rows ~5s apart in a single run, one with a server-assigned id and one with
-        // the client-generated id the classic POST supplies. Tracking:
+        // The SDK tries the supported bound member first and falls back to a classic `workflows` row
+        // on a qualifying 400. That fallback USED to assume the 400 meant "nothing was written";
+        // live measurement showed the platform commits the row and THEN faults generating its
+        // UiData, so the fallback wrote a SECOND copy and both fired. Observed as two rows ~5s apart
+        // in one run, one server-assigned and one carrying the client-generated id.
+        //
+        // Fixed upstream and vendored here: on the qualifying 400 the SDK now probes for the
+        // committed row and DELETES it before writing its own, failing closed if the probe is
+        // indeterminate. Live-verified against the org that originally reproduced the bug —
+        // one authored rule now yields exactly one row.
         // https://github.com/microsoft/power-platform-skills/issues/482
+        //
+        // This sweep is KEPT because it covers what the SDK fix cannot: duplicates left on the org
+        // by an EARLIER build (those rows are already committed and often refuse both deactivate and
+        // delete), and any future path that reintroduces a second write. With the fix in place it
+        // finds nothing on a clean org, so it costs one query.
         //
         // Scope is deliberately tight: only rules matching THIS rule's exact name and entity, and
         // only ones that are not the id the push returned. That cannot touch a rule this build did

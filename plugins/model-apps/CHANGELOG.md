@@ -58,6 +58,10 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   version is available, with the update command for your host.
 
 ### Fixed
+- **Business rules are no longer written twice (#482).** The platform commits the workflow row and
+  only then faults generating its UiData, so the SDK's fallback used to write a second copy — both
+  Active, both firing. The re-vendored SDK removes the committed row before writing its own; the
+  plugin keeps a de-duplication sweep for duplicates an earlier build already left behind.
 - **AI preflight no longer reports a running feature as disabled.** The readiness gate and a
   feature's actual setting are different rows, so a gate reading off did not mean the feature was
   off — NL search and NL charts were reported as unavailable while both were in effect. Preflight now

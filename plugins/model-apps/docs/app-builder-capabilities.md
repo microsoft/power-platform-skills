@@ -42,6 +42,12 @@ apart deliberately.
   is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
   rule naming a column that does not exist is rejected up front rather than deploying and never firing.
 - Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
+- **Deployed exactly once.** The platform commits the workflow row and only then faults generating
+  its UiData, so an earlier SDK fallback wrote a second copy — both Active, both firing. The
+  vendored SDK now removes the committed row before writing its own; live-verified on the org that
+  originally reproduced it (one authored rule → one row). The build keeps a de-duplication sweep for
+  duplicates a previous build already left behind, since those often refuse both deactivate and
+  delete.
 - Live-verified end to end through the App Spec: rules authored from `businessRules[]` deployed,
   activated, and the platform's own generated `clientdata` named the authored columns.
 

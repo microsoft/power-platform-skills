@@ -286,3 +286,49 @@ test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', 
   assert.strictEqual(gateMap.formFill, appMap.formFill);
   assert.strictEqual(gateMap.m365, appMap.m365);
 });
+
+// ---------------------------------------------------------------------------------------------
+// 4. The #482 double-write fix, pinned against the bundle.
+//
+// The platform COMMITS the workflow row and only then faults generating its UiData, raising the
+// qualifying 400. The old bundle treated that status as "nothing was written" and its fallback
+// wrote a SECOND copy — measured live as 4 rows for 2 authored rules, both Active, both firing.
+//
+// The fix probes for the committed row on that 400 and DELETES it before writing its own. Pinning
+// it here because a future re-vendor that loses this reverts to silently duplicating every rule,
+// and the resulting rows are not always deletable afterwards.
+test('REAL BUNDLE: a qualifying 400 makes the SDK remove the committed row before the classic write', async () => {
+  const COMMITTED = '77777777-7777-7777-7777-777777777777';
+  const { sdk, calls } = sdkWith({
+    // The bound member faults AFTER committing.
+    post: (url) => (/CreateProcessWithWfomJson/i.test(url)
+      ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'Error generating UiData for workflow' } } }
+      : { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} }),
+    // The probe for the orphan finds exactly one candidate.
+    get: (url) => (/workflows\?/i.test(String(url))
+      ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }] } }
+      : { status: 200, headers: {}, body: { value: [] } }),
+  });
+
+  const art = sdk.createArtifact('businessRule', {
+    name: 'Dup Guard', entityLogicalName: 'account', scope: 'Entity', status: 'Draft',
+  });
+  await sdk.updateElement('businessRule', art.id, '/rootCondition', {
+    id: 'root', logicalOperator: 'And',
+    clauses: [{ id: 'c1', field: 'name', operator: 'Equals', valueType: 'Value', value: 'x', valueWorkflowType: 'String' }],
+    trueBranch: [{ id: 'a1', type: 'SetVisibility', field: 'fax', visible: false }],
+  });
+  const res = await sdk.pushArtifact('businessRule', art.id);
+  assert.strictEqual(res.saved, true, 'the fallback still succeeds');
+
+  // The committed orphan must be DELETED — not adopted. Its content is unverified (the fault
+  // happened while generating UiData), so promoting it would activate a half-built definition.
+  const del = calls.find((c) => c.verb === 'DELETE' && String(c.url).includes(COMMITTED));
+  assert.ok(del, 'the committed row must be deleted; calls: ' + JSON.stringify(calls.map((c) => `${c.verb} ${c.url}`)));
+
+  // And the delete must precede the classic POST, or the row it removes could be the new one.
+  const delIdx = calls.indexOf(del);
+  const classicIdx = calls.findIndex((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url)));
+  assert.ok(classicIdx > -1, 'the classic fallback write must still happen');
+  assert.ok(delIdx < classicIdx, 'the orphan is removed BEFORE the replacement is written');
+});
