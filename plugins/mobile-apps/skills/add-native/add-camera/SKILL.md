@@ -7,11 +7,11 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 **References:**
 
-- [dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../add-dataverse/references/dataverse-reference.md) — File/image column upload patterns (Step 7–8)
+- [dataverse-reference.md](${PLUGIN_ROOT}/skills/add-dataverse/references/dataverse-reference.md) — File/image column upload patterns (Step 7–8)
 
 # Add Camera
 
