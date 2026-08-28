@@ -502,7 +502,7 @@ Dataverse returns hex error codes alongside messages. The most common ones the a
 | `0x80040217` | Record not found (often a referenced lookup target) | Verify the GUID in the `@odata.bind` value exists. |
 | `0x8004F510` | "Resource not found for the segment" | Wrong entity set name in URL. Use the *plural* logical collection name (`cr123_projects`, not `cr123_project`). |
 
-For any error code not in this table, the message in `data.error.message` is usually self-explanatory — read it before guessing. If you need authoritative docs for an unfamiliar code or a new behavior, query the `microsoft-learn` MCP server (see [`shared/shared-instructions.md`](../../../shared/shared-instructions.md#microsoft-learn-mcp-authoritative-microsoft-docs)).
+For any error code not in this table, the message in `data.error.message` is usually self-explanatory — read it before guessing. If you need authoritative docs for an unfamiliar code or a new behavior, query the `microsoft-learn` MCP server (see [`shared/shared-instructions-docs.md`](../../../shared/shared-instructions-docs.md)).
 
 ## Column Type Quick Reference
 

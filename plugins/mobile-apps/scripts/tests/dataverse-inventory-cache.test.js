@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  DEFAULT_TTL_MS,
   invalidateInventoryCache,
   readInventoryCache,
   writeInventoryCache,
@@ -15,6 +16,10 @@ const {
   cacheablePlanningInventory,
   createSnapshot,
 } = require('../create-dataverse-snapshot');
+
+test('inventory cache defaults to thirty minutes', () => {
+  assert.equal(DEFAULT_TTL_MS, 30 * 60 * 1000);
+});
 
 const context = {
   environmentUrl: 'https://example.crm.dynamics.com/',
@@ -159,6 +164,13 @@ test('execution reconciliation explicitly bypasses the planning inventory cache'
   const source = fs.readFileSync(path.resolve(__dirname, '..', 'create-dataverse-snapshot.js'), 'utf8');
   assert.match(source, /inventoryCachePath && !baseSnapshot && !args\['reconcile-exact'\]/);
   assert.match(source, /if \(inventoryCachePath && !baseSnapshot && !args\['reconcile-exact'\] && !cacheRead\.hit\)/);
+});
+
+test('refresh invalidates the cache before a planning read', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '..', 'create-dataverse-snapshot.js'), 'utf8');
+  assert.match(source, /if \(args\.refresh && inventoryCachePath\)/);
+  assert.match(source, /invalidateInventoryCache\(inventoryCachePath\)/);
+  assert.match(source, /refreshed: Boolean\(args\.refresh\)/);
 });
 
 test('cache candidates exclude non-customizable exact-name additions', () => {

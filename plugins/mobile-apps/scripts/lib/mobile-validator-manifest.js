@@ -25,6 +25,7 @@ const VALIDATORS = [
   { script: 'validate-package-deps.js', appliesTo: (filePath) => path.basename(filePath) === 'package.json' },
   { script: 'validate-icon-imports.js', appliesTo: (filePath) => hasExtension(filePath, SOURCE_EXTENSIONS) },
   { script: 'validate-connector-first.js', appliesTo: (filePath) => hasExtension(filePath, SOURCE_EXTENSIONS) },
+  { script: 'validate-mobile-code-idioms.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-dataverse-payload.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-dataverse-heavy-lists.js', appliesTo: (filePath) => hasExtension(filePath, TYPESCRIPT_EXTENSIONS) },
   { script: 'validate-navigation-idempotency.js', appliesTo: (filePath) => path.extname(filePath).toLowerCase() === '.tsx' },

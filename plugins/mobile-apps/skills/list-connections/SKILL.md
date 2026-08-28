@@ -6,7 +6,7 @@ allowed-tools: Bash
 model: haiku
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — cross-cutting concerns (Windows CLI compatibility, memory bank, etc.).
+**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — mandatory safety, environment, failure, and execution guardrails.
 
 # List Connections
 

@@ -85,6 +85,7 @@
   },
   "devDependencies": {
     "@babel/core": "7.29.6",
+    "@microsoft/power-apps-cli": "0.13.0",
     "@tamagui/babel-plugin": "2.4.5",
     "@types/react": "19.2.14",
     "babel-preset-expo": "55.0.18",

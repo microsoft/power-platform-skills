@@ -113,7 +113,12 @@ test('planning timing summary keeps outer wall, model, and approval durations se
       metadataCandidateSelection: { history: [{ durationMs: 3 }] },
       metadataDetailLoading: { history: [{ durationMs: 40 }] },
       metadataExpansion: { history: [{ durationMs: 10 }] },
-      nativePlanner: { retryCount: 1, needsContextCount: 1, history: [{ durationMs: 100 }] },
+      nativePlanner: {
+        status: 'failed',
+        retryCount: 1,
+        needsContextCount: 1,
+        history: [{ durationMs: 100 }],
+      },
       modelArchitect: { history: [{ durationMs: 50 }] },
       screenPlanner: { history: [{ durationMs: 25 }, { durationMs: 30 }] },
       artifactValidation: { history: [{ durationMs: 2 }] },
@@ -126,13 +131,66 @@ test('planning timing summary keeps outer wall, model, and approval durations se
     dataverseMetadataNetworkMs: 70,
     localDeterministicProcessingMs: 5,
     outerPlannerWallMs: 100,
+    nativePlannerStatus: 'failed',
+    nativePlannerApprovalWaitingMs: 0,
     modelArchitectMs: 50,
     screenPlannerMs: 55,
     planRevisionMs: 0,
+    postPlannerModelArchitectMs: 0,
+    postPlannerScreenPlannerMs: 0,
+    postPlannerRevisionMs: 0,
     userApprovalWaitingMs: 60,
     retries: { nativePlanner: 1 },
     needsContext: { nativePlanner: 1 },
   });
+});
+
+test('planning timing separates nested planner work from post-failure fallback work', () => {
+  const artifact = {
+    schemaVersion: 1,
+    stages: {
+      nativePlanner: {
+        status: 'failed',
+        history: [{
+          startedAt: '2026-08-28T00:00:00.000Z',
+          completedAt: '2026-08-28T00:00:01.000Z',
+          durationMs: 1000,
+        }],
+      },
+      modelArchitect: {
+        history: [
+          {
+            startedAt: '2026-08-28T00:00:00.100Z',
+            completedAt: '2026-08-28T00:00:00.500Z',
+            durationMs: 400,
+          },
+          {
+            startedAt: '2026-08-28T00:00:01.100Z',
+            completedAt: '2026-08-28T00:00:01.300Z',
+            durationMs: 200,
+          },
+        ],
+      },
+      screenPlanner: {
+        history: [{
+          startedAt: '2026-08-28T00:00:01.300Z',
+          completedAt: '2026-08-28T00:00:01.600Z',
+          durationMs: 300,
+        }],
+      },
+      userApproval: {
+        history: [{
+          startedAt: '2026-08-28T00:00:00.600Z',
+          completedAt: '2026-08-28T00:00:00.800Z',
+          durationMs: 200,
+        }],
+      },
+    },
+  };
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(summary.nativePlannerApprovalWaitingMs, 200);
+  assert.equal(summary.postPlannerModelArchitectMs, 200);
+  assert.equal(summary.postPlannerScreenPlannerMs, 300);
 });
 
 test('snapshot timings record initial stages and bounded expansion separately', () => {

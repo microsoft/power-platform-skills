@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
@@ -65,7 +65,7 @@ console.log(JSON.stringify({ platforms, hasNative }));
 STOP conditions:
 - No `power.config.json` → "Run `/create-mobile-app` first."
 - Neither `.datamodel-manifest.json` nor `docs/plan-artifacts/.datamodel-manifest.json` → "Run `/add-dataverse` first — offline profiles require a data model."
-- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)).
+- Environment resolution failure → standard auth recovery (`az login --tenant <env-tenant>` or provide environment URL directly; see [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)).
 - Web-only + user declines override → STOP. Print: `Offline profile creation skipped — no native target.`
 
 #### Step 1a — Environment consistency check

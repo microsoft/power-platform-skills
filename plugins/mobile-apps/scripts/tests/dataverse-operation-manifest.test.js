@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { composeCreateMobileAppWorkflow } = require('./workflow-test-helpers');
 
 const {
   bindContractToPlan,
@@ -1541,10 +1542,9 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
     /structured schema[\s\S]*regenerate the complete aliases[\s\S]*service-required names/,
   );
   assert.match(skill, /--approval-receipt <working_dir>\/\.tmp\/mobile-plan-status\.json/);
-  const createSkill = fs.readFileSync(path.join(
-    __dirname,
-    '../../skills/create-mobile-app/SKILL.md',
-  ), 'utf8');
+  const createSkill = composeCreateMobileAppWorkflow(
+    path.resolve(__dirname, '../..'),
+  );
   assert.match(
     createSkill,
     /foreground planning snapshot[\s\S]*never authorizes a write/,

@@ -73,6 +73,8 @@ test('shared components preserve token literals and accessible row selection sem
 test('template path aliases do not depend on deprecated baseUrl', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
   assert.ok(!Object.hasOwn(tsconfig.compilerOptions, 'baseUrl'));
+  assert.equal(tsconfig.compilerOptions.incremental, true);
+  assert.equal(tsconfig.compilerOptions.tsBuildInfoFile, '.tmp/tsc.tsbuildinfo');
   for (const alias of [
     '@/components', '@/components/*',
     '@/hooks', '@/hooks/*',
@@ -83,4 +85,10 @@ test('template path aliases do not depend on deprecated baseUrl', () => {
   ]) {
     assert.ok(tsconfig.compilerOptions.paths[alias], alias);
   }
+});
+
+test('template pins the Power Apps CLI version used by npx commands', () => {
+  const packageJson = JSON.parse(read('template/package.json'));
+  assert.equal(packageJson.dependencies['@microsoft/power-apps'], '1.2.7');
+  assert.equal(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.13.0');
 });

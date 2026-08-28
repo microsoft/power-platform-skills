@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { composeCreateMobileAppWorkflow } = require('./workflow-test-helpers');
 
 const {
   analyzeProposedNames,
@@ -1063,10 +1064,7 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
     path.join(pluginRoot, 'agents', 'native-app-planner.md'),
     'utf8',
   );
-  const createSkill = fs.readFileSync(
-    path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'),
-    'utf8',
-  );
+  const createSkill = composeCreateMobileAppWorkflow(pluginRoot);
   const snapshotScript = fs.readFileSync(
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
@@ -1109,6 +1107,7 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.doesNotMatch(createSkill, /legacy-unverified/);
   assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
   assert.match(createSkill, /BLOCKED: Dataverse planning metadata unavailable for exact target decisions/);
-  assert.match(createSkill, /10–15 minute target/);
+  assert.match(createSkill, /planning-eta\.js/);
+  assert.match(createSkill, /measured p50/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

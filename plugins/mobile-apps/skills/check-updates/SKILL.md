@@ -3,10 +3,10 @@ name: check-updates
 description: Use when a Power Apps mobile project needs dependency updates or an npm audit review. Checks the mobile-app plugin first, then updates the native host, other Microsoft packages, and all remaining direct npm packages in order with validation and rollback.
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, AskUserQuestion
-model: opus
+model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
+**Shared instructions: [shared-instructions-core.md](../../shared/shared-instructions-core.md)** — read the guardrails only. This skill intentionally does not load the memory topic because it performs its own plugin check and must not create unrelated project state.
 
 # Check Updates (`/check-updates`)
 

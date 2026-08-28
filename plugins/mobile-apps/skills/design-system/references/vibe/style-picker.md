@@ -1,6 +1,6 @@
 # Internal Style Picker
 
-**Shared instructions: [shared-instructions.md](../../../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](../../../../shared/shared-instructions-core.md)** — read first.
 
 A self-contained moodboard-before-build reference for `/design-system`. Three named directions, each anchored in real-world reference apps the user already knows. Output is a single HTML page with three phone-frame mockups of the same screen rendered three different ways — user picks one (or describes a hybrid), `/design-system` locks the choice into the design system, downstream agents cascade from it.
 

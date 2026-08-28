@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
 
 # Add Dataverse
 
@@ -1260,7 +1260,7 @@ After printing the summary, **offer one-click sample-data seeding** — but only
 - A valid operation manifest removes repeated agent reconciliation; it does not
   change Dataverse's serialized metadata-lock latency. Real matched A/B runs
   remain required before claiming an end-to-end timing range.
-- **When a Dataverse Web API behavior is uncertain (lookup write syntax, `$expand` nav property names, choice column shape, batch semantics, error format), query the `microsoft-learn` MCP server before guessing.** See [shared/shared-instructions.md → Microsoft Learn MCP](../../shared/shared-instructions.md#microsoft-learn-mcp-authoritative-microsoft-docs). Guessed Dataverse syntax silently 400s.
+- **When a Dataverse Web API behavior is uncertain (lookup write syntax, `$expand` nav property names, choice column shape, batch semantics, error format), query the `microsoft-learn` MCP server before guessing.** See [shared/shared-instructions-docs.md](../../shared/shared-instructions-docs.md). Guessed Dataverse syntax silently 400s.
 
 ## Reference
 

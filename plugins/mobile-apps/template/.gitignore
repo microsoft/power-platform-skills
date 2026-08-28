@@ -13,6 +13,7 @@ dist/
 dist-web/
 web-build/
 .tamagui/
+.tmp/tsc.tsbuildinfo
 
 # ── Local environment overrides ──────────────────────────────────────────────
 .env

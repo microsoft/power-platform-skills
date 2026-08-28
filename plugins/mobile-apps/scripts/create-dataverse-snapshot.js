@@ -10,6 +10,7 @@ const {
 } = require('./lib/dataverse-planning-telemetry');
 const {
   DEFAULT_TTL_MS,
+  invalidateInventoryCache,
   readInventoryCache,
   writeInventoryCache,
 } = require('./dataverse-inventory-cache');
@@ -2431,7 +2432,7 @@ async function main() {
       + '[--base-snapshot <existing-json>] [--reconcile-exact] [--progressive-detail] '
       + '[--combined-base-read] '
       + '[--read-concurrency <1-8>] [--inventory-cache <json>] '
-      + '[--inventory-cache-ttl-ms <number>] [--telemetry-output <json>] '
+      + '[--inventory-cache-ttl-ms <number>] [--refresh] [--telemetry-output <json>] '
       + '[--planning-timings-output <json>]\n',
     );
     process.exit(1);
@@ -2468,6 +2469,9 @@ async function main() {
     apiVersion: '9.2',
     inventorySchemaVersion: 3,
   };
+  if (args.refresh && inventoryCachePath) {
+    invalidateInventoryCache(inventoryCachePath);
+  }
   const cacheRead = inventoryCachePath && !baseSnapshot && !args['reconcile-exact']
     ? readInventoryCache(inventoryCachePath, cacheContext, { ttlMs: inventoryCacheTtlMs })
     : { hit: false, reason: 'not-applicable', inventory: null };
@@ -2576,6 +2580,7 @@ async function main() {
       hit: cacheRead.hit,
       reason: cacheRead.reason,
       ageMs: cacheRead.ageMs ?? null,
+      refreshed: Boolean(args.refresh),
     } : null,
     telemetryOutput,
   }, null, 2));

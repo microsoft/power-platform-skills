@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFe
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](../../shared/shared-instructions-core.md)** — read first.
 
 # Design System
 

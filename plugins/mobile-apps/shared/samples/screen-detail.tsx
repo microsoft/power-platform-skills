@@ -1,25 +1,42 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ScrollView } from 'react-native';
+import { Alert, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AlertDialog, Button, H2, Paragraph, Separator, XStack, YStack, Text } from 'tamagui';
 
 import { LoadingState, ErrorState, BottomActionBar, InfoRow } from '@/components';
-import { formatDate } from '@/utils';
+import { formatDate, normalizeDataverseGuid } from '@/utils';
 import { RecipesService } from '@/generated/services/RecipesService';
 
 export default function RecipeDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id } = useLocalSearchParams<{ id: string | string[] }>();
   const router = useRouter();
+  const routeId = Array.isArray(id) ? id[0] : id;
+  const recordId = normalizeDataverseGuid(routeId);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['recipe', id],
-    queryFn: () => RecipesService.get(id!),
-    enabled: !!id,
+    queryKey: ['recipe', recordId],
+    queryFn: async () => {
+      if (!recordId) throw new Error('Invalid recipe ID');
+      const result = await RecipesService.get(recordId);
+      if (!result.success) {
+        throw result.error instanceof Error ? result.error : new Error('Failed to load recipe');
+      }
+      return result.data;
+    },
+    enabled: !!recordId,
   });
 
-  const recipe = data?.data;
+  const recipe = data;
+
+  if (!recordId) {
+    return (
+      <SafeAreaView style={{ flex: 1 }}>
+        <ErrorState title="Invalid recipe" message="The recipe ID is not valid." />
+      </SafeAreaView>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -81,11 +98,11 @@ export default function RecipeDetailScreen() {
               flex={1}
               bg="$blue10"
               icon={<Ionicons name="create-outline" size={18} color="white" />}
-              onPress={() => router.push(`/recipes/${id}/edit`)}
+              onPress={() => router.push(`/recipes/${recordId}/edit`)}
             >
               <Button.Text color="$color1">Edit</Button.Text>
             </Button>
-            <DeleteButton id={id!} onDeleted={() => router.back()} />
+            <DeleteButton recordId={recordId} onDeleted={() => router.back()} />
           </XStack>
         </BottomActionBar>
       </YStack>
@@ -93,7 +110,7 @@ export default function RecipeDetailScreen() {
   );
 }
 
-function DeleteButton({ id, onDeleted }: { id: string; onDeleted: () => void }) {
+function DeleteButton({ recordId, onDeleted }: { recordId: string; onDeleted: () => void }) {
   return (
     <AlertDialog>
       <AlertDialog.Trigger asChild>
@@ -110,7 +127,17 @@ function DeleteButton({ id, onDeleted }: { id: string; onDeleted: () => void }) 
               <AlertDialog.Action asChild>
                 <Button
                   theme="red"
-                  onPress={async () => { await RecipesService.delete(id); onDeleted(); }}
+                  onPress={async () => {
+                    const result = await RecipesService.delete(recordId);
+                    if (!result.success) {
+                      Alert.alert(
+                        'Could not delete recipe',
+                        result.error instanceof Error ? result.error.message : 'Try again.',
+                      );
+                      return;
+                    }
+                    onDeleted();
+                  }}
                 >
                   Delete
                 </Button>

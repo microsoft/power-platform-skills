@@ -39,7 +39,7 @@ If `/add-native` adds `expo-camera`, the only changes that get committed are: `p
 | npm | `10.0.0` | `npm --version` | Expo install / lockfile v3 |
 | Expo CLI (via npx) | `0.21.0` | `npx expo --version` | SDK 55 prebuild support |
 | TypeScript (project-local) | `5.4.0` | `npx tsc --version` | Required by generated service types |
-| POSIX shell (Windows only) | bash 4+ / zsh 5+ | `echo $BASH_VERSION || echo $ZSH_VERSION` | Skills use `cp -R`, `rm -rf`, `mkdir -p`, `grep`, `sed`, `find`. Native PowerShell / cmd.exe lack these. Use **Git Bash** or **WSL** on Windows. See [shared-instructions.md → Shell Requirement](./shared-instructions.md#shell-requirement-windows-users). |
+| POSIX shell (Windows only) | bash 4+ / zsh 5+ | `echo $BASH_VERSION || echo $ZSH_VERSION` | Skills use `cp -R`, `rm -rf`, `mkdir -p`, `grep`, `sed`, `find`. Native PowerShell / cmd.exe lack these. Use **Git Bash** or **WSL** on Windows. See [shared-instructions-cli.md](./shared-instructions-cli.md). |
 
 ## Required only when the relevant skill runs
 
@@ -112,4 +112,3 @@ node -e "console.log(JSON.stringify(require('./app.json').expo, null, 2))" 2>/de
 - New skill needs a tool not listed → add it here, then reference from the skill (don't hard-code in the skill).
 - An SDK pin changes in [`plugins/mobile-apps/template/package.json`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template/package.json) → update the SDK table here.
 - A new Power Platform CLI feature requires a newer minimum → bump the table, surface a one-line warning in the affected skills.
-

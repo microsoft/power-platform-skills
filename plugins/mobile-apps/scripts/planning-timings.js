@@ -148,7 +148,47 @@ function stageDuration(artifact, stage) {
   );
 }
 
+function parsedInterval(attempt) {
+  const start = Date.parse(attempt.startedAt);
+  const end = Date.parse(attempt.completedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return { start, end };
+}
+
+function latestStageCompletion(artifact, stage) {
+  return (artifact.stages?.[stage]?.history || [])
+    .map(parsedInterval)
+    .filter(Boolean)
+    .reduce((latest, interval) => Math.max(latest, interval.end), -Infinity);
+}
+
+function stageDurationStartingAtOrAfter(artifact, stage, cutoff) {
+  if (!Number.isFinite(cutoff)) return 0;
+  return (artifact.stages?.[stage]?.history || []).reduce((total, attempt) => {
+    const interval = parsedInterval(attempt);
+    return interval && interval.start >= cutoff
+      ? total + (Number.isFinite(attempt.durationMs) ? attempt.durationMs : 0)
+      : total;
+  }, 0);
+}
+
+function stageOverlapDuration(artifact, stage, containerStage) {
+  const containers = (artifact.stages?.[containerStage]?.history || [])
+    .map(parsedInterval)
+    .filter(Boolean);
+  return (artifact.stages?.[stage]?.history || []).reduce((total, attempt) => {
+    const interval = parsedInterval(attempt);
+    if (!interval) return total;
+    return total + containers.reduce(
+      (overlap, container) => overlap
+        + Math.max(0, Math.min(interval.end, container.end) - Math.max(interval.start, container.start)),
+      0,
+    );
+  }, 0);
+}
+
 function summarizePlanningTimings(artifact) {
+  const plannerCompletion = latestStageCompletion(artifact, 'nativePlanner');
   return {
     environmentResolutionMs: stageDuration(artifact, 'environmentResolution'),
     publisherPrefixDetectionMs: stageDuration(artifact, 'publisherPrefixDetection'),
@@ -158,9 +198,30 @@ function summarizePlanningTimings(artifact) {
     localDeterministicProcessingMs: stageDuration(artifact, 'metadataCandidateSelection')
       + stageDuration(artifact, 'artifactValidation'),
     outerPlannerWallMs: stageDuration(artifact, 'nativePlanner'),
+    nativePlannerStatus: artifact.stages?.nativePlanner?.status || null,
+    nativePlannerApprovalWaitingMs: stageOverlapDuration(
+      artifact,
+      'userApproval',
+      'nativePlanner',
+    ),
     modelArchitectMs: stageDuration(artifact, 'modelArchitect'),
     screenPlannerMs: stageDuration(artifact, 'screenPlanner'),
     planRevisionMs: stageDuration(artifact, 'planRevision'),
+    postPlannerModelArchitectMs: stageDurationStartingAtOrAfter(
+      artifact,
+      'modelArchitect',
+      plannerCompletion,
+    ),
+    postPlannerScreenPlannerMs: stageDurationStartingAtOrAfter(
+      artifact,
+      'screenPlanner',
+      plannerCompletion,
+    ),
+    postPlannerRevisionMs: stageDurationStartingAtOrAfter(
+      artifact,
+      'planRevision',
+      plannerCompletion,
+    ),
     userApprovalWaitingMs: stageDuration(artifact, 'userApproval'),
     retries: Object.fromEntries(Object.entries(artifact.stages || {})
       .filter(([, value]) => Number(value.retryCount || 0) > 0)

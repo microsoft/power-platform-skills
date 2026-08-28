@@ -4,12 +4,10 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const test = require('node:test');
+const { composeCreateMobileAppWorkflow } = require('./workflow-test-helpers');
 
-const skillPath = path.resolve(
-  __dirname,
-  '../../skills/create-mobile-app/SKILL.md',
-);
-const skill = fs.readFileSync(skillPath, 'utf8');
+const pluginRoot = path.resolve(__dirname, '../..');
+const skill = composeCreateMobileAppWorkflow(pluginRoot);
 
 test('template preparation is delegated to the deterministic script', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');

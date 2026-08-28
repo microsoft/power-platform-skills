@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMo
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** — read first.
 
 **References:**
 
@@ -27,7 +27,7 @@ Two paths: **existing lists** (skip to Step 6) or **new lists** (full workflow).
 
 ### Step 1: Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions-memory.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-memory.md).
 
 Also confirm this is a mobile app:
 

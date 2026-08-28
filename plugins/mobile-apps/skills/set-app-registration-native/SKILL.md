@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](${PLUGIN_ROOT}/shared/shared-instructions-core.md)** — read first.
 
 # Set App Registration Native
 

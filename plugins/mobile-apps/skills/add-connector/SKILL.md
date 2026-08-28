@@ -6,7 +6,7 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, Skill
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** | **Connector reference: [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)** — read both first.
+**📋 Shared instructions: [shared-instructions-core.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)** | **Connector reference: [connector-reference.md](${CLAUDE_SKILL_DIR}/../../shared/connector-reference.md)** — read both first.
 
 # Add Connector (Generic)
 
@@ -27,7 +27,7 @@ The native host runtime (`@microsoft/power-apps-native-host`) handles connector 
 
 ### Step 1 — Check Memory Bank
 
-Check for `memory-bank.md` per [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md).
+Check for `memory-bank.md` per [shared-instructions-memory.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-memory.md).
 
 Also confirm we're inside a Power Apps mobile app:
 

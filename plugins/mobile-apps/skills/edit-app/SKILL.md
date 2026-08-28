@@ -6,13 +6,16 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](../../shared/shared-instructions-core.md)** — read first.
 
 # Edit App (`/edit-app`)
 
 Post-generation editor for an existing mobile app. `native-app-plan.md` remains the source of truth, but the default outcome is a fixed generated app, not a plan-only diff. After the user approves the plan delta, continue into Dataverse/native/design/screen mutations, run verification, update `memory-bank.md`, and regenerate the static preview when UI changed.
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
+
+`--builder-concurrency <1-10>` overrides the screen-builder wave cap. The
+non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 8.
 
 ## When to use
 
@@ -118,7 +121,7 @@ ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\
 find src/native -maxdepth 1 -type f -name '*.ts*' 2>/dev/null | sort
 ```
 
-Also read the relevant `native-app-plan.md` sections (`## Data Model`, `## Native Capabilities`, `## Design`, `## Screens`, and `## Generated Services` if present) plus the existing TSX for any candidate screen. If `brand/design-system.md` exists, read it before asking design/screen questions so the edit preserves product grammar, density, component rules, and negatives.
+Also read the relevant `native-app-plan.md` sections (`## Data Model`, `## Native Capabilities`, `## Design`, and `## Screens`), `.tmp/generated-services-snapshot.md` when present, plus the existing TSX for any candidate screen. A legacy `## Generated Services` plan section is informational only; the standalone snapshot is authoritative. If `brand/design-system.md` exists, read it before asking design/screen questions so the edit preserves product grammar, density, component rules, and negatives.
 
 Ask only for information that cannot be inferred from the app. If there is exactly one plausible screen/table/service, state the inferred choice in the mutation preview instead of asking. If there are multiple plausible choices, ask a small multiple-choice question with those real names.
 
@@ -289,14 +292,19 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 | JavaScript dependency | `screen-planner` + `shared/references/javascript-dependency-planning.md` | Explicit package requests or established JS libraries needed by edited screens |
 | Design | `/design-system` Step 9b | Token refresh, reskin, density/component rules |
 | Navigation | `/create-mobile-app` Step 10b | Changed tabs, stacks, route groups, modal/formSheet presentation |
-| Service snapshot | `/create-mobile-app` Step 10.7 | Refresh after any data source/schema change before builders run |
+| Service snapshot | `/create-mobile-app` Step 10.7 | Refresh `.tmp/generated-services-snapshot.md` after any data source/schema change before builders run; do not rewrite the approved plan |
 | Shared code + skeletons | `/create-mobile-app` Step 10.8 | New screens, changed data imports, new shared row/card/hooks |
 | Screen implementation | `/create-mobile-app` Step 11 | Only affected screens, via `mobile-app:screen-builder` waves |
 | Quality sweep | `/create-mobile-app` Step 11.4 | Changed screen files and route layouts |
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
-Before the first `Task`, run a silent preflight for the leaf agent you need (`mobile-app:data-model-architect`, `mobile-app:screen-planner`, or `mobile-app:screen-builder` preflight later). If the host cannot spawn agents, print once:
+Before the first real agent dispatch, read `memory-bank.md` `## Host
+Capabilities`. Reuse a result only when its host/runtime identifier and plugin
+version match and `checkedAt` is no older than 30 minutes. Treat legacy,
+expired, and mismatched entries as stale. Otherwise dispatch the actual
+required leaf agent; on an agent-routing/tool-surface failure, record the
+result with current scope metadata and print once:
 
 > "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
 
@@ -396,15 +404,31 @@ Run this after any data-source/schema/connector mutation and before any screen-b
 
 ```bash
 cd <working_dir>
-for svc in src/generated/services/*.ts; do
-  [ -e "$svc" ] || continue
-  name=$(basename "$svc" .ts)
-  methods=$(grep -oE 'static async [a-zA-Z_]+' "$svc" | sed 's/static async //' | tr '\n' ',' | sed 's/,$//')
-  echo "| \`$name\` | \`src/generated/services/$name.ts\` | $methods |"
-done
+SNAPSHOT=".tmp/generated-services-snapshot.md"
+mkdir -p .tmp
+{
+  echo "# Generated Services (snapshot at $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+  echo
+  echo "| Service | Path | Methods present |"
+  echo "|---|---|---|"
+  found=0
+  for svc in src/generated/services/*.ts; do
+    [ -e "$svc" ] || continue
+    found=1
+    name=$(basename "$svc" .ts)
+    methods=$(grep -oE 'static async [a-zA-Z_]+' "$svc" | sed 's/static async //' | tr '\n' ',' | sed 's/,$//')
+    echo "| \`$name\` | \`src/generated/services/$name.ts\` | $methods |"
+  done
+  if [ "$found" -eq 0 ]; then
+    echo
+    echo "No generated services are present."
+  fi
+} > "$SNAPSHOT"
 ```
 
-Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
+Refresh `.tmp/generated-services-snapshot.md` on every relevant edit run.
+Screen-builders must receive it as `generated_services_path` and treat it as
+authoritative. Do not rewrite the approved `native-app-plan.md`.
 
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 
@@ -438,7 +462,7 @@ Before spawning builders:
 
 - Update route layout files using the `/create-mobile-app` Step 10b layout rules if navigation changed.
 - Create missing route folders for new screens.
-- Refresh the `## Generated Services` table using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
+- Refresh `.tmp/generated-services-snapshot.md` using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
 - Generate or refresh app-specific shared code from `/create-mobile-app` Step 10.8a when two or more affected screens share an entity row/card, choice map, cursor hook, or save helper.
 - For brand-new screens, write typed skeleton files using `/create-mobile-app` Step 10.8b patterns before calling builders.
 - For existing screens, do not overwrite with skeletons. Pass the current file content and the change request to the builder in edit mode. If imports/data hooks changed, update them surgically before the builder fills or revises JSX.
@@ -469,11 +493,18 @@ npx tsc --noEmit
 
 If it fails, batch-fix layouts, route names, skeleton imports, generated-service names, shared exports, or hook signatures, then rerun once. Do not launch screen-builders from a broken shell.
 
-#### Step 6.1 — Screen-builder preflight + waves
+#### Step 6.1 — Screen-builder capability + waves
 
-Before the first wave, run a silent `Task` preflight for `mobile-app:screen-builder` using a no-op screen name. If unavailable, print once and build inline using `agents/screen-builder.md`; inline mode must satisfy the same quality rules.
+Do not run a no-op preflight. Reuse the cached `screen_builder` capability only
+when host/runtime, plugin version, and the 30-minute TTL match; otherwise
+attempt the first real builder wave. On an agent-routing/tool-surface failure,
+record `screen_builder: unavailable` with scope metadata, print once, and
+build inline using `agents/screen-builder.md`; inline mode must satisfy the
+same quality rules. Record a successful real dispatch with the same metadata.
 
-Batch affected screens in waves of up to 5. For each wave:
+Resolve `BUILDER_CONCURRENCY` from `--builder-concurrency`, then
+`MOBILE_APP_BUILDER_CONCURRENCY`, then `8`; reject values outside `1..10`.
+Batch affected screens using that cap. For each wave:
 
 1. Print the wave start: `Wave <N>/<W> starting: <screen names>`.
 2. Spawn all builders in one message so they can run in parallel.
@@ -485,7 +516,7 @@ Batch affected screens in waves of up to 5. For each wave:
 
 Do not launch wave N+1 until wave N is clean.
 
-Spawn `mobile-app:screen-builder` agents in waves of up to 5 screens. Prompt each builder with:
+Spawn `mobile-app:screen-builder` agents using the resolved wave cap. Prompt each builder with:
 
 ```text
 Follow screen-builder.md.
@@ -496,6 +527,7 @@ screen_name: <screen id>
 route: <route>
 target_file: <absolute path>
 plan_path: <absolute path>/native-app-plan.md
+generated_services_path: <absolute path>/.tmp/generated-services-snapshot.md
 current_file: <paste current file content if the file exists>
 
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.

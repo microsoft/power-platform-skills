@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
+**Shared instructions: [shared-instructions-core.md](../../shared/shared-instructions-core.md)** — read first.
 
 # Preview Screens
 
