@@ -153,7 +153,7 @@ async function hydrateSpec(read) {
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
     // grabbed the wrong one). Charts/forms/commands also need structured reads the SDK doesn't expose.
     // All four survive on the live app — a rebuild preserves them by discovery — but are absent from the
-    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-roadmap.
+    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-capabilities.
     charts: [],
     forms: [],
     commands: [],

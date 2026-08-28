@@ -16,7 +16,7 @@
 //
 // When you bump + re-vendor the SDK, run this first: a method the skill depends on that the
 // new bundle no longer exposes fails HERE (listing the exact names) instead of silently at
-// build time. Update the migration accordingly (see docs/app-builder-roadmap.md).
+// build time. Update the migration accordingly (see docs/app-builder-capabilities.md).
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');

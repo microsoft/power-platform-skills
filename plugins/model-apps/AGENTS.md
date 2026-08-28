@@ -44,7 +44,7 @@ able to tell what moved from the docs alone):
 |-----|---------------|--------------|
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
-| [`docs/app-builder-roadmap.md`](docs/app-builder-roadmap.md) | `/app-builder` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize an app-builder capability |
+| [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
@@ -279,8 +279,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
   `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
   the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. **ADO 6603388 (download) is still open**, and a live attempt to construct
-  the hidden component it describes did not succeed: pinning `task` via `AddAppComponents` with the
+  or edited in the maker. **Download does not recover an entity component that has no sitemap subarea**
+  (ADO 6603388), and a live attempt to construct the hidden component it describes did not succeed:
+  pinning `task` via `AddAppComponents` with the
   now-correct reference shape returned 204 but wrote no row, before or after publish. So the
   download-side fix cannot currently be verified end to end — do not implement it speculatively.
   The component read is best-effort: a failure degrades
@@ -440,7 +441,7 @@ feature-flags.json             ← Default-OFF feature flags (currently connecto
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
-  app-builder-roadmap.md       ← /app-builder roadmap / TODO (Complete + Pending by phase)
+  app-builder-capabilities.md       ← /app-builder capabilities (what ships today, with evidence)
   app-builder-design.md        ← /app-builder design record (Part I staged flow · Part II --changed-only)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)

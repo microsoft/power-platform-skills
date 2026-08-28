@@ -1470,7 +1470,7 @@ async function runSdkBuild(spec, opts = {}) {
         // (charts-phase addSolutionComponent) and shows on its table's chart pane. Preview limitation:
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
         // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
-        // it must be an explicit component). See docs/app-builder-roadmap.md.
+        // it must be an explicit component). See docs/app-builder-capabilities.md.
         // Imp6 (removal-gate safety) + C2 (page-backed deferral): write the existing app's sitemap here
         // ONLY when the pages phase will NOT run (so there is no removal gate to bypass) AND the spec has
         // no page subareas (a page-backed sitemap is always resolved in the finalizer). When has('pages')

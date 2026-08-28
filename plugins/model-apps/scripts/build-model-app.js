@@ -527,7 +527,7 @@ async function main() {
   }
   // #3 (track the diff): on a DRY-RUN, if a prior apply left a snapshot, report which phases changed
   // since — so a small edit is visibly "only pages changed", not a re-read of the whole plan. Advisory
-  // only (it does not yet gate --apply; see docs/app-builder-roadmap.md). Never fatal.
+  // only (it does not yet gate --apply; see docs/app-builder-capabilities.md). Never fatal.
   const lastAppliedPath = path.join(workspaceDir, 'last-applied.json');
   // #2 (content-aware diff): resolve a page codeFile / web-resource contentPath the SAME way the build
   // engine does — relative to the app folder (opts.appDir) — and return its bytes, or null when it can't

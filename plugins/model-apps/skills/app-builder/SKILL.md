@@ -55,7 +55,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
-- **App shell** — the app module + sitemap, with per-subarea icons
+- **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
+  `app.newLook: true` unless the user asks for the classic one; it is opt-in and best-effort, so a
+  tenant without the setting still gets a working app. `app.headerNavigationRefresh` controls the
+  **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
+  **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
   (the entity access each job needs, unioned into the role), so the app **opens for non-admins**.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
@@ -92,6 +96,13 @@ Rules:
 - **Every page in `pages[]` must be sitemap-placed** — validation rejects any page absent from the
   sitemap. A "detail" page that receives a caller-supplied id is a normal sitemap page; it reads its
   input via `pageInput?.data?.<field>`. Navigation-only (headless) pages are not supported.
+- **A page that declares `pageInput` MUST declare `directEntry`.** Because every page is
+  sitemap-placed, a detail page is also reachable straight from the app navigation with **no input**
+  — a state a user reaches by clicking. Say what happens then: `{ "behavior": "selector" }` shows a
+  picker and then the record, `{ "behavior": "emptyState" }` explains and renders nothing broken.
+  Prefer `selector` when the table is browsable; it is the more useful landing. Every key in
+  `pageInput.data` must also be produced by some page's `navigatesTo[].data`, or the generated page
+  reads a key nothing ever sets.
 - **Three-authority page identity** (build + download + verify all follow this): (1) **IDENTITY** —
   the durable `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own `pages[].pageId`
   outranks it for that rebuild. (2) **EXISTENCE** — env-wide `pac model genpage list` (crash-safe;
@@ -508,7 +519,7 @@ child view id. Each step emits `[n/total]`.
   apply a structural edit, `teardown --apply` then rebuild fresh.** `--verify` catches this: it
   checks **content** (a view's column set, relationship + command existence), so an unapplied edit
   surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
-  `docs/app-builder-roadmap.md`.
+  `docs/app-builder-capabilities.md`.
 - Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
@@ -524,6 +535,6 @@ child view id. Each step emits `[n/total]`.
   round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]`) incl.
   **flyout / split-button menus**; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`);
   web resources + form JS event handlers; sample data with **multi-parent `$parents`** +
-  **`statusReason`**. See [`docs/app-builder-roadmap.md`](../../docs/app-builder-roadmap.md) and
+  **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.
