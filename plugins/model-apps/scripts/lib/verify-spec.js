@@ -11,6 +11,7 @@ const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
+const { isVisualizationUnsupported } = require('./entity-provision.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -48,8 +49,10 @@ async function verifySpec(spec, read, opts = {}) {
           try {
             deployed = await read.columnVisualization(logical, String(c.schemaName).toLowerCase());
           } catch (err) {
-            const status = err && (err.statusCode || err.status);
-            if (status === 404) continue;
+            // Skip ONLY the "preview not provisioned here" case, matched on the server's
+            // segment-missing phrasing rather than on the status alone. A bare `status === 404`
+            // test also swallowed a row-level 404, turning a real divergence into silence.
+            if (isVisualizationUnsupported(err)) continue;
             throw err;
           }
           add('column-visualization', name, deployed === c.visualization,
@@ -135,6 +138,45 @@ async function verifySpec(spec, read, opts = {}) {
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+  }
+
+  // Business rules. A rule that EXISTS is not a rule that RUNS: a Draft (statecode 0) rule is inert,
+  // and a duplicate means the same logic fires twice. Both are states the BUILD can legitimately end
+  // in without failing — activation is best-effort, and the SDK's fallback can leave a duplicate it
+  // cannot remove (#482) — so the build warns and relies on verify to report the outcome. Without
+  // this block that promise was empty: a missing, inert, or duplicated rule still verified PASS.
+  //
+  // Reconciled on THREE axes, because each fails differently and silently:
+  //   existence   — the rule never built at all
+  //   cardinality — more than one row for the same (entity, name) fires the logic repeatedly
+  //   state       — deployed Draft when the spec asked for Active (or the reverse)
+  for (const rule of spec.businessRules || []) {
+    const entityLogical = String(rule.entity).toLowerCase();
+    const name = `${entityLogical}.${rule.name}`;
+    let rows;
+    try {
+      // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to the entity as well as the
+      // name so a same-named rule on another table is never counted here.
+      rows = await read.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
+        top: 50,
+      });
+    } catch (e) {
+      // Fail CLOSED: a read that could not run must not read as "present and correct".
+      add('business-rule', name, false, `could not be read: ${e && e.message}`);
+      continue;
+    }
+    const list = rows || [];
+    if (!list.length) { add('business-rule', name, false, 'not deployed'); continue; }
+    if (list.length > 1) {
+      add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
+      continue;
+    }
+    const wantActive = (rule.status || 'Active') === 'Active';
+    const isActive = list[0].statecode === 1;
+    add('business-rule', name, wantActive === isActive,
+      wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the rule does not run' : 'deployed ACTIVE but the spec asks for Draft — the rule is running'));
   }
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea

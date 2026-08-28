@@ -204,8 +204,16 @@ function isAlreadyExists(err) {
 function isVisualizationUnsupported(err) {
   if (!err) return false;
   const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
+  if (status !== 404) return false;
   const msg = String((err && err.message) || '');
-  return status === 404 && /controlconfiguration/i.test(msg);
+  // Match the SEGMENT-missing phrasing specifically, not merely the word "controlconfigurations".
+  // The SDK's message embeds the full request URL, which ALWAYS contains that word — so a plain
+  // substring test would also swallow a row-level 404 (e.g. `controlconfigurations(<id>)` deleted
+  // concurrently), silently reporting "preview unavailable" and leaving the renderer unset on an
+  // org that supports it. The server's actual response when the table is absent is:
+  //   {"error":{"code":"0x80060888","message":"Resource not found for the segment
+  //    'controlconfigurations'."}}
+  return /not found for the segment\s+'?controlconfigurations/i.test(msg);
 }
 
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which

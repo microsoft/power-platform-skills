@@ -1454,21 +1454,28 @@ async function runSdkBuild(spec, opts = {}) {
         // rebuild. So reconcile the one thing that is cheap and safe to converge — its state.
         const wantActive = (rule.status || 'Active') === 'Active';
         const isActive = existing[0].statecode === 1;
-        if (wantActive && !isActive) {
+        if (wantActive !== isActive) {
+          // Converge in BOTH directions. Activating a Draft rule was handled from the start; the
+          // reverse was not, so a spec changed to `status: "Draft"` left the deployed rule ACTIVE and
+          // still firing — a rebuild that silently ignores the one property it claims to reconcile.
+          //
           // Best-effort, NOT a build halt. A rule can be wedged in a state where the platform refuses
           // both activation and deletion ("Invalid operation - You cannot activate or deactivate this
           // business rule") — live-observed on a row the SDK's bound member left behind after faulting
           // during UiData generation (#482). Failing the phase there would make one broken pre-existing
           // rule block the whole app from building, which is worse than an inert rule. The warning
-          // says so, and `--verify` reports the rule as not active.
+          // says so, and `--verify` reports the rule's real state (see the business-rule block in
+          // verify-spec.js).
+          const target = wantActive ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 };
+          const verb = wantActive ? 'activated' : 'deactivated';
           try {
-            await provision.updateRecord('workflow', existingId, { statecode: 1, statuscode: 2 });
-            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (existed in Draft — activated)`);
+            await provision.updateRecord('workflow', existingId, target);
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (existed in the wrong state — ${verb})`);
           } catch (e) {
             if (typeof opts.warn === 'function') {
-              opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but is DRAFT and could not be activated (${e && e.message}). It will not run. Delete it and rebuild to recreate it cleanly.`);
+              opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but could not be ${verb} (${e && e.message}). It is ${isActive ? 'still running' : 'inert'}. Delete it and rebuild to recreate it cleanly.`);
             }
-            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists but is DRAFT — could not activate)`);
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists but could not be ${verb})`);
           }
         } else {
           runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);

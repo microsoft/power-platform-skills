@@ -190,3 +190,89 @@ test('REAL BUNDLE: the mapped rule compiles to XAML naming the authored columns'
   assert.match(classic.body.xaml, /new_status/, 'the condition column reaches the compiled XAML');
   assert.match(classic.body.xaml, /new_notes/, 'the action column reaches the compiled XAML');
 });
+
+// --- peer-review findings: verified and fixed ---------------------------------------------------
+
+test('dataType mirrors the compiler literal-type map exactly (no DateTime)', () => {
+  // The bundle's literal table is the authority. `DateTime` used to be accepted here and does NOT
+  // exist there, so such a spec validated and then threw from INSIDE the push — the worst place,
+  // because the bound member may already have committed a workflow row (#482), leaving an orphan
+  // behind a "failed" build.
+  const bundle = require('node:fs').readFileSync(BUNDLE, 'utf8');
+  const i = bundle.indexOf('Picklist:{propertyType:"OptionSetValue"');
+  assert.ok(i > 0, 'the literal-type map must be present in the vendored bundle');
+  const seg = bundle.slice(i, i + 1200);
+  const sdkTypes = [...seg.matchAll(/(\w+):\{propertyType/g)].map((m) => m[1]);
+  assert.ok(!sdkTypes.includes('DateTime'), 'guard assumes the compiler has no DateTime literal');
+  const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
+  assert.deepStrictEqual([...BUSINESS_RULE_DATA_TYPES].sort(), [...sdkTypes].sort());
+});
+
+test('a DateTime dataType is rejected at the spec gate, not mid-build', () => {
+  const res = validateAppSpec(specWith([{
+    name: 'R', entity: 'new_ticket',
+    conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'DateTime' }],
+    actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }],
+  }]));
+  assert.ok(res.errors.some((e) => /dataType/i.test(e) && /DateTime/.test(e)), `expected a dataType error, got ${JSON.stringify(res.errors)}`);
+});
+
+// --- verify reconciles business rules (previously: no checks at all) ----------------------------
+
+const { verifySpec } = require('../lib/verify-spec.js');
+
+function ruleSpec(status) {
+  const s = specWith([{
+    name: 'Lock when closed', entity: 'new_ticket',
+    conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }],
+    actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }],
+    ...(status ? { status } : {}),
+  }]);
+  return s;
+}
+const baseReader = (workflows) => ({
+  findTable: async () => ({ logicalName: 'new_ticket' }),
+  findColumns: async () => [{ logicalName: 'new_status' }, { logicalName: 'new_notes' }, { logicalName: 'new_owner' }],
+  queryRecords: async (entity) => (entity === 'workflow' ? workflows : []),
+  sitemapXml: async () => '',
+});
+const ruleCheck = (r) => r.checks.find((c) => c.kind === 'business-rule');
+
+test('verify PASSES an Active rule the spec wants Active', async () => {
+  const r = await verifySpec(ruleSpec(), baseReader([{ workflowid: 'w1', statecode: 1 }]));
+  assert.strictEqual(ruleCheck(r).present, true);
+});
+
+test('verify FAILS a rule that never deployed', async () => {
+  const c = ruleCheck(await verifySpec(ruleSpec(), baseReader([])));
+  assert.strictEqual(c.present, false);
+  assert.match(c.detail, /not deployed/);
+});
+
+test('verify FAILS a rule deployed as Draft — "exists" is not "runs"', async () => {
+  const c = ruleCheck(await verifySpec(ruleSpec(), baseReader([{ workflowid: 'w1', statecode: 0 }])));
+  assert.strictEqual(c.present, false);
+  assert.match(c.detail, /DRAFT/);
+});
+
+test('verify FAILS duplicates — the #482 residue the build cannot always remove', async () => {
+  const c = ruleCheck(await verifySpec(ruleSpec(), baseReader([{ workflowid: 'w1', statecode: 1 }, { workflowid: 'w2', statecode: 1 }])));
+  assert.strictEqual(c.present, false);
+  assert.match(c.detail, /2 rules share this name/);
+});
+
+test('verify FAILS an ACTIVE rule the spec asks to be Draft', async () => {
+  const c = ruleCheck(await verifySpec(ruleSpec('Draft'), baseReader([{ workflowid: 'w1', statecode: 1 }])));
+  assert.strictEqual(c.present, false);
+  assert.match(c.detail, /running/);
+});
+
+test('verify fails CLOSED when the workflow read itself errors', async () => {
+  // "Could not look" must never read as "present and correct".
+  const read = Object.assign(baseReader([]), {
+    queryRecords: async (entity) => { if (entity === 'workflow') throw new Error('HTTP 401'); return []; },
+  });
+  const c = ruleCheck(await verifySpec(ruleSpec(), read));
+  assert.strictEqual(c.present, false);
+  assert.match(c.detail, /could not be read/);
+});

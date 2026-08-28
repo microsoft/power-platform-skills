@@ -408,7 +408,14 @@ const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'S
 // `valueWorkflowType` in SDK terms: how the platform should interpret the literal. Named `dataType`
 // in the App Spec because `valueType` in the SDK means something else (Value vs Field vs Lookup),
 // and only `Value` is supported — so exposing that name would invite a distinction authors cannot use.
-const BUSINESS_RULE_DATA_TYPES = ['String', 'Picklist', 'Boolean', 'Integer', 'Decimal', 'Money', 'DateTime', 'Memo'];
+//
+// This list MIRRORS the compiler's literal-type map exactly (the `Q5`/type table in the vendored
+// bundle). It previously included `DateTime`, which the compiler does NOT have: such a spec passed
+// validation and then threw a ValidationError from inside the push — the worst place for it, because
+// the bound member may already have committed a workflow row (#482), leaving an orphan behind a
+// "failed" build. `column-visualization`-style drift protection is in business-rules.test.js, which
+// pins this list against the bundle's own map.
+const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status', 'Boolean', 'Integer', 'Double', 'Decimal', 'Money'];
 // Only entity scope is supported. A form-scoped rule needs `processtriggerscope 1` plus a form id,
 // which cannot be resolved before the forms phase has run.
 const BUSINESS_RULE_SCOPES = ['Entity'];
@@ -805,7 +812,10 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`${label}: '${c.operator}' needs a value`);
       }
       if (c.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(c.dataType)) {
-        errors.push(`${label}: condition dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+        // Name the offending value: this list mirrors the compiler's literal-type map, and the most
+        // likely mistake is a plausible-but-absent type (DateTime is the classic one), so echoing
+        // what was written is what makes the message actionable.
+        errors.push(`${label}: condition dataType '${c.dataType}' is not supported — must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
       }
     }
 

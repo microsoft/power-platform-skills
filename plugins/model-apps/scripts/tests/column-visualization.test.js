@@ -81,6 +81,15 @@ test('the live-observed "preview absent" error is recognised as a SKIP', () => {
   const otherFourOhFour = new Error("Resource not found for the segment 'workflows'.");
   otherFourOhFour.statusCode = 404;
   assert.strictEqual(isVisualizationUnsupported(otherFourOhFour), false);
+
+  // A ROW-level 404 on the controlconfigurations SET must NOT be swallowed. The SDK's message
+  // always embeds the request URL, which contains the word "controlconfigurations" — so a plain
+  // substring test also matched a row that was deleted concurrently, silently reporting "preview
+  // unavailable" and leaving the renderer unset on an org that fully supports it. Only the
+  // segment-missing phrasing means the table is absent.
+  const rowGone = new Error("HTTP 404 from https://contoso.crm.dynamics.com/api/data/v9.0/controlconfigurations(00000000-0000-0000-0000-000000000001): The record does not exist.");
+  rowGone.statusCode = 404;
+  assert.strictEqual(isVisualizationUnsupported(rowGone), false);
 });
 
 test('an unknown visualization is rejected and names the column', () => {
