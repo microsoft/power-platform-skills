@@ -90,6 +90,32 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   now names the cause instead of dropping the subarea silently. Tracked upstream.
 
 ### Changed
+- **Business rules are authorable — the vendored SDK now compiles them to classic workflow XAML.**
+  They had been deferred because the `*ProcessWithWfomJson` bound members answer `400 0x80040216`
+  (a server-side plugin fault) on our tenants, so a rule could not be written at all. The SDK now
+  tries the supported member first and falls back to a plain `workflows` row carrying compiled WWF
+  XAML, which works. Live-verified end to end: the rule creates, activates (`statecode 1` /
+  `statuscode 2`), and the platform's **own generated** `clientdata` names the authored columns —
+  proving it compiled the XAML rather than merely storing it.
+
+  The fallback is deliberately narrow — only a `400` carrying `0x80040216`, or a `404` — because a
+  second write after an ambiguous failure could duplicate the rule. Every other status (401, 403,
+  429, 500, another 400 code) propagates, and a `412` is reported by value as `saved: false`. All
+  of it is pinned against the shipped bundle in `sdk-uptake-contract.test.js`.
+
+  **The App Spec does not expose business rules yet** — this release makes them possible, not
+  authorable from a spec. That surface is its own change.
+
+- **Column data visualizations for grids** (`getColumnVisualization` / `setColumnVisualization`)
+  are available on the vendored SDK (preview). Not yet surfaced in the App Spec.
+
+- **An app now requires an image icon.** `appmodule.webresourceid` is a required attribute, and the
+  SDK's auto-resolve demands an **image** web resource (PNG/JPG/GIF/ICO/SVG), failing with
+  `APP_ICON_UNRESOLVED` when the environment has none. It previously fell back to any unmanaged web
+  resource — which on an org whose images are all managed returned a **JavaScript** file, and the
+  platform then rejected the create with an opaque "dependent component WebResource does not exist".
+  No change for `/app-builder`: it always generates or resolves an icon and passes it explicitly.
+
 - **Vendored SDK re-taken from its merged `master`, and it now records its provenance.**
   `scripts/vendor/PROVENANCE.json` carries the upstream SHA, build mode and the bundle's own
   sha256, and the bundler **refuses** a stale, dirty or unidentifiable source. "Built from master"
