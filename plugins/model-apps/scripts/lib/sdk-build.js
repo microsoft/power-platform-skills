@@ -416,7 +416,7 @@ function viewDef(spec, v) {
       conditions.push(cond);
     }
   }
-  return { name: v.name, description: '', entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
+  return { name: v.name, description: v.description || '', entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
     filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
 }
@@ -568,7 +568,7 @@ function artifactIdentityQuery(type, def) {
 }
 
 function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
-  return { name: ch.name, description: '', entityLogicalName: entityLogical, chartType: ch.chartType, isDefault: false,
+  return { name: ch.name, description: ch.description || '', entityLogicalName: entityLogical, chartType: ch.chartType, isDefault: false,
     series: [{ attribute: `${entityLogical}id`, aggregate: ch.measure || 'count' }],
     categories: [{ attribute: String(ch.groupBy).toLowerCase() }], presentation: { showLegend: true, title: ch.name } };
 }
@@ -835,6 +835,8 @@ function businessRuleDef(rule) {
     name: rule.name,
     entityLogicalName: String(rule.entity).toLowerCase(),
     scope: rule.scope || 'Entity',
+    // Omitted when the spec has none, so a rebuild never blanks one added in the maker.
+    ...(rule.description ? { description: rule.description } : {}),
     // Draft unless the author asks for Active. A rule is inert until activated, so defaulting to
     // Active is what makes `businessRules[]` do something on the first build.
     status: rule.status || 'Active',
@@ -1095,7 +1097,10 @@ async function runSdkBuild(spec, opts = {}) {
   // coarse whole-tab insert is the adapter-blessed path), then drop the seed tab at index 0. Every
   // intermediate state keeps >=1 tab, so the structural validator never rejects an empty form.
   const createFormShell = async (def) => {
-    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status });
+    // `description` is new on forms in this SDK uptake (dashboards, rows in the same systemform
+    // table, always had it). Passed only when the spec sets one: omitted on push it is not written,
+    // so an existing server-side description survives an edit that did not set one.
+    const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status, ...(def.description ? { description: def.description } : {}) });
     const tabs = def.tabs || [];
     // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
     for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
@@ -1668,7 +1673,7 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
-        const art = provision.createArtifact('dashboard', { name: dash.name });
+        const art = provision.createArtifact('dashboard', { name: dash.name, ...(dash.description ? { description: dash.description } : {}) });
         // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
         // without awaiting them — the push below could then race an unfinished tile insert.
         const tiles = dash.tiles || [];

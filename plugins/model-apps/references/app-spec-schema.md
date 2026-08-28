@@ -130,6 +130,40 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   pin is not silently lost — losing it would leave newly created columns in the org default while
   the existing ones keep the pinned language, with no error anywhere.
 
+## `description` — write one on everything that takes one
+
+`description` is optional on every artifact below and **recommended on all of them**. It is written
+to Dataverse **at create time**, so it costs nothing extra and needs no backfill pass.
+
+| Accepts `description` | Notes |
+|---|---|
+| `entities[]` · `entities[].columns[]` | The highest-value ones — table and column names are cryptic (`new_col3`) without them |
+| `views[]` · `charts[]` · `forms[]` · `dashboards[]` | What the artifact is *for*, not what it contains |
+| `businessRules[]` | Why the rule exists — the logic itself is already visible |
+| `solution` · `globalChoices[]` · `webResources[]` · `app.description` | |
+
+**Accepted by the spec but NOT written to Dataverse** (you get a build **warning**, never silent
+loss) — the vendored SDK's create surface has nowhere to put them:
+- **`commands[]`** — `createArtifact('command', …)` drops the field.
+- **`Customer` columns** — `createCustomerColumn`'s payload is only `{ Lookup, OneToManyRelationships }`.
+
+**Not accepted at all, deliberately:** **`personas[]`**. The SDK stamps its own ownership marker into
+a security role's `description` and then requires an *exact* match on it before it will touch that
+role, so a custom description would make the SDK disown the role it created and refuse to update it.
+
+**Why it matters beyond tidiness.** A description is the only durable, machine-readable statement of
+*intent* an app carries. Names say what a thing is called; descriptions say what it is for. When an
+agent later inspects an app it did not build — to extend it, debug it, or answer a question about it
+— descriptions are the grounding it has. Write them for that reader.
+
+Good: `"Severity 1-5; drives the escalation rule and the SLA clock."`
+Weak: `"The priority column."` (restates the name and adds nothing)
+
+**Rules:** must be a non-empty string, max 2000 characters (the Dataverse ceiling — the platform
+truncates silently past it, so it is rejected at author time instead). Omit the field entirely rather
+than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
+maker typed in the UI**.
+
 ## entities[]
 ```jsonc
 {
@@ -174,11 +208,16 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
                                           //   tables are auto-detected and skipped by teardown even
                                           //   without this flag — set it for a REUSED CUSTOM table
                                           //   you want protected from teardown.
+  "description": "A customer support ticket, from intake through resolution.",
+                                          // RECOMMENDED — see "description" below. Written to
+                                          //   Dataverse at create time; the grounding an agent reads
+                                          //   when it later inspects an app it did not build.
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
   // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
   "columns": [
-    { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"] },
+    { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"],
+      "description": "How urgently the ticket needs attention." },   // RECOMMENDED — see below
     { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" },
     { "schemaName": "new_score",    "displayName": "Score", "type": "Integer",
       "visualization": "RadialDial" }         // optional — CUSTOM GRID RENDERING (preview), below
@@ -303,6 +342,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 { "entity": "new_ticket", "name": "Active Tickets", "columns": ["new_subject","new_priority"],
   "sort": [{ "attr": "new_subject", "dir": "asc" }], "activeOnly": true,
+  "description": "Unresolved tickets, most urgent first — the queue agents work from.",
   // optional rich filters (beyond the default active-records condition):
   "filters": [
     { "attr": "ownerid", "op": "eq-userid" },                       // "my" records — no value
@@ -326,7 +366,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ## charts[]
 ```jsonc
 { "entity": "new_ticket", "name": "Tickets by Priority", "chartType": "Pie",
-  "groupBy": "new_priority", "measure": "count" }
+  "groupBy": "new_priority", "measure": "count",
+  "description": "Where the open workload is concentrated." }
 ```
 - `chartType`: `Column · Bar · Pie · Line`. **`groupBy` MUST be a Choice column** on `entity`.
 
@@ -334,6 +375,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 ```jsonc
 // auto layout (default): primary + all scalar columns + 1:N parent lookups; opt-in child grids
 { "entity": "new_customer", "type": "main", "name": "Customer", "layout": "auto",
+  "description": "The main customer record — profile, contacts and open tickets.",
   "notes": true,                                   // optional — add a Notes section
   "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
   "deactivateOtherMainForms": true,                // optional — see below (own custom tables only)
@@ -438,6 +480,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 ```jsonc
 { "entity": "new_ticket", "name": "Hide notes on closed tickets",
+  "description": "Closed tickets are read-only history, so the working fields are hidden.",
   "scope": "Entity",          // only Entity today
   "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
   "conditions": [             // ALL must hold (ANDed)
@@ -473,7 +516,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
-{ "name": "Operations", "tiles": [
+{ "name": "Operations", "description": "Daily queue health for the support lead.", "tiles": [
   { "type": "chart", "chart": "Orders by Status", "view": "Active Orders" },  // chart needs both
   { "type": "list",  "view": "Active Orders", "name": "Recent" },             // list needs a view
   { "type": "iframe", "url": "https://…", "name": "Map" },

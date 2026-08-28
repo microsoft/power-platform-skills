@@ -320,8 +320,15 @@ const KIND_HANDLERS = {
         select: ['workflowid', 'statecode'],
         // DEFINITION rows only (see businessRuleFilter in sdk-build.js). Activating a rule makes the
         // platform create a second `type 2` activated copy whose parent is the definition; the
-        // platform refuses to delete that copy directly (405) and removes it with its parent. An
-        // unfiltered query therefore produced a guaranteed per-rule teardown failure.
+        // platform refuses to delete that copy directly (405). An unfiltered query therefore
+        // produced a guaranteed per-rule teardown failure.
+        //
+        // The copy is NOT removed with its parent — live-measured: after a full teardown the type-2
+        // row survives with `parent` pointing at the deleted definition, and once the table is gone
+        // it can no longer be deleted at all (400 0x80041102, "entity with ObjectTypeCode = N was
+        // not found in the MetadataCache"), because the platform cannot resolve the entity it
+        // references. So every teardown of an ACTIVE rule strands one row while still reporting
+        // `0 failed`. Tracking: https://github.com/microsoft/power-platform-skills/issues/493
         filter: businessRuleFilter(target.name, target.entity),
         top: 50,
       });

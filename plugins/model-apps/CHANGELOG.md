@@ -12,6 +12,17 @@ is controllable per capability, and on/off is read with the platform's real sema
 "non-zero means on" guess.
 
 ### Added
+- **A `description` on every artifact that accepts one.** Tables, columns, views, charts, forms,
+  dashboards, business rules, the solution and global choices now take an optional `description`,
+  written to Dataverse **at create time** rather than backfilled. A name says what a thing is called;
+  a description says what it is *for* — and it is the grounding an agent has when it later inspects
+  an app it did not build. Descriptions stay optional (a spec authored before this still builds), are
+  validated as a non-empty string within the 2000-character Dataverse ceiling, and are **omitted when
+  absent, so a rebuild never blanks a description someone typed in the maker**. `commands[]` and
+  `Customer` columns accept one but the SDK's create surface cannot write it, so you get a **warning**
+  instead of silent loss; `personas[]` takes none at all, because a security role's description
+  carries the SDK's own ownership marker, which it requires an exact match on before it will touch
+  the role.
 - **Presence operators for business rules.** `ContainsData` / `DoesNotContainData` were gated because
   they compiled to XAML the platform answered with `HTTP 500 — Error generating UiData`. The compiler
   emitted an empty parameter array where a null one is required; fixed upstream and re-verified live,

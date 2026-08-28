@@ -982,6 +982,33 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+// Descriptions must survive the BUILD, not just the def builder. A def-builder unit test cannot see
+// a phase that constructs its own createArtifact payload inline and forgets to forward the field —
+// which is exactly what both of these did before they were wired.
+test('descriptions: a form and a dashboard are CREATED with the authored description', async () => {
+  const spec = makeSpec();
+  spec.forms[0].description = 'Primary intake form for support agents.';
+  spec.dashboards = [{ name: 'Ops', description: 'At-a-glance queue health.', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const form = find(calls, 'createArtifact').find((c) => c.args[0] === 'form');
+  assert.strictEqual(form.args[1].description, 'Primary intake form for support agents.');
+  const dash = find(calls, 'createArtifact').find((c) => c.args[0] === 'dashboard');
+  assert.strictEqual(dash.args[1].description, 'At-a-glance queue health.');
+});
+
+test('descriptions: a form and a dashboard with none OMIT the key (a rebuild must never blank one)', async () => {
+  // Sending `description: ''` would erase whatever a maker typed in the UI on the next rebuild.
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const form = find(calls, 'createArtifact').find((c) => c.args[0] === 'form');
+  assert.ok(!('description' in form.args[1]), 'form payload omits description');
+  const dash = find(calls, 'createArtifact').find((c) => c.args[0] === 'dashboard');
+  assert.ok(!('description' in dash.args[1]), 'dashboard payload omits description');
+});
+
 test('dashboards: an existing dashboard is reused (no duplicate) and reported in result.created', async () => {
   const spec = makeSpec();
   spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];

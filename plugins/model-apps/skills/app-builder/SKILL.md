@@ -164,6 +164,14 @@ every prompt yourself via `AskUserQuestion`. In short:
    - **Level (a) — data model**: entities/columns/relationships **derived from those jobs**; run the
      **early data-model lint** (catches e.g. the relationship-vs-lookup collision before forms are
      authored on top).
+   - **Descriptions are part of authoring, not a cleanup pass.** Every table, column, view, chart,
+     form, dashboard and business rule takes an optional `description`, and you should **write one as
+     you create the artifact** — never as a backfill. A name says what a thing is called; a
+     description says what it is *for*, and it is the only intent an app carries that an agent can
+     read back later when it inspects an app it did not build. Describe the purpose, not the shape:
+     `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
+     (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
+     warning; `personas[]` does not take one at all. See the schema reference for why.)
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison

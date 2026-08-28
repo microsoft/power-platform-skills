@@ -350,6 +350,9 @@ function compileFormIntent(spec, formSpec, opts) {
     // residual case type-scoped resolution can't disambiguate — the author sets forms[].formId to reconcile
     // that exact form. Carried verbatim (validated as a GUID at resolve time). Undefined for most forms.
     formId: formSpec.formId,
+    // The maker-facing "what is this form for". Carried through to createArtifact, and omitted when
+    // absent so an edit never blanks a description someone added in the maker.
+    description: formSpec.description,
     status: 'Active',
     tabs: tabs,
     __explicitLayout: explicit,

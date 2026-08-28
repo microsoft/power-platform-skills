@@ -486,6 +486,38 @@ function quickCreateEnabledFor(spec, entity) {
   );
 }
 
+// A maker-facing `description`, supported on every artifact whose SDK create surface accepts one
+// (table, column, view, chart, form, dashboard, business rule, app, web resource).
+//
+// Deliberately a soft contract: descriptions are OPTIONAL, because making them mandatory would fail
+// every spec authored before they existed. What is validated is only that a supplied value is usable
+// — a number or an object here means the author meant something else, and silently stringifying it
+// would write "[object Object]" into Dataverse.
+//
+// 2000 is the Dataverse ceiling for a description Label; the platform truncates past it rather than
+// erroring, so catching it here is the only place the author finds out.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/entity-attribute-metadata
+const DESCRIPTION_MAX = 2000;
+function validateDescription(value, label, errors, opts = {}) {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string') {
+    errors.push(`${label}: description must be a string`);
+    return;
+  }
+  // `app.description` predates this contract and countless existing specs (and every spec emitted by
+  // `download-model-app`) carry it as `""`. Rejecting that would fail specs that are otherwise fine,
+  // so emptiness is tolerated exactly where it is already established — never for a NEW surface,
+  // where an empty string is the one value that could blank a maker's text on rebuild.
+  if (!value.trim()) {
+    if (opts.allowEmpty) return;
+    errors.push(`${label}: description must not be blank — omit the field instead of setting an empty string`);
+    return;
+  }
+  if (value.length > DESCRIPTION_MAX) {
+    errors.push(`${label}: description is ${value.length} characters (max ${DESCRIPTION_MAX})`);
+  }
+}
+
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
   const errors = [];
@@ -512,6 +544,12 @@ function validateAppSpec(spec, opts = {}) {
   }
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
+  }
+  validateDescription(spec.solution && spec.solution.description, 'solution', errors);
+  // allowEmpty: `app.description: ""` is the established shape (download-model-app emits it).
+  validateDescription(spec.app && spec.app.description, 'app', errors, { allowEmpty: true });
+  for (const gc of spec.globalChoices || []) {
+    validateDescription(gc && gc.description, `globalChoice '${(gc && gc.name) || '(unnamed)'}'`, errors);
   }
   // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
   // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
@@ -544,9 +582,18 @@ function validateAppSpec(spec, opts = {}) {
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
     }
+    validateDescription(e.description, `entity ${e.schemaName}`, errors);
     for (const c of e.columns || []) {
       if (!c.schemaName) {
         errors.push(`entity ${e.schemaName}: a column is missing schemaName`);
+      }
+      validateDescription(c.description, `entity ${e.schemaName}: column ${c.schemaName}`, errors);
+      // A Customer column is created through `createCustomerColumn`, whose payload is only
+      // { Lookup, OneToManyRelationships } — the SDK has nowhere to put a description, so one
+      // authored here is silently discarded. Warn rather than error: the spec is still valid and
+      // still builds; the author just needs to know the value will not appear in Dataverse.
+      if (c.type === 'Customer' && c.description) {
+        warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no description, so this one will NOT be written to Dataverse`);
       }
       if (c.type && !TYPE_MAP[c.type]) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown type '${c.type}'`);
@@ -577,6 +624,7 @@ function validateAppSpec(spec, opts = {}) {
   const rasterWebResourceNames = new Set();   // png/jpg/gif/ico — valid for a table's raster icon
   for (const wr of spec.webResources || []) {
     if (!wr || !wr.name) { errors.push('a webResource is missing a name'); continue; }
+    validateDescription(wr.description, `webResource '${wr.name}'`, errors);
     webResourceNames.add(wr.name.toLowerCase());
     const wrType = String(wr.type || '').toLowerCase();
     if (IMAGE_WR_TYPES.has(wrType)) imageWebResourceNames.add(wr.name.toLowerCase());
@@ -612,6 +660,7 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const f of spec.forms || []) {
+    validateDescription(f.description, `form '${f.name || f.entity}'`, errors);
     if (!entityNames.has(f.entity)) {
       errors.push(`form references unknown entity '${f.entity}'`);
     }
@@ -700,6 +749,7 @@ function validateAppSpec(spec, opts = {}) {
     qvIdentity.add(key);
   }
   for (const ch of spec.charts || []) {
+    validateDescription(ch && ch.description, `chart '${(ch && (ch.name || ch.entity)) || '(unnamed)'}'`, errors);
     if (!ch || !ch.entity || !entityByLower.has(String(ch.entity).toLowerCase())) {
       errors.push(`chart references unknown entity '${ch && ch.entity}'`);
       continue;
@@ -721,6 +771,7 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
   for (const v of spec.views || []) {
+    validateDescription(v && v.description, `view '${(v && (v.name || v.entity)) || '(unnamed)'}'`, errors);
     if (!entityNames.has(v.entity)) {
       errors.push(`view references unknown entity '${v.entity}'`);
     }
@@ -738,6 +789,12 @@ function validateAppSpec(spec, opts = {}) {
   };
   for (const c of spec.commands || []) {
     if (!c || !c.entity || !entityNames.has(c.entity)) { errors.push(`command references unknown entity '${c && c.entity}'`); continue; }
+    // The SDK's command surface drops `description` (the artifact it returns carries only
+    // commandBars/entityLogicalName/id), so one authored here never reaches Dataverse. Warn rather
+    // than error — the spec is otherwise valid — but do not let it pass silently.
+    if (c.description) {
+      warnings.push(`command '${c.label || c.entity}': the SDK's command surface accepts no description, so this one will NOT be written to Dataverse`);
+    }
     if (!c.label) errors.push(`command on ${c.entity}: label is required`);
     if (c.location && !COMMAND_LOCATIONS.has(c.location)) errors.push(`command '${c.label}' on ${c.entity}: location must be MainTab|HomeTab|ContextualTab`);
     const type = c.type || 'Button';
@@ -759,6 +816,7 @@ function validateAppSpec(spec, opts = {}) {
   for (const r of spec.businessRules || []) {
     const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
     if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
+    validateDescription(r.description, label, errors);
     if (!r.name) errors.push(`${label}: name is required`);
     if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
     if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
@@ -854,6 +912,7 @@ function validateAppSpec(spec, opts = {}) {
   const chartNamesSet = new Set((spec.charts || []).map((c) => c.name));
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    validateDescription(d.description, `dashboard '${d.name}'`, errors);
     if (!Array.isArray(d.tiles) || !d.tiles.length) { errors.push(`dashboard '${d.name}': needs tiles[]`); continue; }
     for (const t of d.tiles) {
       if (!t || !DASH_TILE_TYPES.has(t.type)) { errors.push(`dashboard '${d.name}': tile type must be chart|list|iframe|webresource`); continue; }

@@ -136,6 +136,11 @@ async function resolveLanguageCode({ provision, spec, languageCode, warn, provis
 // name -> its metadataId (so a column can bind to a shared option set).
 function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
   const o = { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, type: SDK_COLUMN_TYPE[c.type || 'Text'], required: REQUIRED(c), languageCode };
+  // Description is the maker-facing "what is this column for". Written at CREATE time rather than
+  // backfilled: `createColumn` accepts it, and a later PATCH is a second round trip that is easy to
+  // skip and easy to forget — so the only reliable moment is the one where the column is authored.
+  // Omitted when absent, so an existing column's description is never blanked by a rebuild.
+  if (c.description) o.description = String(c.description);
   switch (c.type) {
     case 'Text': if (c.maxLength) o.maxLength = c.maxLength; if (c.format) o.stringFormat = c.format; break;
     case 'Memo': if (c.maxLength) o.maxLength = c.maxLength; break;
@@ -326,7 +331,7 @@ async function provisionSolution({ sdk, provision, runner, solution }) {
     const pubs = await provision.queryRecords('publisher', { select: ['publisherid'], filter: `customizationprefix eq '${odataLit(solution.publisherPrefix)}'`, top: 1 });
     if (pubs && pubs[0] && pubs[0].publisherid) publisherId = pubs[0].publisherid;
     else publisherId = (await provision.createPublisher({ uniqueName: `${solution.publisherPrefix}publisher`, friendlyName: `${solution.publisherPrefix} publisher`, prefix: solution.publisherPrefix })).id;
-    await provision.createSolution({ uniqueName: solution.uniqueName, friendlyName: solution.displayName || solution.uniqueName, publisherId });
+    await provision.createSolution({ uniqueName: solution.uniqueName, friendlyName: solution.displayName || solution.uniqueName, publisherId, ...(solution.description ? { description: solution.description } : {}) });
   }, { recoverable: true });
 }
 
@@ -388,7 +393,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // runner.run instead of being silently swallowed.
   for (const gc of spec.globalChoices || []) {
     await runner.run('data-model', `global choice ${gc.name}`, async () => {
-      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
+      const r = await sdk.createGlobalOptionSet({ name: gc.name, displayName: gc.displayName || gc.name, languageCode: resolvedLanguageCode, ...(gc.description ? { description: gc.description } : {}), options: (gc.options || []).map((label, i) => ({ value: 100000000 + i, label })) });
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }
@@ -409,6 +414,9 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
+        // Same reasoning as columns: set the description at CREATE time, and omit it when absent so
+        // a rebuild never blanks a description someone added in the maker.
+        if (e.description) createOpts.description = String(e.description);
         try {
           const t = await sdk.createTable(createOpts);
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
