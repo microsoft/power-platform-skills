@@ -40,7 +40,7 @@ test('template imports the host Metro logger at config startup', () => {
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
 });
 
-test('skill contracts read .powernative logs directly', () => {
+test('skill contracts read logs and persist host-neutral state under .powernative', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
   const createSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8');
   const debugSkill = fs.readFileSync(path.join(pluginRoot, 'skills', 'debug-app', 'SKILL.md'), 'utf8');
@@ -54,7 +54,9 @@ test('skill contracts read .powernative logs directly', () => {
   assert.match(createSkill, /without rerunning the `predev` schema hook/);
   assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
-  assert.match(debugSkill, /latest .*\.powernative/i);
+  assert.match(debugSkill, /\.powernative\/debug-app/);
+  assert.doesNotMatch(debugSkill, /\.claude\/debug-app/);
+  assert.match(debugSkill, /discover valid project-local Metro sessions/i);
   assert.match(debugSkill, /"logPath":/);
   assert.match(debugSkill, /"pid":/);
   assert.match(debugSkill, /predates project-local Metro logging/);

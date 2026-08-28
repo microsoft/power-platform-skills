@@ -1,16 +1,16 @@
 ---
 name: debug-app
-description: Use when the user has finished building a mobile app, started Metro with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive persisted-log diagnostics — injects temporary console.log statements at data-path boundaries, reads the sanitized `.powernative/metro-logs/` log, and cleans up logs after the root cause is fixed. Otherwise polls that log with a durable byte cursor, classifies errors using an 8-category table, fixes inline or routes to the right skill, verifies each fix from new log output, and exits after 3 consecutive clean polls. Foreground loop — blocks the conversation while running. Run only after the app is loaded.
+description: Use when the user has finished building a mobile app, started Metro with `npm run dev`, and wants the running app monitored for runtime errors AND silent failures (empty lists, blank screens, swallowed network errors) and fixed autonomously. Accepts a free-text symptom (e.g., `/debug-app "todos not appearing on home screen"`) to drive persisted-log diagnostics — injects temporary console.log statements at data-path boundaries, reads the sanitized `.powernative/metro-logs/` log, and cleans up logs after the root cause is fixed. Supports port/platform filtering, configurable clean-cycle and timeout limits, and watch-only `--no-fix` mode. Otherwise polls with a durable byte cursor, fixes inline or routes appropriately, verifies each fix from new output, and exits after the configured clean checks (default 3). Foreground loop — blocks the conversation while running. Run only after the app is loaded.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch, mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search
 model: sonnet
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first.
+**📋 Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Debug App — Monitor & Fix
 
-Monitor the running app through the project-local `.powernative/metro-logs/` files written by `metro.config.js`, detect runtime and bundle errors, and fix them autonomously by editing the affected files (or routing to the right skill when the fix belongs in a domain like Dataverse schema or auth registration). For silent failures, inject temporary `console.log` statements at data-path boundaries, read only newly appended log bytes, then clean the traces after the root cause is fixed. Modeled on the upstream `app-debugger.agent.md` pattern — foreground loop, bounded polling, exit on 3 consecutive clean polls.
+Monitor the running app through the project-local `.powernative/metro-logs/` files written by `metro.config.js`, detect runtime and bundle errors, and fix them autonomously by editing the affected files (or routing to the right skill when the fix belongs in a domain like Dataverse schema or auth registration). For silent failures, inject temporary `console.log` statements at data-path boundaries, read only newly appended log bytes, then clean the traces after the root cause is fixed. Modeled on the upstream `app-debugger.agent.md` pattern — foreground loop, bounded polling, configurable clean-check/timeout exits, and optional watch-only operation.
 
 > **Dev-client limitation:** the standalone dev client sends app/runtime logs, React errors, host diagnostics, and Metro bundler output through Metro. The template's `metro.config.js` writes Metro terminal output and HTTP bundle failures into `.powernative/metro-logs/`; there is no separate device log source. Host diagnostics include strings such as `[AuthProvider] MSAL init failed:`, `[bridge] fetch THREW for`, `[bridge] HTTP <status> for`, `[addAadAppToConnectionAcl] failed HTTP <status> for connection`, `[useConnectionRefs] could not verify connection ACLs; treating existing connections as setup-required`, and `[PAHost][ErrorBoundary] Unhandled JS error:`.
 
@@ -18,41 +18,82 @@ Monitor the running app through the project-local `.powernative/metro-logs/` fil
 
 | Form | Behavior |
 |---|---|
-| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, locate the latest live `.powernative` Metro log by port/PID, then enter the monitor loop by reading bytes from that file. No host terminal ID is required. |
+| `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, discover valid project-local Metro sessions, select automatically when one is live or ask when several are live, then monitor the selected log. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app status` | Locate the latest `.powernative` log, parse its PID/port from the filename, then print log path, dev-server port, last cursor, fixes applied, and unresolved errors. Do NOT enter the loop. |
-| `/debug-app stop` | Stop only the foreground debug loop and preserve `.claude/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
+| `/debug-app status` | Discover all project-local Metro logs and print each valid session's project, platform, PID, port, start time, and log path. Mark the session referenced by the saved cursor when present, then print fixes and unresolved errors. Do NOT ask for a selection or enter the loop. |
+| `/debug-app stop` | Stop only the foreground debug loop and preserve `.powernative/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
 
-**Dispatch rule:** if `$ARGUMENTS` is non-empty and is not one of the reserved subcommand tokens (`status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`), treat the entire string (everything after the command name; outer quotes optional) as the symptom and use symptom-driven mode. For `help` / `--help` / `-h`, print the subcommands table above and exit.
+### Monitoring options
+
+Options may follow the default command, a symptom, or `status`:
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--port <1-65535>` | Monitor only the valid Metro session on this port. | Any port |
+| `--platform <ios\|android>` | Consider only sessions whose recent log identifies this platform. | Any platform |
+| `--cycles <1-50>` | Exit after this many consecutive clean observation intervals. | `3` |
+| `--timeout <duration>` | Maximum wall-clock monitoring time. Accept `30s`–`60m` using `s`, `m`, or `h`. | `5m` |
+| `--no-fix` | Watch-only mode: classify and report, but never edit project source/config, inject traces, install dependencies, regenerate files, or invoke a mutating handoff. Debug cursor/audit/health state still advances. | Fix enabled |
+
+Examples:
+
+```text
+/debug-app --port 8082 --platform ios
+/debug-app "orders screen is empty" --cycles 10 --timeout 15m
+/debug-app --no-fix --timeout 30m
+/debug-app status --platform android
+```
+
+**Argument parsing:**
+
+1. Parse quoted text as one symptom value and parse recognized flags wherever they appear.
+2. The first reserved token (`status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`) selects the subcommand. `stop`, help, and version do not accept monitoring options. `status` accepts only `--port` and `--platform`; reject symptoms, `--cycles`, `--timeout`, and `--no-fix` because it does not enter the loop.
+3. After removing recognized options and their values, any remaining non-reserved text is the symptom and enables symptom mode.
+4. Reject unknown flags, duplicate flags, missing values, invalid numbers, unsupported platforms, or more than one free-text symptom. Print the valid forms and exit without monitoring.
+5. Normalize `platform` to lowercase. Convert `timeout` to `timeoutSeconds`; require `30 <= timeoutSeconds <= 3600`.
+6. Initialize:
+   ```text
+   portFilter=<number|none>
+   platformFilter=<ios|android|none>
+   targetCleanCycles=<number, default 3>
+   timeoutSeconds=<number, default 300>
+   noFix=<true|false, default false>
+   monitorStartedAt=<current ISO timestamp>
+   ```
+
+For `help` / `--help` / `-h`, print the subcommands and monitoring-options tables and exit.
 
 **Tip — "play around then debug":** Metro persists recent app output in `.powernative/metro-logs/` even across chat/editor restarts. If something weird just happened, keep using the app normally, then run `/debug-app` or `/debug-app "<what you saw>"`. The first cycle reads the latest persisted log window; subsequent cycles read only bytes appended after the saved cursor.
 
 ## Core Principles
 
-- **Foreground autonomous loop** — Once started, this skill owns the conversation until 3 consecutive clean polls confirm the app is healthy, the user types `stop`, or the escalation rule trips. **Do not run other skills concurrently** — they'll queue behind the loop.
+- **Foreground autonomous loop** — Once started, this skill owns the conversation until `targetCleanCycles` consecutive clean polls confirm the app is healthy, `timeoutSeconds` elapses, the user types `stop`, or the escalation rule trips. **Do not run other skills concurrently** — they'll queue behind the loop.
+- **Watch-only means no project mutation** — With `--no-fix`, do not edit project source/configuration, inject diagnostic logs, install packages, regenerate schemas, switch accounts, or invoke a mutating skill. Continue to advance `.powernative/debug-app/` cursor/audit/health state, classify errors, and provide the fix/handoff that would have been used.
 - **Run AFTER the app is loaded** — Metro must be running through `npm run dev` and the simulator/device must have the app open. Phase 0 verifies that a live `.powernative` log exists; the skill stops cleanly if no app is detected.
 - **Native-only runtime target** — The app must be loaded in a native dev client on a device or simulator; `.powernative/metro-logs/` is the authoritative log source for that native session.
 - **No web or direct Metro probes** — Do not use React Native Web, browser automation, `curl`, `fetch`, `WebFetch`, or any direct request to a Metro/localhost endpoint for runtime diagnosis. Read only the `.powernative` log and source files.
 - **No screen-by-screen verification** — Do not crawl routes or validate every screen. In symptom mode, focus only on the user-reported workflow and the terminal/source evidence needed to diagnose it.
 - **One fix at a time** — Fully resolve one issue (context → fix → type-check → reload → re-poll) before starting the next. No batching.
-- **Working-dir state** — Debug audit state lives in `.claude/debug-app/`: `fixes.md`, `unresolved.md`, `injected-logs.md`, and `metro-cursor.json`. Metro logs live in the already-ignored `.powernative/metro-logs/`. Both survive chat/editor restarts.
+- **Working-dir state** — Debug audit state lives in `.powernative/debug-app/`: `fixes.md`, `unresolved.md`, `injected-logs.md`, `health.json`, and `metro-cursor.json`. Metro logs live in the already-ignored `.powernative/metro-logs/`. Both survive chat/editor restarts without binding state to a specific agent host.
+- **Defense-in-depth redaction** — The Metro logger removes credential-like lines before writing `.powernative`, but `/debug-app` must independently minimize and sanitize every value before persisting it to `.powernative/debug-app/`. Never copy raw response bodies, record objects, tokens, headers, trace payloads, or absolute home-directory paths into debugger state.
 - **The port is the log identity** — the dev-server port is the number the QR encodes, the device dials, and this skill verifies. Liveness is a socket probe (does the log's PID still hold that port?), never terminal scrollback. A `port-taken` status means the log belongs to a dead session and must not be diagnosed.
 - **Never fix history** — the log is a record of the past, so an error in it is not proof of a current problem. Errors found in the baseline window must pass the Phase 0.2.1 supersession check before any code is edited. Editing working code to chase an already-resolved error is a worse outcome than reporting nothing.
 - **Host terminal APIs are optional only** — If the current host already exposes Metro terminal output, it may be consulted as a low-latency convenience. Never ask the user for a terminal ID, never persist one, and never make a diagnosis from host output without advancing the authoritative `.powernative` log cursor too.
-- **Reference resolution order** — For unfamiliar errors: in-repo references first ([skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md), etc.), then `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search`, then general web search.
+- **Context-first diagnosis** — Read `memory-bank.md` when present. Read `power.config.json` for environment, Dataverse, and connector context. Consult `native-app-plan.md` only when the failure concerns a planned screen, data model, connector, offline profile, or native capability; do not parse it for unrelated syntax/runtime errors.
+- **Reference resolution order** — For Dataverse/Power Platform errors: read [skills/add-dataverse/references/dataverse-reference.md](../add-dataverse/references/dataverse-reference.md) first, inspect generated services/models and project context, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` when behavior remains uncertain. For Expo/Expo Router/React Native errors: inspect installed versions and project code first, then use targeted `WebFetch` against official `https://docs.expo.dev/` documentation. Use package documentation next and general web search only as a last resort.
 
 ## Workflow — Task List First
 
 Before entering the monitor loop, write a task list and keep it up to date:
 
 ```
-- [ ] Verify the latest `.powernative` Metro log exists and matches a live PID/port
-- [ ] Capture baseline log state (read latest log, save byte cursor)
+- [ ] Discover valid `.powernative` Metro sessions and select one when needed
+- [ ] Capture baseline log state from the selected session and save its byte cursor
 - [ ] (Symptom mode only) Phase 0.5: parse symptom → ask user to navigate → inject console.logs → read new log bytes → walk data path → clean up logs
 - [ ] Monitoring cycle 1: collect → classify → fix if needed
 - [ ] Monitoring cycle 2: collect → classify → fix if needed
 - [ ] Monitoring cycle 3: collect → classify → fix if needed
-      (add cycles as needed; stop after 3 consecutive clean cycles AND symptom resolved/flagged)
+      (add cycles as needed; stop after <targetCleanCycles> consecutive clean cycles AND symptom resolved/flagged)
 - [ ] Fix: <error summary> → <inline edit | skill route>  (one task per error found)
 ```
 
@@ -64,47 +105,86 @@ Mark each cycle complete (clean OR fixed) before starting the next.
 
 Before entering the loop:
 
-### 0.0 Resolve the project-local Metro log
+### 0.preflight Read project context
 
-Determine `<working_dir>` from `--working-dir` when present, otherwise use the current app root. Define:
+Follow the shared instructions before diagnosing logs:
+
+1. If `<working_dir>/memory-bank.md` exists, read its Project facts, Power Platform context, Data model, Connectors, Screens, Native capabilities, and Build history. Do not create a memory bank from `/debug-app`; absence is valid.
+2. Read `<working_dir>/power.config.json` when present. Capture `environmentId`, `databaseReferences`, and `connectionReferences`. `power.config.json` is the preferred environment source.
+3. Read `<working_dir>/native-app-plan.md` only when the supplied symptom or a classified error concerns a planned screen, Dataverse entity/column, connector, offline behavior, navigation contract, or native capability. Treat the plan as intended design, not proof of live schema/runtime state.
+4. Inspect `src/generated/services/`, `src/generated/models/`, and `src/generated/connectorSchemas.ts` only when the affected data path uses them. Never edit generated files.
+
+Append a compact context line to `fixes.md` after Phase 0.1 creates it:
+
+```text
+[<HH:MM:SS>] Context — memory-bank=<present|absent> native-plan=<present|absent|not-needed> environment=<environmentId|none> dataverse-tables=<N> connectors=<N>
+```
+
+Do not resolve the environment or call Dataverse during ordinary bundle, React, or local JavaScript failures. When a current symptom/error is Dataverse or Power Platform related, perform the read-only Dataverse diagnostic sequence in D2 before handing off.
+
+### 0.0 Discover and select the project-local Metro session
+
+Determine `<working_dir>` from `--working-dir` when present, otherwise use the current app root. Enumerate **all** matching logs, newest first:
 
 ```bash
 LOG_DIR="<working_dir>/.powernative/metro-logs"
-LOG_PATH="$(ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null | head -1)"
+ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null
 ```
 
-Parse `pid` and `port` from `basename "$LOG_PATH"`, which has the shape `metro-<timestamp>-pid-<pid>-port-<port>.log`. When `port` is numeric, optionally verify the listener with the host shell (`lsof -nP -iTCP:<port> -sTCP:LISTEN -t` on macOS/Linux, `netstat -ano -p tcp` on Windows). Do not persist terminal IDs or depend on terminal output.
+For every candidate, parse:
+
+- `pid` and `port` from `metro-<timestamp>-pid-<pid>-port-<port>.log`;
+- `startedAt` from the filename timestamp;
+- `project` from `power.config.json.appDisplayName`, falling back to the basename of `<working_dir>`;
+- `platform` by scanning only the latest 64 KiB for the most recent `iOS ... Bundled` / `iOS Bundling` or `Android ... Bundled` / `Android Bundling` line; use `unknown` when neither appears.
+
+When `port` is numeric, verify the listener with the host shell (`lsof -nP -iTCP:<port> -sTCP:LISTEN -t` on macOS/Linux, `netstat -ano -p tcp` on Windows). A candidate is **valid/live** only when its recorded PID is alive and either owns the recorded port or the port probe is unavailable. Do not persist terminal IDs or depend on terminal output.
+
+Selection rules:
+
+- Apply `portFilter` and `platformFilter` to the valid/live candidates before selection. When no valid session matches, print the filters plus the available valid sessions and stop. If a platform-filtered candidate is `unknown`, do not guess; tell the user to use `--port` or omit `--platform`.
+- **One valid session** — select it automatically.
+- **Multiple valid sessions** — show one choice per session in this exact shape, then ask which to monitor:
+  ```text
+  <project> — <platform> — port <port> — pid <pid> — started <startedAt>
+  ```
+  Use `AskUserQuestion`; identify choices internally by the complete `logPath` + `pid` + `port`, not by port alone. If `metro-cursor.json` points to one of the valid sessions, make that session the default choice but still ask. Never silently choose the newest session when more than one is live.
+- **No valid sessions** — apply the failure branches below. Stale or contradictory logs are evidence for the report, never selectable choices.
+
+After selection, set `LOG_PATH`, `pid`, `port`, `project`, `platform`, and `startedAt` from the chosen candidate. This selection is sticky for the current monitor run.
 
 Branch as follows:
 
 | Status | Meaning | Action |
 |---|---|---|
-| Log exists, PID is alive, and either port is unknown or the port probe is unavailable | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
-| Log exists and PID still owns the logged port | Treat as live. Capture `port`, `pid`, `logPath`, and continue. |
+| Exactly one valid log exists, PID is alive, and either port is unknown or the port probe is unavailable | Select it. Capture `project`, `platform`, `startedAt`, `port`, `pid`, and `logPath`, then continue. |
+| Exactly one valid log exists and PID still owns the logged port | Select it. Capture `project`, `platform`, `startedAt`, `port`, `pid`, and `logPath`, then continue. |
+| Multiple valid logs exist | Show every valid session and ask which one to monitor. Do not select by recency alone. |
 | Log exists, PID is gone, and another process owns the logged port | Do NOT diagnose from this log. Tell the user which PID holds the port and ask them to restart `npm run dev`. |
 | Log exists but PID/port contradict each other | The device may be talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
 | No log exists and `metro.config.js` does not directly import `@microsoft/power-apps-native-host/metro-logger`, or `package.json` does not require `@microsoft/power-apps-native-host` `^0.2.26` or newer | This project predates project-local Metro logging. Stop and report both missing contract pieces. Do not enter a restart loop or edit customer-owned config from `/debug-app`; the user must adopt the current template's Metro config and host dependency first. |
 | No log exists and the Metro config/dependency contract is current | Tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
 
-The port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test.
+The PID/port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test. The explicit choice prevents a valid session on one port from being confused with another valid session in the same project.
 
 If no `.powernative` log exists but the host exposes a live Metro terminal, that output may explain what is running, but do not ask for or store its terminal ID and do not enter the continuous monitor loop against it. Ask the user to restart with `npm run dev` so Metro config creates the log.
 
 Record the stable source in `fixes.md`:
 
 ```text
-[<HH:MM:SS>] Log source — <logPath> (pid <pid>, port <port>)
+[<HH:MM:SS>] Log source — <project> <platform> — <logPath> (pid <pid>, port <port>, started <startedAt>)
 ```
 
 ### 0.1 Ensure state directory
 
 ```bash
-mkdir -p .claude/debug-app
-touch .claude/debug-app/fixes.md
-touch .claude/debug-app/unresolved.md
-touch .claude/debug-app/injected-logs.md
-touch .claude/debug-app/metro-cursor.json
-rm -f .claude/debug-app/symptom-state    # per-session — Phase 0.5 rewrites it if symptom mode is active
+mkdir -p .powernative/debug-app
+touch .powernative/debug-app/fixes.md
+touch .powernative/debug-app/unresolved.md
+touch .powernative/debug-app/injected-logs.md
+touch .powernative/debug-app/health.json
+touch .powernative/debug-app/metro-cursor.json
+rm -f .powernative/debug-app/symptom-state    # per-session — Phase 0.5 rewrites it if symptom mode is active
 ```
 
 If `fixes.md` is empty, write a session header:
@@ -112,6 +192,69 @@ If `fixes.md` is empty, write a session header:
 # Debug session — <date>
 
 ```
+
+Append the effective invocation settings:
+
+```text
+[<HH:MM:SS>] Monitor config — port=<any|port> platform=<any|ios|android> clean-cycles=<targetCleanCycles> timeout=<timeoutSeconds>s no-fix=<true|false>
+```
+
+### 0.1.1 Initialize health state
+
+Write `.powernative/debug-app/health.json` without raw log content:
+
+```json
+{
+  "bundle": { "status": "unknown", "summary": "No evidence yet" },
+  "runtime": { "status": "unknown", "summary": "No evidence yet" },
+  "authentication": { "status": "unknown", "summary": "No evidence yet" },
+  "dataverse": { "status": "unknown", "summary": "No evidence yet" },
+  "connector": { "status": "unknown", "summary": "No evidence yet" },
+  "offline": { "status": "unknown", "summary": "No evidence yet" },
+  "navigation": { "status": "unknown", "summary": "No evidence yet" },
+  "nativeCapability": { "status": "unknown", "summary": "No evidence yet" },
+  "updatedAt": "<ISO timestamp>"
+}
+```
+
+Allowed statuses are `healthy`, `degraded`, `failed`, `unknown`, and `not-configured`. Update only the affected domain after each classified signal:
+
+| Signal | Health update |
+|---|---|
+| Successful native bundle after the latest bundle error | `bundle=healthy` |
+| Bundle/transform/import failure | `bundle=failed` |
+| Uncaught JS/React error | `runtime=failed`; set `healthy` after the repaired workflow produces clean new output |
+| Auth success/failure host diagnostics | `authentication=healthy|failed` |
+| Dataverse 2xx/error for the affected operation | `dataverse=healthy|failed` |
+| Connector resolution/call success or failure | `connector=healthy|failed` |
+| No offline profile | `offline=not-configured`; offline activation/sync warning or failure → `degraded|failed` |
+| Confirmed route/navigation error | `navigation=failed`; repaired route confirmation → `healthy` |
+| Native wrapper success, permission denial, missing module, or native failure | `nativeCapability=healthy|degraded|failed` |
+
+Absence of evidence remains `unknown`; never convert an unobserved domain to `healthy`.
+
+### 0.1.2 Persistence redaction gate
+
+Before appending diagnostic text to `fixes.md` or `unresolved.md`, or storing a health `summary`, sanitize it:
+
+1. Convert project paths to paths relative to `<working_dir>`. Replace other absolute home-directory paths with `[REDACTED_PATH]`.
+2. Replace complete authorization/cookie/secret headers (`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `api-key`, `client-secret`, and token headers) with `[REDACTED_HEADER]`.
+3. Replace Bearer values, JWT-like three-segment values, SAS/query secrets (`sig`, `se`, `sp`, `sv`, `code`, `token`, `access_token`, `refresh_token`, `id_token`, `client_secret`), passwords, and API keys with `[REDACTED_SECRET]`.
+4. Replace email addresses with `[REDACTED_EMAIL]` and GUIDs/record identifiers with `[REDACTED_ID]` unless the identifier is a non-sensitive local PID/port.
+5. Never persist Dataverse/connector response bodies or arbitrary `[TRACE]` object values. Persist only status, source/config table or column names, counts, error codes, and a bounded error message.
+6. Scan the sanitized result again. If any sensitive pattern remains, persist `[REDACTION_BLOCKED: diagnostic omitted]` instead.
+
+Run the bundled verifier for every candidate diagnostic before writing:
+
+```bash
+printf '%s' "$DIAGNOSTIC_SUMMARY" | node \
+   "${PLUGIN_ROOT}/scripts/redact-debug-diagnostic.js" \
+  --working-dir "<working_dir>"
+```
+
+Persist only the verifier's stdout. Build `DIAGNOSTIC_SUMMARY` from minimal fields first; do not pass a full Metro window or response body and rely on redaction to make it safe.
+
+Store `logPath` in `metro-cursor.json` relative to `<working_dir>` and resolve it against `<working_dir>` when reading. This gate is required even though `.powernative` logs are already sanitized.
 
 ### 0.2 Verify Metro bundled and the app is running
 
@@ -198,22 +341,34 @@ Use the output from Phase 0.2. Note the most recently bundled native platform (i
 
 ### 0.4 Initialize the durable byte cursor
 
-Write `.claude/debug-app/metro-cursor.json` using structured JSON:
+Write `.powernative/debug-app/metro-cursor.json` using structured JSON:
 
 ```json
 {
-   "logPath": "/absolute/project/.powernative/metro-logs/metro-<timestamp>-pid-12345-port-8081.log",
+   "logPath": ".powernative/metro-logs/metro-<timestamp>-pid-12345-port-8081.log",
    "pid": 12345,
    "port": 8081,
+   "project": "My Mobile App",
+   "platform": "ios",
+   "startedAt": "2026-08-27T12:41:32.050Z",
+   "monitorStartedAt": "<ISO timestamp>",
+   "monitorConfig": {
+      "port": null,
+      "platform": null,
+      "targetCleanCycles": 3,
+      "timeoutSeconds": 300,
+      "noFix": false
+   },
    "cursor": 12345,
    "updatedAt": "<ISO timestamp>"
 }
 ```
 
-Set `logPath`, `pid`, and `port` from Phase 0.0, and set `cursor` to `nextCursor` from Phase 0.2. On later invocations:
+Set project-relative `logPath`, plus `pid`, `port`, `project`, `platform`, and `startedAt` from Phase 0.0. Set `monitorStartedAt` and `monitorConfig` from the current invocation, and set `cursor` to `nextCursor` from Phase 0.2. Resolve `logPath` against `<working_dir>` before file access. A new invocation always replaces the prior monitoring configuration and start time. On later invocations:
 
 - Same `logPath`, `pid`, and `port`, with the process still owning the port → reuse the saved cursor so old errors are not processed again.
-- Different `logPath`, `pid`, or `port` → a new Metro session is in play. Discard the old cursor and initialize from the latest log window.
+- Multiple valid sessions → ask which session to monitor. Default to the saved session when it remains valid.
+- A different session is explicitly selected, or the saved session is no longer valid → discard the old cursor and initialize from the selected session's latest log window.
 - `rotationLost: true` from Step A → accept the returned reset cursor and record the file shrink/replacement in `fixes.md`.
 
 ---
@@ -221,6 +376,8 @@ Set `logPath`, `pid`, and `port` from Phase 0.0, and set `cursor` to `nextCursor
 ## Phase 0.5 — Symptom-driven setup (only when `$ARGUMENTS` is a symptom string)
 
 Skip this entire phase if no symptom was provided. The standard log-polling loop alone is good at *visible* errors but blind to *silent* ones: an empty list because the connector wasn't added, a blank screen because `useFocusEffect` wasn't wired, blank rows because column names don't match the model. Phase 0.5 closes that gap.
+
+**`--no-fix` behavior:** Parse the symptom and ask the user to reproduce it, but do not inject `[INJECTED-TRACE]` logs or edit any file. Read only new Metro output. If the symptom is silent and produces no classifiable output, record it as `pending` with `watch-only: traces not injected`, then enter the standard loop.
 
 ### 0.5.1 Parse the symptom
 
@@ -271,7 +428,7 @@ console.log('[TRACE <tag>]', <value>); // [INJECTED-TRACE]
 - Log the smallest useful value; use `JSON.stringify(value)` for objects
 - **Never inject inside `src/generated/`** — inject in the hook/screen that calls into it
 
-Record every injection in `.claude/debug-app/injected-logs.md`:
+Record every injection in `.powernative/debug-app/injected-logs.md`:
 ```
 [<HH:MM:SS>] Injected [INJECTED-TRACE] at <file>:<line> — tag=<tag>
 ```
@@ -322,7 +479,7 @@ Use the `[TRACE` lines to walk the chain:
 | `[TRACE handler-called]` never appears | `onPress` not wired or component not mounted | Read TSX, fix the event binding |
 | No `[TRACE` lines at all | Metro may have cached the old bundle | Ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload the native app |
 
-Record the outcome in `.claude/debug-app/symptom-state` (single line: `resolved`, `flagged`, or `pending`).
+Record the outcome in `.powernative/debug-app/symptom-state` (single line: `resolved`, `flagged`, or `pending`).
 
 - **Fix is clear and local** → apply via Step D3 + D4 (type-check + reload + re-poll). After the fix, ask the user to interact with the screen again and read the terminal. If the `[TRACE items]` line shows N > 0, write `resolved`.
 - **Fix routes to another skill** → tell the user, log to `unresolved.md`. Write `flagged`.
@@ -343,7 +500,7 @@ grep -rn 'INJECTED-TRACE' app/ src/hooks/ src/services/  # must return zero resu
 
 Clear the tracking file:
 ```bash
-echo '' > .claude/debug-app/injected-logs.md
+echo '' > .powernative/debug-app/injected-logs.md
 ```
 
 Run `npm run type-check` once after cleanup.
@@ -352,17 +509,36 @@ Run `npm run type-check` once after cleanup.
 
 ### 0.5.6 Re-enter the standard monitor loop
 
-After Phase 0.5 completes, fall through to the monitor loop (Step A). The "3 consecutive clean cycles" exit condition is **suspended** until the symptom is either marked resolved or recorded as `NEEDS ATTENTION` in `unresolved.md`. After that, the loop exits per the standard rule.
+After Phase 0.5 completes, fall through to the monitor loop (Step A). The "`targetCleanCycles` consecutive clean cycles" exit condition is **suspended** until the symptom is either marked resolved or recorded as `NEEDS ATTENTION` in `unresolved.md`. After that, the loop exits per the standard rule.
 
 ---
 
 ## Monitor Loop
 
-Repeat until **3 consecutive clean cycles**, OR the user types `stop`, OR the escalation rule trips.
+Repeat until **`targetCleanCycles` consecutive clean cycles**, `timeoutSeconds` elapses, the user types `stop`, OR the escalation rule trips.
+
+Before every collection cycle and immediately after any fix verification, compare the current time with `monitorStartedAt`. When elapsed time is greater than or equal to `timeoutSeconds`:
+
+1. Clean up all `[INJECTED-TRACE]` lines before exit.
+2. Append the elapsed time, cycle count, clean count, active session identity, and unresolved issue count to `fixes.md`.
+3. Exit without stopping Metro:
+   ```text
+   ⚠ Monitoring timeout reached after <duration>.
+     Session: <project> — <platform> — port <port> — pid <pid>
+     Clean checks: <clean>/<targetCleanCycles>
+   Details: .powernative/debug-app/fixes.md
+   ```
 
 ### Step A — Collect logs
 
-Read `.claude/debug-app/metro-cursor.json`, rediscover the latest live `.powernative` log using Phase 0.0, and confirm the saved `logPath`, `pid`, and `port` still match. If any differ, return to Phase 0.2 and initialize a new baseline. Otherwise read newly appended bytes:
+Read `.powernative/debug-app/metro-cursor.json` and rediscover all live `.powernative` sessions using Phase 0.0's validation logic.
+
+- If the saved `logPath` + `pid` + `port` is still valid, keep monitoring it even when a newer valid session has appeared. Do not interrupt the current run or jump ports.
+- If the saved session is no longer valid and exactly one valid session remains, select that session and return to Phase 0.2 for a new baseline.
+- If the saved session is no longer valid and multiple valid sessions remain, show the session choices and ask which one to monitor, then return to Phase 0.2.
+- If no valid session remains, stop with the applicable Phase 0.0 failure instead of reading a stale log.
+
+Otherwise read newly appended bytes from the pinned session:
 
 ```bash
 node - "$LOG_PATH" <saved-cursor> 262144 <<'NODE'
@@ -392,7 +568,7 @@ Count a clean cycle only after observing a full 5-second interval with empty or 
 
 If `truncated: true`, never count the result as clean. Process any nonempty output, then issue at most three additional tail calls from the returned cursor in the same cycle. If `rotationLost: true`, record an explicit rotation warning in `fixes.md` and require a fresh full observation interval before incrementing the clean counter. If data remains truncated after four chunks, record a backlog warning and continue next cycle rather than consuming unbounded context.
 
-In the new output, surface as classifiable signal:
+In the new output, surface as classifiable signal and update the matching `health.json` domain:
 - Runtime ` ERROR ` / ` WARN ` / ` LOG ` prefixes
 - Host diagnostic lines with prefixes like `[PAHost]`, `[bridge]`, `[AuthProvider]`, `[AuthContext]`, `[useConnectionRefs]`, `[useConnectionSetup]`, `[addAadAppToConnectionAcl]`, `[PAHost][ErrorBoundary]`
 - Stack frames (`at <fn> (<file>:<line>:<col>)`)
@@ -469,14 +645,30 @@ Take `app/(tabs)/todos.tsx:47:12` as the fix site. The recipes in D3.1 below ope
 
 Increment the consecutive-clean-cycle counter.
 
-**Before exiting at 3 clean cycles, check the symptom guard.** Read `.claude/debug-app/symptom-state` and pick the matching exit path below. (If no symptom-driven mode was used this session, Phase 0.1 cleared the file at startup, so the "file missing" branch fires.)
+**Before exiting at `targetCleanCycles`, check the symptom guard.** Read `.powernative/debug-app/symptom-state` and pick the matching exit path below. (If no symptom-driven mode was used this session, Phase 0.1 cleared the file at startup, so the "file missing" branch fires.)
+
+Before every clean, flagged, pending, timeout, iteration-cap, or escalation exit, print this sanitized health table from `health.json`:
+
+```text
+Health
+Bundle             <status>  <summary>
+Runtime            <status>  <summary>
+Authentication     <status>  <summary>
+Dataverse          <status>  <summary>
+Connector          <status>  <summary>
+Offline            <status>  <summary>
+Navigation         <status>  <summary>
+Native capability  <status>  <summary>
+```
+
+Keep `unknown` when no evidence was observed and `not-configured` only when configuration absence was positively detected. Apply the persistence redaction gate to every summary. A clean log interval does not make all unknown domains healthy.
 
 **`resolved`** OR file missing (no symptom mode this session):
 
 ```
-✓ App is running cleanly — no errors detected across 3 consecutive log checks.
+✓ App is running cleanly — no errors detected across <targetCleanCycles> consecutive log checks.
   Symptom verification: <PASS | n/a — no symptom provided>.
-  Session summary written to .claude/debug-app/fixes.md.
+   Session summary written to .powernative/debug-app/fixes.md.
 
   To resume monitoring, run /debug-app again.
 ```
@@ -487,32 +679,45 @@ Increment the consecutive-clean-cycle counter.
 ⚠ Logs are clean BUT the symptom isn't fixed — it requires another skill.
   Symptom: <class> on <screen>
   Next step: <skill route recorded in unresolved.md by Phase 0.5> (e.g., run /add-connector)
-  Details: .claude/debug-app/unresolved.md
+   Details: .powernative/debug-app/unresolved.md
 
   Re-run /debug-app "<symptom>" after taking that step to verify the fix.
 ```
 
 Do NOT print the green ✓ — the app is technically log-clean but the user-visible problem persists, and the user needs to act before re-running.
 
-**`pending`** (still active after 3 clean log cycles):
+**`pending`** (still active after `targetCleanCycles` clean log cycles):
 
 Append to `unresolved.md` with the Phase 0.5 chain findings, then print:
 
-> "⚠ Symptom `<class>` on `<screen>` still active after 3 clean log cycles. The runtime is quiet but the user-visible problem persists — likely a swallowed data-path error. See `.claude/debug-app/unresolved.md` for the chain walk. Suggested next step: <derived from the walk>."
+> "⚠ Symptom `<class>` on `<screen>` still active after `<targetCleanCycles>` clean log cycles. The runtime is quiet but the user-visible problem persists — likely a swallowed data-path error. See `.powernative/debug-app/unresolved.md` for the chain walk. Suggested next step: <derived from the walk>."
 
 ---
 
 Exit the loop. Do NOT auto-resume.
 
-**Iteration cap (applies in both modes):** independent of the clean-cycle counter, the loop exits after **50 total cycles** (≈5 min wall clock on a clean loop, longer when fixes are running). Track `cycle: <N>` at the top of `fixes.md` and increment per cycle. On cap-hit, exit with:
+**Iteration cap (applies in both modes):** independent of the clean-cycle counter and timeout, the loop exits after **50 total cycles**. Track `cycle: <N>` at the top of `fixes.md` and increment per cycle. On cap-hit, exit with:
 
-> "⚠ Loop reached the iteration cap (50 cycles). Symptom may be intermittent OR a fix is regressing on every reload. See `.claude/debug-app/fixes.md` for the per-cycle log. Suggested next step: review the last 3 fixes for circular regressions, or re-run with a more specific symptom."
+> "⚠ Loop reached the iteration cap (50 cycles). Symptom may be intermittent OR a fix is regressing on every reload. See `.powernative/debug-app/fixes.md` for the per-cycle log. Suggested next step: review the last 3 fixes for circular regressions, or re-run with a more specific symptom."
 
 If counter is < 3 AND the cap hasn't tripped, return to Step A on the next monitoring beat. Do not run shell `sleep` or a host-specific wait command; ordinary tool execution provides the cadence and the cursor prevents duplicate reads.
 
 ### Step D — If issues ARE found
 
 Reset the consecutive-clean counter to 0. For each issue, work through the sequence below **one at a time** before moving to the next.
+
+#### D0. Watch-only branch (`--no-fix`)
+
+When `noFix=true`, do not continue to D1–D4 for mutation:
+
+1. Record the category, exact error, top user-code frame when available, and the fix recipe or handoff that would have been used.
+2. Append:
+   ```text
+   [<HH:MM:SS>] Observed (no-fix) — <category> — <file:line|no user frame> — <summary>
+     Would do: <inline fix recipe | skill handoff | manual native action>
+   ```
+3. Do not edit project source/configuration, inject traces, type-check, reload, install, regenerate, switch accounts, or invoke another skill. Updating `.powernative/debug-app/` cursor, audit, and health files is allowed.
+4. Continue to the next issue, then return to Step A. New output is still monitored until the clean target, timeout, stop, or iteration cap is reached.
 
 #### D1. Gather context
 
@@ -534,6 +739,32 @@ Read the relevant source file(s). Identify:
 - Whether the fix touches the data layer, UI layer, routing, or schema.
 - Whether the fix could regress other screens.
 
+**Dataverse / Power Platform diagnostic sequence (before handoff):**
+
+1. Read [skills/add-dataverse/references/dataverse-reference.md](../add-dataverse/references/dataverse-reference.md). Use `memory-bank.md` and the relevant `native-app-plan.md` sections when present.
+2. Read `power.config.json`; take `environmentId` from it before any other source. Inspect the relevant generated service/model and `connectorSchemas.ts`.
+3. Resolve the environment read-only:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "<environmentId-or-url>"
+   ```
+   If resolution fails, run `npx power-apps auth-status --json`. Never switch accounts, log out, or open login from `/debug-app` without user confirmation.
+4. When environment resolution succeeds and live evidence is required, use only read-only `GET` requests through:
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET <apiPath> \
+     --tenant-id '<resolved-tenant-id>'
+   ```
+   Start with `WhoAmI` when authentication/tenant identity is in question. Use bounded metadata/entity reads to confirm table and column names. Do not create, update, delete, publish, seed, flood, or intentionally invalidate credentials from `/debug-app`.
+5. App runtime data fixes must continue to use generated `<Table>Service` calls. Never replace them with direct `fetch`/`axios` Dataverse calls.
+6. If OData syntax, lookup behavior, choice/virtual/file/image fields, authentication, throttling, or error shape remains uncertain, query Microsoft Learn with the exact error/token before forming a fix.
+
+Only after this sequence proves that a table/column/service/schema artifact is missing or incompatible should D3 route to `/add-dataverse`.
+
+**Expo / Expo Router / React Native diagnostic sequence:**
+
+1. Read the cited app file plus `package.json`, `app.json`/`app.config.js`, and route layout only as relevant.
+2. Prefer installed package types/readmes for the exact version.
+3. If behavior remains uncertain, use a targeted `WebFetch` against official `https://docs.expo.dev/` documentation (Expo Router pages for routing; SDK pages for native modules). Do not query Microsoft Learn for Expo/React Native behavior.
+
 #### D3. Apply the fix
 
 **For Import / Bundle category errors, jump to D3.1 first** — those have specific recipes that pre-empt the generic routing table below. For everything else (JS Runtime, Network/API, React, etc.), use the routing table:
@@ -544,7 +775,7 @@ Read the relevant source file(s). Identify:
 | `src/components/` | Inline edit via `Edit` tool |
 | `src/hooks/`, `src/services/` | Inline edit via `Edit` tool |
 | `src/generated/` | **Do not edit.** Fix the upstream query or schema and run `npm run generate-schemas` |
-| Dataverse schema (column/table missing) | **Hand-off:** route user to `/add-dataverse`. Do not auto-edit. Read [skills/add-dataverse/references/dataverse-reference.md](${CLAUDE_SKILL_DIR}/../../skills/add-dataverse/references/dataverse-reference.md) before suggesting changes. |
+| Dataverse schema (column/table missing) | Run D2's read-only Dataverse diagnostic sequence first. If live metadata/generated artifacts confirm the schema or service is missing, **hand off** to `/add-dataverse`. Do not mutate Dataverse or edit generated files from `/debug-app`. |
 | Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
 | Native module, `app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle` | **Inform the user.** Do NOT auto-edit native config — print the error + suggested action and skip to next issue. |
@@ -560,7 +791,7 @@ PDF/pen/geolocation-specific routing:
 
 For inline edits, keep the change minimal and surgical. Do not refactor surrounding code, rename symbols, or change component contracts.
 
-Append to `.claude/debug-app/fixes.md`:
+Append to `.powernative/debug-app/fixes.md`:
 ```
 [<HH:MM:SS>] <category> — <file>:<line> — <one-line description of fix>
 ```
@@ -574,7 +805,7 @@ These recipes apply to errors classified as "Import / Bundle" in Step B. They ar
 | `SyntaxError: <file>:<line>:<col>` in `app/`, `src/components/`, `src/hooks/`, `src/services/` | The cited line is in editable user code (NOT `src/generated/`, NOT `node_modules/`) | `Read` the file around the cited line (±10 lines), identify the syntactic issue (unclosed JSX tag, missing closing brace/paren, stray comma, missing `from` in import, unterminated string, missing semicolon between statements), apply a single minimal `Edit`. Do NOT reformat surrounding code. |
 | `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
-| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
+| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](../../shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
 | `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload. Never kill an unowned process. |
 | `transform failed` referencing a babel plugin (e.g., `[BABEL] ... unknown plugin "react-native-reanimated/plugin"`) | Error references `babel.config.js` | **Hand-off.** `babel.config.js` is project config (same constraint that protects `app.config.js`). Print the cited plugin and suggested fix order (e.g., "`react-native-reanimated/plugin` MUST be the LAST plugin in `babel.config.js` `plugins` array"); skip to next issue. |
 | `transform failed` without a babel reference | Generic transform failure (often a TS feature Metro's transformer can't handle) | Read the cited file, look for syntax that requires a specific TS lib (e.g., decorators, top-level await). If the issue is a known-bad pattern, surface and ask before fixing. Otherwise hand-off. |
@@ -583,7 +814,7 @@ These recipes apply to errors classified as "Import / Bundle" in Step B. They ar
 
 After applying any inline edit (rows 1, 3, 4 above), Metro auto-detects the file save and re-bundles. Skip directly to D4 — do NOT manually trigger a reload. The verify step picks up Metro's `Bundling complete` (or the next error block) automatically.
 
-Append to `.claude/debug-app/fixes.md`:
+Append to `.powernative/debug-app/fixes.md`:
 ```
 [<HH:MM:SS>] Import/Bundle — <file>:<line> — <recipe applied>
 ```
@@ -599,15 +830,16 @@ When an error falls through every row of Step B's classification table AND every
 3. **Verbatim grep across the repo** — `Grep` for the exact error message text (or its most distinctive 4–6 word phrase, with regex special chars escaped) across `app/`, `src/components/`, `src/hooks/`, `src/services/`. A match at a `throw new Error('...')` site IS the cite.
 4. **Module + symbol grep** — if the error mentions a function or component name (e.g., `useFoo is not a function`), `Grep` for the symbol; the unique declaration site is the cite.
 
-If no cite can be located by step 4: log a structured note to `.claude/debug-app/unresolved.md` (verbatim error + which lookup attempts ran), surface to the user, advance to next issue. **Do not guess at a file.** Best-effort still requires a target.
+If no cite can be located by step 4: log a structured note to `.powernative/debug-app/unresolved.md` (verbatim error + which lookup attempts ran), surface to the user, advance to next issue. **Do not guess at a file.** Best-effort still requires a target.
 
 **Step 2 — Enrich understanding (do not skip).**
 
-- If the error contains a Microsoft-stack token (`AADSTS\d+`, `Dataverse`, `Power Platform`, `MSAL`, `Entra`, `Graph API`): query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` with the exact code or token. A matching doc usually pins the fix exactly.
+- If the error contains a Microsoft-stack token (`AADSTS\d+`, `Dataverse`, `Power Platform`, `MSAL`, `Entra`, `Graph API`): first run D2's project/reference/read-only diagnostic sequence, then query `mcp__plugin_mobile-app_microsoft-learn__microsoft_docs_search` with the exact code or token when behavior remains uncertain.
+- If the error concerns Expo, Expo Router, an Expo SDK module, or React Native behavior: inspect the installed version and local package documentation, then use targeted `WebFetch` against `https://docs.expo.dev/`. Do not use Microsoft Learn for these errors.
 - Read the cited file ±15 lines for surrounding context. Note recent imports, the function signature, and any nearby `try/catch` or `useEffect` deps.
 - If the error mentions a third-party module (anything in `node_modules/` from the stack), one targeted `WebFetch` against the module's npm page or GitHub README is acceptable; do NOT do open-ended web searches in the loop.
 
-**Step 3 — Form ONE named hypothesis.** Write it to `.claude/debug-app/fixes.md` BEFORE editing, in this format:
+**Step 3 — Form ONE named hypothesis.** Write it to `.powernative/debug-app/fixes.md` BEFORE editing, in this format:
 
 ```
 [<HH:MM:SS>] Hypothesis (best-effort) — <file>:<line> — <one-sentence theory>
@@ -678,7 +910,7 @@ If the same error persists after **2 fix attempts**, stop and report:
   Suggested next step: <manual action>
 ```
 
-Append the same block to `.claude/debug-app/unresolved.md`. Clean up any `[INJECTED-TRACE]` logs before exiting (Phase 0.5.5 procedure).
+Append the same block to `.powernative/debug-app/unresolved.md`. Clean up any `[INJECTED-TRACE]` logs before exiting (Phase 0.5.5 procedure).
 
 Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
@@ -688,6 +920,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
 - **Never fix native config files** (`app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle`, `gradle.properties`) — report the error to the user with the exact line and a suggested manual action.
 - **Never modify `src/generated/`** — these files are auto-generated. Fix the upstream query / service / schema instead, then run `npm run generate-schemas`.
+- **Dataverse diagnosis is read-only** — `/debug-app` may resolve the configured environment and issue bounded Dataverse `GET` requests through the bundled scripts. It must never perform metadata/data writes, publish, seed records, intentionally trigger throttling, invalidate tokens, switch CLI accounts, or replace generated services with direct HTTP.
 - **Do not ask the user about errors mid-cycle** — investigate autonomously using the tools above. Only surface to the user when:
   1. The fix requires a native config change.
   2. The fix requires a tenant admin action (e.g., AAD consent).
@@ -713,7 +946,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 | Same error keeps recurring after fix | Fast Refresh didn't apply the change, or the fix targeted the wrong file | Verify with `git status`; reload from the native dev-client menu; re-run |
 | Same error persists after fix AND `git status` shows the change saved AND type-check is clean | Stale Metro transform cache | Ask the user to stop Metro, rerun `npm run dev -- --clear`, reload, then rerun `/debug-app` |
 | Escalation triggered immediately | Error pattern is in a category we hand-off (auth, schema, native) | Take the suggested manual action, then re-run `/debug-app` |
-| `.claude/debug-app/fixes.md` not appearing | Phase 0 didn't run / state directory not created | Run `mkdir -p .claude/debug-app` manually, re-run skill |
+| `.powernative/debug-app/fixes.md` not appearing | Phase 0 didn't run / state directory not created | Run `mkdir -p .powernative/debug-app` manually, re-run skill |
 | "App is running cleanly" but the user still sees the problem | Symptom-driven mode was not used — log polling alone is blind to silent failures | Re-run as `/debug-app "<describe what you see>"` to trigger Phase 0.5 (console.log injection) |
 | Phase 0.5 reports `screen=unknown` | Symptom text didn't match any route filename | Re-run with a more specific symptom (`/debug-app "todos screen empty"` not `"data is broken"`), OR navigate to the broken screen first then re-run |
 | No `[TRACE` lines after reload | Metro cached the old bundle | Ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload the app |
@@ -723,7 +956,7 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
 ## Notes
 
-- **Designed to be re-run** — every invocation is idempotent. `.claude/debug-app/metro-cursor.json` advances past previously seen bytes and resets safely when a new Metro session or rotated log is detected.
+- **Designed to be re-run** — every invocation is idempotent. `.powernative/debug-app/metro-cursor.json` advances past previously seen bytes and resets safely when a new Metro session or rotated log is detected.
 - **Honest about limits** — this is a foreground loop. While it's running, you can't run other skills. By design — the model is "build first, debug second." If you need to pause, type `stop` and resume later.
 - **No specialist agents** — upstream's `app-debugger.agent.md` delegates to `screen-builder`, `component-author`, `api-integration`, `dataverse-data-modeler` agents. We don't have all those agents in this plugin, so this skill fixes inline OR routes to skills (`/add-dataverse`, `/set-app-registration-native`, `/list-connections`, `/add-connector`). Behavior is equivalent for the categories we cover.
 - **Host diagnostics caveat** — host-prefixed diagnostics (`[PAHost]`, `[bridge]`, `[AuthProvider]`, etc.) are expected in dev-player sessions and should be treated as first-class telemetry. If these lines are absent in non-dev-player builds, that is expected and not itself a bug.
@@ -736,9 +969,9 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
   | Verification cycle (type-check + reload + re-poll) | yes | yes |
   | Escalation after 2 attempts | yes | yes |
    | Bounded polling | yes | yes — durable byte cursor, bounded chunks |
-  | Exit on 3 consecutive clean cycles | yes | yes (gated on symptom resolution when symptom-driven mode is in use) |
+  | Configurable consecutive-clean exit | fixed at 3 | yes — default 3, configurable with `--cycles`, and gated on symptom resolution |
   | Specialist agent delegation | yes | replaced with skill routing |
-  | Working-dir audit log | no | yes (additional — `.claude/debug-app/fixes.md`, `injected-logs.md`) |
+   | Working-dir audit log | no | yes (additional — `.powernative/debug-app/fixes.md`, `injected-logs.md`) |
   | MS Learn fallback for unknown errors | no | yes (additional) |
    | Persisted Metro/app log source (bundler errors + Hermes console + HTTP request log) | no | yes — survives host restarts; no MCP fallback |
   | Bundle / transform error fix recipes (D3.1) | no | yes (additional) |

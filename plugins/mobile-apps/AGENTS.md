@@ -73,7 +73,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-13. **Metro lifecycle is project-local** — template `metro.config.js` delegates sanitized `.powernative/metro-logs/` writing to `@microsoft/power-apps-native-host/metro-logger` during normal `npm run dev`; `/debug-app` locates and tails those files directly with a persisted byte cursor. Do not restore required `BashOutput`/terminal-ID behavior. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
+13. **Metro lifecycle is project-local** — template `metro.config.js` delegates sanitized `.powernative/metro-logs/` writing to `@microsoft/power-apps-native-host/metro-logger` during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
 
 ## Decisions made
 
