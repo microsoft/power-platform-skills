@@ -6,6 +6,7 @@ const path = require('path');
 const test = require('node:test');
 
 const plannerPath = path.resolve(__dirname, '../../agents/native-app-planner.md');
+const agentRoot = path.resolve(__dirname, '../../agents');
 
 test('native app planner may write only the documented planning artifacts', () => {
   const planner = fs.readFileSync(plannerPath, 'utf8');
@@ -28,4 +29,18 @@ test('native app planner may write only the documented planning artifacts', () =
   }
   assert.match(planner, /MUST NOT write application source, generated services, configuration/);
   assert.doesNotMatch(planner, /Write` only for `native-app-plan\.md`/);
+});
+
+test('mobile leaf agents defer model selection to the host', () => {
+  const leafAgents = [
+    'data-model-architect.md',
+    'screen-planner.md',
+    'screen-builder.md',
+    'offline-profile-architect.md',
+  ];
+
+  for (const fileName of leafAgents) {
+    const source = fs.readFileSync(path.join(agentRoot, fileName), 'utf8');
+    assert.doesNotMatch(source, /^model:\s*sonnet\s*$/m, fileName);
+  }
 });

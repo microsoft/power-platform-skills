@@ -3,7 +3,7 @@ name: screen-planner
 description: Use when an orchestrator needs a journey-oriented screen graph, Workflow Journey contract, and revision-bound per-screen build packs for a Power Apps mobile app. Read-only — does NOT write TSX. Called by native-app-planner and /edit-app; not invoked directly by users.
 user-invocable: false
 color: cyan
-model: sonnet
+
 tools:
   - Read
   - Write

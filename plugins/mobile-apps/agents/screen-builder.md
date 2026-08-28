@@ -3,7 +3,7 @@ name: screen-builder
 description: Use when an orchestrator needs ONE screen of a Power Apps mobile app implemented from a per-screen spec in native-app-plan.md. Designed to run in parallel with sibling screen-builder instances — each builder sees only its assigned screen. Called by /create-mobile-app and /edit-app; not invoked directly by users.
 user-invocable: false
 color: green
-model: sonnet
+
 tools:
   - Read
   - Write

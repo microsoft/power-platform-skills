@@ -9,22 +9,29 @@ const {
   runBenchmark,
 } = require('../benchmark-dataverse-planning');
 
-test('fixture benchmark covers wildlife and an unrelated laboratory workflow', async () => {
+test('fixture benchmark covers typed domain and adversarial receiving workflows', async () => {
   const result = await runBenchmark();
-  assert.equal(result.scenarios.length, 2);
+  assert.equal(result.scenarios.length, 3);
   assert.deepEqual(
     result.scenarios.map((scenario) => scenario.id),
-    ['wildlife-rehabilitation', 'laboratory-chain-of-custody'],
+    [
+      'wildlife-rehabilitation',
+      'laboratory-chain-of-custody',
+      'warehouse-receiving-adversarial',
+    ],
   );
   for (const scenario of result.scenarios) {
-    assert.equal(scenario.requiredConceptCount, 5);
-    assert.ok(scenario.selectedCandidateCount >= 5);
     assert.equal(scenario.detailedCandidateBreakdown.required, 0);
-    assert.equal(scenario.detailedCandidateBreakdown.advisory, 5);
     assert.equal(scenario.detailedCandidateBreakdown.exactCoveredConcepts, 0);
     assert.equal(scenario.detailedCandidateBreakdown.advisoryLimit, 40);
+    assert.equal(
+      scenario.detailedCandidateBreakdown.loaded
+        + scenario.detailedCandidateBreakdown.failed,
+      scenario.detailedCandidateBreakdown.advisory,
+    );
     assert.equal(scenario.metadataRequests.snapshotFirstAgentRequests, 0);
     assert.ok(scenario.metadataRequests.snapshotForegroundRequests > 0);
+    assert.ok(Object.keys(scenario.metadataRequests.byCategory).length > 0);
     assert.equal(scenario.outputCompleteness.percent, 100);
     assert.deepEqual(scenario.outputCompleteness.checks, {
       candidateSelection: true,
@@ -32,21 +39,45 @@ test('fixture benchmark covers wildlife and an unrelated laboratory workflow', a
       computedExtraction: true,
       proposedNameChecks: true,
       evidenceOutput: true,
+      nonEntityConceptFiltering: true,
+      strongCollisionPromotion: true,
     });
     assert.ok(scenario.evidenceCharacters > 0);
+    assert.ok(scenario.architectEvidenceBytes < scenario.snapshotBytes);
     assert.ok(scenario.elapsedLocalProcessingMs >= 0);
   }
+
+  const receiving = result.scenarios[2];
+  assert.equal(receiving.requiredConceptCount, 6);
+  assert.equal(receiving.selectedCandidateCount, 8);
+  assert.deepEqual(receiving.detailedCandidateBreakdown, {
+    required: 0,
+    advisory: 8,
+    exactCoveredConcepts: 0,
+    advisoryLimit: 40,
+    primary: 6,
+    ambiguity: 1,
+    strongCollisions: 1,
+    deferred: 0,
+    core: 2,
+    full: 6,
+    loaded: 8,
+    failed: 0,
+  });
 });
 
 test('benchmark report is explicit about real fixture execution and A/B limitations', async () => {
   const markdown = renderBenchmarkMarkdown(await runBenchmark(REQUIREMENT_SETS));
   assert.match(markdown, /Wildlife rehabilitation/);
   assert.match(markdown, /Laboratory sample chain-of-custody/);
-  assert.match(markdown, /Foreground fixture requests/);
-  assert.match(markdown, /Required \/ advisory/);
-  assert.match(markdown, /Exact-covered concepts/);
-  assert.match(markdown, /Snapshot-first agent requests/);
-  assert.match(markdown, /real snapshot candidate selection/);
+  assert.match(markdown, /Warehouse receiving with typed noise and collision/);
+  assert.match(markdown, /Core \/ full \/ failed/);
+  assert.match(markdown, /combined-base-metadata=/);
+  assert.match(markdown, /Primary \/ ambiguity \/ collision/);
+  assert.match(markdown, /Snapshot \/ sidecar/);
+  assert.match(markdown, /## Request categories/);
+  assert.match(markdown, /typed candidate selection/);
+  assert.match(markdown, /compact architect evidence/);
   assert.match(markdown, /Matched agent A\/B runs are still required/);
   assert.match(markdown, /matched agent A\/B decision and timing runs/);
 });

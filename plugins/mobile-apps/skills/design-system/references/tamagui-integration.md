@@ -8,7 +8,11 @@ Internal reference used by `/create-mobile-app` Step 9b after `/design-system` w
 
 Keep generated screens on one stable token contract:
 
-- Always provide `$surface0`-`$surface3` and `$accentBase` / `$accentSoft` / `$accentDeep` / `$accentOnAccent`.
+- Always preserve the complete baseline contract: `$surface0`-`$surface3`,
+  `$mediaSurface`, `$accentBase` / `$accentSoft` / `$accentDeep` /
+  `$accentOnAccent`, `$text0`-`$text3`, foreground/background pairs for
+  complete, pending, overdue, in-progress, draft, and cancelled, plus
+  `fonts.mono`.
 - Import `brand/tokens.ts` when it exists; it is the source of truth from `/design-system`.
 - Do not add an outer `TamaguiProvider`, `PortalProvider`, app-owned `Toaster`, `GestureHandlerRootView`, or `QueryClientProvider`; current `PowerAppsProvider` owns the provider and portal infrastructure. In Tamagui 2, `Toaster` is a sibling component rather than a provider wrapper.
 
@@ -50,6 +54,8 @@ type BrandColors = Partial<{
   primary: string;
   accent: string;
   border: string;
+  text: string;
+  textMuted: string;
   statusSuccess: string;
   statusWarning: string;
   statusDanger: string;
@@ -66,18 +72,27 @@ function withSemanticAliases(
     surface1: brand.surface ?? theme.color2,
     surface2: theme.color3,
     surface3: brand.border ?? theme.color4,
-    accentDeep: brand.primary ?? theme.blue8,
+    mediaSurface: theme.color3,
+    accentDeep: brand.primary ?? theme.blue11,
     accentBase: brand.primary ?? theme.blue10,
     accentSoft: brand.accent ?? theme.blue3,
     accentOnAccent: theme.color1,
-    statusComplete: brand.statusSuccess ?? theme.green10,
+    text0: brand.text ?? theme.color12,
+    text1: brand.textMuted ?? theme.color11,
+    text2: theme.color10,
+    text3: theme.color9,
+    statusComplete: brand.statusSuccess ?? theme.green11,
     statusCompleteBg: theme.green3,
-    statusPending: brand.statusWarning ?? theme.yellow10,
+    statusPending: brand.statusWarning ?? theme.yellow11,
     statusPendingBg: theme.yellow3,
-    statusOverdue: brand.statusDanger ?? theme.red10,
+    statusOverdue: brand.statusDanger ?? theme.red11,
     statusOverdueBg: theme.red3,
-    statusInProgress: brand.statusInfo ?? theme.blue10,
+    statusInProgress: brand.statusInfo ?? theme.blue11,
     statusInProgressBg: theme.blue3,
+    statusDraft: theme.color10,
+    statusDraftBg: theme.color3,
+    statusCancelled: theme.red11,
+    statusCancelledBg: theme.red3,
   };
 }
 
@@ -87,10 +102,16 @@ const themes = {
   dark: withSemanticAliases(defaultConfig.themes.dark),
 };
 
+const fonts = {
+  ...defaultConfig.fonts,
+  mono: defaultConfig.fonts.body,
+};
+
 const customConfig = {
   ...defaultConfig,
   animations,
   themes,
+  fonts,
 };
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 
@@ -142,6 +163,10 @@ const customConfig = {
   animations,
   tokens,
   themes,
+  fonts: {
+    ...defaultConfig.fonts,
+    mono: defaultConfig.fonts.body,
+  },
 };
 // CUSTOMIZATION END - DO NOT REMOVE OR RENAME
 ```
@@ -150,22 +175,32 @@ Hard rule: never remap brand space keys (`xs`, `sm`, `md`, `lg`, `xl`, `2xl`, `3
 
 ## Root Provider Wiring
 
-Current templates pass design values through `PowerAppsProvider`:
+Current templates pass design values through `PowerAppsProvider` and preserve
+the offline profile. `SafeAreaProvider` owns context only; rendered routes own
+their visible safe-area edges:
 
 ```tsx
-<PowerAppsProvider
-  authConfig={authConfig}
-  powerConfig={powerConfig}
-  tamaguiConfig={tamaguiConfig}
-  defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-  theme={lightTheme}
-  darkTheme={darkTheme}
->
-  <Slot />
-</PowerAppsProvider>
+<SafeAreaProvider>
+  <PowerAppsProvider
+    msalConfig={authConfig.msal}
+    powerConfig={powerConfig}
+    schemaMap={schemaMap}
+    offlineProfile={offlineProfile}
+    tamaguiConfig={tamaguiConfig}
+    defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
+    theme={lightTheme}
+    darkTheme={darkTheme}
+  >
+    <Slot />
+  </PowerAppsProvider>
+</SafeAreaProvider>
 ```
 
 If `brand/tokens.ts` exists, spread brand values over `lightTheme` / `darkTheme` with nullish fallback; do not rename imported `lightTheme`/`darkTheme` into local constants with the same names.
+
+Do not wrap `<Slot />` in a root `SafeAreaView`. Home, login, callback, and
+generated routes must use `SafeAreaView` or explicit insets themselves so
+nested navigation does not receive double top/bottom padding.
 
 ## Common Fixes
 

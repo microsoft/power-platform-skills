@@ -502,6 +502,13 @@ the operation manifest.
 The manifest builder never emits calculated/rollup/formula creation. Reused
 computed dependencies have already crossed the exact derived-metadata barrier;
 unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and continue
+and invalidate the planning-only inventory cache:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+```
+
 to Step 6. When there were zero writes and no checkpoint, continue without
 deleting anything. Skip the
 fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
@@ -1047,6 +1054,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> POST \
 Build the entity list from all tables that were **created or extended** in Steps 4–5. Skip reused-as-is tables — they don't need republishing.
 
 If the publish call returns a non-2xx status, report the error and stop — do not proceed. The user must resolve before the tables are usable.
+
+After a 2xx publish, invalidate the planning-only inventory cache before
+verification so a later planning run cannot reuse pre-publication inventory:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
+  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
+```
 
 ### Step 6c — Verify tables exist
 

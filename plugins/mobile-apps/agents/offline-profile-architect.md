@@ -3,7 +3,7 @@ name: offline-profile-architect
 description: Use when the orchestrator needs an offline profile design proposed (per-table row scope, recommended relationships, selected columns, sync frequency) for embedding in native-app-plan.md ## Offline Profile section. Read-only — proposes, never mutates. Called by /setup-offline-profile; not invoked directly by users.
 user-invocable: false
 color: teal
-model: sonnet
+
 tools:
   - Read
   - Write
