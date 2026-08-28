@@ -390,42 +390,87 @@ bodies. Read `execution.phases` in this fixed order:
 
 1. `tableCreates` — dependency-tier table creates with all ordinary columns
    inline;
-2. `extensions` — missing ordinary columns on existing tables;
+2. `extensions` — missing ordinary columns plus narrowly validated full-image
+  configuration PUTs after Image creation;
 3. `relationships` — lookups/1:N and M:N after both endpoints exist;
 4. `alternateKeys` — after target tables and columns exist;
 5. `publish` — one `PublishXml` operation only when earlier phases contain
    writes or a bound publish-pending checkpoint requires retry.
 
-For each non-empty phase, write just that phase's `operations` array to
-`<working_dir>/.tmp/dataverse-operation-phase-<name>.json`. Read
-`integritySha256` and `binding.reconciliationSha256` from the validated
-manifest, then execute every phase with the same project-local atomic journal:
+Execute the already validated manifest through one deterministic entry point.
+It revalidates the manifest and its exact plan/contract/receipt/reconciliation
+bindings before sending any request, then owns every phase transition and the
+project-local atomic journal:
 
 ```bash
 EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
-ALL_MANIFEST_OPERATIONS="<working_dir>/.tmp/dataverse-operation-all.json"
-# Write the flattened operations from every manifest phase to ALL_MANIFEST_OPERATIONS once.
+EXECUTION_OUTCOME="<working_dir>/.tmp/dataverse-execution-outcome.json"
+DATAVERSE_TIMINGS_PATH="<working_dir>/.tmp/mobile-planning-timings.json"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> \
-  BATCH-METADATA "manifest-<phase-name>" \
-  --operations "$(cat <working_dir>/.tmp/dataverse-operation-phase-<name>.json)" \
-  --solution "<solution-uniquename>" \
-  --tenant-id "<tenantId>" \
+node "${CLAUDE_SKILL_DIR}/../../scripts/execute-dataverse-plan.js" \
+  --manifest "$OPERATION_MANIFEST" \
+  --contract "$SCHEMA_CONTRACT" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --reconciliation "$EXECUTION_RECONCILIATION" \
+  --plan "<working_dir>/native-app-plan.md" \
   --journal "$EXECUTION_JOURNAL" \
-  --manifest-file "$OPERATION_MANIFEST" \
-  --manifest-hash "<manifest.integritySha256>" \
-  --reconciliation-hash "<manifest.binding.reconciliationSha256>" \
-  --manifest-operations "$(cat "$ALL_MANIFEST_OPERATIONS")"
+  --publish-checkpoint "$PUBLISH_CHECKPOINT" \
+  --inventory-cache "<working_dir>/.tmp/dataverse-inventory-cache.json" \
+  --outcome "$EXECUTION_OUTCOME" \
+  --timings-output "$DATAVERSE_TIMINGS_PATH" \
+  --environment-id "<environmentId>" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --publisher-prefix "<customizationprefix>" \
+  --solution "<solution-uniquename>" \
+  --json
 ```
 
-Wait for the entire phase to finish before starting the next. This executor is
-not OData `$batch`; it sends one request at a time, reuses one token, preserves
-manifest order, and stops on the first non-2xx response. Never pass
-`--continue-on-error`, never parallelize phases or operations, and never
-execute `service.requiredTables` through BATCH-METADATA.
-The runner verifies the manifest file's integrity hash, requires the supplied
-operation array to equal one complete manifest phase byte-for-byte, and rejects
-that phase until every operation in preceding phases is journal-complete.
+This executor is not OData `$batch`; it sends one request at a time, reuses one
+token, preserves manifest phase/order, and stops on the first non-2xx response.
+It never executes `service.requiredTables` as metadata operations. On `DONE`, it
+removes the publish checkpoint and invalidates planning inventory only when the
+publish phase returned success. Handle other statuses mechanically:
+
+- `UNCERTAIN_RECONCILIATION_REQUIRED` — perform fresh exact reconciliation and
+  regenerate the complete manifest before invoking the runner again.
+- `COLLISION_ADAPTATION_REQUIRED` — use only its journal-derived
+  `collisionEvidence` in the existing approved revision/roll-forward path.
+- `BLOCKED` — stop and surface `stage` plus `reasonCode`; do not inspect or
+  replay individual operations manually.
+
+Time recovery work in the same atomic artifact, without including user approval
+waiting. For `UNCERTAIN_RECONCILIATION_REQUIRED`, start immediately before the
+fresh exact reconciliation and finish only after the rebuilt manifest validates:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --output "$DATAVERSE_TIMINGS_PATH" \
+  --stage uncertainRecovery --action start
+# Fresh exact reconciliation, complete manifest rebuild, and validation.
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --output "$DATAVERSE_TIMINGS_PATH" \
+  --stage uncertainRecovery --action finish
+```
+
+For `COLLISION_ADAPTATION_REQUIRED`, use the same boundary around the approved
+technical-identity revision, checkpoint roll-forward, fresh reconciliation,
+and manifest validation:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --output "$DATAVERSE_TIMINGS_PATH" \
+  --stage collisionAdaptation --action start
+# Approved technical adaptation and complete deterministic regeneration.
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --output "$DATAVERSE_TIMINGS_PATH" \
+  --stage collisionAdaptation --action finish
+```
+
+Use `--action fail --reason <short-safe-classification>` instead of `finish`
+when either bounded path fails. If semantic approval is needed, stop the
+adaptation timer before the approval gate and use the existing `userApproval`
+stage for that wait.
 
 The runner atomically writes `inFlight` before each request and records each
 successful operation before moving to the next. Completed fingerprints are
@@ -441,7 +486,7 @@ manifest, then resume with both new hashes. The runner mechanically treats an
 uncertain operation omitted by the new manifest as already applied/superseded,
 or retries it only when the fresh reconciliation proves it is still required.
 
-If `summary.metadataOperationCount` is zero, issue **zero metadata POSTs** and
+If `summary.metadataOperationCount` is zero, issue **zero metadata mutations** and
 print `↻ Dataverse schema already fully applied — zero metadata writes.` This
 is the required idempotent rerun behavior after successful publish. A manifest
 with zero schema operations but one checkpoint-driven `PublishXml` operation
@@ -466,10 +511,66 @@ files. Revalidate before resuming through the journal. Never continue an old
 array after a rename. Any non-collision failure stops the metadata path with
 its exact result.
 
+The revised table row must distinguish an unreadable hidden collision from a
+normal existing-object Adapt:
+
+```json
+{
+  "plannedDecision": "adapt",
+  "adaptationKind": "hidden-name-collision",
+  "adaptedLogicalName": "<verified candidate name>",
+  "adaptedSchemaName": "<matching schema name>",
+  "collisionEvidence": {
+    "code": "0x80044363",
+    "operationId": "<journal inFlight operationId>",
+    "operationFingerprint": "<journal inFlight fingerprint>",
+    "priorManifestSha256": "<journal inFlight manifestHash>",
+    "priorReconciliationSha256": "<journal inFlight reconciliationHash>",
+    "observedAt": "<journal failure recordedAt>"
+  }
+}
+```
+
+Select the technical identity with the deterministic read-only helper; do not
+choose or probe suffixes manually:
+
+```bash
+COLLISION_ADAPTATION="<working_dir>/.tmp/dataverse-collision-adaptation.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-dataverse-collision-adaptation.js" \
+  --manifest "$OPERATION_MANIFEST" \
+  --approval-receipt "$APPROVAL_RECEIPT" \
+  --execution-outcome "$EXECUTION_OUTCOME" \
+  --journal "$EXECUTION_JOURNAL" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --output "$COLLISION_ADAPTATION" \
+  --json
+```
+
+The helper verifies receipt, manifest, operation fingerprint, and mutation
+journal bindings; checks the remaining approved suffixes with one bounded exact
+metadata read; skips every previously collided suffix; and emits a hash-bound
+`adaptation` object. Apply that object to the one canonical table row through
+the existing revision path. Never reconstruct collision evidence from chat or
+logs and never ad hoc search-and-replace generated files.
+
+`ADAPTATION_CANDIDATE_READY` means the candidate was metadata-absent at probe
+time, not reserved or guaranteed free. A 404 exact-name probe means candidate
+metadata is absent, not that the schema name is reserved or guaranteed free.
+Another POST collision reruns the helper against the new failed manifest and
+advances to the next suffix. On
+`COLLISION_SEQUENCE_EXHAUSTED`, return `NEEDS_APPROVAL` to extend or replace the
+policy; perform no write. Transport loss remains uncertain and requires fresh
+reconciliation.
+
 Before overwriting the old manifest, preserve its path. After the revised plan
 and structured schema are approved through the existing flow, the top-level
 planner/orchestrator must refresh the structured service dependencies and
 `mobile-plan-status.json` receipt. This skill cannot create or restamp it.
+The refreshed receipt must retain `semanticChangesRequireApproval: true` and
+bind the allowed collision codes, suffix sequence, and maximum attempts under
+`adaptationPolicy`. If the alternative changes product semantics rather than
+technical identity, return `NEEDS_APPROVAL` instead of rolling forward.
 Bind the contract through that pre-existing receipt, then roll the existing
 publish checkpoint forward:
 
@@ -501,15 +602,8 @@ the operation manifest.
 
 The manifest builder never emits calculated/rollup/formula creation. Reused
 computed dependencies have already crossed the exact derived-metadata barrier;
-unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and continue
-and invalidate the planning-only inventory cache:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
-  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate
-```
-
-to Step 6. When there were zero writes and no checkpoint, continue without
+unsupported projections are explicit `defer` rows. After `DONE`, continue to
+Step 6. When there were zero writes and no checkpoint, continue without
 deleting anything. Skip the
 fallback mutation instructions in Steps 5a–5d and skip Step 6b because publish
 was already part of the validated phase order.
@@ -904,7 +998,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   | Boolean | `Microsoft.Dynamics.CRM.BooleanAttributeMetadata` | `DefaultValue`, `OptionSet` with `TrueOption`/`FalseOption` |
   | Choice (picklist) | `Microsoft.Dynamics.CRM.PicklistAttributeMetadata` | `OptionSet` with `IsGlobal: false`, `OptionSetType: "Picklist"`, `Options[]` — **option integer values start at `100000000` and increment by 1** |
   | Lookup | via `RelationshipDefinitions` — see 1:N skeleton above | — |
-  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxHeight`, `MaxWidth` |
+  | Image | `Microsoft.Dynamics.CRM.ImageAttributeMetadata` | `MaxSizeInKB`, `CanStoreFullImage`; follow a `true` create with the manifest's full-definition `configure-image` PUT before publish |
   | File | `Microsoft.Dynamics.CRM.FileAttributeMetadata` | `MaxSizeInKB` |
 
   **Common mistake:** omitting `FormatName` on String columns and `DateTimeBehavior` on DateTime columns. Both are required — Dataverse rejects the POST without them.
@@ -928,7 +1022,12 @@ Column shapes that have non-obvious gotchas (handle carefully):
     }
   }
   ```
-- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`, `MaxHeight`/`MaxWidth` required
+- **Image** — `@odata.type: Microsoft.Dynamics.CRM.ImageAttributeMetadata`,
+  `MaxSizeInKB` and `CanStoreFullImage` required. Dataverse can persist
+  `CanStoreFullImage: false` after the create even when `true` was requested.
+  The valid manifest path therefore emits one journaled `configure-image` PUT
+  with the complete approved Image definition before publish. `MaxHeight` and
+  `MaxWidth` are read-only 144-pixel thumbnail facts and must not be written.
 - **File** — `@odata.type: Microsoft.Dynamics.CRM.FileAttributeMetadata`, `MaxSizeInKB` required
 
 If the column type is not a simple string/int/boolean, surface a one-line confirmation to the user before posting.
@@ -1064,6 +1163,34 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-inventory-cache.js" \
 ```
 
 ### Step 6c — Verify tables exist
+
+When `<operation_manifest_mode> = valid`, run exact changed-scope verification
+instead of the fallback table-presence query:
+
+```bash
+POST_PUBLISH_RECONCILIATION="<working_dir>/.tmp/dataverse-post-publish-reconciliation.json"
+POST_PUBLISH_VERIFICATION="<working_dir>/.tmp/dataverse-post-publish-verification.json"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/verify-dataverse-post-publish.js" \
+  --manifest "$OPERATION_MANIFEST" \
+  --execution-outcome "$EXECUTION_OUTCOME" \
+  --reconciliation-output "$POST_PUBLISH_RECONCILIATION" \
+  --output "$POST_PUBLISH_VERIFICATION" \
+  --timings-output "$DATAVERSE_TIMINGS_PATH" \
+  --env-url "<envUrl>" \
+  --tenant-id "<tenantId>" \
+  --json
+```
+
+This performs one fresh exact reconciliation for the manifest scope and checks
+only changed tables, columns, relationships, alternate keys, File/Image limits,
+and full-image configuration. `DONE_WITH_PENDING_ACTIVATIONS` is successful but
+must list alternate keys still in Dataverse `Pending` state; do not rely on
+their uniqueness until a later bounded check reports `Active`. `BLOCKED` names
+the exact mismatched fact and stops before generated services or sample data.
+
+When `<operation_manifest_mode> = valid`, skip the fallback query below after
+this verifier succeeds.
 
 Confirm every created or extended table is queryable after publish with **one** filtered query, not one request per table:
 

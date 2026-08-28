@@ -15,6 +15,8 @@ const {
   rollForwardPublishCheckpoint,
   sha256,
   stableJson,
+  validateContract,
+  validateApprovalReceipt,
   validateManifest,
 } = require('../build-dataverse-operation-manifest');
 const { operationFingerprint } = require('../dataverse-request');
@@ -45,7 +47,12 @@ function column(logicalName, type = 'String', overrides = {}) {
       precision: 2,
     },
     File: { maxSizeInKB: 32768 },
-    Image: { maxHeight: 1440, maxWidth: 1440 },
+    Image: {
+      maxHeight: 144,
+      maxWidth: 144,
+      maxSizeInKB: 10240,
+      canStoreFullImage: false,
+    },
     Integer: { minValue: -2147483648, maxValue: 2147483647, format: 'None' },
     Memo: { maxLength: 10000, format: 'TextArea' },
     Money: {
@@ -295,7 +302,7 @@ function createContract() {
   };
 }
 
-function buildInputs(contract, reconciliation, plan = '# Plan\n') {
+function buildInputs(contract, reconciliation, plan = '# Plan\n', receiptExtras = {}) {
   const planBytes = Buffer.from(plan);
   const normalized = normalizedContract(contract);
   const serviceRequiredTables = [];
@@ -345,6 +352,7 @@ function buildInputs(contract, reconciliation, plan = '# Plan\n') {
     approvedContractSha256: sha256(stableJson(approvedContract)),
     approvedContract,
     serviceRequiredTables: serviceDependencies.serviceRequiredTables,
+    ...receiptExtras,
   };
   approvalReceipt.integritySha256 = sha256(stableJson(approvalReceipt));
   const bound = bindContractToPlan(normalized, planBytes, approvalReceipt);
@@ -1096,8 +1104,8 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
         contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
         contractColumn('cr1_document', 'file', 'create', { maxSizeInKB: 32768 }),
         contractColumn('cr1_photo', 'image', 'create', {
-          maxHeight: 1440,
-          maxWidth: 1440,
+          maxSizeInKB: 10240,
+          canStoreFullImage: true,
         }),
       ]),
     ],
@@ -1106,12 +1114,16 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
     column('cr1_name', 'String', { primaryName: true }),
     column('cr1_document', 'Virtual', {
       typeName: 'FileType',
+      sourceType: null,
       maxSizeInKB: 32768,
     }),
     column('cr1_photo', 'Virtual', {
       typeName: 'ImageType',
-      maxHeight: 1440,
-      maxWidth: 1440,
+      sourceType: null,
+      maxHeight: 144,
+      maxWidth: 144,
+      maxSizeInKB: 10240,
+      canStoreFullImage: true,
     }),
   ]);
   const manifest = buildManifest(buildInputs(contract, snapshot({
@@ -1145,6 +1157,211 @@ test('existing Dataverse File and Image virtual attributes are zero-write compat
     assert.equal(mismatch.executable, false);
     assert.equal(mismatch.summary.metadataOperationCount, 0);
   }
+});
+
+test('media mutation contracts require explicit writable capability fields', () => {
+  const imageContract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'extend', 0, [
+      contractColumn('cr1_photo', 'image', 'create', {
+        maxHeight: 1440,
+        maxWidth: 1440,
+      }),
+    ])],
+  };
+  const imageValidation = validateContract(imageContract);
+  assert.equal(imageValidation.valid, false);
+  assert.ok(imageValidation.errors.some((error) => /canStoreFullImage/.test(error)));
+  assert.ok(imageValidation.errors.some((error) => /maxSizeInKB/.test(error)));
+
+  const fileContract = structuredClone(imageContract);
+  fileContract.tables[0].columns[0] = contractColumn(
+    'cr1_document',
+    'file',
+    'create',
+  );
+  const fileValidation = validateContract(fileContract);
+  assert.equal(fileValidation.valid, false);
+  assert.ok(fileValidation.errors.some((error) => /maxSizeInKB/.test(error)));
+});
+
+test('Image metadata operations emit full-image fields and omit thumbnail dimensions', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'extend', 0, [
+      contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+      contractColumn('cr1_photo', 'image', 'create', {
+        canStoreFullImage: true,
+        maxSizeInKB: 10240,
+      }),
+    ])],
+  };
+  const existing = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+  ]);
+  const inputs = buildInputs(contract, snapshot({
+    tables: [existing],
+  }));
+  const manifest = buildManifest(inputs);
+  assert.equal(manifest.executable, true);
+  assert.deepEqual(validateManifest(manifest, {
+    ...inputs,
+    requireExecutable: true,
+  }), { valid: true, errors: [] });
+  const operations = manifest.execution.phases
+    .find((phase) => phase.name === 'extensions').operations;
+  assert.deepEqual(operations.map((item) => item.id), [
+    'extend-column:cr1_item:cr1_photo',
+    'configure-image:cr1_item:cr1_photo',
+  ]);
+  const operation = operations[0];
+  assert.ok(operation);
+  assert.equal(operation.body['@odata.type'], 'Microsoft.Dynamics.CRM.ImageAttributeMetadata');
+  assert.equal(operation.body.CanStoreFullImage, true);
+  assert.equal(operation.body.MaxSizeInKB, 10240);
+  assert.equal(Object.hasOwn(operation.body, 'MaxHeight'), false);
+  assert.equal(Object.hasOwn(operation.body, 'MaxWidth'), false);
+  const configuration = operations[1];
+  assert.equal(configuration.method, 'PUT');
+  assert.equal(
+    configuration.apiPath,
+    "EntityDefinitions(LogicalName='cr1_item')/Attributes(LogicalName='cr1_photo')",
+  );
+  assert.deepEqual(configuration.body.AttributeTypeName, { Value: 'ImageType' });
+  assert.equal(configuration.body.CanStoreFullImage, true);
+  assert.equal(configuration.body.MaxSizeInKB, 10240);
+  assert.equal(Object.hasOwn(configuration.body, 'MaxHeight'), false);
+  assert.equal(Object.hasOwn(configuration.body, 'MaxWidth'), false);
+});
+
+test('new tables configure full-image columns after the inline create', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'create', 0, [
+      contractColumn('cr1_name', 'string', 'create', { primaryName: true }),
+      contractColumn('cr1_photo', 'image', 'create', {
+        canStoreFullImage: true,
+        maxSizeInKB: 10240,
+      }),
+    ])],
+  };
+  const manifest = buildManifest(buildInputs(contract, snapshot({
+    exactUnavailable: ['cr1_item'],
+    proposedMissing: ['cr1_item'],
+  })));
+  assert.equal(manifest.executable, true);
+  const tableCreate = manifest.execution.phases
+    .find((phase) => phase.name === 'tableCreates').operations[0];
+  assert.ok(tableCreate.body.Attributes.some(
+    (attribute) => attribute.SchemaName === 'cr1_photo',
+  ));
+  const configuration = manifest.execution.phases
+    .find((phase) => phase.name === 'extensions').operations[0];
+  assert.equal(configuration.id, 'configure-image:cr1_item:cr1_photo');
+  assert.equal(configuration.method, 'PUT');
+});
+
+test('partial full-image creation resumes with only the configuration PUT', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'extend', 0, [
+      contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+      contractColumn('cr1_photo', 'image', 'create', {
+        canStoreFullImage: true,
+        maxSizeInKB: 10240,
+      }),
+    ])],
+  };
+  const existing = table('cr1_item', [
+    column('cr1_name', 'String', { primaryName: true }),
+    column('cr1_photo', 'Image', {
+      sourceType: null,
+      maxSizeInKB: 10240,
+      canStoreFullImage: false,
+    }),
+  ]);
+  const manifest = buildManifest(buildInputs(contract, snapshot({
+    tables: [existing],
+  })));
+  assert.equal(manifest.executable, true);
+  assert.deepEqual(
+    manifest.execution.phases.find((phase) => phase.name === 'extensions')
+      .operations.map((item) => item.id),
+    ['configure-image:cr1_item:cr1_photo'],
+  );
+  const decision = manifest.decisions.find(
+    (item) => item.itemId === 'column:cr1_item:cr1_photo',
+  );
+  assert.equal(decision.verificationStatus, 'verified');
+  assert.equal(decision.operation, 'configure-image:cr1_item:cr1_photo');
+});
+
+test('mutable server-owned primary ID columns are rejected before reconciliation', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'create', 0, [
+      contractColumn('cr1_name', 'string', 'create', { primaryName: true }),
+      contractColumn('cr1_itemid', 'uniqueidentifier', 'create', { primaryId: true }),
+    ], {
+      primaryIdAttribute: 'cr1_itemid',
+    })],
+  };
+  const validation = validateContract(contract);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => /server-owned primary ID/.test(error)));
+});
+
+test('hidden collision Adapt requires an approval-bound technical rename policy', () => {
+  const contract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_hidden', 'adapt', 0, [
+      contractColumn('cr1_name', 'string', 'create', { primaryName: true }),
+    ], {
+      adaptedLogicalName: 'cr1_hiddenv2',
+      adaptedSchemaName: 'cr1_hiddenv2',
+      adaptationKind: 'hidden-name-collision',
+      collisionEvidence: {
+        code: '0x80044363',
+        operationId: 'create-table:cr1_hidden',
+        operationFingerprint: 'a'.repeat(64),
+        priorManifestSha256: 'b'.repeat(64),
+        priorReconciliationSha256: 'c'.repeat(64),
+        observedAt: NOW,
+      },
+    })],
+  };
+  const adaptationPolicy = {
+    schemaVersion: 1,
+    automaticTechnicalRename: true,
+    semanticChangesRequireApproval: true,
+    allowedCollisionCodes: ['0x80044363'],
+    alternativeSuffixes: ['v2', 'v3', '2', 'copy'],
+    maxAttempts: 20,
+  };
+  const inputs = buildInputs(
+    contract,
+    snapshot({ exactUnavailable: ['cr1_hiddenv2'], proposedMissing: ['cr1_hiddenv2'] }),
+    '# Plan\n',
+    { adaptationPolicy },
+  );
+  assert.equal(buildManifest(inputs).executable, true);
+
+  const missingPolicy = structuredClone(inputs.approvalReceipt);
+  delete missingPolicy.adaptationPolicy;
+  delete missingPolicy.integritySha256;
+  missingPolicy.integritySha256 = sha256(stableJson(missingPolicy));
+  const validation = validateApprovalReceipt(missingPolicy, {
+    contract: inputs.contract,
+    planBytes: inputs.planBytes,
+  });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((error) => /adaptationPolicy must be an object/.test(error)));
 });
 
 test('mechanical reconciliation never changes approved architecture decisions', () => {
@@ -1947,6 +2164,89 @@ test('checkpoint roll-forward rejects removed completed columns, relationships, 
         'cr1_item_code_key_b_v2';
     },
   });
+});
+
+test('checkpoint roll-forward preserves a completed full-image configuration', () => {
+  const priorContract = {
+    schemaVersion: 1,
+    publisherPrefix: 'cr1',
+    tables: [contractTable('cr1_item', 'extend', 0, [
+      contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+      contractColumn('cr1_photo', 'image', 'create', {
+        canStoreFullImage: true,
+        maxSizeInKB: 10240,
+      }),
+      contractColumn('cr1_z', 'string', 'create'),
+    ])],
+  };
+  const reconciliation = snapshot({
+    tables: [table('cr1_item', [
+      column('cr1_name', 'String', { primaryName: true }),
+    ])],
+  });
+  const priorInputs = buildInputs(priorContract, reconciliation, '# Prior image plan\n');
+  const priorManifest = buildManifest(priorInputs);
+  const operations = priorManifest.execution.phases.flatMap((phase) => phase.operations);
+  const imageCreate = operations.find(
+    (item) => item.id === 'extend-column:cr1_item:cr1_photo',
+  );
+  const imageConfiguration = operations.find(
+    (item) => item.id === 'configure-image:cr1_item:cr1_photo',
+  );
+  const collisionOperation = operations.find(
+    (item) => item.id === 'extend-column:cr1_item:cr1_z',
+  );
+  assert.ok(imageCreate);
+  assert.ok(imageConfiguration);
+  assert.ok(collisionOperation);
+  const journal = {
+    schemaVersion: 1,
+    binding: {
+      environmentUrl: CONTEXT.environmentUrl,
+      solution: CONTEXT.solutionUniqueName,
+    },
+    completed: Object.fromEntries([imageCreate, imageConfiguration].map((item) => [
+      operationFingerprint(item, CONTEXT.solutionUniqueName),
+      { operationId: item.id },
+    ])),
+    recoveries: [],
+    inFlight: {
+      index: collisionOperation.index,
+      operationId: collisionOperation.id,
+      fingerprint: operationFingerprint(
+        collisionOperation,
+        CONTEXT.solutionUniqueName,
+      ),
+      manifestHash: priorManifest.integritySha256,
+      reconciliationHash: priorManifest.binding.reconciliationSha256,
+      failure: { status: 400, collision: true },
+    },
+  };
+  const revisedContract = structuredClone(priorContract);
+  const collisionColumn = revisedContract.tables[0].columns.find(
+    (item) => item.logicalName === 'cr1_z',
+  );
+  collisionColumn.plannedDecision = 'adapt';
+  collisionColumn.adaptedLogicalName = 'cr1_zv2';
+  collisionColumn.adaptedSchemaName = 'cr1_zv2';
+  const revisedInputs = buildInputs(
+    revisedContract,
+    reconciliation,
+    '# Revised image plan\n',
+  );
+  const rolled = rollForwardPublishCheckpoint({
+    checkpoint: priorManifest.publishCheckpoint,
+    previousManifest: priorManifest,
+    journal,
+    contract: revisedInputs.contract,
+    approvalReceipt: revisedInputs.approvalReceipt,
+    contractBytes: revisedInputs.contractBytes,
+    planBytes: revisedInputs.planBytes,
+    context: CONTEXT,
+    rolledAt: NOW,
+  });
+  assert.deepEqual(rolled.tables, ['cr1_item']);
+  assert.equal(rolled.rollForwards.length, 1);
 });
 
 test('CLI cannot self-mint approval receipts and still enforces publish checkpoints', (t) => {

@@ -56,6 +56,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
 
+const MIN_OPERATION_TIMEOUT_MS = 1000;
+const MAX_OPERATION_TIMEOUT_MS = 10 * 60 * 1000;
+const OPERATION_TIMEOUT_DEFAULTS_MS = Object.freeze({
+  read: 60000,
+  'table-write': 120000,
+  'column-write': 90000,
+  'relationship-or-key-write': 90000,
+  publish: 120000,
+  'other-write': 30000,
+});
+
 function retryAfterDelayMs(retryAfter, fallbackMs, nowMs = Date.now()) {
   const safeFallback = Number.isFinite(fallbackMs) && fallbackMs >= 0
     ? fallbackMs
@@ -81,6 +92,38 @@ function isMutationMethod(method) {
 function isMetadataApiPath(apiPath) {
   return /^(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions|PublishXml)(?:\b|\(|\/|\?)/i
     .test(String(apiPath || ''));
+}
+
+function metadataOperationClass(method, apiPath) {
+  const normalizedMethod = String(method || '').toUpperCase();
+  const normalizedPath = String(apiPath || '');
+  if (normalizedMethod === 'GET') return 'read';
+  if (/^PublishXml(?:\b|\?|\/)/i.test(normalizedPath)) return 'publish';
+  if (/^RelationshipDefinitions(?:\b|\?|\/|\()/i.test(normalizedPath)
+    || /^EntityDefinitions\([^)]*\)\/Keys(?:\b|\?|\/|\()/i.test(normalizedPath)) {
+    return 'relationship-or-key-write';
+  }
+  if (/^EntityDefinitions\([^)]*\)\/Attributes(?:\b|\?|\/|\()/i.test(normalizedPath)) {
+    return 'column-write';
+  }
+  if (/^EntityDefinitions(?:\b|\?|\/|\()/i.test(normalizedPath)) return 'table-write';
+  return isMutationMethod(normalizedMethod) ? 'other-write' : 'read';
+}
+
+function operationTimeoutMs(method, apiPath, override = null) {
+  if (override === null || override === undefined || override === '') {
+    return OPERATION_TIMEOUT_DEFAULTS_MS[metadataOperationClass(method, apiPath)];
+  }
+  const parsed = Number(override);
+  if (!Number.isInteger(parsed)
+    || parsed < MIN_OPERATION_TIMEOUT_MS
+    || parsed > MAX_OPERATION_TIMEOUT_MS) {
+    throw new Error(
+      `timeout must be an integer from ${MIN_OPERATION_TIMEOUT_MS} `
+      + `to ${MAX_OPERATION_TIMEOUT_MS} milliseconds`,
+    );
+  }
+  return parsed;
 }
 
 function metadataRequestIdentity(apiPath) {
@@ -110,9 +153,9 @@ function parseArgs() {
   const args = process.argv.slice(2);
   if (args.length < 3) {
     process.stderr.write(
-      'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>] [--tenant-id <id>]\n' +
-      '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>] [--tenant-id <id>]\n' +
-      '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>] [--journal <path> --manifest-file <validated-manifest.json> --manifest-hash <sha256> --reconciliation-hash <sha256> --manifest-operations <complete-json-array>] [--continue-on-error]\n'
+      'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json>] [--include-headers] [--solution <uniqueName>] [--tenant-id <id>] [--timeout-ms <number>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-RECORDS <label> --operations <json> [--concurrency 5] [--solution <name>] [--tenant-id <id>] [--timeout-ms <number>]\n' +
+      '       node dataverse-request.js <envUrl> BATCH-METADATA <label> --operations <json> [--solution <name>] [--tenant-id <id>] [--timeout-ms <number>] [--journal <path> --manifest-file <validated-manifest.json> --manifest-hash <sha256> --reconciliation-hash <sha256> --manifest-operations <complete-json-array>] [--continue-on-error]\n'
     );
     process.exit(1);
   }
@@ -132,6 +175,7 @@ function parseArgs() {
   let reconciliationHash = null;
   let manifestOperations = null;
   let manifestFile = null;
+  let timeoutMs = null;
 
   for (let i = 3; i < args.length; i++) {
     if (args[i] === '--body' && args[i + 1]) {
@@ -159,6 +203,8 @@ function parseArgs() {
       manifestOperations = args[++i];
     } else if (args[i] === '--manifest-file' && args[i + 1]) {
       manifestFile = args[++i];
+    } else if (args[i] === '--timeout-ms' && args[i + 1]) {
+      timeoutMs = args[++i];
     }
   }
 
@@ -178,10 +224,20 @@ function parseArgs() {
     reconciliationHash,
     manifestOperations,
     manifestFile,
+    timeoutMs,
   };
 }
 
-async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, solution) {
+async function doRequest(
+  envUrl,
+  method,
+  apiPath,
+  body,
+  token,
+  includeHeaders,
+  solution,
+  timeoutMs = null,
+) {
   const url = `${envUrl}/api/data/v9.2/${apiPath}`;
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -200,7 +256,7 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, s
     headers,
     body,
     includeHeaders,
-    timeout: 30000,
+    timeout: operationTimeoutMs(method, apiPath, timeoutMs),
   });
 
   return res;
@@ -214,6 +270,7 @@ function createDataverseRequestExecutor({
   sendRequest = doRequest,
   onTelemetry = null,
   nowMs = () => Date.now(),
+  timeoutMs = null,
 }) {
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
@@ -276,7 +333,7 @@ function createDataverseRequestExecutor({
         return refreshed.token;
       },
       sendRequest,
-      { nowMs },
+      { nowMs, timeoutMs },
     );
     token = executed.token;
     if (typeof onTelemetry === 'function') {
@@ -293,6 +350,8 @@ function createDataverseRequestExecutor({
           rateLimited: Boolean(executed.rateLimited),
           tokenAcquisitionCount: ensured.acquired ? 1 : 0,
           tokenRefreshCount: requestRefreshCount,
+          operationClass: executed.operationClass,
+          requestedTimeoutMs: executed.requestedTimeoutMs,
         });
       } catch {
         // Telemetry must never change request behavior.
@@ -304,6 +363,8 @@ function createDataverseRequestExecutor({
       headers: executed.headers,
       error: executed.error,
       rateLimited: executed.rateLimited,
+      operationClass: executed.operationClass,
+      requestedTimeoutMs: executed.requestedTimeoutMs,
     };
   };
   execute.getAuthStats = () => ({ ...authStats });
@@ -327,6 +388,7 @@ async function main() {
     reconciliationHash,
     manifestOperations,
     manifestFile,
+    timeoutMs,
   } = parseArgs();
 
   let token = await getAuthToken(envUrl, tenantId);
@@ -354,7 +416,15 @@ async function main() {
       process.exit(1);
     }
 
-    const results = await runBatch(envUrl, ops, token, solution, concurrency, tenantId);
+    const results = await runBatch(
+      envUrl,
+      ops,
+      token,
+      solution,
+      concurrency,
+      tenantId,
+      timeoutMs,
+    );
     console.log(JSON.stringify({ status: 200, data: results }));
     return;
   }
@@ -411,6 +481,7 @@ async function main() {
         reconciliationHash,
         allOperations: allManifestOperations,
         manifest,
+        timeoutMs,
       },
     );
     console.log(JSON.stringify({ status: result.failed ? 207 : 200, data: result.results }));
@@ -419,8 +490,18 @@ async function main() {
 
   const maxRetries = 4;
   let wasRateLimited = false;
+  const requestedTimeoutMs = operationTimeoutMs(method, apiPath, timeoutMs);
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await doRequest(envUrl, method, apiPath, body, token, true, solution);
+    const res = await doRequest(
+      envUrl,
+      method,
+      apiPath,
+      body,
+      token,
+      true,
+      solution,
+      requestedTimeoutMs,
+    );
 
     if (res.error) {
       if (isMutationMethod(method) && isMetadataApiPath(apiPath)) {
@@ -471,7 +552,12 @@ async function main() {
       }
     }
 
-    const output = { status: res.statusCode, data };
+    const output = {
+      status: res.statusCode,
+      data,
+      operationClass: metadataOperationClass(method, apiPath),
+      requestedTimeoutMs,
+    };
     if (includeHeaders && res.headers) {
       output.headers = res.headers;
     }
@@ -483,13 +569,33 @@ async function main() {
   }
 }
 
+const DUPLICATE_ERROR_CODES = [
+  '0x80040237',
+  '0x80060888',
+  '0x80044363',
+  '0x80060890',
+  '0x8004f00d',
+];
+
+function duplicateCode(data) {
+  if (!data) return null;
+  const err = data.error || data;
+  const values = [
+    err.code,
+    err.errorcode,
+    err.message,
+    err.Message,
+    typeof err === 'string' ? err : null,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return DUPLICATE_ERROR_CODES.find((code) => values.includes(code)) || null;
+}
+
 // Match common Dataverse "already exists" / duplicate signals across both
 // EntityDefinitions and data-row create paths.
 function looksLikeDuplicate(data) {
   if (!data) return false;
   const err = data.error || data;
   const msg = (err.message || err.Message || '').toLowerCase();
-  const code = (err.code || err.errorcode || '').toString().toLowerCase();
 
   const messageMatches = [
     'already exists',
@@ -502,15 +608,7 @@ function looksLikeDuplicate(data) {
     'duplicaterecord',
   ].some((needle) => msg.includes(needle));
 
-  const codeMatches = [
-    '0x80040237', // DuplicateRecord
-    '0x80060888', // SchemaName already in use
-    '0x80044363', // schema name is not unique
-    '0x80060890', // object with same name exists in solution
-    '0x8004f00d', // duplicate attribute
-  ].some((needle) => code.includes(needle));
-
-  return messageMatches || codeMatches;
+  return messageMatches || Boolean(duplicateCode(data));
 }
 
 // BATCH-RECORDS: parallel record-create with concurrency cap. Adaptive — drops cap on first 429.
@@ -518,7 +616,7 @@ function looksLikeDuplicate(data) {
 //
 // USE FOR: record inserts (no metadata lock). DO NOT USE FOR: metadata writes — they serialize via
 // the Dataverse metadata lock server-side and parallel calls return 429 / MetadataLockHeldException.
-async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
+async function runBatch(envUrl, ops, token, solution, initialCap, tenantId, timeoutMs = null) {
   // Normalize input: every op gets a deterministic slot. Honour caller-supplied `index` if present
   // (so caller can correlate results to its own row identity), otherwise use position-in-array.
   const normalized = ops.map((op, i) => ({
@@ -537,7 +635,7 @@ async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
       while (inflight < cap && nextIndex < normalized.length) {
         const op = normalized[nextIndex++];
         inflight++;
-        runOneOperation(envUrl, op, token, solution, tenantId)
+        runOneOperation(envUrl, op, token, solution, tenantId, timeoutMs)
           .then((result) => {
             results[op._slot] = { ...result, index: op.index };
             // Adaptive cap: drop to 3 on first 429 we see, to ease pressure
@@ -569,7 +667,7 @@ async function runBatch(envUrl, ops, token, solution, initialCap, tenantId) {
 
 // Runs a single record-create POST with full retry semantics (matches the single-op main() loop).
 // Returns { index, status, recordId?, error? }.
-async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
+async function runOneOperation(envUrl, op, initialToken, solution, tenantId, timeoutMs = null) {
   const { index, entitySet, body } = op;
   if (!entitySet || !body) {
     return { index, status: 0, error: 'Operation missing entitySet or body' };
@@ -585,7 +683,16 @@ async function runOneOperation(envUrl, op, initialToken, solution, tenantId) {
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const res = await doRequest(envUrl, 'POST', entitySet, bodyStr, token, true, solution);
+    const res = await doRequest(
+      envUrl,
+      'POST',
+      entitySet,
+      bodyStr,
+      token,
+      true,
+      solution,
+      op.timeoutMs ?? timeoutMs,
+    );
 
     if (res.error) {
       if (attempt < maxRetries) continue;
@@ -980,6 +1087,11 @@ async function runMetadataBatch(
     }
 
     if (journal) {
+      const requestedTimeoutMs = operationTimeoutMs(
+        method,
+        apiPath,
+        op.timeoutMs ?? journalOptions.timeoutMs,
+      );
       journal.inFlight = {
         index,
         operationId: op.id || null,
@@ -987,6 +1099,8 @@ async function runMetadataBatch(
         manifestHash: journalOptions.manifestHash,
         reconciliationHash: journalOptions.reconciliationHash,
         startedAt: new Date().toISOString(),
+        operationClass: metadataOperationClass(method, apiPath),
+        requestedTimeoutMs,
       };
       atomicWriteJournal(journalOptions.journalPath, journal);
     }
@@ -1000,13 +1114,19 @@ async function runMetadataBatch(
       Boolean(op.includeHeaders),
       op.solution || defaultSolution,
       tenantId,
+      getAuthToken,
+      doRequest,
+      { timeoutMs: op.timeoutMs ?? journalOptions.timeoutMs },
     );
     token = executed.token;
     const result = {
       index,
       status: executed.status,
+      operationId: op.id || null,
       data: executed.data,
       durationMs: Date.now() - started,
+      operationClass: executed.operationClass,
+      requestedTimeoutMs: executed.requestedTimeoutMs,
     };
     if (executed.headers) result.headers = executed.headers;
     if (executed.error) result.error = executed.error;
@@ -1032,13 +1152,19 @@ async function runMetadataBatch(
         if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
           journal.inFlight = null;
         } else {
+          const collisionCode = duplicateCode(executed.data)
+            || duplicateCode({ error: { message: executed.error || '' } });
           journal.inFlight.failure = {
             status: executed.status,
             error: executed.error || null,
             uncertain: Boolean(executed.uncertain),
-            collision: looksLikeDuplicate(executed.data)
+            collision: Boolean(collisionCode)
+              || looksLikeDuplicate(executed.data)
               || looksLikeDuplicate({ error: { message: executed.error || '' } }),
+            ...(collisionCode ? { collisionCode } : {}),
             recordedAt: new Date().toISOString(),
+            operationClass: executed.operationClass,
+            requestedTimeoutMs: executed.requestedTimeoutMs,
           };
         }
         atomicWriteJournal(journalOptions.journalPath, journal);
@@ -1061,10 +1187,12 @@ async function runOneMetadataOperation(
   tenantId,
   getToken = getAuthToken,
   sendRequest = doRequest,
-  { nowMs = () => Date.now() } = {},
+  { nowMs = () => Date.now(), timeoutMs = null } = {},
 ) {
   let token = initialToken;
   let rateLimited = false;
+  const operationClass = metadataOperationClass(method, apiPath);
+  const requestedTimeoutMs = operationTimeoutMs(method, apiPath, timeoutMs);
   const maxRetries = 4;
   let attempts = 0;
   let retryCount = 0;
@@ -1076,6 +1204,8 @@ async function runOneMetadataOperation(
       attempts,
       retryCount,
       responseBytes,
+      operationClass,
+      requestedTimeoutMs,
     };
   }
 
@@ -1083,7 +1213,16 @@ async function runOneMetadataOperation(
     // Response headers are always needed internally for Retry-After handling.
     // The caller-facing result still honors includeHeaders below.
     const attemptStartedAt = nowMs();
-    const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution);
+    const res = await sendRequest(
+      envUrl,
+      method,
+      apiPath,
+      body,
+      token,
+      true,
+      solution,
+      requestedTimeoutMs,
+    );
     attempts += 1;
     responseBytes += Buffer.byteLength(String(res.body || ''), 'utf8');
     void attemptStartedAt;
@@ -1160,11 +1299,17 @@ function extractGuid(headerValue) {
 if (require.main === module) main();
 
 module.exports = {
+  MAX_OPERATION_TIMEOUT_MS,
+  MIN_OPERATION_TIMEOUT_MS,
+  OPERATION_TIMEOUT_DEFAULTS_MS,
   createDataverseRequestExecutor,
   doRequest,
+  duplicateCode,
   extractGuid,
   looksLikeDuplicate,
+  metadataOperationClass,
   metadataRequestIdentity,
+  operationTimeoutMs,
   operationFingerprint,
   prepareMetadataJournal,
   retryAfterDelayMs,

@@ -105,3 +105,30 @@ test('full evidence satisfies existing-table decisions', () => {
   );
   assert.deepEqual(result, { valid: true, errors: [], contextNames: [] });
 });
+
+test('journal-bound hidden collision Adapt does not require unreadable source metadata', () => {
+  const hidden = contract({ new_hidden: 'adapt' });
+  Object.assign(hidden.tables[0], {
+    adaptationKind: 'hidden-name-collision',
+    collisionEvidence: {
+      code: '0x80044363',
+      operationId: 'create-table:new_hidden',
+      operationFingerprint: 'a'.repeat(64),
+      priorManifestSha256: 'b'.repeat(64),
+      priorReconciliationSha256: 'c'.repeat(64),
+      observedAt: '2026-08-29T00:00:00.000Z',
+    },
+  });
+  assert.deepEqual(
+    validatePlanningDecisions(hidden, snapshot([])),
+    { valid: true, errors: [], contextNames: [] },
+  );
+});
+
+test('hidden collision Adapt fails closed without immutable collision evidence', () => {
+  const hidden = contract({ new_hidden: 'adapt' });
+  hidden.tables[0].adaptationKind = 'hidden-name-collision';
+  const result = validatePlanningDecisions(hidden, snapshot([]));
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((error) => /collisionEvidence is required/.test(error)));
+});

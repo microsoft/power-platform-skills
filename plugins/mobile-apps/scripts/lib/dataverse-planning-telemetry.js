@@ -51,22 +51,32 @@ function sanitizeEvent(event, sequence) {
     rateLimited: Boolean(event?.rateLimited),
     tokenAcquisitionCount: nonNegativeInteger(event?.tokenAcquisitionCount),
     tokenRefreshCount: nonNegativeInteger(event?.tokenRefreshCount),
+    operationClass: sanitizeIdentifier(
+      event?.operationClass,
+      /^(?:read|table-write|column-write|relationship-or-key-write|publish|other-write)$/,
+    ) || 'read',
+    requestedTimeoutMs: nonNegativeInteger(event?.requestedTimeoutMs),
   };
 }
 
 function summarizeEvents(events) {
   const requestCountByCategory = {};
+  const requestCountByOperationClass = {};
   const statusCounts = {};
   for (const event of events) {
     requestCountByCategory[event.category] =
       (requestCountByCategory[event.category] || 0) + 1;
     statusCounts[event.status] = (statusCounts[event.status] || 0) + 1;
+    const operationClass = event.operationClass || 'read';
+    requestCountByOperationClass[operationClass] =
+      (requestCountByOperationClass[operationClass] || 0) + 1;
   }
   const durations = events.map((event) => event.durationMs);
   return {
     requestCount: events.length,
     attemptCount: events.reduce((total, event) => total + event.attempts, 0),
     requestCountByCategory,
+    requestCountByOperationClass,
     statusCounts,
     responseBytes: events.reduce((total, event) => total + event.responseBytes, 0),
     summedRequestDurationMs: durations.reduce((total, duration) => total + duration, 0),

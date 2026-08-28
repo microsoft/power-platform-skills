@@ -6,7 +6,38 @@ const test = require('node:test');
 const {
   createDataverseRequestExecutor,
   metadataRequestIdentity,
+  metadataOperationClass,
+  operationTimeoutMs,
 } = require('../dataverse-request');
+
+test('metadata operation classes own bounded timeout defaults', () => {
+  assert.equal(metadataOperationClass('GET', 'EntityDefinitions'), 'read');
+  assert.equal(metadataOperationClass('POST', 'EntityDefinitions'), 'table-write');
+  assert.equal(
+    metadataOperationClass('POST', "EntityDefinitions(LogicalName='new_item')/Attributes"),
+    'column-write',
+  );
+  assert.equal(
+    metadataOperationClass('POST', 'RelationshipDefinitions'),
+    'relationship-or-key-write',
+  );
+  assert.equal(
+    metadataOperationClass('POST', "EntityDefinitions(LogicalName='new_item')/Keys"),
+    'relationship-or-key-write',
+  );
+  assert.equal(metadataOperationClass('POST', 'PublishXml'), 'publish');
+  assert.equal(operationTimeoutMs('GET', 'EntityDefinitions'), 60000);
+  assert.equal(operationTimeoutMs('POST', 'EntityDefinitions'), 120000);
+  assert.equal(operationTimeoutMs('POST', 'RelationshipDefinitions'), 90000);
+  assert.equal(operationTimeoutMs('POST', 'PublishXml'), 120000);
+  assert.equal(operationTimeoutMs('POST', 'EntityDefinitions', 45000), 45000);
+  for (const value of [0, 999, 600001, 1.5, 'invalid']) {
+    assert.throws(
+      () => operationTimeoutMs('GET', 'EntityDefinitions', value),
+      /timeout must be an integer from 1000 to 600000 milliseconds/,
+    );
+  }
+});
 
 test('metadata request identity classifies paths without retaining query values', () => {
   assert.deepEqual(
@@ -45,8 +76,9 @@ test('request telemetry reports retries, bytes, and auth counts without sensitiv
       tokenCalls += 1;
       return tokenCalls === 1 ? 'initial-secret-token' : 'refreshed-secret-token';
     },
-    sendRequest: async () => {
+    sendRequest: async (...args) => {
       requests += 1;
+      assert.equal(args[7], 60000);
       return requests === 1
         ? { statusCode: 401, body: '{"error":"expired"}', headers: {} }
         : { statusCode: 200, body: '{"value":[]}', headers: {} };
@@ -80,8 +112,26 @@ test('request telemetry reports retries, bytes, and auth counts without sensitiv
     rateLimited: false,
     tokenAcquisitionCount: 1,
     tokenRefreshCount: 1,
+    operationClass: 'read',
+    requestedTimeoutMs: 60000,
   });
   assert.doesNotMatch(JSON.stringify(events), /secret-token|Authorization/i);
+});
+
+test('request executor applies a bounded timeout override', async () => {
+  const timeouts = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    timeoutMs: 45000,
+    getToken: async () => 'token',
+    sendRequest: async (...args) => {
+      timeouts.push(args[7]);
+      return { statusCode: 204, body: '', headers: {} };
+    },
+  });
+  assert.equal((await request('POST', 'EntityDefinitions', {})).status, 204);
+  assert.deepEqual(timeouts, [45000]);
 });
 
 test('concurrent 401 responses share one token refresh', async () => {

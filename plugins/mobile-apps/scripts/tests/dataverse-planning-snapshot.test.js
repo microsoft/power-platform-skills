@@ -1079,6 +1079,8 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /--validate-only/);
   assert.match(architect, /Do not use `Read`, `Grep`, or shell\s+output to load the full snapshot/s);
   assert.match(architect, /detailLevel: core/);
+  assert.match(architect, /NEEDS_CONTEXT: dataverse-evidence:<table>:columns/);
+  assert.match(architect, /no more than 20 names/);
   assert.match(planner, /Dataverse planning forwarding is verbatim/);
   assert.match(planner, /Do not duplicate raw evidence/);
   assert.match(planner, /validate-dataverse-planning-decisions\.js/);
@@ -1088,7 +1090,13 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planner, /screenPlanner/);
   assert.match(planner, /userApproval/);
   assert.match(planner, /planRevision/);
-  assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
+  assert.match(createSkill, /refresh-dataverse-planning-evidence\.js/);
+  assert.match(createSkill, /resolve-dataverse-architect-evidence\.js/);
+  assert.match(createSkill, /performs no Dataverse request/);
+  assert.match(createSkill, /PLANNING_POINTER_PATH/);
+  assert.match(createSkill, /STAGED_SNAPSHOT_PATH/);
+  assert.match(createSkill, /Metadata timing exception/);
+  assert.match(createSkill, /sole owner\s+of `metadataInventory`/s);
   assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
   assert.match(createSkill, /--progressive-detail/);
   assert.match(createSkill, /--combined-base-read/);
@@ -1100,6 +1108,11 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(createSkill, /coreCandidates/);
   assert.match(createSkill, /--stage environmentResolution --action start/);
   assert.match(createSkill, /--stage publisherPrefixDetection/);
+  assert.match(createSkill, /--stage executionReconciliation --action start/);
+  assert.match(createSkill, /--stage executionReconciliation --action finish/);
+  assert.equal((createSkill.match(/--stage manifestBuildValidation --action start/g) || []).length, 2);
+  assert.equal((createSkill.match(/--stage manifestBuildValidation --action finish/g) || []).length, 2);
+  assert.match(createSkill, /metadata writes, publish, uncertain recovery, collision adaptation/);
   assert.match(createSkill, /--project-root "<working_dir>" --summary/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);

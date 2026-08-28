@@ -63,6 +63,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
   rationale, ER diagram, tiers, and risks verbatim. Keep the compact sidecar as a
   referenced artifact; do not paste candidate rankings, raw columns, or timing
   tables into `native-app-plan.md`.
+- **Bounded evidence only.** Architect evidence schema v2 keeps decision-bearing
+  facts inline and exposes hash-bound per-table indexes for omitted platform
+  metadata. Do not read all shards or the full snapshot into model context.
 - **Timing ownership.** The foreground `/create-mobile-app` skill measures the
   outer `nativePlanner` wall. This planner measures only nested
   `modelArchitect`, `screenPlanner`, `artifactValidation`, `planRevision`, and
@@ -203,6 +206,7 @@ While the architect runs, complete Steps 3, 3b, and 3c inline. By the time you f
 >
 > Follow the instructions in your agent file. You are read-only — do NOT create tables. In required mode, return a markdown `## Data Model` section ready to embed in native-app-plan.md and write/normalize the structured schema contract sidecar covering every table, column, relationship, and alternate key. Include a Mermaid ER diagram, a reuse/extend/create table, and dependency-tier ordering. Return per AGENTS.md rule #10: literal first line is `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`, then a blank line, then your summary.
 > If requirements mention generated PDFs, report exports, evidence packets, signatures, sign-off, pen/ink, drawings, or uploaded PDFs/documents, include the artifact storage target in the data model: on-device/share-only, Dataverse Image column, Dataverse File column, or child Evidence/Attachment table. Retained PDF content must use a File column, not long text/base64.
+> Image mutations must include explicit `canStoreFullImage` and `maxSizeInKB` values; File mutations must include `maxSizeInKB`. `maxHeight` and `maxWidth` are observed 144-pixel thumbnail facts, not writable full-image limits. Never declare a server-owned primary ID as a create/extend/adapt column operation.
 
 After spawning, proceed immediately to Step 3 without waiting. Then, before writing the plan doc (Step 4), check the architect's result and parse its first line per AGENTS.md rule #10:
 
@@ -221,6 +225,10 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
 - `NEEDS_CONTEXT: proposed-dataverse-names:<logical names>` → return that exact
   first line to the foreground orchestrator for collision-only expansion. Do
   not infer absence or rewrite the proposed names here.
+- `NEEDS_CONTEXT: dataverse-evidence:<table>:<columns|relationships|keys>:<names>`
+  → return that exact first line to the foreground orchestrator. It resolves at
+  most 20 exact names from the current immutable planning generation without a
+  live Dataverse call.
 - `NEEDS_CONTEXT: <missing>` → re-spawn once with missing non-Dataverse context,
   forwarding the same planning-snapshot/compact-evidence paths unchanged. If the second return
   is also `NEEDS_CONTEXT`, return `BLOCKED`.
@@ -783,6 +791,14 @@ orchestrator. The receipt has this deterministic shape:
       "consumers": ["screen:Inspections", "screen:Inspection detail"]
     }
   ],
+  "adaptationPolicy": {
+    "schemaVersion": 1,
+    "automaticTechnicalRename": true,
+    "semanticChangesRequireApproval": true,
+    "allowedCollisionCodes": ["0x80044363", "0x80060890"],
+    "alternativeSuffixes": ["v2", "v3", "2", "copy"],
+    "maxAttempts": 20
+  },
   "integritySha256": "<sha256 of stable receipt JSON without this field>"
 }
 ```
@@ -803,6 +819,9 @@ Do not call the manifest builder to create or restamp this receipt. The local
 filesystem trust model is non-adversarial: integrity hashes detect accidental
 or out-of-workflow replacement, not a malicious process that can rewrite every
 project artifact. Step 8 only consumes and verifies the completed receipt.
+The adaptation policy authorizes only technical identity changes after a
+journal-bound hidden collision. It never authorizes a semantic model change;
+those changes invalidate Gate 1 and require renewed user approval.
 
 Do not return `DONE` if this fails. Connector-only mode must not create the
 sidecar. Treat every `unverified` contract row as non-executable; only explicit

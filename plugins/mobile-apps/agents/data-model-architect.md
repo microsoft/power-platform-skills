@@ -104,7 +104,7 @@ node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --validate-only
 ```
 
-The compact sidecar must have `schemaVersion: 1`, the foreground environment URL
+The compact sidecar must have `schemaVersion: 2`, the foreground environment URL
 and tenant, and a valid `sourceSnapshotSha256`. A non-zero validation result is
 `NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`.
 
@@ -113,6 +113,9 @@ If validation succeeds, this path is mandatory:
 1. Read the compact architect evidence once. Do not use `Read`, `Grep`, or shell
   output to load the full snapshot into model context; its path is only for the
   deterministic validation command above and the post-contract decision gate.
+  Read a hash-bound shard index only when a selected table's
+  `projectionSummary` shows omitted evidence that is necessary for a concrete
+  decision. Never preload every shard.
 2. Skip Steps 1–3 environment resolution, access verification, and broad
    discovery. Skip every live Dataverse query in Step 5.
 3. Do **not** run Bash discovery or call `resolve-environment.js`,
@@ -126,6 +129,21 @@ If validation succeeds, this path is mandatory:
   describe them as detailed. A selected table with `detailLevel: core` lacks
   decision-bearing enrichment and cannot authorize Reuse, Extend, or Adapt.
   Proposed-name checks are collision evidence, not required existing-table discovery.
+  `projectionSummary` counts are disclosure, not positive or negative schema
+  evidence. A shard contains only compact identities for omitted facts and
+  cannot authorize Reuse, Extend, or Adapt by itself.
+  If an omitted identity is necessary for a concrete decision, return exactly
+  one bounded request containing no more than 20 names:
+
+  `NEEDS_CONTEXT: dataverse-evidence:<table>:columns:<logical-name,...>`
+
+  `NEEDS_CONTEXT: dataverse-evidence:<table>:relationships:<schema-name,...>`
+
+  `NEEDS_CONTEXT: dataverse-evidence:<table>:keys:<logical-or-schema-name,...>`
+
+  The foreground resolves this from the immutable full snapshot and
+  re-dispatches you with a hash-bound response. Do not issue a live query or
+  request the whole table.
 5. If a Reuse, Extend, or Adapt candidate, relationship target, or
   standard/managed dependency is absent from `selectedTables`, is represented
   only by a top candidate, or has `detailLevel: core`, stop and return exactly:
@@ -551,6 +569,13 @@ forbidden. Adapt is fully specified, never inferred later:
   `adaptedIntersectTable`;
 - adapted alternate keys include `adaptedSchemaName`.
 
+A normal `existing-object` Adapt requires full source-table evidence. A
+post-write hidden collision instead uses `adaptationKind:
+hidden-name-collision` and exact `collisionEvidence` copied from the atomic
+metadata journal: collision code, operation ID/fingerprint, prior manifest and
+reconciliation hashes, and observed timestamp. Never invent this evidence or
+use the hidden-collision subtype during initial planning.
+
 Every table/column `SchemaName` must resolve to its paired logical name by the
 Dataverse casing rule (for example `cr123_Inspection` →
 `cr123_inspection`), including adapted names. Relationship lookup definitions
@@ -653,6 +678,21 @@ this workflow does not synthesize them. Lookups are represented both as a
 column and as their relationship so coverage is mechanical.
 For BigInt, omit `minValue`/`maxValue` unless the plan explicitly needs safely
 representable integer bounds; never emit JavaScript-unsafe defaults.
+
+Media and identity fields are explicit execution contracts:
+
+- Every `image` column with `plannedDecision: create|adapt` includes
+  `canStoreFullImage: true|false` and integer `maxSizeInKB` from 1 through
+  30720. Use `true` when users must inspect or download the original image.
+- Never put `maxHeight` or `maxWidth` in a planned Image mutation. Dataverse
+  reports both as fixed 144-pixel thumbnail dimensions; they do not configure
+  full-image resolution.
+- Every `file` column with `plannedDecision: create|adapt` includes integer
+  `maxSizeInKB` from 1 through 10485760.
+- Do not declare a table's server-owned primary ID column as `create`, `extend`,
+  or `adapt`. Dataverse creates that column with the table. Record its logical
+  name in table/ER evidence and use it in app reads, but never authorize a
+  metadata operation for it.
 
 After writing the JSON, normalize and validate it in place:
 

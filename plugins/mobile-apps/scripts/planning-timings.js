@@ -16,6 +16,13 @@ const STAGES = new Set([
   'modelArchitect',
   'screenPlanner',
   'artifactValidation',
+  'executionReconciliation',
+  'manifestBuildValidation',
+  'metadataWrite',
+  'publish',
+  'uncertainRecovery',
+  'collisionAdaptation',
+  'postPublishVerification',
   'planRevision',
   'userApproval',
 ]);
@@ -148,10 +155,40 @@ function stageDuration(artifact, stage) {
   );
 }
 
+function recordPlanningDuration(file, stage, durationMs, {
+  fileSystem = fs,
+  nowIso = () => new Date().toISOString(),
+  nowMs = () => Date.now(),
+} = {}) {
+  const resolved = path.resolve(file);
+  const artifact = updatePlanningTiming(readArtifact(resolved, fileSystem), {
+    stage,
+    action: 'record',
+    durationMs,
+    nowIso,
+    nowMs,
+  });
+  atomicWriteJson(resolved, artifact, fileSystem);
+  return artifact;
+}
+
 function summarizePlanningTimings(artifact) {
   return {
     environmentResolutionMs: stageDuration(artifact, 'environmentResolution'),
     publisherPrefixDetectionMs: stageDuration(artifact, 'publisherPrefixDetection'),
+    planningInventoryMs: stageDuration(artifact, 'metadataInventory'),
+    planningCandidateSelectionMs: stageDuration(artifact, 'metadataCandidateSelection'),
+    planningDetailLoadingMs: stageDuration(artifact, 'metadataDetailLoading'),
+    planningExpansionMs: stageDuration(artifact, 'metadataExpansion'),
+    architectEvidenceRenderMs: stageDuration(artifact, 'artifactValidation'),
+    executionReconciliationMs: stageDuration(artifact, 'executionReconciliation'),
+    manifestBuildValidationMs: stageDuration(artifact, 'manifestBuildValidation'),
+    metadataWriteMs: stageDuration(artifact, 'metadataWrite'),
+    publishMs: stageDuration(artifact, 'publish'),
+    uncertainRecoveryMs: stageDuration(artifact, 'uncertainRecovery'),
+    collisionAdaptationMs: stageDuration(artifact, 'collisionAdaptation'),
+    postPublishVerificationMs: stageDuration(artifact, 'postPublishVerification'),
+    approvalWaitingMs: stageDuration(artifact, 'userApproval'),
     dataverseMetadataNetworkMs: stageDuration(artifact, 'metadataInventory')
       + stageDuration(artifact, 'metadataDetailLoading')
       + stageDuration(artifact, 'metadataExpansion'),
@@ -214,6 +251,7 @@ module.exports = {
   main,
   parseArgs,
   readArtifact,
+  recordPlanningDuration,
   stageDuration,
   summarizePlanningTimings,
   updatePlanningTiming,

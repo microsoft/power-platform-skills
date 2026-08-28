@@ -123,6 +123,19 @@ test('planning timing summary keeps outer wall, model, and approval durations se
   assert.deepEqual(summarizePlanningTimings(artifact), {
     environmentResolutionMs: 0,
     publisherPrefixDetectionMs: 0,
+    planningInventoryMs: 20,
+    planningCandidateSelectionMs: 3,
+    planningDetailLoadingMs: 40,
+    planningExpansionMs: 10,
+    architectEvidenceRenderMs: 2,
+    executionReconciliationMs: 0,
+    manifestBuildValidationMs: 0,
+    metadataWriteMs: 0,
+    publishMs: 0,
+    uncertainRecoveryMs: 0,
+    collisionAdaptationMs: 0,
+    postPublishVerificationMs: 0,
+    approvalWaitingMs: 60,
     dataverseMetadataNetworkMs: 70,
     localDeterministicProcessingMs: 5,
     outerPlannerWallMs: 100,
@@ -133,6 +146,29 @@ test('planning timing summary keeps outer wall, model, and approval durations se
     retries: { nativePlanner: 1 },
     needsContext: { nativePlanner: 1 },
   });
+});
+
+test('planning timing summary keeps Dataverse execution phases separate', () => {
+  const artifact = {
+    schemaVersion: 1,
+    stages: {
+      executionReconciliation: { history: [{ durationMs: 11 }] },
+      manifestBuildValidation: { history: [{ durationMs: 7 }] },
+      metadataWrite: { history: [{ durationMs: 30 }, { durationMs: 5 }] },
+      publish: { history: [{ durationMs: 13 }] },
+      uncertainRecovery: { history: [{ durationMs: 17 }] },
+      collisionAdaptation: { history: [{ durationMs: 19 }] },
+      postPublishVerification: { history: [{ durationMs: 23 }] },
+    },
+  };
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(summary.executionReconciliationMs, 11);
+  assert.equal(summary.manifestBuildValidationMs, 7);
+  assert.equal(summary.metadataWriteMs, 35);
+  assert.equal(summary.publishMs, 13);
+  assert.equal(summary.uncertainRecoveryMs, 17);
+  assert.equal(summary.collisionAdaptationMs, 19);
+  assert.equal(summary.postPublishVerificationMs, 23);
 });
 
 test('snapshot timings record initial stages and bounded expansion separately', () => {

@@ -44,3 +44,52 @@ test('mobile leaf agents defer model selection to the host', () => {
     assert.doesNotMatch(source, /^model:\s*sonnet\s*$/m, fileName);
   }
 });
+
+test('data-model contracts require writable media capabilities and omit primary-ID writes', () => {
+  const dataArchitect = fs.readFileSync(
+    path.join(agentRoot, 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(plannerPath, 'utf8');
+  assert.match(dataArchitect, /canStoreFullImage: true\|false/);
+  assert.match(dataArchitect, /maxSizeInKB.*1 through\s+30720/s);
+  assert.match(dataArchitect, /maxHeight.*maxWidth.*fixed 144-pixel thumbnail/s);
+  assert.match(
+    dataArchitect,
+    /server-owned primary ID column as `create`, `extend`,\s+or `adapt`/s,
+  );
+  assert.match(planner, /Image mutations must include explicit `canStoreFullImage`/);
+  assert.match(planner, /Never declare a server-owned primary ID/);
+});
+
+test('planner agents consume bounded evidence without eagerly loading shards', () => {
+  const dataArchitect = fs.readFileSync(
+    path.join(agentRoot, 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(plannerPath, 'utf8');
+  assert.match(dataArchitect, /schemaVersion: 2/);
+  assert.match(dataArchitect, /Never preload every shard/);
+  assert.match(dataArchitect, /shard contains only compact identities/);
+  assert.match(planner, /Architect evidence schema v2/);
+  assert.match(planner, /Do not read all shards or the full snapshot/);
+});
+
+test('hidden collision adaptation is journal-bound and approval-limited', () => {
+  const dataArchitect = fs.readFileSync(
+    path.join(agentRoot, 'data-model-architect.md'),
+    'utf8',
+  );
+  const planner = fs.readFileSync(plannerPath, 'utf8');
+  const addDataverse = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../skills/add-dataverse/SKILL.md',
+  ), 'utf8');
+  assert.match(dataArchitect, /adaptationKind:\s*hidden-name-collision/);
+  assert.match(dataArchitect, /Never invent this evidence/);
+  assert.match(planner, /"adaptationPolicy"/);
+  assert.match(planner, /semanticChangesRequireApproval/);
+  assert.match(addDataverse, /journal inFlight operationId/);
+  assert.match(addDataverse, /404 exact-name probe means candidate\s+metadata is absent/s);
+  assert.match(addDataverse, /return `NEEDS_APPROVAL`/);
+});

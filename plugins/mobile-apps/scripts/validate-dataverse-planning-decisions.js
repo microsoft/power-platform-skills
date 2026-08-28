@@ -3,7 +3,10 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateContract } = require('./build-dataverse-operation-manifest');
+const {
+  isHiddenNameCollisionAdapt,
+  validateContract,
+} = require('./build-dataverse-operation-manifest');
 const { validateSnapshot } = require('./create-dataverse-snapshot');
 
 const FULL_DETAIL_DECISIONS = new Set(['reuse', 'extend', 'adapt']);
@@ -28,6 +31,7 @@ function validatePlanningDecisions(contract, snapshot) {
   const detailed = new Map(snapshot.tables.map((table) => [normalize(table.logicalName), table]));
   for (const table of contract.tables || []) {
     if (!FULL_DETAIL_DECISIONS.has(normalize(table.plannedDecision))) continue;
+    if (isHiddenNameCollisionAdapt(table)) continue;
     const evidence = detailed.get(normalize(table.logicalName));
     if (!evidence || (evidence.detailLevel || 'full') !== 'full') {
       contextNames.add(table.logicalName);

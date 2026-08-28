@@ -12,6 +12,7 @@ const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 const {
   createDataverseRequestExecutor,
+  duplicateCode,
   looksLikeDuplicate,
   operationFingerprint,
   prepareMetadataJournal,
@@ -93,6 +94,7 @@ test('Retry-After supports delta-seconds and HTTP-date with a safe fallback', ()
 });
 
 test('hidden Dataverse metadata collision signatures require regeneration', () => {
+  assert.equal(duplicateCode(null), null);
   assert.equal(looksLikeDuplicate({
     error: {
       code: '0x80044363',
@@ -105,6 +107,12 @@ test('hidden Dataverse metadata collision signatures require regeneration', () =
       message: 'An object with same name exists in solution',
     },
   }), true);
+  assert.equal(duplicateCode({
+    error: {
+      code: '0x80044363',
+      message: 'The schema name new_Table is not unique',
+    },
+  }), '0x80044363');
 });
 
 test('operation fingerprints ignore reindexing while order is validated separately', () => {
@@ -348,6 +356,58 @@ test('journal preserves inFlight uncertainty after metadata transport loss', asy
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
   assert.equal(journal.inFlight.operationId, operation.id);
   assert.equal(journal.inFlight.failure.uncertain, true);
+});
+
+test('journal persists a bounded collision code from an HTTP error body', async (t) => {
+  const directory = makeTempDir(t);
+  const journalPath = path.join(directory, 'metadata-journal.json');
+  const server = http.createServer((_request, response) => {
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      error: {
+        code: '0x80044363',
+        message: 'The schema name cr1_Item is not unique',
+      },
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const environmentUrl = `http://127.0.0.1:${server.address().port}`;
+  const operation = {
+    id: 'create-table:cr1_item',
+    index: 0,
+    phase: 'tableCreates',
+    method: 'POST',
+    apiPath: 'EntityDefinitions',
+    body: { SchemaName: 'cr1_Item' },
+    solution: null,
+  };
+  const reconciliationHash = 'b'.repeat(64);
+  const manifest = executionManifest({ tableCreates: [operation] }, {
+    environmentUrl,
+    reconciliationSha256: reconciliationHash,
+  });
+  const result = await runMetadataBatch(
+    environmentUrl,
+    [operation],
+    'token',
+    null,
+    'tenant-1',
+    false,
+    {
+      journalPath,
+      manifestHash: manifest.integritySha256,
+      reconciliationHash,
+      allOperations: [operation],
+      manifest,
+    },
+  );
+  assert.equal(result.failed, true);
+  assert.equal(result.results[0].operationId, operation.id);
+  const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  assert.equal(journal.inFlight.failure.collision, true);
+  assert.equal(journal.inFlight.failure.collisionCode, '0x80044363');
+  assert.equal(journal.inFlight.failure.error, null);
 });
 
 test('BATCH-METADATA reuses auth, preserves order, and stops on first failure', async (t) => {

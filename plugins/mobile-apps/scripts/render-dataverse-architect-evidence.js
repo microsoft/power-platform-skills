@@ -8,6 +8,10 @@ const {
   atomicWriteJson,
   validateSnapshot,
 } = require('./create-dataverse-snapshot');
+const {
+  projectSelectedTables,
+  stableJson: stableProjectionJson,
+} = require('./lib/dataverse-evidence-projection');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -45,7 +49,7 @@ function architectCandidate(candidate) {
   };
 }
 
-function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
+function buildArchitectEvidenceBundle(snapshot, sourceSnapshotSha256) {
   const validation = validateSnapshot(snapshot);
   if (!validation.valid) {
     throw new Error(`Invalid Dataverse snapshot: ${validation.errors.join('; ')}`);
@@ -53,8 +57,21 @@ function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
   if (!/^[a-f0-9]{64}$/.test(String(sourceSnapshotSha256 || ''))) {
     throw new Error('sourceSnapshotSha256 must be a SHA-256 value');
   }
+  const projection = projectSelectedTables(snapshot, sourceSnapshotSha256);
+  const shardDescriptors = projection.shards.map((shard) => ({
+    id: `table-index:${shard.tableLogicalName}`,
+    tableLogicalName: shard.tableLogicalName,
+    evidenceClasses: [
+      ...(shard.columnIndex.length > 0 ? ['columns'] : []),
+      ...(shard.relationshipIndex.length > 0 ? ['relationships'] : []),
+      ...(shard.keyIndex.length > 0 ? ['keys'] : []),
+    ],
+    file: `${shard.tableLogicalName}.json`,
+    integritySha256: shard.integritySha256,
+    bytes: Buffer.byteLength(stableProjectionJson(shard)),
+  }));
   const evidence = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceSnapshotSha256,
     environment: {
       url: snapshot.environmentUrl,
@@ -69,12 +86,12 @@ function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
       preferredPublisherFamily: ranking.preferredPublisherFamily || '',
       topCandidates: (ranking.candidates || []).slice(0, 3).map(architectCandidate),
     })),
-    selectedTables: snapshot.tables.map((table) => {
-      const selected = clone(table);
-      selected.detailLevel = table.detailLevel || 'full';
-      selected.missingDetailClasses = clone(table.missingDetailClasses || []);
-      return selected;
-    }),
+    selectedTables: projection.selectedTables.map((table) => ({
+      ...table,
+      detailLevel: table.detailLevel || 'full',
+      missingDetailClasses: clone(table.missingDetailClasses || []),
+    })),
+    shards: shardDescriptors,
     selectedCandidateEvidence: snapshot.selectedCandidateEvidence || [],
     proposedNameChecks: snapshot.proposedNameChecks,
     exactNameResolution: snapshot.exactNameResolution,
@@ -82,7 +99,14 @@ function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
     detailLoadSummary: snapshot.detailLoadSummary,
     timings: snapshot.timings,
   };
-  return JSON.parse(JSON.stringify(evidence));
+  return {
+    evidence: JSON.parse(JSON.stringify(evidence)),
+    shards: JSON.parse(JSON.stringify(projection.shards)),
+  };
+}
+
+function buildArchitectEvidence(snapshot, sourceSnapshotSha256) {
+  return buildArchitectEvidenceBundle(snapshot, sourceSnapshotSha256).evidence;
 }
 
 function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
@@ -90,7 +114,7 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     return { valid: false, errors: ['architect evidence must be an object'] };
   }
-  if (evidence.schemaVersion !== 1) errors.push('architect evidence schemaVersion must be 1');
+  if (evidence.schemaVersion !== 2) errors.push('architect evidence schemaVersion must be 2');
   if (evidence.sourceSnapshotSha256 !== sourceSnapshotSha256) {
     errors.push('architect evidence source snapshot hash is stale');
   }
@@ -98,7 +122,10 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
     || evidence.environment?.tenantId !== snapshot.tenantId) {
     errors.push('architect evidence environment does not match the snapshot');
   }
-  const expectedTables = new Map(snapshot.tables.map((table) => [table.logicalName, table]));
+  const expectedBundle = buildArchitectEvidenceBundle(snapshot, sourceSnapshotSha256);
+  const expectedTables = new Map(expectedBundle.evidence.selectedTables.map(
+    (table) => [table.logicalName, table],
+  ));
   const actualTables = Array.isArray(evidence.selectedTables) ? evidence.selectedTables : [];
   if (new Set(actualTables.map((table) => table.logicalName)).size !== actualTables.length) {
     errors.push('architect evidence selected tables must be unique');
@@ -112,15 +139,8 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
       errors.push(`architect evidence contains unknown table ${table.logicalName}`);
       continue;
     }
-    const normalized = { ...table };
-    if (!Object.prototype.hasOwnProperty.call(expected, 'detailLevel')) {
-      delete normalized.detailLevel;
-    }
-    if (!Object.prototype.hasOwnProperty.call(expected, 'missingDetailClasses')) {
-      delete normalized.missingDetailClasses;
-    }
-    if (stableJson(normalized) !== stableJson(expected)) {
-      errors.push(`architect evidence table ${table.logicalName} differs from the snapshot`);
+    if (stableJson(table) !== stableJson(expected)) {
+      errors.push(`architect evidence table ${table.logicalName} differs from the projection`);
     }
   }
   const expectedConcepts = snapshot.candidateRanking || [];
@@ -136,8 +156,7 @@ function validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256) {
       }
     }
   }
-  const expectedEvidence = buildArchitectEvidence(snapshot, sourceSnapshotSha256);
-  if (stableJson(evidence) !== stableJson(expectedEvidence)) {
+  if (stableJson(evidence) !== stableJson(expectedBundle.evidence)) {
     errors.push('architect evidence differs from the deterministic snapshot projection');
   }
   return { valid: errors.length === 0, errors };
@@ -154,7 +173,48 @@ function loadAndValidateArchitectEvidence(snapshotFile, evidenceFile, fileSystem
   const sourceSnapshotSha256 = sha256(snapshotSource);
   const validation = validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256);
   if (!validation.valid) throw new Error(validation.errors.join('; '));
-  return { evidence, snapshot, sourceSnapshotSha256 };
+  const expectedBundle = buildArchitectEvidenceBundle(snapshot, sourceSnapshotSha256);
+  const shardDirectory = `${path.resolve(evidenceFile)}.shards`;
+  const shards = [];
+  for (const [index, descriptor] of (evidence.shards || []).entries()) {
+    if (!/^[A-Za-z][A-Za-z0-9_]*\.json$/.test(String(descriptor.file || ''))) {
+      throw new Error(`architect evidence shard ${index} has an unsafe file name`);
+    }
+    const shardPath = path.join(shardDirectory, descriptor.file);
+    if (!fileSystem.existsSync(shardPath)) {
+      throw new Error(`architect evidence shard is missing: ${descriptor.file}`);
+    }
+    const shard = JSON.parse(fileSystem.readFileSync(shardPath, 'utf8'));
+    const withoutIntegrity = { ...shard };
+    delete withoutIntegrity.integritySha256;
+    if (shard.integritySha256 !== sha256(stableProjectionJson(withoutIntegrity))) {
+      throw new Error(`architect evidence shard integrity is invalid: ${descriptor.file}`);
+    }
+    if (shard.integritySha256 !== descriptor.integritySha256) {
+      throw new Error(`architect evidence shard descriptor is stale: ${descriptor.file}`);
+    }
+    const expected = expectedBundle.shards.find(
+      (item) => item.tableLogicalName === shard.tableLogicalName,
+    );
+    if (!expected || stableJson(shard) !== stableJson(expected)) {
+      throw new Error(`architect evidence shard differs from projection: ${descriptor.file}`);
+    }
+    shards.push(shard);
+  }
+  if (shards.length !== expectedBundle.shards.length) {
+    throw new Error('architect evidence shard count does not match projection');
+  }
+  return { evidence, shards, snapshot, sourceSnapshotSha256 };
+}
+
+function writeArchitectEvidenceBundle(output, bundle, fileSystem = fs) {
+  const resolved = path.resolve(output);
+  const shardDirectory = `${resolved}.shards`;
+  if (bundle.shards.length > 0) fileSystem.mkdirSync(shardDirectory, { recursive: true });
+  for (const shard of bundle.shards) {
+    atomicWriteJson(path.join(shardDirectory, `${shard.tableLogicalName}.json`), shard, fileSystem);
+  }
+  atomicWriteJson(resolved, bundle.evidence, fileSystem);
 }
 
 function parseArgs(argv) {
@@ -195,16 +255,18 @@ function main(argv = process.argv) {
     const source = fs.readFileSync(snapshotPath, 'utf8');
     const snapshot = JSON.parse(source);
     const sourceSnapshotSha256 = sha256(source);
-    const evidence = buildArchitectEvidence(snapshot, sourceSnapshotSha256);
+    const bundle = buildArchitectEvidenceBundle(snapshot, sourceSnapshotSha256);
+    const evidence = bundle.evidence;
     const validation = validateArchitectEvidence(evidence, snapshot, sourceSnapshotSha256);
     if (!validation.valid) throw new Error(validation.errors.join('; '));
-    atomicWriteJson(output, evidence);
+    writeArchitectEvidenceBundle(output, bundle);
     const result = {
       status: 'DONE',
       output,
       sourceSnapshotSha256,
       concepts: evidence.concepts.length,
       selectedTables: evidence.selectedTables.length,
+      shards: evidence.shards.length,
       bytes: Buffer.byteLength(JSON.stringify(evidence)),
     };
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -220,9 +282,11 @@ if (require.main === module) process.exitCode = main();
 module.exports = {
   architectCandidate,
   buildArchitectEvidence,
+  buildArchitectEvidenceBundle,
   loadAndValidateArchitectEvidence,
   main,
   sha256,
   stableJson,
   validateArchitectEvidence,
+  writeArchitectEvidenceBundle,
 };

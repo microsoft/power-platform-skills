@@ -51,10 +51,17 @@ const DERIVED_COLUMN_TYPES = new Set([
   'computed',
 ]);
 const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
+  'file',
+  'image',
   'lookup',
   'memo',
   'multiline',
 ]);
+const MUTATING_DECISIONS = new Set(['create', 'extend', 'adapt']);
+const MAX_IMAGE_SIZE_IN_KB = 30 * 1024;
+const MAX_FILE_SIZE_IN_KB = 10 * 1024 * 1024;
+const ADAPTATION_KINDS = new Set(['existing-object', 'hidden-name-collision']);
+const HIDDEN_COLLISION_CODES = new Set(['0x80044363', '0x80060890']);
 
 function parseArgs(argv) {
   const args = {};
@@ -166,6 +173,73 @@ function validateSchemaLogicalIdentity(logicalName, schemaName, labelText, error
       + 'under Dataverse casing rules',
     );
   }
+}
+
+function isSha256(value) {
+  return /^[a-f0-9]{64}$/i.test(String(value || ''));
+}
+
+function isHiddenNameCollisionAdapt(table) {
+  return normalizeName(table?.plannedDecision) === 'adapt'
+    && table?.adaptationKind === 'hidden-name-collision';
+}
+
+function validateHiddenCollisionEvidence(table, prefix, errors) {
+  const evidence = table.collisionEvidence;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    errors.push(`${prefix}.collisionEvidence is required for hidden-name-collision Adapt`);
+    return;
+  }
+  if (!HIDDEN_COLLISION_CODES.has(normalizeName(evidence.code))) {
+    errors.push(`${prefix}.collisionEvidence.code is not an approved hidden collision code`);
+  }
+  if (typeof evidence.operationId !== 'string' || !evidence.operationId.trim()) {
+    errors.push(`${prefix}.collisionEvidence.operationId is required`);
+  }
+  for (const field of [
+    'operationFingerprint',
+    'priorManifestSha256',
+    'priorReconciliationSha256',
+  ]) {
+    if (!isSha256(evidence[field])) {
+      errors.push(`${prefix}.collisionEvidence.${field} must be a SHA-256 value`);
+    }
+  }
+  if (!Number.isFinite(Date.parse(evidence.observedAt))) {
+    errors.push(`${prefix}.collisionEvidence.observedAt must be an ISO timestamp`);
+  }
+}
+
+function validateAdaptationPolicy(policy) {
+  const errors = [];
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) {
+    return { valid: false, errors: ['adaptationPolicy must be an object'] };
+  }
+  if (policy.schemaVersion !== 1) errors.push('adaptationPolicy.schemaVersion must be 1');
+  if (policy.automaticTechnicalRename !== true) {
+    errors.push('adaptationPolicy.automaticTechnicalRename must be true');
+  }
+  if (policy.semanticChangesRequireApproval !== true) {
+    errors.push('adaptationPolicy.semanticChangesRequireApproval must be true');
+  }
+  if (!Array.isArray(policy.allowedCollisionCodes)
+    || policy.allowedCollisionCodes.length === 0
+    || policy.allowedCollisionCodes.some(
+      (code) => !HIDDEN_COLLISION_CODES.has(normalizeName(code)),
+    )) {
+    errors.push('adaptationPolicy.allowedCollisionCodes must contain only approved codes');
+  }
+  if (!Array.isArray(policy.alternativeSuffixes)
+    || policy.alternativeSuffixes.length === 0
+    || policy.alternativeSuffixes.some((suffix) => !/^[a-z0-9]+$/i.test(String(suffix)))) {
+    errors.push('adaptationPolicy.alternativeSuffixes must be a non-empty safe suffix array');
+  }
+  if (!Number.isInteger(policy.maxAttempts)
+    || policy.maxAttempts < 1
+    || policy.maxAttempts > 20) {
+    errors.push('adaptationPolicy.maxAttempts must be an integer from 1 to 20');
+  }
+  return { valid: errors.length === 0, errors };
 }
 
 function hasOwn(value, key) {
@@ -286,18 +360,27 @@ function validateContract(contract) {
       errors.push(`${prefix}.alternateKeys must be an array`);
     }
     if (normalizeName(table.plannedDecision) === 'adapt') {
+      const adaptationKind = table.adaptationKind || 'existing-object';
+      if (!ADAPTATION_KINDS.has(adaptationKind)) {
+        errors.push(`${prefix}.adaptationKind is invalid`);
+      }
       validateSchemaLogicalIdentity(
         table.adaptedLogicalName,
         table.adaptedSchemaName,
         `${prefix}.adapted`,
         errors,
       );
+      if (adaptationKind === 'hidden-name-collision') {
+        validateHiddenCollisionEvidence(table, prefix, errors);
+      }
     }
 
     const columns = Array.isArray(table.columns) ? table.columns : [];
     uniqueByNormalizedName(columns, (column) => column.logicalName, `${prefix}.columns`, errors);
     for (const [columnIndex, column] of columns.entries()) {
       const columnPrefix = `${prefix}.columns[${columnIndex}]`;
+      const columnDecision = normalizeName(column.plannedDecision);
+      const columnType = normalizeColumnType(column.type);
       validateSchemaLogicalIdentity(
         column.logicalName,
         column.schemaName || column.logicalName,
@@ -307,7 +390,40 @@ function validateContract(contract) {
       if (!CONTRACT_DECISIONS.has(normalizeName(column.plannedDecision))) {
         errors.push(`${columnPrefix}.plannedDecision must use the reconciliation taxonomy`);
       }
-      if (!normalizeColumnType(column.type)) errors.push(`${columnPrefix}.type is required`);
+      if (!columnType) errors.push(`${columnPrefix}.type is required`);
+      if (MUTATING_DECISIONS.has(columnDecision)
+        && (column.primaryId === true
+          || (table.primaryIdAttribute
+            && normalizeName(column.logicalName) === normalizeName(table.primaryIdAttribute)))) {
+        errors.push(`${columnPrefix} cannot mutate the server-owned primary ID`);
+      }
+      if (columnType === 'image' && MUTATING_DECISIONS.has(columnDecision)) {
+        if (typeof column.canStoreFullImage !== 'boolean') {
+          errors.push(`${columnPrefix}.canStoreFullImage must be boolean for an Image mutation`);
+        }
+        if (!Number.isInteger(column.maxSizeInKB)
+          || column.maxSizeInKB < 1
+          || column.maxSizeInKB > MAX_IMAGE_SIZE_IN_KB) {
+          errors.push(
+            `${columnPrefix}.maxSizeInKB must be an integer from 1 to ${MAX_IMAGE_SIZE_IN_KB}`,
+          );
+        }
+        for (const thumbnailField of ['maxHeight', 'maxWidth']) {
+          if (hasOwn(column, thumbnailField)) {
+            errors.push(
+              `${columnPrefix}.${thumbnailField} is observed thumbnail metadata and cannot be configured`,
+            );
+          }
+        }
+      }
+      if (columnType === 'file' && MUTATING_DECISIONS.has(columnDecision)
+        && (!Number.isInteger(column.maxSizeInKB)
+          || column.maxSizeInKB < 1
+          || column.maxSizeInKB > MAX_FILE_SIZE_IN_KB)) {
+        errors.push(
+          `${columnPrefix}.maxSizeInKB must be an integer from 1 to ${MAX_FILE_SIZE_IN_KB}`,
+        );
+      }
       if (normalizeName(column.plannedDecision) === 'adapt') {
         validateSchemaLogicalIdentity(
           column.adaptedLogicalName,
@@ -870,6 +986,27 @@ function validateApprovalReceipt(approvalReceipt, {
       'data-model approval record does not match the approved contract hash',
     );
   }
+  const hiddenCollisionTables = (contract.tables || []).filter(isHiddenNameCollisionAdapt);
+  if (hiddenCollisionTables.length > 0) {
+    const policyValidation = validateAdaptationPolicy(approvalReceipt.adaptationPolicy);
+    if (!policyValidation.valid) {
+      errors.push(...policyValidation.errors.map(
+        (error) => `mobile plan approval receipt: ${error}`,
+      ));
+    } else {
+      const allowedCodes = new Set(
+        approvalReceipt.adaptationPolicy.allowedCollisionCodes.map(normalizeName),
+      );
+      for (const table of hiddenCollisionTables) {
+        if (!allowedCodes.has(normalizeName(table.collisionEvidence?.code))) {
+          errors.push(
+            `mobile plan approval receipt does not authorize collision code `
+            + `${table.collisionEvidence?.code || '<missing>'}`,
+          );
+        }
+      }
+    }
+  }
   const dependencyValidation = normalizeServiceDependencies({
     schemaVersion: approvalReceipt.schemaVersion,
     serviceRequiredTables: approvalReceipt.serviceRequiredTables,
@@ -1083,10 +1220,9 @@ function expectedColumnConstraints(column) {
     constraints.push(['defaultValue', Boolean(column.defaultValue), 'DefaultValue']);
   } else if (type === 'image') {
     constraints.push(
-      ['maxHeight', Number(column.maxHeight ?? 1440), 'MaxHeight',
+      ['maxSizeInKB', Number(column.maxSizeInKB), 'MaxSizeInKB',
         (actual, expected) => Number(actual) >= expected],
-      ['maxWidth', Number(column.maxWidth ?? 1440), 'MaxWidth',
-        (actual, expected) => Number(actual) >= expected],
+      ['canStoreFullImage', Boolean(column.canStoreFullImage), 'CanStoreFullImage'],
     );
   } else if (type === 'file') {
     constraints.push(
@@ -1327,8 +1463,8 @@ function columnPayload(column, effectiveLogicalName = column.logicalName) {
     return {
       '@odata.type': 'Microsoft.Dynamics.CRM.ImageAttributeMetadata',
       ...common,
-      MaxHeight: Number(column.maxHeight || 1440),
-      MaxWidth: Number(column.maxWidth || 1440),
+      MaxSizeInKB: Number(column.maxSizeInKB),
+      CanStoreFullImage: Boolean(column.canStoreFullImage),
     };
   }
   if (type === 'file') {
@@ -1641,6 +1777,78 @@ function operation(index, id, phase, apiPath, body, solution) {
   };
 }
 
+function requiresFullImageConfiguration(column) {
+  return normalizeColumnType(column?.type) === 'image'
+    && column.canStoreFullImage === true;
+}
+
+function imageConfigurationOperation(
+  index,
+  tableLogicalName,
+  column,
+  solution,
+) {
+  const columnLogicalName = normalizeName(
+    column.effectiveLogicalName || column.adaptedLogicalName || column.logicalName,
+  );
+  return {
+    ...operation(
+      index,
+      `configure-image:${tableLogicalName}:${columnLogicalName}`,
+      'extensions',
+      `EntityDefinitions(LogicalName='${tableLogicalName}')/Attributes(`
+        + `LogicalName='${columnLogicalName}')`,
+      {
+        ...columnPayload(column, columnLogicalName),
+        AttributeTypeName: { Value: 'ImageType' },
+        CanStoreFullImage: true,
+      },
+      solution,
+    ),
+    method: 'PUT',
+  };
+}
+
+function repairableFullImageConfiguration(column, liveColumn) {
+  if (!requiresFullImageConfiguration(column) || !liveColumn) return false;
+  const actualMaxSizeInKB = Number(liveColumn.maxSizeInKB);
+  if (!Number.isFinite(actualMaxSizeInKB) || actualMaxSizeInKB < 1) return false;
+  if (liveColumn.canStoreFullImage === true
+    && actualMaxSizeInKB >= Number(column.maxSizeInKB)) {
+    return false;
+  }
+  return baseColumnCompatibility({
+    ...column,
+    canStoreFullImage: Boolean(liveColumn.canStoreFullImage),
+    maxSizeInKB: actualMaxSizeInKB,
+  }, liveColumn).compatible;
+}
+
+function isImageConfigurationOperation(item) {
+  const match = String(item?.id || '').match(
+    /^configure-image:([a-z][a-z0-9_]*):([a-z][a-z0-9_]*)$/i,
+  );
+  if (!match) return false;
+  const tableLogicalName = normalizeName(match[1]);
+  const columnLogicalName = normalizeName(match[2]);
+  const body = item.body || {};
+  return item.phase === 'extensions'
+    && item.enclosingPhase === 'extensions'
+    && item.method === 'PUT'
+    && item.apiPath === `EntityDefinitions(LogicalName='${tableLogicalName}')/Attributes(`
+      + `LogicalName='${columnLogicalName}')`
+    && body['@odata.type'] === 'Microsoft.Dynamics.CRM.ImageAttributeMetadata'
+    && normalizeName(body.SchemaName) === columnLogicalName
+    && body.AttributeTypeName?.Value === 'ImageType'
+    && body.CanStoreFullImage === true
+    && Number.isInteger(body.MaxSizeInKB)
+    && body.MaxSizeInKB >= 1
+    && body.MaxSizeInKB <= MAX_IMAGE_SIZE_IN_KB
+    && !hasOwn(body, 'MaxHeight')
+    && !hasOwn(body, 'MaxWidth')
+    && body.IsPrimaryId !== true;
+}
+
 function xmlEscape(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -1793,6 +2001,7 @@ function operationAffectedPublishTables(operation) {
     return [logicalNameFromSchemaName(operation.body?.SchemaName)];
   }
   if (String(operation?.id || '').startsWith('extend-column:')
+    || String(operation?.id || '').startsWith('configure-image:')
     || String(operation?.id || '').startsWith('create-key:')) {
     const match = String(operation.apiPath || '').match(
       /EntityDefinitions\(LogicalName='([^']+)'\)/,
@@ -1810,16 +2019,31 @@ function revisedEquivalentOperation(previousOperation, previousManifest, normali
   const expectedItemType = String(previousOperation?.id || '').startsWith('create-table:')
     ? 'table'
     : String(previousOperation?.id || '').startsWith('extend-column:')
+      || String(previousOperation?.id || '').startsWith('configure-image:')
       ? 'column'
       : String(previousOperation?.id || '').startsWith('create-relationship:')
         ? 'relationship'
         : String(previousOperation?.id || '').startsWith('create-key:')
           ? 'key'
           : null;
-  const decision = (previousManifest.decisions || []).find(
+  let decision = (previousManifest.decisions || []).find(
     (item) => item.operation === previousOperation.id
       && item.itemType === expectedItemType,
   );
+  const imageConfigurationMatch = String(previousOperation?.id || '').match(
+    /^configure-image:([a-z][a-z0-9_]*):([a-z][a-z0-9_]*)$/i,
+  );
+  if (!decision && imageConfigurationMatch) {
+    const previousTable = normalizeName(imageConfigurationMatch[1]);
+    const previousColumn = normalizeName(imageConfigurationMatch[2]);
+    decision = (previousManifest.decisions || []).find((item) => (
+      item.itemType === 'column'
+      && normalizeName(item.effectiveName) === previousColumn
+      && normalizeName(
+        previousManifest.aliases?.tables?.[normalizeName(item.table)] || item.table,
+      ) === previousTable
+    ));
+  }
   if (!decision) return null;
   const table = normalized.tables.find(
     (item) => item.logicalName === normalizeName(
@@ -1878,6 +2102,15 @@ function revisedEquivalentOperation(previousOperation, previousManifest, normali
     const effectiveColumn = normalizeName(
       column.adaptedLogicalName || column.logicalName,
     );
+    if (String(previousOperation?.id || '').startsWith('configure-image:')) {
+      if (!requiresFullImageConfiguration(column)) return null;
+      return imageConfigurationOperation(
+        0,
+        effectiveTable,
+        { ...column, effectiveLogicalName: effectiveColumn },
+        context.solutionUniqueName,
+      );
+    }
     return operation(
       0,
       `extend-column:${effectiveTable}:${effectiveColumn}`,
@@ -2402,6 +2635,19 @@ function buildManifest({
       );
       phaseOperations.tableCreates.push(tableOperation);
       publishTables.add(effectiveName);
+      const fullImageColumns = ordinaryColumns
+        .filter(requiresFullImageConfiguration)
+        .sort((left, right) => (
+          left.effectiveLogicalName.localeCompare(right.effectiveLogicalName)
+        ));
+      for (const column of fullImageColumns) {
+        phaseOperations.extensions.push(imageConfigurationOperation(
+          nextIndex++,
+          effectiveName,
+          column,
+          context.solutionUniqueName,
+        ));
+      }
       decisions.push(makeDecision({
         itemId: tableId,
         itemType: 'table',
@@ -2449,10 +2695,14 @@ function buildManifest({
           decision: column.plannedDecision === 'adapt' ? 'adapt' : 'create',
           operation: normalizeColumnType(column.type) === 'lookup'
             ? 'relationship-phase'
-            : tableOperation.id,
+            : requiresFullImageConfiguration(column)
+              ? `configure-image:${effectiveName}:${columnTarget}`
+              : tableOperation.id,
           reason: normalizeColumnType(column.type) === 'lookup'
             ? 'lookup is created by its relationship after both endpoint tables exist'
-            : 'ordinary column is included inline in the table create',
+            : requiresFullImageConfiguration(column)
+              ? 'image is created inline and full-image storage is configured before publish'
+              : 'ordinary column is included inline in the table create',
         }));
       }
       continue;
@@ -2509,6 +2759,7 @@ function buildManifest({
     );
     const canExtend = Boolean(live.detail.customizable && live.detail.canCreateAttributes);
     const createColumns = [];
+    const configureImages = [];
     let tableHasUnverified = false;
     let tableHasDeferred = false;
 
@@ -2681,6 +2932,31 @@ function buildManifest({
       }
 
       if (
+        ['create', 'extend', 'adapt'].includes(column.plannedDecision)
+        && canExtend
+        && item.liveColumn.customizable !== false
+        && repairableFullImageConfiguration(column, item.liveColumn)
+      ) {
+        const desiredMaxSizeInKB = Math.max(
+          Number(column.maxSizeInKB),
+          Number(item.liveColumn.maxSizeInKB),
+        );
+        configureImages.push({
+          ...column,
+          effectiveLogicalName: columnTarget,
+          maxSizeInKB: desiredMaxSizeInKB,
+        });
+        decisions.push(makeDecision({
+          itemId: columnId,
+          itemType: 'column',
+          table: requestedName,
+          requestedName: column.logicalName,
+          effectiveName: columnTarget,
+          decision: 'extend',
+          operation: `configure-image:${effectiveName}:${columnTarget}`,
+          reason: 'existing Image metadata requires the approved full-image configuration',
+        }));
+      } else if (
         column.plannedDecision === 'adapt'
         && column.adaptedLogicalName
         && canExtend
@@ -2736,12 +3012,32 @@ function buildManifest({
         columnPayload(column, column.effectiveLogicalName),
         context.solutionUniqueName,
       ));
+      if (requiresFullImageConfiguration(column)) {
+        phaseOperations.extensions.push(imageConfigurationOperation(
+          nextIndex++,
+          effectiveName,
+          column,
+          context.solutionUniqueName,
+        ));
+      }
+      publishTables.add(effectiveName);
+    }
+
+    for (const column of configureImages.sort((left, right) => (
+      left.effectiveLogicalName.localeCompare(right.effectiveLogicalName)
+    ))) {
+      phaseOperations.extensions.push(imageConfigurationOperation(
+        nextIndex++,
+        effectiveName,
+        column,
+        context.solutionUniqueName,
+      ));
       publishTables.add(effectiveName);
     }
 
     const tableDecision = tableHasUnverified
       ? 'unverified'
-      : createColumns.length > 0
+      : createColumns.length > 0 || configureImages.length > 0
         ? 'extend'
         : table.plannedDecision === 'adapt'
           ? 'adapt'
@@ -2752,11 +3048,14 @@ function buildManifest({
       requestedName,
       effectiveName,
       decision: tableDecision,
-      operation: createColumns.length > 0 ? 'extensions-phase' : 'none',
+      operation: createColumns.length > 0 || configureImages.length > 0
+        ? 'extensions-phase'
+        : 'none',
       reason: tableHasUnverified
         ? 'one or more columns remain unverified'
-        : createColumns.length > 0
-          ? `${createColumns.length} missing ordinary column(s) will be extended`
+        : createColumns.length > 0 || configureImages.length > 0
+          ? `${createColumns.length} missing ordinary column(s) and `
+            + `${configureImages.length} Image configuration(s) will be applied`
           : tableHasDeferred
             ? 'compatible table reused; unsupported additions are explicitly deferred'
             : incompatible.length > 0
@@ -3305,7 +3604,9 @@ function buildManifest({
     summary: {
       decisionCount: decisions.length,
       metadataOperationCount: operations.length,
-      metadataWriteCount: operations.filter((item) => item.method === 'POST').length,
+      metadataWriteCount: operations.filter(
+        (item) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(item.method),
+      ).length,
       unresolvedCount: unverified.length,
       unverifiedCount: unverifiedFacts.length,
       conflictCount: conflicts.length,
@@ -3495,8 +3796,11 @@ function validateManifest(manifest, {
       if (item.phase !== item.enclosingPhase) {
         errors.push(`operation ${item.id} phase does not match its container`);
       }
-      if (item.method !== 'POST') errors.push(`operation ${item.id} is not a POST`);
-      if (['DELETE', 'PATCH', 'PUT'].includes(item.method)) {
+      const imageConfiguration = isImageConfigurationOperation(item);
+      if (item.method !== 'POST' && !imageConfiguration) {
+        errors.push(`operation ${item.id} is not an allowed manifest mutation`);
+      }
+      if (['DELETE', 'PATCH', 'PUT'].includes(item.method) && !imageConfiguration) {
         errors.push(`operation ${item.id} is destructive or mutating in-place`);
       }
     }
@@ -3815,6 +4119,7 @@ module.exports = {
   contractApprovalContent,
   createPublishCheckpoint,
   declaredServiceRequiredTableNames,
+  isHiddenNameCollisionAdapt,
   normalizeColumnType,
   normalizedContract,
   parseArgs,
@@ -3824,6 +4129,7 @@ module.exports = {
   stableJson,
   validateContract,
   validateApprovalReceipt,
+  validateAdaptationPolicy,
   validateManifest,
   validatePublishCheckpoint,
 };

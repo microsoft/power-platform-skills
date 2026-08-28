@@ -29,6 +29,8 @@ test('telemetry collector serializes only the safe event allowlist', () => {
     rateLimited: false,
     tokenAcquisitionCount: 1,
     tokenRefreshCount: 1,
+    operationClass: 'read',
+    requestedTimeoutMs: 60000,
     token: 'must-not-serialize',
     authorization: 'must-not-serialize',
     responseBody: 'must-not-serialize',
@@ -41,6 +43,8 @@ test('telemetry collector serializes only the safe event allowlist', () => {
   assert.equal(run.summary.requestCount, 1);
   assert.equal(run.summary.attemptCount, 2);
   assert.equal(run.summary.retryCount, 1);
+  assert.equal(run.events[0].operationClass, 'read');
+  assert.equal(run.events[0].requestedTimeoutMs, 60000);
   assert.doesNotMatch(JSON.stringify(run), /must-not-serialize|authorization/i);
 });
 
@@ -55,11 +59,14 @@ test('telemetry summary groups categories and computes observed percentiles', ()
     rateLimited: index === 4,
     tokenAcquisitionCount: index === 0 ? 1 : 0,
     tokenRefreshCount: 0,
+    operationClass: 'read',
+    requestedTimeoutMs: 60000,
   }));
   assert.deepEqual(summarizeEvents(events), {
     requestCount: 5,
     attemptCount: 6,
     requestCountByCategory: { attributes: 2, 'typed-attribute-metadata': 3 },
+    requestCountByOperationClass: { read: 5 },
     statusCounts: { 200: 4, 429: 1 },
     responseBytes: 25,
     summedRequestDurationMs: 200,

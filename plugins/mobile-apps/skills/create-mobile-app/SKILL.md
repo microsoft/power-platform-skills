@@ -481,6 +481,12 @@ after success. On `BLOCKED` or command failure use `--action fail --reason
 bodies in `reason`. Model token/cost fields are optional and must be omitted
 when the host does not expose them.
 
+**Metadata timing exception:** `create-dataverse-snapshot.js` is the sole owner
+of `metadataInventory`, `metadataCandidateSelection`, `metadataDetailLoading`,
+and `metadataExpansion` whenever `--planning-timings-output` is supplied. Do not
+start, finish, or fail those stages around the command. The foreground owns only
+`artifactValidation` while promoting the staged snapshot and evidence.
+
 ### Step 3.0 — Foreground Dataverse planning snapshot and evidence
 
 Planning stays read-only. Branch on `<dataverse_planning_mode>`:
@@ -543,16 +549,17 @@ Detailed advisory discovery is quality-bounded:
   bounded exact-name expansion.
 
 ```bash
-SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
+STAGED_SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-planning-staging.json"
+PLANNING_GENERATIONS_DIR="<working_dir>/.tmp/dataverse-planning-generations"
+PLANNING_POINTER_PATH="<working_dir>/.tmp/dataverse-planning-current.json"
 CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
-ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
 PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
 INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
-  --output "$SNAPSHOT_PATH" \
+  --output "$STAGED_SNAPSHOT_PATH" \
   --concepts-file "$CONCEPTS_PATH" \
   --tables "<EXPLICIT_TABLES>" \
   --proposed-tables "<PROPOSED_TABLES>" \
@@ -565,9 +572,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
 
 node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage artifactValidation --action start
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
-  --snapshot "$SNAPSHOT_PATH" \
-  --output "$ARCHITECT_EVIDENCE_PATH"
+GENERATION_JSON=$(node \
+  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
+  --snapshot "$STAGED_SNAPSHOT_PATH" \
+  --generations-dir "$PLANNING_GENERATIONS_DIR" \
+  --pointer "$PLANNING_POINTER_PATH" \
+  --json)
+SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
 node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage artifactValidation --action finish
 
@@ -582,8 +594,14 @@ node -e '
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
 ' "$SNAPSHOT_PATH"
 echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
+echo "✓ Planning generation pointer: $PLANNING_POINTER_PATH"
 echo "✓ Request telemetry: $PLANNING_TELEMETRY_PATH"
 ```
+
+The helper writes snapshot, sidecar, shard indexes, and a generation manifest
+under an immutable snapshot-hash directory. It atomically updates only
+`PLANNING_POINTER_PATH`, and only after the complete generation validates. A
+failed render or validation leaves the previous current generation active.
 
 `--combined-base-read` loads attributes, three relationship collections, and
 alternate keys through one entity-definition GET per selected table, following
@@ -779,6 +797,27 @@ Gate 3 and Gate 4 still run at Step 6.75 before any mutation step executes.
 
 Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
 
+**Targeted architect evidence:** when the planner or direct architect returns
+`NEEDS_CONTEXT: dataverse-evidence:<table>:<columns|relationships|keys>:<names>`,
+require `required` mode and the current validated planning pointer. Resolve no
+more than 20 exact names locally:
+
+```bash
+TARGETED_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-targeted-evidence.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-dataverse-architect-evidence.js" \
+  --pointer "$PLANNING_POINTER_PATH" \
+  --request "<literal NEEDS_CONTEXT signal>" \
+  --output "$TARGETED_EVIDENCE_PATH" \
+  --json
+```
+
+Re-dispatch the same planner or architect once with `Targeted Dataverse evidence
+response: $TARGETED_EVIDENCE_PATH`, the same `SNAPSHOT_PATH`, and the same
+`ARCHITECT_EVIDENCE_PATH`. The response is hash-bound to the current generation
+and reads only its full snapshot; it performs no Dataverse request. A second
+targeted-evidence signal for the same decision is `BLOCKED` rather than a broad
+fallback.
+
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
 `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>`, sort and
@@ -794,16 +833,25 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
-  --output "$SNAPSHOT_PATH" \
+  --output "$STAGED_SNAPSHOT_PATH" \
   --tables "<exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
-  --snapshot "$SNAPSHOT_PATH" \
-  --output "$ARCHITECT_EVIDENCE_PATH"
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage artifactValidation --action start
+GENERATION_JSON=$(node \
+  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
+  --snapshot "$STAGED_SNAPSHOT_PATH" \
+  --generations-dir "$PLANNING_GENERATIONS_DIR" \
+  --pointer "$PLANNING_POINTER_PATH" \
+  --json)
+SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage artifactValidation --action finish
 
 node -e '
   const s=require(process.argv[1]);
@@ -833,16 +881,25 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
-  --output "$SNAPSHOT_PATH" \
+  --output "$STAGED_SNAPSHOT_PATH" \
   --proposed-tables "<exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
-  --snapshot "$SNAPSHOT_PATH" \
-  --output "$ARCHITECT_EVIDENCE_PATH"
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage artifactValidation --action start
+GENERATION_JSON=$(node \
+  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
+  --snapshot "$STAGED_SNAPSHOT_PATH" \
+  --generations-dir "$PLANNING_GENERATIONS_DIR" \
+  --pointer "$PLANNING_POINTER_PATH" \
+  --json)
+SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage artifactValidation --action finish
 ```
 
 This expansion checks collisions only; it does not treat absent proposed names
@@ -1393,6 +1450,8 @@ test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
   -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
   -a -f "<working_dir>/native-app-plan.md"
 
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage manifestBuildValidation --action start
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
@@ -1405,7 +1464,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
 
 EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
 PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage manifestBuildValidation --action finish
 
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage executionReconciliation --action start
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -1414,7 +1477,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --proposed-tables "$PROPOSED_TABLES" \
   --reconcile-exact \
   --output "$EXECUTION_RECONCILIATION"
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage executionReconciliation --action finish
 
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage manifestBuildValidation --action start
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
@@ -1449,6 +1516,8 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
   --publish-checkpoint "$PUBLISH_CHECKPOINT" \
   --require-executable
+node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  --project-root "<working_dir>" --stage manifestBuildValidation --action finish
 ```
 
 Invoke `/add-dataverse` with the working directory, approved plan, and exact
@@ -2405,14 +2474,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
   --project-root "<working_dir>" --summary
 ```
 
-Report `dataverseMetadataNetworkMs`, `localDeterministicProcessingMs`,
-`modelArchitectMs`, `screenPlannerMs`, `outerPlannerWallMs`, and
-`userApprovalWaitingMs` as separate values. The outer planner wall contains
-nested work and is not added to architect/screen durations. Scaffold and
-mutation timing stays outside this planning artifact; show its own captured
-step duration when available, otherwise `not recorded`. Never label fixture
-processing as network/model time or include user approval waiting in an
-agent-performance claim.
+Report planning inventory, candidate selection, detail loading, expansion,
+architect evidence rendering, execution reconciliation, manifest build and
+validation, metadata writes, publish, uncertain recovery, collision adaptation,
+post-publish verification, and approval waiting as the separate `...Ms` values
+returned by the summary. Also retain `modelArchitectMs`, `screenPlannerMs`, and
+`outerPlannerWallMs`; the outer planner wall contains nested work and is not
+added to architect/screen durations. Never label local processing as network or
+model time, and never include approval waiting in an agent-performance claim.
 
 ```
 ✅ Native code app created

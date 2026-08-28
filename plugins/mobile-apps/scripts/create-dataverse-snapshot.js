@@ -120,7 +120,12 @@ const ORDINARY_METADATA_FIELDS_BY_TYPE = {
   DecimalAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   DoubleAttributeMetadata: ['MinValue', 'MaxValue', 'Precision'],
   FileAttributeMetadata: ['MaxSizeInKB'],
-  ImageAttributeMetadata: ['MaxHeight', 'MaxWidth', 'MaxSizeInKB'],
+  ImageAttributeMetadata: [
+    'MaxHeight',
+    'MaxWidth',
+    'MaxSizeInKB',
+    'CanStoreFullImage',
+  ],
   IntegerAttributeMetadata: ['MinValue', 'MaxValue', 'Format'],
   MemoAttributeMetadata: ['MaxLength', 'Format'],
   MoneyAttributeMetadata: ['MinValue', 'MaxValue', 'Precision', 'PrecisionSource'],
