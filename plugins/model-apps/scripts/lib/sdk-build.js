@@ -2294,7 +2294,7 @@ async function runSdkBuild(spec, opts = {}) {
       const setting = AI_APP_SETTING[p.feature];
       let proof = { error: app.error };
       if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
-      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature]))) {
+      if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature], p.feature))) {
         reproven.push(p.feature);
         reprovenBy.set(p.feature, 'confirmed present after publish by the build\u2019s own override-row proof');
         continue;

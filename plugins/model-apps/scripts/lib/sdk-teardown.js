@@ -475,12 +475,30 @@ const KIND_HANDLERS = {
     },
     del: (sdk, item) => sdk.deleteWebResource(item.id),
   },
-  // Clear a column visualization on a table that teardown deliberately KEEPS. Setting 'None' deletes
-  // the backing `controlconfiguration` row; the SDK converges rather than erroring when there is
-  // nothing to clear, so a re-run is safe. On an environment where the preview is not provisioned
-  // every call 404s — tolerated as "nothing to remove" rather than a teardown failure.
+  // Clear a column visualization on a table that teardown deliberately KEEPS.
+  //
+  // FAIL-CLOSED on ownership. The configuration row is shared by every app that shows the column, and
+  // the build PATCHes an existing row rather than creating a private one — so blindly writing 'None'
+  // would erase a renderer another maker set after this spec built. The clear therefore only happens
+  // when the CURRENT value still equals what this spec authored; anything else (someone changed it,
+  // or the preview is not provisioned here) is left alone and reported as skipped.
   columnVisualization: {
     async resolve(sdk, target) {
+      let current;
+      try {
+        current = await sdk.getColumnVisualization(target.entityLogical, target.columnLogical);
+      } catch (err) {
+        // A 404 means the preview is not provisioned on this environment, so there is nothing to
+        // clear. Any other read failure means we cannot establish ownership — skip rather than guess.
+        const status = (err && (err.statusCode || err.status)) || 0;
+        return { items: [], skipReason: status === 404
+          ? 'grid-visualization preview is not provisioned on this environment — nothing to clear'
+          : `could not read the current visualization (${String((err && err.message) || err).slice(0, 120)}) — left alone rather than risk clearing another app's setting` };
+      }
+      if (current === 'None') return { items: [] };
+      if (current !== target.authored) {
+        return { items: [], skipReason: `column visualization on ${target.entityLogical}.${target.columnLogical} is now '${current}' but this spec authored '${target.authored}' — someone else changed it, so it is left as-is` };
+      }
       return [{ id: `${target.entityLogical}.${target.columnLogical}`, entityLogical: target.entityLogical, columnLogical: target.columnLogical }];
     },
     del: (sdk, item) => sdk.setColumnVisualization(item.entityLogical, item.columnLogical, 'None'),
@@ -651,12 +669,16 @@ function planTeardown(spec) {
   }
   // Column visualizations on tables that SURVIVE teardown. A visualization is a
   // `controlconfiguration` row bound to the attribute, so it is removed with the column when the
-  // table is deleted — but a table marked `existing: true` (or a system table) is deliberately kept,
-  // and its columns keep whatever renderer this spec applied. That is residue on somebody else's
-  // table, so clear it explicitly. Emitted BEFORE the tables phase because a table this spec DOES
-  // own would take its configurations with it, making the step redundant there.
+  // table is deleted — but a retained table keeps whatever renderer this spec applied, which is
+  // residue on somebody else's table.
+  //
+  // A table is retained when the spec flags it `existing: true` OR when it turns out to be a
+  // system/non-custom table (the table handler detects that live and skips the delete). Planning only
+  // on the flag missed the second case, so a spec that declares a visualization on `account` without
+  // the flag left the renderer behind. Plan a candidate for EVERY declared visualization; the
+  // resolver above establishes ownership and skips a table whose value we did not author, and a
+  // table this spec really does delete simply reports nothing left to clear.
   for (const e of spec.entities || []) {
-    if (e.existing !== true) continue;
     const logical = String(e.schemaName).toLowerCase();
     for (const c of e.columns || []) {
       if (!c || !c.schemaName || c.visualization === undefined || c.visualization === 'None') continue;
@@ -664,7 +686,8 @@ function planTeardown(spec) {
         kind: 'columnVisualization',
         phase: 'data-model',
         label: `column visualization ${logical}.${String(c.schemaName).toLowerCase()}`,
-        target: { entityLogical: logical, columnLogical: String(c.schemaName).toLowerCase() },
+        // `authored` is what makes the clear safe: teardown only removes a value this spec set.
+        target: { entityLogical: logical, columnLogical: String(c.schemaName).toLowerCase(), authored: c.visualization },
       });
     }
   }

@@ -2066,7 +2066,9 @@ test('ai-features phase: the recovery reason names the path that actually recove
   sdk.queryRecords = async (logical) => {
     if (logical === 'appmodule') return [{ appmoduleid: 'app-guid' }];
     if (logical === 'settingdefinition') return [{ settingdefinitionid: 'def-guid' }];
-    if (logical === 'appsetting') return [{ value: '1' }];
+    // '2' is ENABLED for the form-fill family ('1' is DISABLED, '0' the platform default), so this
+    // is what a successful `formFill: true` actually writes.
+    if (logical === 'appsetting') return [{ value: '2' }];
     return [];
   };
   const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
@@ -2120,7 +2122,7 @@ test('ai-features phase: a feature the SDK mis-reports is RE-PROVEN against the 
   sdk.queryRecords = async (set) => {
     if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
     if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
-    if (set === 'appsetting') return [{ value: '1' }]; // the row IS there
+    if (set === 'appsetting') return [{ value: '2' }]; // the row IS there, holding ENABLED for this family
     return [];
   };
   const events = [];

@@ -151,12 +151,8 @@ const OPT_OUT_BINDING = 'sdk-async-binding-ok';
  * makes the question unanswerable-by-ambiguity: nothing can span into a line that begins with `//`.
  * The cost is one extra line at three call sites; the benefit is that a waiver cannot be forged.
  */
-function markerInComment(rawLine, marker) {
-  const trimmed = String(rawLine || '').trimStart();
-  return trimmed.startsWith('//') && trimmed.includes(marker);
-}
-
-const isWaiverLine = (rawLine) => markerInComment(rawLine, OPT_OUT);
+// markerInComment / isWaiverLine are defined by the AST scan below — the regex-era pair they
+// replaced inferred "is this a comment?" from punctuation, which a template literal can forge.
 
 /**
  * Blank out comments and string-literal TEXT, preserving every byte offset and newline so match
@@ -183,295 +179,160 @@ const isWaiverLine = (rawLine) => markerInComment(rawLine, OPT_OUT);
  * an offset bug is impossible by construction — an earlier version could lose a byte when a
  * backslash escape ran past the end, shifting every reported line number after it.
  */
-function stripCommentsAndStrings(source, { keepStrings = false } = {}) {
-  const out = new Array(source.length);
-  for (let k = 0; k < source.length; k++) out[k] = source[k] === '\n' ? '\n' : ' ';
-  const live = (from, to) => { for (let k = from; k < to && k < source.length; k++) out[k] = source[k]; };
+const acorn = require('./vendor/acorn.cjs');
 
-  // A '/' starts a regex only where a VALUE may begin; after a value it is division.
-  //
-  // The last significant CHARACTER is not sufficient on its own: `return /['"]/.test(s)` is real
-  // code in this plugin (scripts/lib/genpage-cli.js), and after `return` the previous character is
-  // `n`, so a character-only rule reads the `/` as division and then treats the regex's quote as a
-  // string opener. So keywords are checked too.
-  //
-  // Even with that, `/` after `)` stays genuinely ambiguous without a parser. Rather than pretend
-  // otherwise, the string scanner below FAILS CLOSED: a single- or double-quoted string cannot
-  // contain a raw newline in JavaScript, so if one is hit before the closing quote the scanner has
-  // mis-lexed and reverts, leaving the text as code. That converts every possible regex
-  // misclassification from "silently erases the following lines" into "leaves them visible" — the
-  // safe direction for a guard, and the property that actually matters here.
-  const REGEX_CAN_FOLLOW = '(,=:[!&|?{};+-*%~^<>';
-  const REGEX_KEYWORDS = /(?:^|[^\w$])(?:return|typeof|instanceof|in|of|new|delete|void|case|do|else|yield|await|throw)$/;
-  let prev = '';
-  let i = 0;
-  const regexMayStart = () => {
-    if (prev === '' || REGEX_CAN_FOLLOW.includes(prev)) return true;
-    // Look back over the code emitted so far for a keyword ending at this point.
-    const back = out.slice(Math.max(0, i - 12), i).join('').replace(/\s+$/, '');
-    return REGEX_KEYWORDS.test(back);
-  };
-  // Brace depth at which each open template interpolation closes.
-  const templates = [];
-  let braceDepth = 0;
+const PARSE_OPTS = {
+  ecmaVersion: 'latest',
+  sourceType: 'script',
+  locations: true,
+  // The corpus is made of fragments, and production files are CommonJS: both can legitimately have
+  // top-level await or a bare return in the snippets we hand this.
+  allowAwaitOutsideFunction: true,
+  allowReturnOutsideFunction: true,
+  allowHashBang: true,
+};
 
-  // Consume a template literal from `i`, stopping either at its closing backtick or at the start
-  // of an interpolation (whose code the MAIN loop then scans normally). Returns false when the
-  // literal never terminates, which means it was not a template at all.
-  const runTemplate = () => {
-    while (i < source.length) {
-      if (source[i] === '\\') { i += 2; continue; }
-      if (source[i] === '`') { i++; return true; }
-      if (source.slice(i, i + 2) === '${') {
-        live(i, i + 2);
-        i += 2;
-        braceDepth++;
-        templates.push(braceDepth);
-        return true;
-      }
-      i++;
-    }
-    return false;
-  };
-
-  while (i < source.length) {
-    const ch = source[i];
-    const two = source.slice(i, i + 2);
-
-    if (two === '//') { while (i < source.length && source[i] !== '\n') i++; continue; }
-    if (two === '/*') {
-      const close = source.indexOf('*/', i + 2);
-      i = close === -1 ? source.length : close + 2;
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      const open = i;
-      let j = i + 1;
-      let closed = false;
-      while (j < source.length) {
-        if (source[j] === '\\') { j += 2; continue; }
-        if (source[j] === '\n') break; // a quoted string cannot span a line -> we mis-lexed
-        if (source[j] === ch) { j++; closed = true; break; }
-        j++;
-      }
-      if (!closed) {
-        // Not a string. Emit the quote as ordinary code and carry on from the next character, so a
-        // misread apostrophe or regex quote can never blank the lines that follow it.
-        out[i] = ch;
-        prev = ch;
-        i++;
-        continue;
-      }
-      i = j;
-      if (keepStrings) live(open, i);
-      prev = 'x';
-      continue;
-    }
-
-    if (ch === '`') {
-      const open = i;
-      i++;
-      if (!runTemplate()) {
-        // Unterminated: treat the backtick as code rather than swallowing the rest of the file.
-        i = open;
-        out[i] = ch;
-        prev = ch;
-        i++;
-        continue;
-      }
-      if (keepStrings) live(open, Math.min(i, source.length));
-      prev = 'x';
-      continue;
-    }
-
-    if (ch === '}' && templates.length && braceDepth === templates[templates.length - 1]) {
-      // Closing an interpolation: resume the enclosing template literal.
-      out[i] = '}';
-      i++;
-      braceDepth--;
-      templates.pop();
-      runTemplate();
-      prev = 'x';
-      continue;
-    }
-
-    if (ch === '/' && regexMayStart()) {
-      const open = i;
-      i++;
-      let inClass = false;
-      let closed = false;
-      while (i < source.length) {
-        if (source[i] === '\\') { i += 2; continue; }
-        if (source[i] === '[') inClass = true;
-        else if (source[i] === ']') inClass = false;
-        else if (source[i] === '/' && !inClass) { i++; closed = true; break; }
-        else if (source[i] === '\n') break; // unterminated: not a regex after all
-        i++;
-      }
-      if (!closed) { i = open; out[i] = ch; prev = ch; i++; continue; }
-      while (i < source.length && /[a-z]/.test(source[i])) i++; // flags
-      prev = 'x';
-      continue;
-    }
-
-    if (ch === '{') braceDepth++;
-    else if (ch === '}') braceDepth--;
-    out[i] = ch;
-    if (!/\s/.test(ch)) prev = ch;
-    i++;
+/** Parse, collecting comments. Returns null when the source will not parse. */
+function parseForGuard(raw) {
+  const comments = [];
+  for (const sourceType of ['script', 'module']) {
+    comments.length = 0;
+    try {
+      const ast = acorn.parse(raw, { ...PARSE_OPTS, sourceType, onComment: comments });
+      return { ast, comments: comments.slice() };
+    } catch { /* try the other goal symbol */ }
   }
-  return out.join('');
+  return null;
 }
 
 /**
- * Find every un-awaited SDK call in `raw`, returning `{ line, text, kind }` findings.
+ * Is `marker` inside a WHOLE-LINE comment on this line?
  *
- * DIRECTION OF FAILURE — the property that makes this trustworthy.
- *
- * Candidates are matched against the RAW source, and a candidate is only DISMISSED when it can be
- * shown to be inert. Earlier versions did the opposite: they matched against a stripped copy, so
- * any flaw in the stripper made a real call invisible. Two separate stripper flaws did exactly
- * that (a regex literal's quote opening a fake string; a template literal swallowing its own
- * interpolation), and each turned the guard into a green light over a live bug.
- *
- * A candidate is DISMISSED only when both hold:
- *   1. the lexer blanked that offset, AND
- *   2. the ENTIRE raw line is inert — either it is trimmed-`//`, or the lexer blanked every
- *      non-whitespace character on it.
- *
- * (2) is whole-LINE on purpose. Testing only `startsWith('/*')` or `startsWith('*')` was wrong:
- * `/* legacy *\/ provision.getArtifact(id)` starts with a block comment and then contains a LIVE
- * call, so a prefix test dismissed it — the same class of bug as the very first line-prefix filter.
- * Requiring the whole line to be blank means live code on the line always keeps it visible.
- *
- * Deliberately NOT included: "the match is inside quotes on this line". Deciding that needs the
- * very lexing that may have desynced, and the quote-counting shortcut fails on
- * `if (c) /['"]/.test(v) && provision.getArtifact('form', id)` — an odd quote count before a LIVE
- * call. The cost of leaving it out is a false positive when a call appears inside a string literal
- * on a code line — rare, loud, waivable, and asserted below as a KNOWN accepted false positive.
+ * Decided from the parser's own comment list rather than inferred from punctuation: a line that
+ * begins with `//` is not necessarily a comment (inside a template literal it is just text), and
+ * that forgery previously silenced a real call. "Whole-line" means nothing but whitespace precedes
+ * the comment — a trailing `// sdk-async-ok` after live code does not waive it.
  */
+function markerInComment(rawLine, marker) {
+  const parsed = parseForGuard(String(rawLine || ''));
+  if (!parsed) return false;
+  return parsed.comments.some((c) => {
+    if (!String(c.value).includes(marker)) return false;
+    return String(rawLine).slice(0, c.start).trim() === '';
+  });
+}
+const isWaiverLine = (rawLine) => markerInComment(rawLine, OPT_OUT);
+
+/** Walk every node, calling `visit(node, ancestors)` with the ancestor chain (closest first). */
+function walk(node, visit, ancestors = []) {
+  if (!node || typeof node.type !== 'string') return;
+  visit(node, ancestors);
+  const nextAncestors = [node, ...ancestors];
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'loc' || key === 'start' || key === 'end') continue;
+    const value = node[key];
+    if (Array.isArray(value)) {
+      for (const child of value) if (child && typeof child.type === 'string') walk(child, visit, nextAncestors);
+    } else if (value && typeof value.type === 'string') {
+      walk(value, visit, nextAncestors);
+    }
+  }
+}
+
+/** The method name a callee refers to, for both `x.m()` and `x['m']()`; null otherwise. */
+function calleeMethodName(callee) {
+  const target = callee && callee.type === 'ChainExpression' ? callee.expression : callee;
+  if (!target || target.type !== 'MemberExpression') return null;
+  const prop = target.property;
+  if (!target.computed) return prop && prop.type === 'Identifier' ? prop.name : null;
+  if (prop && prop.type === 'Literal' && typeof prop.value === 'string') return prop.value;
+  // `x[\`getArtifact\`]()` — a template with no interpolation is a constant string.
+  if (prop && prop.type === 'TemplateLiteral' && prop.expressions.length === 0 && prop.quasis.length === 1) {
+    return prop.quasis[0].value.cooked;
+  }
+  return null;
+}
+
+/** Names bound by an ObjectPattern, covering rename, default, computed key and rest. */
+function patternBoundNames(pattern, out) {
+  if (!pattern || pattern.type !== 'ObjectPattern') return;
+  for (const p of pattern.properties) {
+    if (p.type === 'RestElement') continue;
+    const k = p.key;
+    if (!p.computed && k && k.type === 'Identifier') out.push(k.name);
+    else if (k && k.type === 'Literal' && typeof k.value === 'string') out.push(k.value);
+  }
+}
+
 function findUnawaitedCalls(raw) {
-  const code = stripCommentsAndStrings(raw);
-  const codeWithStrings = stripCommentsAndStrings(raw, { keepStrings: true });
   const rawLines = raw.split('\n');
   const found = [];
+  found.waivedLines = new Set();
   let candidates = 0;
 
-  const lineAt = (index) => raw.slice(0, index).split('\n').length;
-  const codeLines = code.split('\n');
-  const strLines = codeWithStrings.split('\n');
-  // A waiver must be a whole-line `//` comment AND be blanked in BOTH lexer views.
-  //
-  // The second condition closes a forge: a raw line beginning with `//` is not necessarily a
-  // comment — inside a template literal it is just text, e.g.
-  //     const note = `
-  //       // sdk-async-ok`;
-  //     provision.getArtifact('form', id);
-  // A real comment is blanked in both views; template/string text survives in the
-  // string-preserving view. Note the direction: this condition only ever REJECTS a waiver, and a
-  // rejected waiver produces a loud finding, so being wrong here is safe.
-  const waives = (lineNo, marker = OPT_OUT) => {
-    const rawLine = rawLines[lineNo - 1];
-    if (!markerInComment(rawLine, marker)) return false;
-    const inCode = codeLines[lineNo - 1];
-    const inStr = strLines[lineNo - 1];
-    return inCode !== undefined && inCode.trim() === '' && inStr !== undefined && inStr.trim() === '';
-  };
-  // Reading the RAW lines above `lineNo`, is there an unclosed `/*`? Independent of the lexer.
-  const insideOpenBlockComment = (lineNo) => {
-    for (let n = lineNo - 2; n >= 0; n--) {
-      const l = rawLines[n] || '';
-      const open = l.lastIndexOf('/*');
-      const close = l.lastIndexOf('*/');
-      if (open > close) return true;   // this line opens a comment that is still open
-      if (close > open) return false;  // a comment closed above us, so we are not inside one
-    }
-    return false;
-  };
-  const wholeLineInert = (lineText, lineNo) => {
-    const trimmed = String(lineText || '').trimStart();
-    if (trimmed.startsWith('//')) return true;
-    const blankedLine = codeLines[lineNo - 1];
-    const lexerSaysBlank = blankedLine !== undefined && blankedLine.trim() === '';
-    // A block-comment CONTINUATION line. THREE signals must agree, because two were not enough:
-    // a composed desync can blank a line that legitimately begins with `*` —
-    //     if (c) /`/.test(v);
-    //     const n = x
-    //       * provision.getArtifact('f', id);     <- multiplication, not a comment
-    //     const s = `ok`;
-    // So besides the `*` shape and the lexer, the RAW SOURCE ABOVE must show an open block comment:
-    // searching upward, a `/*` must appear before any `*/`. That check reads the raw text and does
-    // not depend on the lexer, so a desync cannot supply it.
-    if (trimmed.startsWith('*') && lexerSaysBlank && insideOpenBlockComment(lineNo)) return true;
-    // Otherwise decide from the RAW LINE ALONE, independently of the lexer.
-    //
-    // This matters because the lexer-derived signal is not independent of the lexer: a multi-line
-    // desync blanks the WHOLE line, so "the lexer blanked every character" agreed with itself and
-    // dismissed a live call —
-    //     if (c) /`/.test(v);
-    //      /* legacy *\/ provision.getArtifact('f', id);   <- blanked by the desync, and dismissed
-    //     const s = `ok`;
-    // Removing the complete comments from the raw line leaves `provision.getArtifact(...)`, which
-    // is code, so the line is not inert no matter what the lexer believes.
-    let s = String(lineText || '').replace(/\/\*[\s\S]*?\*\//g, ' ');
-    const lineComment = s.indexOf('//');
-    if (lineComment !== -1) s = s.slice(0, lineComment);
-    const unterminated = s.indexOf('/*');
-    if (unterminated !== -1) s = s.slice(0, unterminated);
-    return s.trim() === '';
-  };
-  const dismissed = (index, lineText, lineNo, blankedView) => {
-    const blanked = blankedView[index] !== raw[index];
-    return blanked && wholeLineInert(lineText, lineNo);
+  const parsed = parseForGuard(raw);
+  if (!parsed) {
+    // Unparseable source is reported rather than skipped: silently scanning nothing is precisely the
+    // fail-open behaviour this guard exists to prevent.
+    found.push({ line: 1, text: '(source did not parse — the guard could not inspect this file)', kind: 'parse error' });
+    found.candidates = 0;
+    found.waived = 0;
+    return found;
+  }
+
+  // A waiver is a whole-line comment carrying the marker, taken from the parser's comment list.
+  const waiverLines = new Map();
+  for (const c of parsed.comments) {
+    if (c.type !== 'Line') continue;
+    const line = c.loc.start.line;
+    if (String(rawLines[line - 1] || '').slice(0, c.loc.start.column).trim() !== '') continue;
+    const existing = waiverLines.get(line) || [];
+    existing.push(String(c.value));
+    waiverLines.set(line, existing);
+  }
+  const waivedAbove = (line, marker) => (waiverLines.get(line - 1) || []).some((v) => v.includes(marker));
+
+  const record = (line, kind) => {
+    const text = rawLines[line - 1] || '';
+    if (!found.some((f) => f.line === line && f.kind === kind)) found.push({ line, text: text.trim(), kind });
   };
 
-  const consider = (m, kind, blankedView) => {
-    candidates++;
-    if (m[1]) return; // awaited
-    const index = m.index;
-    const line = lineAt(index);
-    const text = rawLines[line - 1] || '';
-    if (dismissed(index, text, line, blankedView)) return;
-    if (waives(line - 1) || waives(line - 2)) {
-      // Deduplicated by line: the two-pass scan can match the same call twice, and a doubled count
-      // would trip the "waivers must stay rare" assertion for no real reason.
-      found.waivedLines = found.waivedLines || new Set();
-      found.waivedLines.add(line);
+  walk(parsed.ast, (node, ancestors) => {
+    const parent = ancestors[0] || null;
+    if (node.type === 'CallExpression') {
+      const name = calleeMethodName(node.callee);
+      if (!name || !ASYNC_SDK_METHODS.includes(name)) return;
+      candidates += 1;
+      // `await x.m()` is AwaitExpression -> CallExpression, but `await x?.m()` is
+      // AwaitExpression -> ChainExpression -> CallExpression, so the await can be the GRANDparent.
+      // Checking only the immediate parent flagged every correctly-awaited optional call.
+      const awaited = (parent && parent.type === 'AwaitExpression')
+        || (parent && parent.type === 'ChainExpression'
+            && ancestors[1] && ancestors[1].type === 'AwaitExpression');
+      if (awaited) return;
+      const line = node.loc.start.line;
+      if (waivedAbove(line, OPT_OUT)) { found.waivedLines.add(line); return; }
+      record(line, 'call');
       return;
     }
-    const finding = { line, text: text.trim(), kind };
-    if (!found.some((f) => f.line === line && f.kind === kind)) found.push(finding);
-  };
+    // Destructuring the async surface is banned outright: the resulting call sites have no receiver,
+    // so nothing downstream could ever match them. Covers both `const { getArtifact } = sdk` and
+    // `function use({ getArtifact })` — the parameter form is the case regexes could not decide.
+    if (node.type === 'ObjectPattern') {
+      const names = [];
+      patternBoundNames(node, names);
+      const hit = names.find((n) => ASYNC_SDK_METHODS.includes(n));
+      if (!hit) return;
+      const line = node.loc.start.line;
+      // The ordinary waiver must NOT apply: one comment would hide every call made through the
+      // binding. A dedicated marker exists for a genuine false positive.
+      if (waivedAbove(line, OPT_OUT_BINDING)) return;
+      record(line, 'destructured binding');
+    }
+  });
 
-  // TWO PASSES per pattern.
-  //
-  // The RAW pass is the one that cannot be defeated by a lexer flaw. The COMMENT-BLANKED pass
-  // exists because comments are whitespace in JavaScript, so `provision /* note */ .getArtifact()`
-  // is a real call that the raw pass cannot see with a `\s*` separator — and widening the separator
-  // to include comments made the regex rescan the file from every position and hang the run.
-  // Findings are the UNION, deduplicated by line, so the extra pass can only ADD detection.
-  CALL_RE.lastIndex = 0;
-  for (const m of raw.matchAll(CALL_RE)) consider(m, 'call', code);
-  CALL_RE.lastIndex = 0;
-  for (const m of code.matchAll(CALL_RE)) consider(m, 'call', code);
-  COMPUTED_RE.lastIndex = 0;
-  for (const m of raw.matchAll(COMPUTED_RE)) consider(m, 'computed', codeWithStrings);
-  COMPUTED_RE.lastIndex = 0;
-  for (const m of codeWithStrings.matchAll(COMPUTED_RE)) consider(m, 'computed', codeWithStrings);
-  DESTRUCTURE_RE.lastIndex = 0;
-  for (const m of raw.matchAll(DESTRUCTURE_RE)) {
-    const line = lineAt(m.index);
-    const text = rawLines[line - 1] || '';
-    if (dismissed(m.index, text, line, code)) continue;
-    // The ordinary waiver must NOT apply here: one comment would hide every call made through the
-    // binding, and those call sites carry no receiver, so nothing else could ever see them. A
-    // dedicated marker exists for a genuine false positive.
-    if (waives(line - 1, OPT_OUT_BINDING)) continue;
-    found.push({ line, text: text.trim(), kind: 'destructured binding' });
-  }
   found.candidates = candidates;
-  found.waived = found.waivedLines ? found.waivedLines.size : 0;
+  found.waived = found.waivedLines.size;
   return found;
 }
 
@@ -627,9 +488,29 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
       "calls.push({ name: 'getArtifact', args: [t, id] });",
     'documentation prose inside a real block comment':
       "/**\n * See provision.getArtifact(id) for the rationale.\n */\nconst x = 1;",
+    // Previously an ACCEPTED FALSE POSITIVE. The regex scan reported it because suppressing it would
+    // have required deciding "this offset is inside a string" — the very lexing that could itself
+    // desync. A parser decides it for free: this is a TemplateLiteral, not a CallExpression, so it
+    // is now correctly silent. Kept as a pinned case so a regression back to text matching fails.
+    'a call written inside a template literal on a code line': 'log(`use x.getArtifact(y)`);',
+    // The construct regexes genuinely could not decide (#475): an ObjectPattern in a PARAMETER list
+    // is indistinguishable from an ObjectExpression by text, so catching it flagged every mock object
+    // literal in this suite. The parser separates them.
+    'a mock object literal in a call argument (an ObjectExpression, not a pattern)':
+      "use({ getArtifact: spy, addElement: spy2 });",
   };
   for (const [label, code] of Object.entries(MUST_NOT_FLAG)) {
     assert.strictEqual(check(code), false, `the matcher must NOT flag: ${label}`);
+  }
+
+  // Constructs the regex scan could not decide, now caught (#475).
+  const AST_ONLY = {
+    'PARAMETER destructuring of the async surface': "function use({ getArtifact }) { getArtifact(id); }",
+    'parameter destructuring with a rename': "const use = ({ getArtifact: read }) => read(id);",
+    'nested parameter destructuring': "function use({ sdk: { addElement } }) { addElement(a, b); }",
+  };
+  for (const [label, code] of Object.entries(AST_ONLY)) {
+    assert.strictEqual(check(code), true, `the AST scan must flag: ${label}`);
   }
 
   // ACCEPTED FALSE POSITIVES — documented, not fixed, because fixing them reopens a fail-open path.
@@ -639,14 +520,8 @@ test('GUARD-THE-GUARD: the matcher catches evasions and does not fire on look-al
   // have desynced — the exact inference that hid a live call twice. So the guard reports it, and
   // the author adds a waiver comment. A false positive costs one line; a false negative ships
   // corrupted artifacts.
-  const ACCEPTED_FALSE_POSITIVES = {
-    'a call written inside a template literal on a code line': 'log(`use x.getArtifact(y)`);',
-  };
-  for (const [label, code] of Object.entries(ACCEPTED_FALSE_POSITIVES)) {
-    assert.strictEqual(check(code), true,
-      `this is a KNOWN, accepted false positive and must stay detected rather than be silently `
-      + `suppressed: ${label}`);
-  }
+  // (The former ACCEPTED_FALSE_POSITIVES block is gone: the parser removed the only entry in it.)
+
 
   const waiverCase = (line) => isWaiverLine(line);
   assert.strictEqual(waiverCase('  // sdk-async-ok: handed to Promise.all'), true, 'a whole-line comment waives');
@@ -928,4 +803,29 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- red-green: the AST scan must actually fire on a real un-awaited call --------------------------
+//
+// A guard that matches nothing "passes" forever. The corpus above proves the matcher, but this pins
+// the end-to-end path the CI test uses: production source in, findings out.
+test('MUTATION: dropping an await in real plugin source is caught', () => {
+  const fsx = require('node:fs');
+  const target = path.join(SCRIPTS_DIR, 'lib', 'sdk-build.js');
+  const src = fsx.readFileSync(target, 'utf8');
+  // Find a genuine awaited call on the guarded surface and remove just the `await`.
+  const m = new RegExp(`await\\s+(\\w+)\\.(${ASYNC_SDK_METHODS.join('|')})\\(`).exec(src);
+  assert.ok(m, 'expected at least one awaited generic-surface call in sdk-build.js');
+  const mutated = src.slice(0, m.index) + src.slice(m.index + 'await '.length);
+  const hits = findUnawaitedCalls(mutated).filter((h) => h.kind === 'call');
+  assert.ok(hits.length > 0, 'removing an await must produce a finding');
+  // And the unmutated file is clean, so the finding came from the mutation and not from noise.
+  assert.deepStrictEqual(findUnawaitedCalls(src).filter((h) => h.kind === 'call'), []);
+});
+
+test('an unparseable file is REPORTED, never silently skipped', () => {
+  // Failing open is the one thing this guard must not do: a file the scan cannot read is a file it
+  // cannot vouch for.
+  const hits = findUnawaitedCalls('const x = ;;;(');
+  assert.ok(hits.some((h) => h.kind === 'parse error'), 'a parse failure must surface as a finding');
 });

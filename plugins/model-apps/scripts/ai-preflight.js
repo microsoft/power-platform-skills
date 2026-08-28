@@ -9,7 +9,7 @@
 
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { AI_APP_SETTING, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
+const { AI_APP_SETTING, AI_SETTING_CODEC, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -78,17 +78,22 @@ function runPreflight(readiness, effective = {}) {
     // Only a POSITIVE reading counts. `eff.error` (could not look, or the setting is not
     // provisioned here) must never be read as "in effect" — that would suppress a real admin action.
     const inEffect = eff.on === true;
-    // A value the codec calls "platform default" (0 for the form-fill family) is genuinely UNKNOWN:
-    // the service decides by flighting. Distinguishing it from off keeps the report honest — and it
-    // still earns an admin action, because leaving it to flighting is not a deterministic choice.
-    const effectiveUnknown = eff.on === undefined && eff.value !== undefined && !eff.error;
+    // "Platform default" is a SPECIFIC state, not a synonym for "we could not decide". Only a
+    // codec-governed feature sitting at its default value ('0') defers to flighting; an
+    // unrecognised value like '3' or 'yes' is simply indeterminate, and calling that "the platform
+    // decides" would invent a fact. Both suppress the ✓/✗ claim, but only one earns the explanation.
+    const codec = AI_SETTING_CODEC[key];
+    const effectiveDefault = eff.on === undefined && !eff.error && codec
+      && eff.value !== undefined && String(eff.value).trim() === '0';
+    const effectiveIndeterminate = eff.on === undefined && !eff.error && eff.value !== undefined && !effectiveDefault;
     features.push({
       feature: key,
       enabled: f.enabled,
       setting: f.setting,
       ...(eff.value !== undefined ? { effectiveValue: eff.value, effectiveScope: eff.scope } : {}),
       ...(inEffect ? { inEffect: true } : {}),
-      ...(effectiveUnknown ? { effectiveUnknown: true } : {}),
+      ...(effectiveDefault ? { effectiveDefault: true } : {}),
+      ...(effectiveIndeterminate ? { effectiveIndeterminate: true } : {}),
     });
     if (!f.enabled && !inEffect) {
       adminActions.push(meta.action(f));
@@ -157,10 +162,12 @@ async function main() {
       if (f.inEffect && !f.enabled) {
         // The distinction that matters: running, but not because of anything this app declares.
         process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
-      } else if (f.effectiveUnknown) {
+      } else if (f.effectiveDefault) {
         // "Platform default" is not off. For the AI form-fill family `0` means "defer to flighting",
         // so the feature may well be running; printing ✗ would assert something we cannot see.
         process.stderr.write(`  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by service flighting, not by this environment\n`);
+      } else if (f.effectiveIndeterminate) {
+        process.stderr.write(`  ? ${label} (${f.setting}) — holds an unrecognised value ("${f.effectiveValue}"), so its state cannot be determined from here\n`);
       } else {
         process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
       }

@@ -1254,11 +1254,56 @@ test('a column visualization on a RETAINED table is cleared at teardown', () => 
   assert.ok(steps.indexOf(viz[0]) < tableIdx, 'the clear must precede the tables phase');
 });
 
-test('a visualization on a table THIS spec owns needs no clear step', () => {
-  // It is removed with the table; emitting a step would be a redundant call that 404s.
+test('a clear candidate is planned for every declared visualization, ownership decided at resolve', () => {
+  // Planning cannot know whether a table survives: `existing: true` is one reason, but a SYSTEM table
+  // is retained by live detection the plan has no access to, and such a spec need not carry the flag.
+  // So a candidate is planned for each declared visualization and the resolver establishes ownership
+  // — it reads the current value and skips unless it still matches what this spec authored.
   const spec = fullSpec();
   spec.entities[0].columns = [{ schemaName: 'new_score', displayName: 'Score', type: 'Integer', visualization: 'StarRating' }];
-  assert.strictEqual(planTeardown(spec, {}).filter((s) => s.kind === 'columnVisualization').length, 0);
+  const steps = planTeardown(spec, {}).filter((s) => s.kind === 'columnVisualization');
+  assert.strictEqual(steps.length, 1);
+  assert.strictEqual(steps[0].target.authored, 'StarRating', 'the authored value is what makes the clear safe');
+});
+
+test('teardown does NOT clear a visualization somebody else changed', async () => {
+  // The configuration row is shared by every app showing the column, and the build PATCHes an
+  // existing row rather than creating a private one. Blindly writing 'None' would erase a renderer
+  // another maker set after this spec built.
+  const calls = [];
+  const sdk = {
+    getColumnVisualization: async () => 'HeatMap',            // someone changed it
+    setColumnVisualization: async (...a) => { calls.push(a); },
+  };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, [], 'nothing to delete when the value is not ours');
+  assert.match(res.skipReason, /someone else changed it/);
+  assert.strictEqual(calls.length, 0, 'and nothing is written');
+});
+
+test('teardown clears a visualization that still matches what this spec authored', async () => {
+  const sdk = { getColumnVisualization: async () => 'StarRating', setColumnVisualization: async () => {} };
+  const items = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.strictEqual(items.length, 1);
+});
+
+test('teardown skips quietly where the visualization preview is not provisioned', async () => {
+  const err = new Error("Resource not found for the segment 'controlconfigurations'.");
+  err.statusCode = 404;
+  const sdk = { getColumnVisualization: async () => { throw err; } };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, []);
+  assert.match(res.skipReason, /not provisioned/);
+});
+
+test('an unreadable current value is left alone rather than cleared', async () => {
+  // Fail closed: if ownership cannot be established, doing nothing is the safe outcome.
+  const err = new Error('403 forbidden');
+  err.statusCode = 403;
+  const sdk = { getColumnVisualization: async () => { throw err; } };
+  const res = await KIND_HANDLERS.columnVisualization.resolve(sdk, { entityLogical: 'account', columnLogical: 'new_score', authored: 'StarRating' });
+  assert.deepStrictEqual(res.items, []);
+  assert.match(res.skipReason, /could not read/);
 });
 
 test('clearing a visualization writes None through the SDK', async () => {

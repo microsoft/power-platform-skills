@@ -402,7 +402,9 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      const want = featureWantValue(requested);
+      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
+      // against the wrong spelling reports a correctly-applied feature as missing.
+      const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
       //     A small retry on the ABSENT case only: an override row can lag briefly behind the write

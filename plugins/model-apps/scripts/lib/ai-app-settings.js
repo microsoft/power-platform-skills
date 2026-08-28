@@ -85,13 +85,22 @@ function resolveAiFlags(spec) {
 }
 
 /**
- * Normalize a requested flag to the string the numeric setting stores. `true`/`false` are the
- * ergonomic spellings of `'1'`/`'0'`; any other integer (e.g. 2 = "on for everyone") is used
- * verbatim. Mirrors the SDK's `settingValueOf`, minus its throwing validation — the spec validator
- * has already rejected out-of-range values by the time this runs.
+ * Normalize a requested flag to the string the setting actually stores.
+ *
+ * `true`/`false` are ergonomic spellings, but what they MEAN is per setting: for the AI form-fill
+ * family on is `'2'` and off is `'1'` (`'0'` is the platform default, not off), while everything else
+ * keeps the plain `'1'`/`'0'` convention. Any explicit integer is used verbatim.
+ *
+ * `feature` is required for a codec-governed setting. Without it a boolean maps to `'1'`, which for
+ * the form-fill family means DISABLED — and since the build writes through the SDK (which applies
+ * the codec), a verifier using the wrong spelling reports a correctly-applied feature as missing.
+ * That mismatch is the reason this takes a feature at all.
  */
-function featureWantValue(requested) {
-  return typeof requested === 'boolean' ? (requested ? '1' : '0') : String(requested).trim();
+function featureWantValue(requested, feature) {
+  if (typeof requested !== 'boolean') return String(requested).trim();
+  const codec = feature && AI_SETTING_CODEC[feature];
+  if (codec) return requested ? codec.enabled : codec.disabled;
+  return requested ? '1' : '0';
 }
 
 /**

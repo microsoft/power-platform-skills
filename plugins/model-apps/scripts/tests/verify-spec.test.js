@@ -591,8 +591,10 @@ const aiRead = (overrides, effective, opts = {}) => {
   };
 };
 const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
+// The AI form-fill family does not use 1/0: 0 = platform default, 1 = DISABLED, 2 = ENABLED
+// (SDK SETTING_CODEC, mirroring the admin UI). An ENABLED override therefore holds '2'.
 const ALL_SETTINGS_ON = {
-  FormFillBarUXEnabled: '1',
+  FormFillBarUXEnabled: '2',
   NLGridSearchSetting: '1',
   NLChartDataVisualizationSetting: '1',
   m365copilotmodelappenabled: '1',
@@ -601,7 +603,7 @@ const ALL_SETTINGS_ON = {
 // m365 off for any spec carrying `ai`, and verify reconciles that whole set — so a test focusing on
 // ONE feature must still satisfy the other three or it is asserting on unrelated misses.
 const DEFAULT_SETTINGS = {
-  FormFillBarUXEnabled: '1',
+  FormFillBarUXEnabled: '2',
   NLGridSearchSetting: '1',
   NLChartDataVisualizationSetting: '1',
   m365copilotmodelappenabled: '0',
@@ -653,10 +655,12 @@ test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared
 });
 
 test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
-  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
   assert.strictEqual(r.ok, false);
   // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
-  const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '0' }));
+  // OFF for this family is '1' (DISABLED). '0' would be the platform default — deliberately NOT
+  // accepted as off, because it defers to flighting rather than turning the feature off.
+  const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
 });
 
@@ -780,9 +784,9 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
   const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
-  return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' })).then(async (on) => {
+  return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
-    const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'false' }));
+    const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
     assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
   });
 });
@@ -792,7 +796,7 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
   // a throwing context read must not change the verdict (it previously supplied `dataType`, which
   // silently decided the comparison).
   const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
-  const read = { ...aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: 'true' }), retrieveSetting: async () => { throw new Error('429 too many requests'); } };
+  const read = { ...aiRead({ ...DEFAULT_SETTINGS }), retrieveSetting: async () => { throw new Error('429 too many requests'); } };
   return verifyAi(spec, read).then((r) => {
     assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   });

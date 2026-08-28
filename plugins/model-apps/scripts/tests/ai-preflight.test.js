@@ -306,7 +306,8 @@ test('a platform-default value is reported as UNKNOWN, not as off', () => {
   const readiness = { formFill: { enabled: false, setting: 'FormFillBarUXEnabled', value: '0' } };
   const r = runPreflight(readiness, { formFill: { value: '0', scope: 'default', on: undefined } });
   const f = r.features.find((x) => x.feature === 'formFill');
-  assert.strictEqual(f.effectiveUnknown, true, 'a default value must be flagged unknown');
+  assert.strictEqual(f.effectiveDefault, true, 'a codec default must be flagged as the platform default');
+  assert.ok(!f.effectiveIndeterminate, 'a known default is not the same as an unrecognised value');
   assert.ok(!f.inEffect, 'unknown is not a claim that it runs');
   // Still actionable: leaving it to flighting is not a deterministic choice.
   assert.strictEqual(r.adminActions.length, 1);
