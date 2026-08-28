@@ -34,7 +34,7 @@ const PROTECTED = [
   {
     rx: /(^|\/)vendor\/[^/]+\.tgz$/,
     reason:
-      '`vendor/*.tgz` files are sourced from `plugins/mobile-apps/template`. Update them there, not by editing in-project.',
+      '`vendor/*.tgz` files are sourced from https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template. Update them there, not by editing in-project.',
   },
 ];
 
