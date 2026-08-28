@@ -96,7 +96,11 @@ test('REAL BUNDLE: a proven app-scope override row is the only thing that yields
 test('REAL BUNDLE: an ENV-fallback match with NO override row is notPersisted, not applied', async () => {
   // The false PASS the plugin's verify oracle also had to fix: RetrieveSetting at app scope returns
   // the ENVIRONMENT value, so the write reads back as requested while `appsettings` holds no row.
-  const { sdk } = freshSdk({ gate: '1', effective: '1', overrideRows: [] });
+  // The whole point is that the app-scope read MATCHES the request while no override row exists —
+  // that is what makes the env-fallback read look like success. So `effective` must be the value the
+  // request resolves to ('2' = enabled for this family); stubbing '1' would mean the read disagrees
+  // with the request anyway, and the test would pass for the wrong reason.
+  const { sdk } = freshSdk({ gate: '2', effective: '2', overrideRows: [] });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.applied, [], 'an env-fallback read must never count as applied');
   assert.deepStrictEqual(r.notPersisted, ['formFill']);

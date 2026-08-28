@@ -783,7 +783,13 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // The normalization is deliberately UNCONDITIONAL: branching on a `dataType` read made the
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
-  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true } } };
+  // Requested on nlSearch, not formFill: this asserts that a Boolean SPELLING of the stored value is
+  // reconciled with the requested one, and that only makes sense for a setting whose on/off really
+  // is 1/0. The form-fill family is a 0/1/2 enum (0 = platform default, 1 = disabled, 2 = enabled)
+  // and never stores 'true'/'false', so pointing this at formFill would assert a shape the platform
+  // cannot produce — and, with the request and the stub naming different settings, it could pass or
+  // fail for reasons unrelated to the normalisation under test.
+  const spec = { ...AI_BASE, ai: { appFeatures: { nlSearch: true } } };
   return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
     const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
