@@ -19,7 +19,7 @@ model: sonnet
 
 Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
 
-This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the `plugins/mobile-apps/template` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
+This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
 
 Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
 
