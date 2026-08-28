@@ -78,12 +78,17 @@ function runPreflight(readiness, effective = {}) {
     // Only a POSITIVE reading counts. `eff.error` (could not look, or the setting is not
     // provisioned here) must never be read as "in effect" — that would suppress a real admin action.
     const inEffect = eff.on === true;
+    // A value the codec calls "platform default" (0 for the form-fill family) is genuinely UNKNOWN:
+    // the service decides by flighting. Distinguishing it from off keeps the report honest — and it
+    // still earns an admin action, because leaving it to flighting is not a deterministic choice.
+    const effectiveUnknown = eff.on === undefined && eff.value !== undefined && !eff.error;
     features.push({
       feature: key,
       enabled: f.enabled,
       setting: f.setting,
       ...(eff.value !== undefined ? { effectiveValue: eff.value, effectiveScope: eff.scope } : {}),
       ...(inEffect ? { inEffect: true } : {}),
+      ...(effectiveUnknown ? { effectiveUnknown: true } : {}),
     });
     if (!f.enabled && !inEffect) {
       adminActions.push(meta.action(f));
@@ -152,6 +157,10 @@ async function main() {
       if (f.inEffect && !f.enabled) {
         // The distinction that matters: running, but not because of anything this app declares.
         process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
+      } else if (f.effectiveUnknown) {
+        // "Platform default" is not off. For the AI form-fill family `0` means "defer to flighting",
+        // so the feature may well be running; printing ✗ would assert something we cannot see.
+        process.stderr.write(`  ? ${label} (${f.setting}) — set to the platform default ("${f.effectiveValue}"), so whether it runs is decided by service flighting, not by this environment\n`);
       } else {
         process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
       }
