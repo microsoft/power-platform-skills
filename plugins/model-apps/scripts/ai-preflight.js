@@ -17,8 +17,15 @@ const path = require('node:path');
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
   formFill: {
-    label: 'Form fill',
-    action: (f) => `Enable "Form fill" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+    // Deliberately NOT "Form fill". `FormFillBarUXEnabled` governs only the form fill assist
+    // TOOLBAR — one capability of AI form fill assistance. The SDK's own type docs name three
+    // siblings this flag does not touch: `FormFillFileUploadEnabled` (file upload),
+    // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form
+    // predictions). Labelling it "Form fill" overclaims in both directions — it reports a feature
+    // as unavailable when a user may well have smart paste working, and it implies enabling it
+    // turns the whole family on.
+    label: 'Form fill assist toolbar',
+    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features. Note this is the toolbar only — smart paste (FormPredictSmartPasteEnabled), file upload (FormFillFileUploadEnabled) and edit-form predictions (FormPredictEnabled) are separate settings this does not enable.`,
   },
   nlSearch: {
     label: 'Natural language search',

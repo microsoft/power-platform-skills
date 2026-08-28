@@ -166,7 +166,7 @@ test('ai-preflight CLI passes the app scope, prints admin actions, emits the rep
 
   assert.ok(harness.events.some((e) => e.type === 'getAiReadiness' && e.opts.appUniqueName === 'new_supportdesk'));
   assert.match(stderr, /AI Feature Readiness/);
-  assert.match(stderr, /✗ Form fill \(FormFillBarUXEnabled\)/);
+  assert.match(stderr, /✗ Form fill assist toolbar \(FormFillBarUXEnabled\)/);
   assert.match(stderr, /Admin actions required:/);
   assert.ok(cleanupIndex > -1 && cleanupIndex < emitIndex, 'emitResult exits, so cleanup must happen first');
   assert.strictEqual(emitted.ok, true);
@@ -211,7 +211,7 @@ test('a gate-off feature that is ON at environment scope reports as in effect, w
   assert.strictEqual(nl.effectiveValue, '2');
   // Only the genuinely-off feature earns an admin action.
   assert.strictEqual(r.adminActions.length, 1);
-  assert.match(r.adminActions[0], /Form fill/);
+  assert.match(r.adminActions[0], /Form fill assist toolbar/);
 });
 
 test('an UNREADABLE effective value never counts as in effect', () => {

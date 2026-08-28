@@ -108,10 +108,15 @@ apart deliberately.
 - **Form fill is a real "off", not a naming mix-up** (measured 2026-08-28). Unlike NL search, the
   gate and the per-app setting share one name — `FormFillBarUXEnabled` — confirmed against the
   SDK's own `AI_GATE`/per-app maps, so there is no second setting hiding a different answer. It
-  reads `0` at org *and* app scope, its whole family is off (`FormFillFileUploadEnabled`,
-  `FormPredictEnabled`, `FormPredictSmartPasteEnabled`), and it is `0` on **all 12** test orgs
-  scanned. What IS on everywhere is `EnableFormInsights` (with `EnableFormInsightsAppSetting` = 2)
-  — AI form/row insights, which renders a Copilot card on the form and is easily read as form fill.
+  reads `0` at org *and* app scope, and it is `0` on **all 161** orgs in the test tenant.
+- **`formFill` is the assist TOOLBAR only, and the report now says so.** "AI form fill assistance"
+  is a family; `FormFillBarUXEnabled` governs one member of it. Three siblings are neither covered
+  by that flag nor exposed by the App Spec: `FormFillFileUploadEnabled` (file upload),
+  `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form predictions).
+  Calling the flag "Form fill" overclaimed in both directions — it reported the feature unavailable
+  to someone who may have had smart paste working, and implied enabling it turned the family on. All
+  four members were measured off across 40 orgs, so nothing is silently on here; exposing the
+  siblings would be a feature (new spec keys plus live verification), not a rename.
 - **The setting names are now pinned against the bundle.** Nothing previously did: every test
   hardcoded the same strings the source does, so an upstream rename would have left the suite green
   while the build wrote to a setting that no longer exists — the same shape as the

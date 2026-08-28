@@ -24,6 +24,12 @@ const { odataLit } = require('./odata.js');
 // Keep in sync with the vendored SDK; `sdk-surface-contract.test.js` guards the method surface and
 // `verify-spec.test.js` pins these names.
 const AI_APP_SETTING = {
+  // `FormFillBarUXEnabled` is the form fill assist TOOLBAR only — one capability of AI form fill
+  // assistance, per the SDK's own type docs. Three siblings are NOT covered by this flag and are not
+  // exposed by the App Spec: `FormFillFileUploadEnabled` (file upload),
+  // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form predictions).
+  // Do not silently repoint this key at a sibling — exposing those is a feature (new keys plus live
+  // verification), not a rename.
   formFill: 'FormFillBarUXEnabled',
   nlSearch: 'NLGridSearchSetting',
   nlChart: 'NLChartDataVisualizationSetting',
