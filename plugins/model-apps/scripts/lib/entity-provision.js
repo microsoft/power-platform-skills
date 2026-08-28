@@ -194,6 +194,20 @@ function isAlreadyExists(err) {
   return /already exist|duplicate|with the (?:specified|same) name|a key with/.test(msg);
 }
 
+// The grid data-visualization preview is not provisioned on every environment. When it is absent,
+// Dataverse answers the `controlconfigurations` set with a raw 404 naming the segment — the SDK
+// deliberately propagates that rather than reporting 'None', so "cannot inspect here" is never
+// confused with "plain text on purpose" (see getColumnVisualization in the SDK's SchemaApi).
+// Treat it as a SKIP, not a build failure: the table, its columns and every other artifact are
+// fine, and failing the whole data-model phase over an optional rendering flourish would strand
+// an otherwise-complete app. Anything else (403, 500, a bad column name) still halts.
+function isVisualizationUnsupported(err) {
+  if (!err) return false;
+  const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
+  const msg = String((err && err.message) || '');
+  return status === 404 && /controlconfiguration/i.test(msg);
+}
+
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
 // raises SQL-deadlock risk). Preserves input order in the result.
 async function mapLimit(items, limit, fn) {
@@ -437,6 +451,33 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         });
       }
     });
+    // Grid data visualization (preview) — render a column's value as a radial dial / line chart /
+    // heat map / star rating instead of text. Applied HERE, with the columns, and not with views:
+    // it is per-COLUMN metadata (a `controlconfiguration` row bound to the attribute), so the
+    // platform honours it in EVERY grid and view that shows the column.
+    //
+    // Runs for pre-existing columns as well as freshly created ones. `setColumnVisualization` is
+    // idempotent — it PATCHes the single config row it finds and prunes duplicates — so re-asserting
+    // the spec on a rebuild converges rather than piling up rows. Serial for the same reason the
+    // column loop is: these writes touch the same table's customizations.
+    //
+    // Deliberately a SEPARATE call rather than `createColumn`'s inline `visualization` option, for
+    // two reasons: (1) the inline option only ever fires for a column being created, so a rebuild —
+    // where every column already exists — would never re-assert the spec; (2) when the binding
+    // fails, createColumn raises its own `..._BIND_FAILED` error wrapping the cause, which the
+    // absent-preview check below cannot cleanly recognise. Calling it separately yields the raw 404
+    // and lets an unprovisioned environment skip instead of halting.
+    const withVisualization = (e.columns || []).filter((c) => c && c.schemaName && c.visualization !== undefined);
+    for (const c of withVisualization) {
+      // Prefer the logical name the create call actually returned; fall back to the conventional
+      // lower-cased schema name for a column that already existed (Dataverse lower-cases logical
+      // names, so `cfo_Rating` is always `cfo_rating`).
+      const created = (result.columns[e.schemaName] || []).find((x) => x.schemaName === c.schemaName);
+      const columnLogical = (created && created.logicalName) || String(c.schemaName).toLowerCase();
+      await runner.run('data-model', `visualization ${e.schemaName}.${c.schemaName} (${c.visualization})`,
+        () => sdk.setColumnVisualization(logical, columnLogical, c.visualization),
+        { recoverable: true, skipIf: isVisualizationUnsupported });
+    }
     // custom status reasons — capture the option value so sample data can set them. IDEMPOTENT:
     // insertStatusValue itself is not (with no explicit Value, Dataverse auto-assigns a NEW value
     // every call, duplicating the reason on a data-model re-run). So we PIN a deterministic value
@@ -634,4 +675,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE };
+module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported };

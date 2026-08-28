@@ -26,6 +26,8 @@ function makeSimpleMockSdk() {
     createSolution: async (o) => { calls.push(['createSolution', o]); return { id: 'sol-1' }; },
     createTable: async (o) => { calls.push(['createTable', o]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s` }; },
     createColumn: async (e, o) => { calls.push(['createColumn', e, o]); return { logicalName: o.schemaName.toLowerCase() }; },
+    setColumnVisualization: async (e, c, v) => { calls.push(['setColumnVisualization', e, c, v]); },
+    getColumnVisualization: async () => 'None',
     createCustomerColumn: async (e, o) => ({ logicalName: o.schemaName.toLowerCase() }),
     createGlobalOptionSet: async (o) => ({ name: o.name }),
     insertStatusValue: async () => 100000001,

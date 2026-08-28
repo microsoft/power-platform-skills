@@ -365,6 +365,20 @@ const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 //   emptyState — render an explanatory empty state ("open a row from X to see its detail").
 const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 
+// Per-column grid data visualization (PREVIEW). MIRRORS the vendored SDK's `ColumnVisualizationType`
+// (types/schema.ts) exactly — widening here without widening there produces a mid-build throw.
+//
+// Semantics are per COLUMN, not per view: the platform renders the graphic in EVERY grid and view
+// that shows the column, which is why this lives on `entities[].columns[]` rather than on `views[]`.
+// Persisted as a `controlconfiguration` row bound to the attribute.
+//
+// `None` is the platform default (plain text) and is accepted so a spec can explicitly CLEAR a
+// visualization set by an earlier build or by a maker in the portal. OMITTING the field is NOT the
+// same as `None`: an omitted column is left exactly as deployed, because converging every undeclared
+// column to "plain text" would cost one extra read per column on every build to find out whether
+// there was anything to clear.
+const COLUMN_VISUALIZATIONS = ['None', 'RadialDial', 'LineChart', 'HeatMap', 'StarRating'];
+
 // Business rules. These MIRROR the vendored SDK's supported slice — but NARROWER, and the gap is
 // deliberate: the SDK advertises four operators and only two of them survive contact with the
 // platform.
@@ -534,6 +548,14 @@ function validateAppSpec(spec, opts = {}) {
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
+      }
+      // Grid data visualization (preview). Only the enum is enforced. Column-TYPE compatibility is
+      // deliberately NOT enforced: the SDK does not constrain it either, and the sensible pairings
+      // are not a clean "numeric only" rule (LineChart is documented for a TEXT column holding
+      // comma-separated numbers). Guessing a constraint the platform does not have would reject
+      // valid specs, so type guidance lives in the schema doc instead.
+      if (c.visualization !== undefined && !COLUMN_VISUALIZATIONS.includes(c.visualization)) {
+        errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown visualization '${c.visualization}' — must be one of ${COLUMN_VISUALIZATIONS.join('|')}`);
       }
     }
   }
@@ -1513,6 +1535,7 @@ module.exports = {
   canonicalPersonaName,
   VALIDATION_PROFILES,
   DIRECT_ENTRY_BEHAVIORS,
+  COLUMN_VISUALIZATIONS,
   BUSINESS_RULE_OPERATORS,
   BUSINESS_RULE_VALUELESS_OPERATORS,
   BUSINESS_RULE_ACTIONS,

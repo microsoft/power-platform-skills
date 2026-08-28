@@ -52,6 +52,13 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 
 - **Data model** — tables (give each custom table a **meaningful Fluent-style SVG table icon by default**; propose what the glyph will **depict** in words — never a Fluent token name — and record it as `iconDescription` before drawing the SVG — see [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Table icons*), columns (all types), relationships (1:N / N:N + junctions), sample data
 - **Record UI** — forms (sub-grids, quick-create / quick-view), views (with enriched default columns), charts
+- **Custom grid rendering** (preview) — `entities[].columns[].visualization`: render a column as a
+  `RadialDial`, `LineChart`, `HeatMap` or `StarRating` in **every** grid and view that shows it,
+  instead of plain text. Reach for it when a column is a *magnitude a user scans* (a score, a
+  utilization %, a rating, a priority) rather than a value they read exactly — it makes a list
+  scannable at a glance for one line of spec. It is per-*column*, so set it once on the column, not
+  on each view. **Preview:** on an environment where it is not provisioned the build skips it and
+  everything else still deploys, so it is always safe to include.
 - **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
   set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
@@ -541,7 +548,8 @@ child view id. Each step emits `[n/total]`.
   `pac model genpage upload` and surfaced as `GenPage` sitemap subareas; full **create + edit**
   round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]`) incl.
   **flyout / split-button menus**; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`);
-  web resources + form JS event handlers; sample data with **multi-parent `$parents`** +
-  **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
+  **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /
+  heat map / star rating, preview); web resources + form JS event handlers; sample data with
+  **multi-parent `$parents`** + **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.

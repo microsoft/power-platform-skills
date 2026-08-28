@@ -31,6 +31,31 @@ async function verifySpec(spec, read, opts = {}) {
     if (tbl) {
       const cols = new Set(((await read.findColumns(logical)) || []).map((c) => String(c.logicalName || c).toLowerCase()));
       for (const c of e.columns || []) add('column', `${e.schemaName}.${c.schemaName}`, cols.has(String(c.schemaName).toLowerCase()));
+      // Grid data visualization (preview). Reconciled by VALUE, not existence: the build writes a
+      // specific renderer, so "a config row exists" would pass even if the deployed renderer were a
+      // star rating where the spec asked for a radial dial.
+      //
+      // Guarded on the reader exposing the capability — most callers construct a reader with only
+      // the methods they need, and an optional preview must never turn into a TypeError for them.
+      // A 404 means the preview is not provisioned on this environment, which is exactly the case
+      // the build SKIPS; reporting it as a failed check would flag every app on such an org for a
+      // divergence the build deliberately declined to create.
+      if (typeof read.columnVisualization === 'function') {
+        for (const c of e.columns || []) {
+          if (!c || c.visualization === undefined) continue;
+          const name = `${e.schemaName}.${c.schemaName}`;
+          let deployed;
+          try {
+            deployed = await read.columnVisualization(logical, String(c.schemaName).toLowerCase());
+          } catch (err) {
+            const status = err && (err.statusCode || err.status);
+            if (status === 404) continue;
+            throw err;
+          }
+          add('column-visualization', name, deployed === c.visualization,
+            deployed === c.visualization ? '' : `expected '${c.visualization}', deployed '${deployed}'`);
+        }
+      }
     }
   }
 

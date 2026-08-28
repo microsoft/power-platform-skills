@@ -13,13 +13,15 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
 
 ### Added
 - **`businessRules[]` — declarative form logic, no code.** Show/hide, lock/unlock, set-required and
-  set-value, gated on a condition over the record. Compiled to classic workflow XAML by the vendored
-  SDK and activated on create. Every field is checked against the rule's own entity, because a rule
-  naming a column that does not exist is accepted by the platform and then simply never fires.
-  Supported slice: operators `Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`;
-  actions `SetVisibility` · `LockUnlock` · `SetBusinessRequired` · `SetFieldValue` — exactly what the
-  compiler accepts, so anything outside it fails at the spec gate instead of mid-build. Additive on
-  rebuild, torn down with the app, and a new `business-rules` build phase (15 now).
+  set-value, gated on a condition over the record; compiled to classic workflow XAML and activated on
+  create. Every field is checked against the rule's own entity, because a rule naming a column that
+  does not exist is accepted by the platform and then simply never fires. Operators `Equals` ·
+  `DoesNotEqual`. Additive on rebuild, torn down with the app, and a new `business-rules` build
+  phase (15 now).
+- **Custom grid rendering (preview) — `entities[].columns[].visualization`.** Render a column as a
+  radial dial, line chart, heat map or star rating in every grid and view that shows it. Per-column,
+  so it is declared once rather than per view. Where the platform has not provisioned the preview the
+  build skips it and everything else still deploys.
 - **`app.newLook` — opt into the modern ("new look") shell.** Writes the per-app
   `NewLookAlwaysOn` setting, so the result is deterministic rather than a per-user preference.
   Scoped to the app and solution so it travels on export/import. Best-effort: a tenant without

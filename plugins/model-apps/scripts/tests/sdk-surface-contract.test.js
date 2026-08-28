@@ -65,6 +65,7 @@ const SKILL_SDK_SURFACE = [
   'findTables',
   'getAiReadiness',
   'getArtifact',
+  'getColumnVisualization',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
@@ -77,6 +78,7 @@ const SKILL_SDK_SURFACE = [
   'retrieveSetting',
   'seedRecordGraph',
   'setAppAiFeatures',
+  'setColumnVisualization',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',

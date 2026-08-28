@@ -253,7 +253,12 @@ function buildPagePlan(spec, opts = {}) {
     out.push(`- **Interactions:** ${nav.length
       ? `Navigate to ${nav.map((k) => `"PAGEREF_${k}"`).join(', ')} via Xrm.Navigation.navigateTo (pageType "generative"); custom ids go in data:`
       : 'In-page interactions only (no cross-page navigation)'}`);
-    if (p.pageInput !== undefined) {
+    // Gate on the DECLARED KEYS, not on `pageInput` being present. `pageInput: { data: {} }` is a
+    // page that takes no caller-supplied context, so "direct entry" is not a distinct mode for it —
+    // and App Spec validation only demands `directEntry` when at least one key is declared
+    // (see app-spec.js, the `inputKeys.length` guard). Keying off presence alone made the plan
+    // describe a direct-entry state the contract never required the author to answer for.
+    if (Object.keys((p.pageInput && p.pageInput.data) || {}).length) {
       out.push('- **Page Input:** reads `pageInput` (caller-supplied context)');
       // The page is sitemap-placed, so it is ALSO reachable straight from the app navigation with
       // no input at all. The generator has to be told what that renders, or it writes a page that

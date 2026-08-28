@@ -179,7 +179,9 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
   "columns": [
     { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"] },
-    { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" }
+    { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" },
+    { "schemaName": "new_score",    "displayName": "Score", "type": "Integer",
+      "visualization": "RadialDial" }         // optional — CUSTOM GRID RENDERING (preview), below
   ]
 }
 ```
@@ -195,6 +197,34 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+
+### `visualization` — custom grid rendering (optional, PREVIEW)
+
+Renders the column's value as a small graphic instead of plain text, in **every grid and view that
+shows the column** — it is per-*column* metadata, not per-view, so you set it once here rather than
+on each `views[]` entry.
+
+| Value | Renders as | Best for |
+|---|---|---|
+| `RadialDial` | circular gauge filled to a percentage | a number over a known range (0–100) |
+| `LineChart` | sparkline across several points | a **text** column of comma-separated numbers |
+| `HeatMap` | horizontal bar coloured by value | a single number, or a choice value |
+| `StarRating` | row of stars filled to the value | a whole number (0–5 by default) |
+| `None` | plain text | explicitly **clearing** a renderer |
+
+- **Type-only.** The renderers use built-in defaults (dial 0–100, stars 0–5); there are no tuning
+  parameters. Column-type compatibility is **not** validated — the pairings above are guidance, and
+  the platform does not enforce a clean "numeric only" rule (`LineChart` is documented for a text
+  column). A nonsensical pairing deploys and simply renders nothing useful.
+- **Omitting is not the same as `None`.** An omitted column is left exactly as deployed; use
+  `"None"` to actively clear a renderer set by an earlier build or by a maker in the portal.
+- **Rebuild-safe.** The value is re-asserted on every build, including for columns that already
+  exist, and converges to a single configuration row.
+- **PREVIEW — not provisioned everywhere.** Where the platform has not enabled it, the build
+  **skips** the visualization step (the column and everything else still deploy) and `verify`
+  reports no divergence. Live-measured: the backing `controlconfigurations` table was present on
+  only 1 of 18 test environments. If a renderer does not appear, check the environment first — the
+  same spec succeeds unchanged on a provisioned org.
 
 ### entity sub-sections (optional)
 ```jsonc

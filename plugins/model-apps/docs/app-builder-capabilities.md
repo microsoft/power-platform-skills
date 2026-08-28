@@ -33,17 +33,17 @@ apart deliberately.
 - ⚠ Calculated / Rollup formula columns — `source` + `formula` plumbed through, **not live-verified**.
 - **Table icons** (`entities[].vectorIcon` = SVG web resource → `IconVectorName`; `entities[].icon` = raster web resource → `IconMediumName`) — sets a custom table's own icon (what the modern designer + nav render). Applied after the web-resources phase via the SDK's `setEntityIcon`; hard-validated against declared web resources so an unresolvable value can't break the designer (glimmer). Live-verified: `IconVectorName` set to a published SVG web resource.
 
-### Business rules — 🧪 tested
+### Business rules — ✅ verified live
 - `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
   (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on a
-  condition over the record (`Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`).
+  condition over the record (`Equals` · `DoesNotEqual`). `ContainsData`/`DoesNotContainData` are
+  rejected at the spec gate — the XAML they compile to makes the platform 500 on activation.
 - Compiled to classic workflow XAML by the vendored SDK and activated on create. The supported slice
   is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
   rule naming a column that does not exist is rejected up front rather than deploying and never firing.
 - Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
-- The **SDK path** is ✅ live-verified — a rule created, activated, and the platform's own generated
-  `clientdata` named the authored columns. The **App Spec surface** over it is unit- and
-  real-bundle-tested; a live end-to-end build through `businessRules[]` is the outstanding step.
+- Live-verified end to end through the App Spec: rules authored from `businessRules[]` deployed,
+  activated, and the platform's own generated `clientdata` named the authored columns.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
@@ -51,6 +51,27 @@ apart deliberately.
 - Form JS event handlers (`onload`/`onsave`/`onchange`) wired via web resources.
 - Views with rich filters (`eq-userid`/`this-week`/`in`/`not-in`/… + Choice-label resolution); default Active/Inactive view **column enrichment** via the SDK's `enrichDefaultViews`.
 - Choice-column charts.
+
+### Custom grid rendering (preview) — ✅ SDK live-verified, environment-gated
+- `entities[].columns[].visualization` — render a column as a `RadialDial`, `LineChart`, `HeatMap`
+  or `StarRating` in **every** grid and view that shows it, instead of plain text. `None` clears it.
+  Per-*column* metadata (a `controlconfiguration` row bound to the attribute), so it is declared once
+  on the column rather than on each view.
+- Type-only: the renderers use built-in defaults (dial 0–100, stars 0–5) with no tuning parameters.
+  Column-type compatibility is **not** validated — the platform does not enforce a clean "numeric
+  only" rule (`LineChart` is documented for a *text* column of comma-separated numbers), so guessing
+  a constraint would reject valid specs. Guidance lives in the schema doc.
+- Re-asserted on every build, for pre-existing columns as well as new ones, converging to a single
+  configuration row. Omitting the field leaves a deployed renderer alone; `"None"` is how a spec
+  actively clears one.
+- **Environment-gated preview.** Where the platform has not provisioned it, the backing
+  `controlconfigurations` table is absent and every call 404s; the build **skips** the step (the
+  column and all other artifacts still deploy) and verify reports no divergence. Live-measured: the
+  table was present on **1 of 18** test environments, so a missing renderer is an environment
+  question first, not a spec bug.
+- Live-verified on a provisioned environment: set from scratch, updated in place (the rebuild path),
+  re-asserted without duplicating the config row, all four renderers accepted, and cleared with
+  `None` — 6/6.
 
 ### App shell & navigation — ✅ verified live
 - App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
