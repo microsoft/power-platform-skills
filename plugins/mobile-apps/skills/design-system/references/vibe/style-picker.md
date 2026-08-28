@@ -2,7 +2,11 @@
 
 **Shared instructions: [shared-instructions-core.md](../../../../shared/shared-instructions-core.md)** — read first.
 
-A self-contained moodboard-before-build reference for `/design-system`. Three named directions, each anchored in real-world reference apps the user already knows. Output is a single HTML page with three phone-frame mockups of the same screen rendered three different ways — user picks one (or describes a hybrid), `/design-system` locks the choice into the design system, downstream agents cascade from it.
+A self-contained moodboard-before-build reference for `/design-system`. It
+renders three phone-frame mockups selected from four named bundles. The
+specialist Airline bundle replaces Inspection only when the user or supplied
+brand material explicitly requests aviation styling; industry inference alone
+never activates it.
 
 ## When to use
 
@@ -21,7 +25,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 
 - `working_dir` — absolute path to the project root (must contain `native-app-plan.md`)
 - Optional: `target_screen` — screen name to render (defaults to the most representative; see Step 2)
-- Optional: `default_direction` — `inspection | saas | product` to highlight
+- Optional: `default_direction` — `inspection | airline | saas | product` to highlight
   as the recommended pick. Derive it from the approved visual personality,
   content emphasis, density, operating context, and media role; never from
   industry or raw prompt keywords.
@@ -51,6 +55,7 @@ Before doing anything else, load the direction bundles. These are the source of 
 - [`design-directions.md`](./design-directions.md) — overview + reference-app gestalts
 - [`direction-inspection.md`](./direction-inspection.md) — full Inspection bundle (dark slate + safety orange — outdoor-only opt-in)
 - [`direction-polished-inspection.md`](./direction-polished-inspection.md) — full Polished-Inspection bundle (white + Power-Platform green — explicit inspection-oriented option, not a global default)
+- [`direction-airline.md`](./direction-airline.md) — specialist Airline bundle (deep navy + crisp white + hi-vis operational status)
 - [`direction-saas.md`](./direction-saas.md) — full SaaS bundle
 - [`direction-product.md`](./direction-product.md) — full Product bundle
 - [`design-bundle-schema.md`](./design-bundle-schema.md) — what gets written into the plan
@@ -89,7 +94,7 @@ These are pre-loaded design systems from real-world apps — use as `--brand-doc
 ```
 1. Length check   — max 500 chars for hybrid description
 2. Sanitize       — strip shell metacharacters, HTML tags, control chars
-3. Validate       — direction names must match: inspection|saas|product|hybrid|mix
+3. Validate       — direction names must match: inspection|airline|saas|product|hybrid|mix
 4. Reject         — URLs, file paths, code blocks in free-text fields
 ```
 
@@ -160,17 +165,26 @@ Industry and raw prompt keywords must not participate. The recommendation only
 **highlights** one card; the user can still pick any. When evidence is mixed,
 show all three without a recommendation.
 
+Before rendering, choose the active operational bundle:
+
+- Default: `Inspection / SaaS / Product`.
+- When `default_direction=airline`, or the user/brand input explicitly asks
+  for airline/aviation styling: `Airline / SaaS / Product`.
+- Never substitute Airline from an industry keyword alone.
+
 ## Step 3 — Render the 3-up `_design_vibe.html`
 
 **Print before starting:**
-> "→ [design-system:vibe] Rendering 3 phone-frame mockups (Inspection / SaaS / Product)…"
+> "→ [design-system:vibe] Rendering 3 phone-frame mockups (<Inspection or Airline> / SaaS / Product)…"
 
 For each direction, synthesize a single phone-frame HTML mock of the chosen screen, using:
 - The screen's spec from `### Per-Screen Specs` for the layout structure (which sections, how many rows)
 - The direction's bundle from `references/direction-<name>.md` for ALL visual choices (palette, typography, list style, surface, density, motion-frozen-into-static)
 - Plausible placeholder data (3–4 list items synthesized from the entity name)
 
-The three mocks must use the **same screen, same data, same layout structure** — only the design tokens differ. That's what makes the comparison legible.
+The three mocks must use the **same screen, same data, same layout structure**
+— only the design tokens differ. When Airline is active, use
+`direction-airline.md` everywhere this section otherwise says Inspection.
 
 Compose the 3-up page:
 
@@ -349,7 +363,7 @@ Use `AskUserQuestion` with options if available; otherwise plain text.
 - **`a` / `b` / `c`** → resolve to the direction name; go to Step 6
 - **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
 - **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open / confirm loop as hybrid
-- **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
+- **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `crisp-white` ↔ `rich-dark`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
 - **`again`** → regenerate with alternate accents (e.g. Product with rust instead of sage; Inspection with amber instead of orange) — same three directions, different concrete realizations. Cap to 1 `again` per session to avoid taste-paralysis.
 - **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open, ask again
 - **No reply / unclear** → ask once more, then default to the recommended direction with: `Defaulting to <name> based on app description; you can run /design-system --reskin any time to swap.`
@@ -413,7 +427,7 @@ Append one line to `<working_dir>/memory-bank.md` under `## Design history` (cre
 
 ```
 DESIGN_VIBE_RESULT
-direction: <Inspection|SaaS|Product|Hybrid>
+direction: <Inspection|Airline|SaaS|Product|Hybrid>
 surface: <value>
 palette: <value>
 typography: <value>
@@ -434,7 +448,7 @@ The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3
 
 **If auto mode (not sub-step):** return one line to the caller:
 
-> Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
+> Design direction picked: <Inspection|Airline|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
 
 If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with screen-builder fan-out using the new direction.
 
@@ -467,6 +481,7 @@ If this skill folder is removed:
 
 - [design-directions.md](./design-directions.md) — overview of the 3 directions
 - [direction-inspection.md](./direction-inspection.md) — full bundle
+- [direction-airline.md](./direction-airline.md) — specialist aviation bundle
 - [direction-saas.md](./direction-saas.md) — full bundle
 - [direction-product.md](./direction-product.md) — full bundle
 - [design-bundle-schema.md](./design-bundle-schema.md) — block schema downstream agents read

@@ -101,6 +101,35 @@ test('create and edit flows keep generated services outside the approved plan', 
   assert.doesNotMatch(edit, /Replace or create the `## Generated Services/);
 });
 
+test('airline design direction is reachable without expanding the three-up picker', () => {
+  const directions = read('skills/design-system/references/vibe/design-directions.md');
+  const picker = read('skills/design-system/references/vibe/style-picker.md');
+  const schema = read('skills/design-system/references/vibe/design-bundle-schema.md');
+  assert.match(directions, /\[direction-airline\.md\]\(\.\/direction-airline\.md\)/);
+  assert.match(picker, /direction-inspection\.md/);
+  assert.match(picker, /direction-airline\.md/);
+  assert.match(picker, /inspection\|airline\|saas\|product/);
+  assert.match(picker, /Airline replaces Inspection|Airline is active/);
+  assert.match(picker, /crisp-white` ↔ `rich-dark/);
+  assert.match(schema, /inspection`, `airline`, `saas`, `product`, `hybrid`/);
+  assert.match(schema, /\*\*Picked:\*\* <Inspection \| Airline \| SaaS \| Product/);
+  assert.match(schema, /background: <dark-slate \| crisp-white/);
+  for (const value of [
+    'surface: subtle-depth',
+    'background: crisp-white',
+    'status_saturation: full',
+    'empty_state: icon-sentence-bigbutton',
+    'primary_action_position: bottom-pinned',
+    'tone: professional',
+  ]) {
+    assert.match(read('skills/design-system/references/vibe/direction-airline.md'), new RegExp(value));
+  }
+  const airline = read('skills/design-system/references/vibe/direction-airline.md');
+  assert.match(airline, /background: rich-dark/);
+  assert.match(airline, /surface0`: `#08131F/);
+  assert.match(airline, /accentBase`: `#5FA8E8/);
+});
+
 test('reference indexes point to existing titled shards', () => {
   for (const [indexPath, shardDir] of [
     ['shared/references/screen-templates.md', 'shared/references/screen-templates'],

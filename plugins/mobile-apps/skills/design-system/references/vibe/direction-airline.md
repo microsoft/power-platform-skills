@@ -14,8 +14,8 @@ Delta, United, American Airlines, Lufthansa, ANA, British Airways apps; airline 
 
 ```yaml
 direction: airline
-surface: clean-light
-background: white
+surface: subtle-depth
+background: crisp-white
 palette: deep-aviation-blue + cool-gray
 typography: sans-only
 heading_font: Inter
@@ -24,25 +24,41 @@ body_size: 15pt
 list_style: row-with-chevron
 density: comfortable
 motion: subtle
-status_saturation: hi-vis
-empty_state: icon-explanation-action
+status_saturation: full
+empty_state: icon-sentence-bigbutton
 primary_action_shape: rectangular
-primary_action_position: bottom-pinned-or-in-flow
+primary_action_position: bottom-pinned
 accent_color: deep-aviation-blue (#0A4F8F)
-tone: branded-operational
+tone: professional
 ```
 
 ## Visual rules
 
 ### Surface
 
-- **Background:** white (`#FFFFFF`) — the canonical airline-brand canvas, not cool-gray.
+- **Light background:** white (`#FFFFFF`) — the canonical airline-brand canvas, not cool-gray.
 - **Surface ladder (explicit aliases — builders rely on these existing):**
   - `surface0`: `#FFFFFF` — page background
   - `surface1`: `#F4F6F9` — card fill
   - `surface2`: `#E6EAF0` — input fill / muted card
   - `surface3`: `#C9D0DA` — hairline / divider
 - **Cards:** `surface1` fill on `surface0` background. 1px hairline `surface3` border. No shadow ring on light surfaces.
+
+When the user explicitly switches Airline to `background: rich-dark`, replace
+the complete surface/accent set rather than changing the background token
+alone:
+
+- `surface0`: `#08131F` — deep night-flight canvas
+- `surface1`: `#102235` — card fill
+- `surface2`: `#193149` — input fill / muted card
+- `surface3`: `#36506B` — hairline / divider
+- `accentBase`: `#5FA8E8`
+- `accentStrong`: `#8FC7F2`
+- `accentSoft`: `#173A59`
+- primary text: `#F7FAFC`; muted text: `#AFC0D2`
+
+Status colors remain saturated in both modes. Dark Airline is still
+navy-and-blue, not a generic charcoal theme.
 
 ### Palette
 
@@ -103,7 +119,7 @@ tone: branded-operational
 ## Negatives — HARD RULES (screen-builder enforces)
 
 - **NEVER** use safety-orange (`#FF6A00`) or any orange hue as primary or accent. Reserved for `statusModerate` only.
-- **NEVER** use cool-gray as page background — always pure white. Carriers brand with white-and-navy, not gray-and-indigo.
+- **NEVER** use cool-gray as page background. Light mode is pure white; explicit dark mode uses the complete `rich-dark` Airline surface set above.
 - **NEVER** desaturate status pills. Hi-vis only.
 - **NEVER** use shadow rings on cards on a white surface. Hairline borders only.
 - **NEVER** use stack-only navigation when there are 3+ persistent contexts (Home / Schedule / Profile etc.) — use bottom tabs.
@@ -144,6 +160,10 @@ const tokens = {
   },
 };
 ```
+
+For `background: rich-dark`, materialize a dark theme object from the complete
+dark surface/accent set above. Do not reuse the light `surface0`-`surface3`
+values with only the background changed.
 
 ## When to use this direction
 

@@ -178,8 +178,6 @@ Apply the code-idiom reference mechanically. In particular:
 - keep navigation and submit actions duplicate-tap safe;
 - preserve form progress;
 - use cursor patterns only when the spec says cursor;
-- keep empty state inside `FlatList`;
-- use exact `@odata.bind` casing and no server-owned payload fields;
 - expose visible reasons for disabled actions.
 
 ### 4. Self-check and validate

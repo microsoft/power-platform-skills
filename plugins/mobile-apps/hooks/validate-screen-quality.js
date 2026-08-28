@@ -133,10 +133,12 @@ function findJsxOpeningTags(content, componentNames) {
   if (names.length === 0) return [];
 
   const tags = [];
-  const startRe = new RegExp(`<(${names.join('|')})(?:\\.[A-Za-z][A-Za-z0-9_]*)?(?=\\s|/?>)`, 'g');
+  const startRe = new RegExp(`<(${names.join('|')})(?:\\.[A-Za-z][A-Za-z0-9_]*)?(?=\\s|<|/?>)`, 'g');
   let startMatch;
   while ((startMatch = startRe.exec(content)) !== null) {
     let braceDepth = 0;
+    let genericDepth = 0;
+    let beforeProps = true;
     let quote = null;
     let escaped = false;
 
@@ -150,13 +152,23 @@ function findJsxOpeningTags(content, componentNames) {
       }
 
       if (char === '"' || char === "'" || char === '`') quote = char;
-      else if (char === '{') braceDepth += 1;
+      else if (beforeProps && char === '<') genericDepth += 1;
+      else if (beforeProps && char === '>' && genericDepth > 0) genericDepth -= 1;
+      else if (char === '{') {
+        beforeProps = false;
+        braceDepth += 1;
+      }
       else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
-      else if (char === '>' && braceDepth === 0) {
-        tags.push({ name: startMatch[1], tag: content.slice(startMatch.index, index + 1) });
+      else if (char === '>' && braceDepth === 0 && genericDepth === 0) {
+        tags.push({
+          name: startMatch[1],
+          tag: content.slice(startMatch.index, index + 1),
+          start: startMatch.index,
+          end: index + 1,
+        });
         startRe.lastIndex = index + 1;
         break;
-      }
+      } else if (!/\s/.test(char) && genericDepth === 0) beforeProps = false;
     }
   }
   return tags;
@@ -469,6 +481,162 @@ function findStatusVisualProblems(content) {
 
 // ─── Aggregate ───────────────────────────────────────────────────────────────
 
+function findListInteractionProblems(content) {
+  const violations = [];
+  const functionScopes = [];
+  const functionStart = /\bfunction\b[^{]*\{|=>\s*\{/g;
+  let functionMatch;
+  while ((functionMatch = functionStart.exec(content)) !== null) {
+    const openingIndex = functionStart.lastIndex - 1;
+    let depth = 0;
+    let quote = null;
+    for (let index = openingIndex; index < content.length; index += 1) {
+      const character = content[index];
+      if (quote) {
+        if (character === '\\') index += 1;
+        else if (character === quote) quote = null;
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') quote = character;
+      else if (character === '{') depth += 1;
+      else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          functionScopes.push({ openingIndex, closingIndex: index });
+          break;
+        }
+      }
+    }
+    const conciseArrow = /=>\s*\(/g;
+    while ((functionMatch = conciseArrow.exec(content)) !== null) {
+      const openingIndex = conciseArrow.lastIndex - 1;
+      let depth = 0;
+      let braceDepth = 0;
+      let squareDepth = 0;
+      let quote = null;
+      for (let index = openingIndex; index < content.length; index += 1) {
+        const character = content[index];
+        if (quote) {
+          if (character === '\\') index += 1;
+          else if (character === quote) quote = null;
+          continue;
+        }
+        if (character === "'" || character === '"' || character === '`') quote = character;
+        else if (character === '(') depth += 1;
+        else if (character === ')') {
+          depth -= 1;
+          if (depth === 0 && braceDepth === 0 && squareDepth === 0) {
+            functionScopes.push({ openingIndex, closingIndex: index });
+            break;
+          }
+        } else if (character === '{') braceDepth += 1;
+        else if (character === '}') braceDepth = Math.max(0, braceDepth - 1);
+        else if (character === '[') squareDepth += 1;
+        else if (character === ']') squareDepth = Math.max(0, squareDepth - 1);
+      }
+    }
+  }
+
+  const serviceExpressionsFor = (source) => {
+    const expressions = new Set();
+    const destructuredList = /\bconst\s*\{([^}]+)\}\s*=\s*use(?:Cursor)?ListData\s*\(/g;
+    let listMatch;
+    while ((listMatch = destructuredList.exec(source)) !== null) {
+      for (const binding of listMatch[1].split(',')) {
+        const name = binding.trim().split(/\s*:\s*/).pop();
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) expressions.add(name);
+      }
+    }
+    const namedList = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*use(?:Cursor)?ListData\s*\(/g;
+    while ((listMatch = namedList.exec(source)) !== null) {
+      expressions.add(`${listMatch[1]}.items`);
+    }
+    const filteredList = /\bconst\s*\{[^}]*\bfiltered(?:\s*:\s*([A-Za-z_$][\w$]*))?[^}]*\}\s*=\s*useSearchFilter\s*\(\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)/g;
+    while ((listMatch = filteredList.exec(source)) !== null) {
+      if (expressions.has(listMatch[2])) expressions.add(listMatch[1] || 'filtered');
+    }
+    return expressions;
+  };
+
+  for (const { tag, start } of findJsxOpeningTags(content, new Set(['FlatList']))) {
+    const scope = functionScopes
+      .filter((candidate) => candidate.openingIndex < start && candidate.closingIndex > start)
+      .sort((left, right) => (
+        left.closingIndex - left.openingIndex
+        - (right.closingIndex - right.openingIndex)
+      ))[0];
+    const serviceDataExpressions = serviceExpressionsFor(
+      scope ? content.slice(scope.openingIndex + 1, scope.closingIndex) : content,
+    );
+    if (!/\bkeyExtractor\s*=/.test(tag)) {
+      violations.push({
+        rule: 'flatlist-missing-key-extractor',
+        match: tag.slice(0, 180),
+        fix: 'Add `keyExtractor={(item) => item.<primaryId>}` using the stable record ID. Never use the array index.',
+      });
+    } else {
+      const extractor = /\bkeyExtractor\s*=\s*\{\s*(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>\s*([\s\S]*?)\}/.exec(tag);
+      if (extractor) {
+        const parameters = (extractor[1] || extractor[2]).split(',').map((value) => value.trim());
+        const itemName = parameters[0]?.match(/^([A-Za-z_$][\w$]*)/)?.[1];
+        const indexName = parameters[1]?.match(/^([A-Za-z_$][\w$]*)/)?.[1];
+        const expression = extractor[3];
+        const destructuredId = !itemName && /^\{[\s\S]*\}$/.test(parameters[0] || '')
+          ? /(?:^|,)\s*((?:id|[A-Za-z_$][\w$]*id))(?:\s*:\s*([A-Za-z_$][\w$]*))?\s*(?=,|$)/i.exec(
+            parameters[0].slice(1, -1),
+          )
+          : null;
+        if (indexName && new RegExp(`\\b${indexName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(expression)) {
+          violations.push({
+            rule: 'flatlist-index-key',
+            match: extractor[0].slice(0, 180),
+            fix: 'Use the stable record primary ID as the key so inserts, deletes, and refreshes preserve row identity.',
+          });
+        } else if (
+          itemName
+          && !new RegExp(`\\b${itemName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(?:id|[A-Za-z_$][\\w$]*id)\\b`, 'i').test(expression)
+        ) {
+          violations.push({
+            rule: 'flatlist-non-id-key',
+            match: extractor[0].slice(0, 180),
+            fix: 'Use the record primary-ID property, not mutable display text, for stable FlatList row identity.',
+          });
+        } else if (
+          !itemName
+          && (
+            !destructuredId
+            || !new RegExp(`\\b${(destructuredId[2] || destructuredId[1]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(expression)
+          )
+        ) {
+          violations.push({
+            rule: 'flatlist-non-id-key',
+            match: extractor[0].slice(0, 180),
+            fix: 'Use the record primary-ID property, not mutable display text, for stable FlatList row identity.',
+          });
+        }
+      }
+    }
+    if (!/\bListEmptyComponent\s*=/.test(tag)) {
+      violations.push({
+        rule: 'flatlist-missing-empty-component',
+        match: tag.slice(0, 180),
+        fix: 'Keep the real empty state in `ListEmptyComponent` so the list and pull-to-refresh remain mounted.',
+      });
+    }
+    const hasRefresh = /\brefreshControl\s*=/.test(tag)
+      || (/\brefreshing\s*=/.test(tag) && /\bonRefresh\s*=/.test(tag));
+    const dataExpression = /\bdata\s*=\s*\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\}/.exec(tag)?.[1];
+    if (dataExpression && serviceDataExpressions.has(dataExpression) && !hasRefresh) {
+      violations.push({
+        rule: 'flatlist-missing-refresh',
+        match: tag.slice(0, 180),
+        fix: 'Wire `refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}` or the equivalent FlatList `refreshing` and `onRefresh` props.',
+      });
+    }
+  }
+  return violations;
+}
+
 function findAllViolations(content) {
   return [
     ...findVagueTokens(content),
@@ -480,6 +648,7 @@ function findAllViolations(content) {
     ...findScannerOverlayProblems(content),
     ...findA11yControlProblems(content),
     ...findStatusVisualProblems(content),
+    ...findListInteractionProblems(content),
   ];
 }
 
@@ -520,6 +689,11 @@ function buildBlockMessage(filePath, violations) {
     'dynamic-type-disabled': 'Dynamic type disabled on readable text',
     'redundant-status-cues': 'Noisy redundant status styling',
     'dominant-red-detail-header': 'Over-dominant failure/error header treatment',
+    'flatlist-missing-key-extractor': 'FlatList missing stable row identity',
+    'flatlist-index-key': 'FlatList uses unstable array-index keys',
+    'flatlist-non-id-key': 'FlatList key does not use a record ID',
+    'flatlist-missing-empty-component': 'FlatList missing an in-list empty state',
+    'flatlist-missing-refresh': 'Service-backed FlatList missing pull-to-refresh',
   };
 
   for (const ruleName of Object.keys(byRule)) {

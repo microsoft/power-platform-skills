@@ -101,10 +101,10 @@ show the reason.
 - Cursor specs use `useCursorListData`/`useInfiniteQuery`, `maxPageSize`,
   `skipToken`, server filter, deterministic `orderBy` including a unique key,
   `select`, and `FlatList.onEndReached`.
-- `ListEmptyComponent` stays inside `FlatList` so pull-to-refresh works when
-  empty.
-- `keyExtractor` uses a stable record ID, never the index.
 - Loading skeletons preserve the populated layout's outer geometry.
+- Imperative screen reads use `useFocusEffect`, not mount-only `useEffect`, so
+  records refresh after navigating back. React Query screens use explicit
+  invalidation or focus refetch.
 
 ## Mobile interaction
 

@@ -64,6 +64,12 @@ enforced by contracts or validators:
   human plan after Gate 4.
 - Host capability cache entries are scoped to host/runtime and plugin version
   and expire after 30 minutes, including negative results.
+- Dispatcher-backed validator coverage now catches server-managed Dataverse
+  writes in both `app/` and `src/`, read-only lookup value writes,
+  create-then-navigate without a pre-generated ID, incomplete FlatList
+  interaction contracts, and bounded loading on cursor-planned screens.
+- The Airline design bundle is selectable as an explicit specialist direction
+  while the comparison UI remains limited to three simultaneous choices.
 
 ## Regression budgets
 

@@ -293,8 +293,293 @@ function findEditQueryViolations(content) {
     if (/[?&](?:id|recordId)=/.test(route) && !/[?&]editId=/.test(route)) {
       violations.push(`Use \`editId\` for create-or-edit route queries: ${route}`);
     }
+
   }
   return violations;
+}
+
+function findBodyBraceAfterSignature(source, startIndex) {
+  let index = startIndex;
+  while (/\s/.test(source[index] || '')) index += 1;
+  if (source[index] === '{') return index;
+  if (source[index] !== ':') return -1;
+
+  let quote = null;
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let curlyDepth = 0;
+  let angleDepth = 0;
+  for (index += 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '(') roundDepth += 1;
+    else if (character === ')') roundDepth = Math.max(0, roundDepth - 1);
+    else if (character === '[') squareDepth += 1;
+    else if (character === ']') squareDepth = Math.max(0, squareDepth - 1);
+    else if (character === '<') angleDepth += 1;
+    else if (character === '>') angleDepth = Math.max(0, angleDepth - 1);
+    else if (character === '{') {
+      const previous = source.slice(startIndex, index).trimEnd().at(-1);
+      if (
+        curlyDepth > 0
+        || roundDepth > 0
+        || squareDepth > 0
+        || angleDepth > 0
+        || previous === ':'
+        || previous === '|'
+        || previous === '&'
+        || previous === ','
+      ) {
+        curlyDepth += 1;
+      } else {
+        return index;
+      }
+    } else if (character === '}' && curlyDepth > 0) {
+      curlyDepth -= 1;
+    } else if (
+      character === ';'
+      && roundDepth === 0
+      && squareDepth === 0
+      && curlyDepth === 0
+      && angleDepth === 0
+    ) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+function findFunctionScopes(source) {
+  const functions = [];
+  const openings = new Set();
+  const addScope = (openingIndex) => {
+    if (openingIndex < 0 || openings.has(openingIndex)) return;
+    const closingIndex = findClosingBrace(source, openingIndex);
+    if (closingIndex >= 0) {
+      openings.add(openingIndex);
+      functions.push({ openingIndex, closingIndex });
+    }
+  };
+
+  const arrow = /=>\s*\{/g;
+  let match;
+  while ((match = arrow.exec(source)) !== null) {
+    addScope(arrow.lastIndex - 1);
+  }
+
+  const declaration = /\bfunction\b[^(]*\([^)]*\)/g;
+  while ((match = declaration.exec(source)) !== null) {
+    addScope(findBodyBraceAfterSignature(source, declaration.lastIndex));
+  }
+
+  const method = /(?<![\w$.])(?:(?:public|private|protected|static|override)\s+)*(?:async\s+)?(?!if\b|for\b|while\b|switch\b|catch\b|with\b|function\b)[A-Za-z_$][\w$]*(?:\s*<[^>{}]*>)?\s*\([^)]*\)/g;
+  while ((match = method.exec(source)) !== null) {
+    addScope(findBodyBraceAfterSignature(source, method.lastIndex));
+  }
+  return functions;
+}
+
+function findVariableObjectInitializer(source, variableName, beforeIndex) {
+  const declaration = new RegExp(
+    `\\b(?:const|let)\\s+${escapeRegExp(variableName)}\\b`,
+    'g',
+  );
+  let declarationMatch;
+  let braceStart = -1;
+  while ((declarationMatch = declaration.exec(source.slice(0, beforeIndex))) !== null) {
+    let quote = null;
+    let roundDepth = 0;
+    let squareDepth = 0;
+    let curlyDepth = 0;
+    let angleDepth = 0;
+    for (
+      let index = declarationMatch.index + declarationMatch[0].length;
+      index < beforeIndex;
+      index += 1
+    ) {
+      const character = source[index];
+      if (quote) {
+        if (character === '\\') index += 1;
+        else if (character === quote) quote = null;
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') quote = character;
+      else if (character === '(') roundDepth += 1;
+      else if (character === ')') roundDepth = Math.max(0, roundDepth - 1);
+      else if (character === '[') squareDepth += 1;
+      else if (character === ']') squareDepth = Math.max(0, squareDepth - 1);
+      else if (character === '{') curlyDepth += 1;
+      else if (character === '}') curlyDepth = Math.max(0, curlyDepth - 1);
+      else if (character === '<') angleDepth += 1;
+      else if (character === '>') angleDepth = Math.max(0, angleDepth - 1);
+      else if (
+        character === '='
+        && roundDepth === 0
+        && squareDepth === 0
+        && curlyDepth === 0
+        && angleDepth === 0
+      ) {
+        let valueStart = index + 1;
+        while (/\s/.test(source[valueStart] || '')) valueStart += 1;
+        if (source[valueStart] === '{') braceStart = valueStart;
+        break;
+      } else if (character === ';' && curlyDepth === 0 && angleDepth === 0) {
+        break;
+      }
+    }
+  }
+  return braceStart;
+}
+
+function servicePrimaryIdMatches(key, serviceName) {
+  const normalizedKey = key.toLowerCase();
+  const serviceParts = serviceName.toLowerCase().split('_');
+  const entitySet = serviceParts.at(-1);
+  const publisherPrefix = serviceParts.length > 1
+    ? serviceParts.slice(0, -1).join('_')
+    : '';
+  const stems = new Set([entitySet]);
+  if (entitySet.endsWith('ies') && entitySet.length > 3) {
+    stems.add(`${entitySet.slice(0, -3)}y`);
+  }
+  if (entitySet.endsWith('s') && entitySet.length > 1) {
+    stems.add(entitySet.slice(0, -1));
+  }
+  return [...stems].some((stem) => (
+    normalizedKey === `${stem}id`
+    || (publisherPrefix && normalizedKey === `${publisherPrefix}_${stem}id`)
+  ));
+}
+
+function findCreateThenNavigateViolations(content) {
+  const source = stripComments(content);
+  const violations = [];
+  const create = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+([A-Za-z_$][\w$]*)Service\.create\s*\(/g;
+  const functions = findFunctionScopes(source);
+  let match;
+  while ((match = create.exec(source)) !== null) {
+    const scope = functions
+      .filter((candidate) => candidate.openingIndex < match.index && candidate.closingIndex > match.index)
+      .sort((left, right) => (left.closingIndex - left.openingIndex) - (right.closingIndex - right.openingIndex))[0];
+    if (!scope) continue;
+    const scopeStart = scope?.openingIndex ?? 0;
+    const scopeEnd = scope?.closingIndex ?? source.length;
+    const beforeCreate = source.slice(scopeStart, match.index);
+    const afterCreate = source.slice(create.lastIndex, scopeEnd);
+    const navigation = /\brouter\.(?:push|navigate|replace)\s*\(\s*(`[\s\S]*?`|'[^']*'|"[^"]*")\s*\)/.exec(afterCreate);
+    if (!navigation || !/\$\{|\?(?:[^'"`]*)(?:id|recordId)=/.test(navigation[1])) continue;
+    const generatedId = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*newId\s*\(\s*\)\s*;?/.exec(beforeCreate);
+    const createEnd = findClosingCallParen(source, create.lastIndex - 1);
+    const createArgument = createEnd >= 0
+      ? firstCallArgument(source, create.lastIndex, createEnd)
+      : '';
+    let createPayload = createArgument;
+    if (/^[A-Za-z_$][\w$]*$/.test(createArgument)) {
+      const payloadStart = findVariableObjectInitializer(
+        beforeCreate,
+        createArgument,
+        beforeCreate.length,
+      );
+      if (payloadStart >= 0) {
+        const payloadEnd = findClosingBrace(beforeCreate, payloadStart);
+        createPayload = payloadEnd >= 0
+          ? beforeCreate.slice(payloadStart, payloadEnd + 1)
+          : '';
+      }
+    }
+    const idIsPersisted = generatedId
+      && topLevelObjectProperties(createPayload).some(
+        ({ key, value }) => (
+          value === generatedId[1]
+          && servicePrimaryIdMatches(key, match[2])
+        ),
+      );
+    if (
+      !generatedId
+      || !idIsPersisted
+      || !new RegExp(`\\$\\{\\s*${escapeRegExp(generatedId[1])}\\s*\\}`).test(navigation[1])
+    ) {
+      violations.push('Create-then-navigate flows must pre-generate the record ID with `newId()` and navigate with that same ID.');
+    }
+  }
+  return violations;
+}
+
+function topLevelObjectProperties(objectSource) {
+  const trimmed = objectSource.trim();
+  if (!trimmed.startsWith('{')) return [];
+  const closingIndex = findClosingBrace(trimmed, 0);
+  if (closingIndex < 0) return [];
+  const body = trimmed.slice(1, closingIndex);
+  const segments = [];
+  let segmentStart = 0;
+  let depth = 0;
+  let quote = null;
+  for (let index = 0; index <= body.length; index += 1) {
+    const character = body[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    else if (character === '{' || character === '[' || character === '(') depth += 1;
+    else if (character === '}' || character === ']' || character === ')') depth -= 1;
+    else if ((character === ',' || index === body.length) && depth === 0) {
+      segments.push(body.slice(segmentStart, index).trim());
+      segmentStart = index + 1;
+    }
+  }
+  return segments.flatMap((segment) => {
+    const property = /^(?:['"]([^'"]+)['"]|([A-Za-z_$][\w$]*))\s*:\s*([A-Za-z_$][\w$]*)$/.exec(segment);
+    return property ? [{ key: property[1] || property[2], value: property[3] }] : [];
+  });
+}
+
+function firstCallArgument(source, startIndex, endIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    else if (character === '(' || character === '{' || character === '[') depth += 1;
+    else if (character === ')' || character === '}' || character === ']') depth -= 1;
+    else if (character === ',' && depth === 0) return source.slice(startIndex, index).trim();
+  }
+  return source.slice(startIndex, endIndex).trim();
+}
+
+function findClosingCallParen(source, openingIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let index = openingIndex; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    else if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
 }
 
 function findODataBindCasingViolations(content) {
@@ -344,6 +629,7 @@ function findDynamicRouteIdViolations(filePath, content) {
 function findViolations(filePath, content) {
   return [
     ...findUncheckedServiceResults(content),
+    ...findCreateThenNavigateViolations(content),
     ...findEditQueryViolations(content),
     ...findODataBindCasingViolations(content),
     ...findDynamicRouteIdViolations(filePath, content),
@@ -386,6 +672,7 @@ if (require.main === module) main();
 
 module.exports = {
   findDynamicRouteIdViolations,
+  findCreateThenNavigateViolations,
   findEditQueryViolations,
   findODataBindCasingViolations,
   findUncheckedServiceResults,

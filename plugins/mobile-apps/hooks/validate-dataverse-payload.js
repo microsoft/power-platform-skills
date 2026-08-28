@@ -20,7 +20,7 @@
  *        satisfy the type with `as any` at the call site — never emit junk
  *        like `ownerid: ''` or `statecode: 0` to silence the type checker.
  *
- * Both checks fire for any TS/TSX file under `src/` — they are runtime
+ * Both checks fire for any TS/TSX file under `app/` or `src/` — they are runtime
  * correctness checks, not stylistic ones, so they fire even when other
  * style hooks are deferred.
  *
@@ -60,8 +60,8 @@ function isWatchedFile(filePath) {
   if (typeof filePath !== 'string') return false;
   if (!/\.(tsx|ts)$/i.test(filePath)) return false;
   // Only screens/components/services under the project — skip plugin files,
-  // generated scaffolding helpers, and anything outside an `src/` tree.
-  if (!/[\\/]src[\\/]/.test(filePath)) return false;
+  // generated scaffolding helpers, and anything outside app/src trees.
+  if (!/[\\/](?:app|src)[\\/]/.test(filePath)) return false;
   // Skip the generated layer itself — npx power-apps owns those files.
   if (/[\\/]src[\\/]generated[\\/]/.test(filePath)) return false;
   return true;
@@ -162,6 +162,181 @@ function findMatchingBrace(content, startIdx) {
   return -1;
 }
 
+function stripComments(content) {
+  let output = '';
+  let state = 'code';
+  for (let index = 0; index < content.length; index += 1) {
+    const current = content[index];
+    const next = content[index + 1];
+    if (state === 'line') {
+      if (current === '\n') {
+        output += current;
+        state = 'code';
+      } else output += ' ';
+      continue;
+    }
+    if (state === 'block') {
+      if (current === '*' && next === '/') {
+        output += '  ';
+        index += 1;
+        state = 'code';
+      } else output += current === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (state !== 'code') {
+      output += current;
+      if (current === '\\') {
+        output += next || '';
+        index += 1;
+      } else if (current === state) state = 'code';
+      continue;
+    }
+    if (current === '/' && next === '/') {
+      output += '  ';
+      index += 1;
+      state = 'line';
+    } else if (current === '/' && next === '*') {
+      output += '  ';
+      index += 1;
+      state = 'block';
+    } else {
+      output += current;
+      if (current === "'" || current === '"' || current === '`') state = current;
+    }
+  }
+  return output;
+}
+
+function findMatchingParen(content, startIdx) {
+  let depth = 0;
+  let quote = null;
+  for (let index = startIdx; index < content.length; index += 1) {
+    const character = content[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    else if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function splitArguments(content, startIdx, endIdx) {
+  const argumentsList = [];
+  let segmentStart = startIdx;
+  let depth = 0;
+  let quote = null;
+  for (let index = startIdx; index < endIdx; index += 1) {
+    const character = content[index];
+    if (quote) {
+      if (character === '\\') index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === '`') quote = character;
+    else if (character === '(' || character === '{' || character === '[') depth += 1;
+    else if (character === ')' || character === '}' || character === ']') depth -= 1;
+    else if (character === ',' && depth === 0) {
+      argumentsList.push({ start: segmentStart, text: content.slice(segmentStart, index).trim() });
+      segmentStart = index + 1;
+    }
+  }
+  argumentsList.push({ start: segmentStart, text: content.slice(segmentStart, endIdx).trim() });
+  return argumentsList;
+}
+
+function findVariableObjectInitializer(source, variableName, beforeIndex) {
+  const declaration = new RegExp(
+    `\\b(?:const|let)\\s+${variableName}\\b`,
+    'g',
+  );
+  let declarationMatch;
+  let braceStart = -1;
+  while ((declarationMatch = declaration.exec(source.slice(0, beforeIndex))) !== null) {
+    let quote = null;
+    let roundDepth = 0;
+    let squareDepth = 0;
+    let curlyDepth = 0;
+    let angleDepth = 0;
+    for (
+      let index = declarationMatch.index + declarationMatch[0].length;
+      index < beforeIndex;
+      index += 1
+    ) {
+      const character = source[index];
+      if (quote) {
+        if (character === '\\') index += 1;
+        else if (character === quote) quote = null;
+        continue;
+      }
+      if (character === "'" || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '(') roundDepth += 1;
+      else if (character === ')') roundDepth = Math.max(0, roundDepth - 1);
+      else if (character === '[') squareDepth += 1;
+      else if (character === ']') squareDepth = Math.max(0, squareDepth - 1);
+      else if (character === '{') curlyDepth += 1;
+      else if (character === '}') curlyDepth = Math.max(0, curlyDepth - 1);
+      else if (character === '<') angleDepth += 1;
+      else if (character === '>') angleDepth = Math.max(0, angleDepth - 1);
+      else if (
+        character === '='
+        && roundDepth === 0
+        && squareDepth === 0
+        && curlyDepth === 0
+        && angleDepth === 0
+      ) {
+        let valueStart = index + 1;
+        while (/\s/.test(source[valueStart] || '')) valueStart += 1;
+        if (source[valueStart] === '{') braceStart = valueStart;
+        break;
+      } else if (character === ';' && curlyDepth === 0 && angleDepth === 0) {
+        break;
+      }
+    }
+  }
+  return braceStart;
+}
+
+function findPayloadObjects(content) {
+  const source = stripComments(content);
+  const payloads = [];
+  const callRe = /\b[A-Za-z_$][\w$]*Service\.(create|update)\s*\(/g;
+  let match;
+  while ((match = callRe.exec(source)) !== null) {
+    const openingParen = callRe.lastIndex - 1;
+    const closingParen = findMatchingParen(source, openingParen);
+    if (closingParen < 0) continue;
+    const args = splitArguments(source, openingParen + 1, closingParen);
+    const argument = args[match[1] === 'create' ? 0 : 1];
+    if (!argument) continue;
+    let braceStart = -1;
+    const leadingWhitespace = source.slice(argument.start, closingParen)
+      .search(/\S/);
+    if (argument.text.startsWith('{') && leadingWhitespace >= 0) {
+      braceStart = argument.start + leadingWhitespace;
+    } else if (/^[A-Za-z_$][\w$]*$/.test(argument.text)) {
+      braceStart = findVariableObjectInitializer(source, argument.text, match.index);
+    }
+    if (braceStart < 0) continue;
+    const braceEnd = findMatchingBrace(source, braceStart);
+    if (braceEnd < 0) continue;
+    payloads.push({
+      body: source.slice(braceStart + 1, braceEnd),
+      line: source.slice(0, braceStart).split('\n').length,
+      op: match[1],
+    });
+    callRe.lastIndex = closingParen + 1;
+  }
+  return payloads;
+}
+
 /**
  * Scan the content for `select: [ ... ]` arrays inside object literals and
  * collect any string entries whose unquoted value matches the A1 forbidden
@@ -195,55 +370,12 @@ function findForbiddenSelectColumns(content) {
  */
 function findServerManagedCreatePayload(content) {
   const violations = [];
-  // Match `.create(` or `.update(` — capture the operation name.
-  const callRe = /\.(create|update)\s*\(/g;
-  let m;
-  while ((m = callRe.exec(content)) !== null) {
-    const op = m[1];
-    // Walk forward from after the `(` to find the first `{` at depth 0
-    // (inside the call's own paren scope).
-    let i = m.index + m[0].length;
-    let parenDepth = 1;
-    let braceStart = -1;
-    let inString = null;
-    while (i < content.length && parenDepth > 0) {
-      const ch = content[i];
-      if (inString) {
-        if (ch === '\\') {
-          i += 2;
-          continue;
-        }
-        if (ch === inString) inString = null;
-        i++;
-        continue;
-      }
-      if (ch === '"' || ch === "'" || ch === '`') {
-        inString = ch;
-        i++;
-        continue;
-      }
-      if (ch === '(') parenDepth++;
-      else if (ch === ')') {
-        parenDepth--;
-        if (parenDepth === 0) break;
-      } else if (ch === '{' && parenDepth === 1) {
-        braceStart = i;
-        break;
-      }
-      i++;
-    }
-    if (braceStart === -1) continue;
-    const braceEnd = findMatchingBrace(content, braceStart);
-    if (braceEnd === -1) continue;
-    const payload = content.slice(braceStart + 1, braceEnd);
-    // Find top-level keys: must not be inside a nested brace. Use a depth-
-    // aware scan.
-    const keys = topLevelKeys(payload);
+  for (const payload of findPayloadObjects(content)) {
+    const keys = topLevelKeys(payload.body);
     for (const key of keys) {
       const lower = key.toLowerCase();
       if (SERVER_MANAGED_COLUMNS.has(lower)) {
-        const line = content.slice(0, braceStart).split('\n').length;
-        violations.push({ line, op, key });
+        violations.push({ line: payload.line, op: payload.op, key });
       }
     }
   }
@@ -274,6 +406,23 @@ function topLevelKeys(body) {
       if (ch === inString) inString = null;
       i++;
       continue;
+    }
+    if (depth === 0 && lookForKey && (ch === '"' || ch === "'")) {
+      const quote = ch;
+      let end = i + 1;
+      while (end < body.length) {
+        if (body[end] === '\\') end += 2;
+        else if (body[end] === quote) break;
+        else end += 1;
+      }
+      let colon = end + 1;
+      while (/\s/.test(body[colon] || '')) colon += 1;
+      if (body[colon] === ':') {
+        keys.push(body.slice(i + 1, end));
+        lookForKey = false;
+        i = colon + 1;
+        continue;
+      }
     }
     if (ch === '"' || ch === "'" || ch === '`') {
       inString = ch;
@@ -316,7 +465,23 @@ function topLevelKeys(body) {
   return keys;
 }
 
-function buildBlockMessage(filePath, selectViolations, payloadViolations) {
+function findRawLookupPayload(content) {
+  const violations = [];
+  for (const payload of findPayloadObjects(content)) {
+    for (const key of topLevelKeys(payload.body)) {
+      if (/^_[A-Za-z0-9_]+_value$/i.test(key)) {
+        violations.push({
+          line: payload.line,
+          op: payload.op,
+          key,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
+function buildBlockMessage(filePath, selectViolations, payloadViolations, lookupViolations) {
   const rel = path.relative(process.cwd(), filePath) || filePath;
   const lines = [];
   lines.push(
@@ -354,6 +519,7 @@ function buildBlockMessage(filePath, selectViolations, payloadViolations) {
     for (const v of payloadViolations) {
       lines.push(`  - line ${v.line}: ${v.op}({ ${v.key}: ... })`);
     }
+
     lines.push('');
     lines.push(
       '  These columns are owned by the Dataverse server. Including any of them in a create or update payload returns HTTP 400 on every save.'
@@ -370,6 +536,19 @@ function buildBlockMessage(filePath, selectViolations, payloadViolations) {
     lines.push(
       '    4. To set state/status, use the `SetState`/`SetStatus` action — not an inline column write. To assign ownership, use the `Assign` action.'
     );
+    lines.push('');
+  }
+
+  if (lookupViolations.length > 0) {
+    lines.push('A3 — Read-only lookup value fields in write payload:');
+    for (const violation of lookupViolations) {
+      lines.push(`  - line ${violation.line}: ${violation.op}({ ${violation.key}: ... })`);
+    }
+    lines.push('');
+    lines.push('  `_<lookup>_value` is a read projection, not a writable lookup column. Raw GUID assignment does not create the relationship.');
+    lines.push('');
+    lines.push('  Required fix: use the exact navigation property and entity set:');
+    lines.push("    '<navigationProperty>@odata.bind': '/<entitySet>(<guid>)'");
     lines.push('');
   }
 
@@ -410,18 +589,29 @@ process.stdin.on('end', () => {
 
   const selectViolations = findForbiddenSelectColumns(content);
   const payloadViolations = findServerManagedCreatePayload(content);
+  const lookupViolations = findRawLookupPayload(content);
 
-  if (selectViolations.length === 0 && payloadViolations.length === 0) {
+  if (
+    selectViolations.length === 0
+    && payloadViolations.length === 0
+    && lookupViolations.length === 0
+  ) {
     process.exit(0);
   }
 
-  process.stderr.write(buildBlockMessage(filePath, selectViolations, payloadViolations) + '\n');
+  process.stderr.write(buildBlockMessage(
+    filePath,
+    selectViolations,
+    payloadViolations,
+    lookupViolations,
+  ) + '\n');
   process.exit(2);
 });
 
 // Exported for tests / cross-module reuse.
 module.exports = {
   findForbiddenSelectColumns,
+  findRawLookupPayload,
   findServerManagedCreatePayload,
   topLevelKeys,
   SERVER_MANAGED_COLUMNS,

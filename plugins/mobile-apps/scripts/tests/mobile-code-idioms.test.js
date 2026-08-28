@@ -7,6 +7,7 @@ const test = require('node:test');
 
 const {
   findDynamicRouteIdViolations,
+  findCreateThenNavigateViolations,
   findEditQueryViolations,
   findODataBindCasingViolations,
   findUncheckedServiceResults,
@@ -113,6 +114,113 @@ test('rejects create-or-edit routes that use id instead of editId', () => {
     findEditQueryViolations("router.push('/(app)/items/form?editId=123')"),
     [],
   );
+});
+
+test('create-then-navigate uses a pre-generated record ID', () => {
+  const flow = (body) => `async function save() { ${body} }`;
+  assert.deepEqual(findCreateThenNavigateViolations(`
+    async function save() {
+      const result = await ItemService.create(payload);
+      if (!result.success) return;
+      router.push(\`/items/\${result.data.id}\`);
+    }
+  `), ['Create-then-navigate flows must pre-generate the record ID with `newId()` and navigate with that same ID.']);
+  assert.deepEqual(findCreateThenNavigateViolations(flow(`
+    const recordId = newId();
+    const result = await ItemService.create({ ...payload, itemid: recordId });
+    if (!result.success) return;
+    router.push(\`/items/\${recordId}\`);
+  `)), []);
+  assert.equal(findCreateThenNavigateViolations(flow(`
+    const recordId = newId();
+    const result = await ItemService.create({ title: 'A' });
+    if (!result.success) return;
+    router.push(\`/items/\${recordId}\`);
+  `)).length, 1);
+  assert.equal(findCreateThenNavigateViolations(flow(`
+    const recordId = newId();
+    const analytics = { eventid: recordId };
+    const result = await ItemService.create({ title: 'A' });
+    if (!result.success) return;
+    router.push(\`/items/\${recordId}\`);
+  `)).length, 1);
+  assert.equal(findCreateThenNavigateViolations(flow(`
+    const result = await ItemService.create({ title: 'A' });
+    if (!result.success) return;
+    router.replace(\`/items/\${result.data.id}\`);
+  `)).length, 1);
+  assert.deepEqual(findCreateThenNavigateViolations(`
+    async function createOnly() {
+      const result = await ItemService.create({ title: 'A' });
+      if (!result.success) return;
+    }
+    function open(id) {
+      router.push(\`/items/\${id}\`);
+    }
+  `), []);
+  assert.deepEqual(findCreateThenNavigateViolations(`
+    class ItemActions {
+      async save() {
+        const result = await ItemService.create({ title: 'A' });
+        if (!result.success) return;
+      }
+      open(id: string) {
+        router.push(\`/items/\${id}\`);
+      }
+    }
+  `), []);
+  assert.equal(findCreateThenNavigateViolations(`
+    class ItemActions {
+      async save(): Promise<void> {
+        const result = await ItemService.create({ title: 'A' });
+        if (!result.success) return;
+        router.replace(\`/items/\${result.data.id}\`);
+      }
+    }
+  `).length, 1);
+  assert.equal(findCreateThenNavigateViolations(`
+    class ItemActions {
+      async save(): Promise<{ ok: boolean }> {
+        const result = await ItemService.create({ title: 'A' });
+        if (!result.success) return { ok: false };
+        router.replace(\`/items/\${result.data.id}\`);
+        return { ok: true };
+      }
+    }
+  `).length, 1);
+  assert.equal(findCreateThenNavigateViolations(`
+    class ItemActions { async save<T>(): Promise<{ ok: boolean }> {
+      const result = await ItemService.create({ title: 'A' });
+      if (!result.success) return { ok: false };
+      router.replace(\`/items/\${result.data.id}\`);
+      return { ok: true };
+    } }
+  `).length, 1);
+  assert.equal(findCreateThenNavigateViolations(flow(`
+    const recordId = newId();
+    const result = await ItemService.create({ parentid: recordId, title: 'A' });
+    if (!result.success) return;
+    router.push(\`/items/\${recordId}\`);
+  `)).length, 1);
+  assert.equal(findCreateThenNavigateViolations(flow(`
+    const recordId = newId();
+    const result = await ItemService.create({ parentitemid: recordId, title: 'A' });
+    if (!result.success) return;
+    router.push(\`/items/\${recordId}\`);
+  `)).length, 1);
+  for (const payload of [
+    "{ note: 'itemid: recordId' }",
+    '{ metadata: { itemid: recordId } }',
+  ]) {
+    assert.equal(findCreateThenNavigateViolations(`
+      async function save() {
+        const recordId = newId();
+        const result = await ItemService.create(${payload});
+        if (!result.success) return;
+        router.push(\`/items/\${recordId}\`);
+      }
+    `).length, 1);
+  }
 });
 
 test('rejects non-canonical odata bind casing', () => {

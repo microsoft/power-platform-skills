@@ -1,16 +1,20 @@
 # Design Directions — overview
 
-Three named gestalts the internal `/design-system` style picker uses. Each is a bundle of ~12 design tokens chosen to maximise contrast against the other two so the user can decide at a glance.
+Four named gestalts are available to the internal `/design-system` style
+picker. The picker still compares only three at a time so the user can decide
+at a glance; Airline replaces Inspection only when the user or supplied brand
+material explicitly requests an aviation direction.
 
-## Why three?
+## Why three at a time?
 
 - **Two** isn't a choice — it's a forced binary
 - **Six** is decision paralysis — people decide worse with more options
 - **Three** gives genuine choice without overwhelm and matches the "Goldilocks" intuition the brain is wired for
 
-The three are intentionally far apart in look, not "shades of beige". If the user picks one, they're picking a clear identity, not a nuance.
+The active three are intentionally far apart in look, not "shades of beige".
+If the user picks one, they're picking a clear identity, not a nuance.
 
-## The three directions
+## Available directions
 
 ### 1. Inspection
 **Reference apps:** Uber Driver, Lyft Driver, ServiceTitan, Procore, Field Service Lightning, Square for Restaurants
@@ -39,6 +43,20 @@ Apps you'd download by choice. Type-led, warm or rich-dark surfaces, single mute
 
 → [direction-product.md](./direction-product.md)
 
+### 4. Airline
+**Reference apps:** Delta, United, Lufthansa, ANA, airline crew and
+ground-operations tools
+
+Commercial-aviation brand language: deep navy, crisp white surfaces, tabular
+operational data, and high-visibility status. It is branded and calm without
+losing the glance-first behavior needed around gates, cabins, and ramps.
+
+**Pick when:** the user, brand document, or approved visual personality
+explicitly requests airline/aviation styling. Industry vocabulary alone does
+not activate this specialist bundle.
+
+→ [direction-airline.md](./direction-airline.md)
+
 ## How they map to the existing surface vocabulary
 
 Existing `surface` token in `shared/references/design-planning.md`:
@@ -48,6 +66,7 @@ Existing `surface` token in `shared/references/design-planning.md`:
 | Inspection | `strong-cards` | High-contrast bg, status stripe on card |
 | SaaS | `subtle-depth` | Hairline border + mild shadow on raised |
 | Product | `editorial` | Flat warm bg, full-bleed sections, asymmetry |
+| Airline | `subtle-depth` | Crisp white/navy hierarchy + hi-vis status |
 
 The new direction names *bundle* the existing tokens with palette + typography + tone choices, so the user picks one thing instead of nine.
 
