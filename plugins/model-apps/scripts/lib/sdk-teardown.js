@@ -45,7 +45,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, businessRuleFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -318,7 +318,11 @@ const KIND_HANDLERS = {
     async resolve(sdk, target) {
       const rows = await sdk.queryRecords('workflow', {
         select: ['workflowid', 'statecode'],
-        filter: `category eq 2 and name eq '${odataLit(target.name)}' and primaryentity eq '${odataLit(target.entity)}'`,
+        // DEFINITION rows only (see businessRuleFilter in sdk-build.js). Activating a rule makes the
+        // platform create a second `type 2` activated copy whose parent is the definition; the
+        // platform refuses to delete that copy directly (405) and removes it with its parent. An
+        // unfiltered query therefore produced a guaranteed per-rule teardown failure.
+        filter: businessRuleFilter(target.name, target.entity),
         top: 50,
       });
       return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));

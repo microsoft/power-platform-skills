@@ -58,10 +58,12 @@ and jobs-to-be-done checkable, and fixes a class of failures that were silent.
   version is available, with the update command for your host.
 
 ### Fixed
-- **Business rules are no longer written twice (#482).** The platform commits the workflow row and
-  only then faults generating its UiData, so the SDK's fallback used to write a second copy — both
-  Active, both firing. The re-vendored SDK removes the committed row before writing its own; the
-  plugin keeps a de-duplication sweep for duplicates an earlier build already left behind.
+- **Business rules no longer mistake the platform's activated copy for a duplicate.** Activating a
+  rule makes Dataverse create a second `workflows` row (`type 2`, parented to the definition) — normal
+  for any activated process. Build, verify and teardown queried without `type eq 1`, so the build
+  tried to delete that copy (which the platform refuses, 405) and warned about a duplicate that did
+  not exist, teardown failed on it, and verify would have reported every active rule as duplicated.
+  All three now select definitions only.
 - **AI preflight no longer reports a running feature as disabled.** The readiness gate and a
   feature's actual setting are different rows, so a gate reading off did not mean the feature was
   off — NL search and NL charts were reported as unavailable while both were in effect. Preflight now

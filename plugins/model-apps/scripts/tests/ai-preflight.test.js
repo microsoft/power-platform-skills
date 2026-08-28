@@ -277,3 +277,24 @@ test('effectiveSettingValue reports a setting the environment does not declare a
   assert.strictEqual(r.unsupported, true);
   assert.strictEqual(r.value, undefined);
 });
+
+test('an unresolvable --app makes effective values INDETERMINATE, not environment-derived', async () => {
+  // Peer-review finding. If `--app` is supplied but the app cannot be resolved, the app-scope layer
+  // is UNKNOWN, not absent. Falling through to the environment value is actively harmful: an app
+  // that overrides a feature to "0" while the environment holds "2" would be reported as in effect,
+  // and the admin action for a genuinely disabled feature would be suppressed.
+  const harness = loadPreflightCli({
+    parseResult: { flags: { env: 'https://contoso.crm.dynamics.com', app: 'missing_app' } },
+    readiness: {
+      formFill: { enabled: false, setting: 'FormFillBarUXEnabled', value: '0' },
+      nlSearch: { enabled: false, setting: 'EnableNLGridSearch', value: 'false' },
+    },
+  });
+  try { await harness.main(); } catch (e) { if (e.exitCode === undefined) throw e; }
+  const out = harness.stderr.join('');
+  // The app could not be resolved (the stub SDK has no queryRecords), so nothing may be claimed to
+  // be in effect, and the admin actions must survive.
+  assert.match(out, /could not resolve app/i, `expected a warning about the unresolved app; got: ${out}`);
+  assert.ok(!/in effect via/.test(out), 'no feature may be reported as in effect when app scope is unknown');
+  assert.match(out, /Admin actions required/, 'genuine admin actions must NOT be suppressed');
+});

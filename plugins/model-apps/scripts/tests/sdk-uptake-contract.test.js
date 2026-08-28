@@ -21,7 +21,7 @@ const dirs = [];
 // Offline SDK whose POST handler the test supplies, so a server fault can be simulated exactly.
 // GET answers an empty collection: that is what an org with no image web resource looks like, which
 // is precisely the state the icon contract below is about.
-function sdkWith({ post, get } = {}) {
+function sdkWith({ post, get, del } = {}) {
   const { createMakerSdk } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uptake-'));
   dirs.push(dir);
@@ -35,7 +35,7 @@ function sdkWith({ post, get } = {}) {
       post: async (url, body) => { calls.push({ verb: 'POST', url, body }); return (post && post(url, body)) || ok204; },
       patch: async (url, body) => { calls.push({ verb: 'PATCH', url, body }); return { status: 204, headers: {}, body: {} }; },
       put: async (url, body) => { calls.push({ verb: 'PUT', url, body }); return { status: 204, headers: {}, body: {} }; },
-      delete: async (url) => { calls.push({ verb: 'DELETE', url }); return { status: 204, headers: {}, body: {} }; },
+      delete: async (url) => { calls.push({ verb: 'DELETE', url }); return (del && del(url)) || { status: 204, headers: {}, body: {} }; },
     },
   });
   sdk.initWorkspace();
@@ -43,6 +43,20 @@ function sdkWith({ post, get } = {}) {
 }
 
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
+
+// The smallest complete business rule, authored the way the build authors one: create the artifact,
+// set the condition tree through the generic element surface, push. Shared by the #482 tests below.
+async function authorDupGuard(sdk) {
+  const art = sdk.createArtifact('businessRule', {
+    name: 'Dup Guard', entityLogicalName: 'account', scope: 'Entity', status: 'Draft',
+  });
+  await sdk.updateElement('businessRule', art.id, '/rootCondition', {
+    id: 'root', logicalOperator: 'And',
+    clauses: [{ id: 'c1', field: 'name', operator: 'Equals', valueType: 'Value', value: 'x', valueWorkflowType: 'String' }],
+    trueBranch: [{ id: 'a1', type: 'SetVisibility', field: 'fax', visible: false }],
+  });
+  return sdk.pushArtifact('businessRule', art.id);
+}
 
 // --- 1. app icon ------------------------------------------------------------------------------
 
@@ -310,15 +324,7 @@ test('REAL BUNDLE: a qualifying 400 makes the SDK remove the committed row befor
       : { status: 200, headers: {}, body: { value: [] } }),
   });
 
-  const art = sdk.createArtifact('businessRule', {
-    name: 'Dup Guard', entityLogicalName: 'account', scope: 'Entity', status: 'Draft',
-  });
-  await sdk.updateElement('businessRule', art.id, '/rootCondition', {
-    id: 'root', logicalOperator: 'And',
-    clauses: [{ id: 'c1', field: 'name', operator: 'Equals', valueType: 'Value', value: 'x', valueWorkflowType: 'String' }],
-    trueBranch: [{ id: 'a1', type: 'SetVisibility', field: 'fax', visible: false }],
-  });
-  const res = await sdk.pushArtifact('businessRule', art.id);
+  const res = await authorDupGuard(sdk);
   assert.strictEqual(res.saved, true, 'the fallback still succeeds');
 
   // The committed orphan must be DELETED — not adopted. Its content is unverified (the fault
@@ -331,4 +337,54 @@ test('REAL BUNDLE: a qualifying 400 makes the SDK remove the committed row befor
   const classicIdx = calls.findIndex((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url)));
   assert.ok(classicIdx > -1, 'the classic fallback write must still happen');
   assert.ok(delIdx < classicIdx, 'the orphan is removed BEFORE the replacement is written');
+
+  // The PROBE must be narrow. A broad probe would delete somebody else's rule, which is far worse
+  // than the duplicate it exists to prevent. Measured shape:
+  //   workflows?$select=workflowid,createdon&$filter=category eq 2 and type eq 1 and
+  //     name eq 'Dup Guard' and primaryentity eq 'account' and createdon ge <watermark>
+  //     &$orderby=createdon desc&$top=2
+  const probe = calls.find((c) => c.verb === 'GET' && /workflows\?/i.test(String(c.url)));
+  assert.ok(probe, 'the orphan probe must run');
+  const probeUrl = decodeURIComponent(String(probe.url));
+  for (const needle of ['category eq 2', 'type eq 1', "name eq 'Dup Guard'", "primaryentity eq 'account'", 'createdon ge', '$top=2']) {
+    assert.ok(probeUrl.includes(needle), `the probe must constrain on ${needle}; got ${probeUrl}`);
+  }
+});
+
+test('REAL BUNDLE: orphan cleanup FAILS CLOSED — no replacement is written when it cannot be trusted', async () => {
+  // "Best-effort fall-through" is how the duplicate comes back. Both of these are measured, not
+  // assumed: a failed DELETE and an ambiguous probe each rethrow, and crucially neither goes on to
+  // write the classic row — which would leave the orphan AND a new copy.
+  const COMMITTED = '77777777-7777-7777-7777-777777777777';
+  const faultingPost = (url) => (/CreateProcessWithWfomJson/i.test(url)
+    ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'Error generating UiData for workflow' } } }
+    : { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} });
+
+  // 1. The delete itself fails (the wedged-row case seen live: 405 0x80040227).
+  {
+    const { sdk, calls } = sdkWith({
+      post: faultingPost,
+      get: (url) => (/workflows\?/i.test(String(url))
+        ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }] } }
+        : { status: 200, headers: {}, body: { value: [] } }),
+      del: () => ({ status: 405, headers: {}, body: { error: { code: '0x80040227', message: 'cannot be deleted' } } }),
+    });
+    await assert.rejects(() => authorDupGuard(sdk), 'a failed cleanup must not resolve as success');
+    assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
+      'no classic write may follow a failed cleanup — that is how BOTH rows end up present');
+  }
+
+  // 2. The probe is ambiguous (more than one candidate) — deleting either could destroy a real rule.
+  {
+    const { sdk, calls } = sdkWith({
+      post: faultingPost,
+      get: (url) => (/workflows\?/i.test(String(url))
+        ? { status: 200, headers: {}, body: { value: [{ workflowid: COMMITTED }, { workflowid: '88888888-8888-8888-8888-888888888888' }] } }
+        : { status: 200, headers: {}, body: { value: [] } }),
+    });
+    await assert.rejects(() => authorDupGuard(sdk), 'an ambiguous probe must not resolve as success');
+    assert.strictEqual(calls.some((c) => c.verb === 'DELETE'), false, 'an ambiguous probe must delete NOTHING');
+    assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
+      'and must not write a replacement either');
+  }
 });

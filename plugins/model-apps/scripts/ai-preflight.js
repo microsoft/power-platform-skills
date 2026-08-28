@@ -118,13 +118,23 @@ async function main() {
     // admin to go enable it — is simply wrong. Best-effort: any lookup failure leaves the feature
     // reported from the gate alone, which is the previous behaviour.
     const read = { queryRecords: (entity, opts) => sdk.queryRecords(entity, opts) };
-    const appModuleId = app ? (await resolveAppModuleId(read, app)).appModuleId || null : null;
+    // If `--app` was supplied but the app cannot be resolved, the app-scope layer is UNKNOWN, not
+    // absent. Falling through to the environment value would be actively harmful: an app that
+    // overrides a feature to "0" while the environment holds "2" would be reported as in effect,
+    // and the admin action for a genuinely disabled feature would be suppressed. So a failed
+    // resolution makes every effective value indeterminate instead.
+    const appLookup = app ? await resolveAppModuleId(read, app) : { appModuleId: null };
+    const appModuleId = appLookup.appModuleId || null;
     const effective = {};
     for (const key of Object.keys(FEATURE_META)) {
       const setting = AI_APP_SETTING[key];
       if (!setting) continue; // `summaries` is not a per-app on/off setting
+      if (appLookup.error) { effective[key] = { error: `app scope unknown: ${appLookup.error}` }; continue; }
       const res = await effectiveSettingValue(read, appModuleId, setting);
       effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value) };
+    }
+    if (appLookup.error) {
+      process.stderr.write(`\nWarning: could not resolve app '${app}' (${appLookup.error}); reporting readiness gates only.\n`);
     }
     report = runPreflight(readiness, effective);
 

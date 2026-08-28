@@ -6,7 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter } = require('./sdk-build.js');
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
@@ -155,11 +155,12 @@ async function verifySpec(spec, read, opts = {}) {
     const name = `${entityLogical}.${rule.name}`;
     let rows;
     try {
-      // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to the entity as well as the
-      // name so a same-named rule on another table is never counted here.
+      // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to DEFINITION rows only
+      // (see businessRuleFilter): activating a rule makes the platform create a second, `type 2`
+      // activated copy, so counting both would report every healthy ACTIVE rule as duplicated.
       rows = await read.queryRecords('workflow', {
         select: ['workflowid', 'statecode'],
-        filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
+        filter: businessRuleFilter(rule.name, entityLogical),
         top: 50,
       });
     } catch (e) {

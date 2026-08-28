@@ -42,12 +42,12 @@ apart deliberately.
   is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
   rule naming a column that does not exist is rejected up front rather than deploying and never firing.
 - Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
-- **Deployed exactly once.** The platform commits the workflow row and only then faults generating
-  its UiData, so an earlier SDK fallback wrote a second copy — both Active, both firing. The
-  vendored SDK now removes the committed row before writing its own; live-verified on the org that
-  originally reproduced it (one authored rule → one row). The build keeps a de-duplication sweep for
-  duplicates a previous build already left behind, since those often refuse both deactivate and
-  delete.
+- **Activating a rule creates a second `workflows` row, and that is normal.** Dataverse keeps the
+  definition (`type 1`, no parent) and an activated copy (`type 2`, parented to it). Live-measured: a
+  Draft create yields one row, a plain `PATCH` to `statecode 1` yields two — and a PATCH cannot create
+  anything, so the platform makes it. Every business-rule query in build, verify and teardown filters
+  `type eq 1`; omitting it made the build attempt to delete the copy (405), warn about a duplicate
+  that did not exist, and would have made `--verify` fail every active rule.
 - Live-verified end to end through the App Spec: rules authored from `businessRules[]` deployed,
   activated, and the platform's own generated `clientdata` named the authored columns.
 

@@ -773,6 +773,24 @@ function appDef(spec, result, opts = {}) {
 //
 // `valueType` is always `'Value'`: the compiler rejects `Field` and `Lookup`, so exposing that axis
 // would offer authors a choice they cannot use. The App Spec's `dataType` is the SDK's
+// A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
+//
+// LIVE-MEASURED. Activating a business rule makes Dataverse create a SECOND `workflows` row:
+//   type=1, parentworkflowid=(none)  -> the definition the author wrote
+//   type=2, parentworkflowid=<def>   -> the platform's activated copy of it
+// That pair is normal for every activated process, and the vendored SDK's own orphan probe filters
+// `category eq 2 and type eq 1` for exactly this reason.
+//
+// Omitting `type` is not cosmetic: it made the build try to deactivate and delete the activated copy
+// (which the platform refuses, 405), emit a false "the SDK created a duplicate" warning, and would
+// have made `--verify` fail EVERY active business rule as "duplicated".
+//
+// category 2 = Business Rule; type 1 = definition, 2 = activated copy.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
+function businessRuleFilter(name, entityLogical) {
+  return `category eq 2 and type eq 1 and name eq '${odataLit(name)}' and primaryentity eq '${odataLit(String(entityLogical).toLowerCase())}'`;
+}
+
 // `valueWorkflowType` — how the platform interprets the literal — renamed because `valueType` already
 // means something else here.
 function businessRuleDef(rule) {
@@ -1440,14 +1458,38 @@ async function runSdkBuild(spec, opts = {}) {
     for (const rule of spec.businessRules || []) {
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
-        select: ['workflowid', 'statecode'],
-        // category 2 = Business Rule. Scoped to the entity as well as the name so a same-named rule
-        // on a DIFFERENT table is not mistaken for this one.
-        filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
-        top: 1,
+        select: ['workflowid', 'statecode', 'createdon'],
+        // Definition rows only — see businessRuleFilter. Scoped to the entity as well as the name so
+        // a same-named rule on a DIFFERENT table is not mistaken for this one.
+        filter: businessRuleFilter(rule.name, entityLogical),
+        // `top: 50` and ORDERED, not `top: 1`. Two reasons, both measured:
+        //  * A previous build (before the SDK's double-write fix) could have left duplicates. With
+        //    `top: 1` this branch reused one and skipped the cleanup entirely, so both rules kept
+        //    firing forever — the sweep below only ever ran after a fresh create.
+        //  * `top: 1` with no ordering returns an ARBITRARY row, so the one adopted as "the" rule
+        //    could be the faulted orphan rather than the good one. Oldest-first makes the survivor
+        //    deterministic and prefers the row that was committed first.
+        orderBy: 'createdon asc',
+        top: 50,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
       if (existingId) {
+        // Legacy duplicates: everything beyond the first row is residue from a build that predates
+        // the SDK fix. Remove it here as well as on the create path, so a rebuild repairs an org
+        // instead of preserving the problem. Best-effort — these rows frequently refuse both
+        // deactivate (400 0x80060015) and delete (405 0x80040227), and a failure to clean one must
+        // not fail the build; `--verify` reports the surviving duplicates.
+        const legacyDupes = (existing || []).slice(1);
+        for (const extra of legacyDupes) {
+          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
+          let removed = false;
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          if (typeof opts.warn === 'function') {
+            opts.warn(removed
+              ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
+              : `business rule "${rule.name}": a duplicate left by an earlier build (${extra.workflowid}) could not be removed — it is wedged by the platform fault that created it. Delete it in Maker so only one copy of the rule runs. See issue #482.`);
+          }
+        }
         // Reuse — but a rule that EXISTS is not necessarily a rule that RUNS. A deployed rule left in
         // Draft (statecode 0) is inert, and "exists, so skip" would report success over an app whose
         // logic silently does nothing. Live-hit: a rule deactivated out-of-band stayed Draft across a
@@ -1517,7 +1559,7 @@ async function runSdkBuild(spec, opts = {}) {
         // not just author.
         const dupes = await provision.queryRecords('workflow', {
           select: ['workflowid', 'statecode'],
-          filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
+          filter: businessRuleFilter(rule.name, entityLogical),
           top: 50,
         });
         const extras = (dupes || []).filter((w) => String(w.workflowid).toLowerCase() !== String(pushed.id).toLowerCase());
@@ -2241,4 +2283,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, businessRuleDef, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, businessRuleDef, businessRuleFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };

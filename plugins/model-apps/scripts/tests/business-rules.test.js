@@ -276,3 +276,139 @@ test('verify fails CLOSED when the workflow read itself errors', async () => {
   assert.strictEqual(c.present, false);
   assert.match(c.detail, /could not be read/);
 });
+
+// --- rebuild repairs legacy duplicates (peer-review finding) ------------------------------------
+//
+// Before the SDK fix, a build could leave two rows for one rule. The reuse branch queried `top: 1`
+// and returned immediately, so the de-duplication sweep — which lived only on the CREATE path —
+// never ran on a rebuild. Both rules kept firing forever, and because `top: 1` is unordered, the row
+// adopted as "the" rule could be the faulted orphan rather than the good one.
+const { runSdkBuild: runBuild } = require('../lib/sdk-build.js');
+
+function ruleOnlySpec() {
+  const s = specWith([{
+    name: 'Lock when closed', entity: 'new_ticket',
+    conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }],
+    actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }],
+  }]);
+  return s;
+}
+
+// Minimal provision double: only the workflow surface the business-rules phase touches.
+function provisionWithRules(rows) {
+  const calls = [];
+  return {
+    calls,
+    provision: {
+      queryRecords: async (entity, opts) => {
+        if (entity === 'workflow') { calls.push(['queryRecords', entity, opts]); return rows; }
+        return entity === 'solution' ? [] : [{ publisherid: 'pub-1' }];
+      },
+      updateRecord: async (e, id, patch) => { calls.push(['updateRecord', e, id, patch]); },
+      deleteRecord: async (e, id) => { calls.push(['deleteRecord', e, id]); },
+      createArtifact: () => ({ id: 'br-new' }),
+      updateElement: async () => undefined,
+      pushArtifact: async () => ({ id: 'br-new', saved: true, publish: { kind: 'notRequested' } }),
+      addSolutionComponent: async () => undefined,
+    },
+  };
+}
+
+test('a rebuild REMOVES duplicates an earlier build left behind', async () => {
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithRules([
+    { workflowid: 'keep-oldest', statecode: 1, createdon: '2026-01-01T00:00:00Z' },
+    { workflowid: 'dupe-1', statecode: 1, createdon: '2026-01-01T00:00:05Z' },
+  ]);
+  const warnings = [];
+  await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true,
+    phases: ['business-rules'], warn: (m) => warnings.push(m),
+  });
+
+  // The extra row is deactivated then deleted; the FIRST (oldest) row is kept.
+  const deletes = calls.filter((c) => c[0] === 'deleteRecord').map((c) => c[2]);
+  assert.deepStrictEqual(deletes, ['dupe-1'], `expected only the duplicate to be deleted, got ${JSON.stringify(deletes)}`);
+  assert.ok(warnings.some((w) => /duplicate left by an earlier build/.test(w)), `expected a warning; got ${JSON.stringify(warnings)}`);
+});
+
+test('the reuse query is ORDERED and asks for more than one row', async () => {
+  // `top: 1` unordered is what made the survivor arbitrary and hid the duplicates entirely.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithRules([{ workflowid: 'only', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]);
+  await runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'] });
+  const q = calls.find((c) => c[0] === 'queryRecords');
+  assert.ok(q, 'the reuse query must run');
+  assert.ok(q[2].top > 1, `the reuse query must be able to SEE duplicates; top was ${q[2].top}`);
+  assert.match(String(q[2].orderBy), /createdon asc/, 'oldest-first makes the surviving row deterministic');
+});
+
+test('a single existing rule is left completely alone', async () => {
+  // The repair must not become a delete-happy sweep: one row is the healthy case.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision, calls } = provisionWithRules([{ workflowid: 'only', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]);
+  const warnings = [];
+  await runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: (m) => warnings.push(m) });
+  assert.strictEqual(calls.filter((c) => c[0] === 'deleteRecord').length, 0);
+  assert.strictEqual(warnings.length, 0);
+});
+
+// --- the activated copy is NOT a duplicate (live-measured) --------------------------------------
+//
+// Activating a business rule makes Dataverse create a SECOND workflows row:
+//   type=1, parentworkflowid=(none)  -> the definition
+//   type=2, parentworkflowid=<def>   -> the platform's activated copy
+// Measured directly: a Draft create yields 1 row; a plain PATCH to statecode 1 yields 2. A PATCH
+// cannot create anything, so the platform made it, and the pair is normal for any activated process.
+//
+// Every business-rule query must therefore filter `type eq 1`. Without it the build tried to delete
+// the activated copy (405), warned about a "duplicate" that did not exist, and verify would have
+// failed EVERY active rule. The vendored SDK's own orphan probe filters the same way.
+const { businessRuleFilter } = require('../lib/sdk-build.js');
+
+test('businessRuleFilter selects the definition only', () => {
+  const f = businessRuleFilter("O'Brien rule", 'CFO_WorkOrder');
+  assert.match(f, /category eq 2/);
+  assert.match(f, /type eq 1/, 'without `type eq 1` the activated copy is counted as a duplicate');
+  assert.match(f, /primaryentity eq 'cfo_workorder'/, 'entity is lower-cased for the logical name');
+  assert.match(f, /name eq 'O''Brien rule'/, "a quote in the name must be OData-escaped, not left to break the filter");
+});
+
+test('every business-rule query in build, verify and teardown filters on type', () => {
+  // A guard on the SOURCE, because the three call sites are in different modules and it is the
+  // omission — not a wrong value — that caused the defect. Any new query that forgets the shared
+  // helper fails here.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  for (const file of ['sdk-build.js', 'verify-spec.js', 'sdk-teardown.js']) {
+    const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', file), 'utf8');
+    const raw = src.match(/category eq 2(?! and type eq 1)/g) || [];
+    // The only permitted mention of `category eq 2` without `type eq 1` is inside businessRuleFilter
+    // itself, which immediately follows it with the type clause — hence the negative lookahead above
+    // matching nothing.
+    assert.deepStrictEqual(raw, [], `${file} has a business-rule query that does not constrain type: ${raw.join(' | ')}`);
+  }
+});
+
+test('a rule with an activated copy present is NOT reported as duplicated', async () => {
+  // The reader is filtered server-side in production; this pins that verify treats a single
+  // definition row as healthy rather than counting anything extra it might receive.
+  const spec = specWith([{
+    name: 'Lock when closed', entity: 'new_ticket',
+    conditions: [{ field: 'new_owner', operator: 'Equals', value: 'x', dataType: 'String' }],
+    actions: [{ type: 'SetVisibility', field: 'new_notes', visible: false }],
+  }]);
+  const read = {
+    findTable: async () => ({ logicalName: 'new_ticket' }),
+    findColumns: async () => [{ logicalName: 'new_status' }, { logicalName: 'new_notes' }, { logicalName: 'new_owner' }],
+    queryRecords: async (entity, opts) => {
+      if (entity !== 'workflow') return [];
+      assert.match(String(opts.filter), /type eq 1/, 'verify must ask the server for definitions only');
+      return [{ workflowid: 'def-1', statecode: 1 }];
+    },
+    sitemapXml: async () => '',
+  };
+  const r = await verifySpec(spec, read);
+  const c = r.checks.find((x) => x.kind === 'business-rule');
+  assert.strictEqual(c.present, true, `an active rule with its activated copy must PASS; detail: ${c.detail}`);
+});
