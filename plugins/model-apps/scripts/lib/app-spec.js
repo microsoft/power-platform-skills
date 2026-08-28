@@ -365,6 +365,30 @@ const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 //   emptyState — render an explanatory empty state ("open a row from X to see its detail").
 const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 
+// Business rules. These MIRROR the vendored SDK's supported slice exactly — deliberately, because
+// the SDK throws a ValidationError for anything outside it and a spec-level error naming the field
+// is far more useful than that throw surfacing mid-build.
+//
+// The slice is not arbitrary: measured across the rules on a live org, these four actions cover
+// 44 of 45 real instances, and these four operators are the complete set that corpus uses.
+// See the SDK's `adapters/businessRuleXaml.ts` (OPERATORS / ACTIONS) — if that widens, widen here.
+const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual', 'ContainsData', 'DoesNotContainData'];
+// Operators that take NO value: they test presence, so a `value` would be meaningless.
+const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
+// action type -> the field carrying its payload. `null` = no payload (none currently).
+const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
+const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
+// Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
+// inverting the author's intent — the same trap `app.newLook` validation exists to close.
+const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'SetBusinessRequired']);
+// `valueWorkflowType` in SDK terms: how the platform should interpret the literal. Named `dataType`
+// in the App Spec because `valueType` in the SDK means something else (Value vs Field vs Lookup),
+// and only `Value` is supported — so exposing that name would invite a distinction authors cannot use.
+const BUSINESS_RULE_DATA_TYPES = ['String', 'Picklist', 'Boolean', 'Integer', 'Decimal', 'Money', 'DateTime', 'Memo'];
+// Only entity scope is supported. A form-scoped rule needs `processtriggerscope 1` plus a form id,
+// which cannot be resolved before the forms phase has run.
+const BUSINESS_RULE_SCOPES = ['Entity'];
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -690,6 +714,83 @@ function validateAppSpec(spec, opts = {}) {
       }
     } else {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
+    }
+  }
+  // Business rules. Every reference is checked against the spec's own columns, because a rule that
+  // names a column the app does not create is authored against nothing — and the platform accepts it
+  // silently (the rule just never fires), so nothing downstream would catch it.
+  for (const r of spec.businessRules || []) {
+    const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
+    if (!r.name) errors.push(`${label}: name is required`);
+    if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
+    if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
+      errors.push(`${label}: scope must be ${BUSINESS_RULE_SCOPES.join('|')} (a form-scoped rule needs a form id that does not exist until the forms phase runs)`);
+    }
+    if (r.status !== undefined && !['Active', 'Draft'].includes(r.status)) {
+      errors.push(`${label}: status must be Active|Draft`);
+    }
+
+    // Columns the rule may reference: the entity's own declared columns plus its primary name.
+    const ent = (spec.entities || []).find((e) => e && e.schemaName === r.entity);
+    const cols = new Set();
+    if (ent) {
+      if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
+      for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
+      // A lookup created by a relationship is a real column on the referencing table.
+      for (const rel of spec.relationships || []) {
+        if (rel && rel.referencing === r.entity && rel.lookup && rel.lookup.schemaName) cols.add(String(rel.lookup.schemaName).toLowerCase());
+      }
+    }
+    const checkField = (field, what) => {
+      if (!field) { errors.push(`${label}: ${what} needs a field`); return; }
+      if (cols.size && !cols.has(String(field).toLowerCase())) {
+        errors.push(`${label}: ${what} references '${field}', which is not a column on ${r.entity}`);
+      }
+    };
+
+    if (!Array.isArray(r.conditions) || !r.conditions.length) {
+      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the compiler emits as an empty rule that silently never fires)`);
+    }
+    for (const c of r.conditions || []) {
+      if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }
+      checkField(c.field, 'condition');
+      if (!BUSINESS_RULE_OPERATORS.includes(c.operator)) {
+        errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+        continue;
+      }
+      const valueless = BUSINESS_RULE_VALUELESS_OPERATORS.has(c.operator);
+      if (valueless && c.value !== undefined) {
+        errors.push(`${label}: '${c.operator}' tests presence, so it must not carry a value`);
+      }
+      if (!valueless && (c.value === undefined || c.value === null || c.value === '')) {
+        errors.push(`${label}: '${c.operator}' needs a value`);
+      }
+      if (c.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(c.dataType)) {
+        errors.push(`${label}: condition dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+      }
+    }
+
+    if (!Array.isArray(r.actions) || !r.actions.length) {
+      errors.push(`${label}: actions[] is required (a rule that does nothing is not worth deploying)`);
+    }
+    for (const a of r.actions || []) {
+      if (!a || typeof a !== 'object') { errors.push(`${label}: each action must be an object`); continue; }
+      if (!BUSINESS_RULE_ACTION_TYPES.includes(a.type)) {
+        errors.push(`${label}: action type must be one of ${BUSINESS_RULE_ACTION_TYPES.join('|')} (got '${a.type}')`);
+        continue;
+      }
+      checkField(a.field, `action '${a.type}'`);
+      const payload = BUSINESS_RULE_ACTIONS[a.type];
+      if (a[payload] === undefined) {
+        errors.push(`${label}: action '${a.type}' needs '${payload}'`);
+      } else if (BUSINESS_RULE_BOOLEAN_ACTIONS.has(a.type) && typeof a[payload] !== 'boolean') {
+        // A string "false" is truthy, so coercing here would invert the author's intent silently.
+        errors.push(`${label}: action '${a.type}'.${payload} must be a boolean`);
+      }
+      if (a.type === 'SetFieldValue' && a.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(a.dataType)) {
+        errors.push(`${label}: action dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+      }
     }
   }
   // Dashboards: chart/list tiles reference a declared chart/view; iframe needs a url; webresource a
@@ -1396,6 +1497,12 @@ module.exports = {
   canonicalPersonaName,
   VALIDATION_PROFILES,
   DIRECT_ENTRY_BEHAVIORS,
+  BUSINESS_RULE_OPERATORS,
+  BUSINESS_RULE_VALUELESS_OPERATORS,
+  BUSINESS_RULE_ACTIONS,
+  BUSINESS_RULE_ACTION_TYPES,
+  BUSINESS_RULE_DATA_TYPES,
+  BUSINESS_RULE_SCOPES,
   migrateAppSpec,
   columnTypeMap,
   TYPE_MAP,

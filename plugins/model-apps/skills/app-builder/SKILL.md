@@ -53,6 +53,11 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 - **Data model** — tables (give each custom table a **meaningful Fluent-style SVG table icon by default**; propose what the glyph will **depict** in words — never a Fluent token name — and record it as `iconDescription` before drawing the SVG — see [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Table icons*), columns (all types), relationships (1:N / N:N + junctions), sample data
 - **Record UI** — forms (sub-grids, quick-create / quick-view), views (with enriched default columns), charts
 - **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
+- **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
+  set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
+  the requirement is field-level and declarative — it is visible in the maker, survives solution
+  export, and needs no web resource. Use form JS when the logic needs a real API call, cross-record
+  work, or anything beyond the four supported actions.
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
@@ -486,6 +491,8 @@ solution (idempotent) → data model — **discover** existing tables/columns/re
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
+→ **business rules** (`businessRules[]`; compiled to classic workflow XAML and activated) →
+**command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
 the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI features** (opt-in) →

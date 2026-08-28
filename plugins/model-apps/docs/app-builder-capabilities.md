@@ -33,6 +33,18 @@ apart deliberately.
 - ⚠ Calculated / Rollup formula columns — `source` + `formula` plumbed through, **not live-verified**.
 - **Table icons** (`entities[].vectorIcon` = SVG web resource → `IconVectorName`; `entities[].icon` = raster web resource → `IconMediumName`) — sets a custom table's own icon (what the modern designer + nav render). Applied after the web-resources phase via the SDK's `setEntityIcon`; hard-validated against declared web resources so an unresolvable value can't break the designer (glimmer). Live-verified: `IconVectorName` set to a published SVG web resource.
 
+### Business rules — 🧪 tested
+- `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
+  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on a
+  condition over the record (`Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`).
+- Compiled to classic workflow XAML by the vendored SDK and activated on create. The supported slice
+  is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
+  rule naming a column that does not exist is rejected up front rather than deploying and never firing.
+- Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
+- The **SDK path** is ✅ live-verified — a rule created, activated, and the platform's own generated
+  `clientdata` named the authored columns. The **App Spec surface** over it is unit- and
+  real-bundle-tested; a live end-to-end build through `businessRules[]` is the outstanding step.
+
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).

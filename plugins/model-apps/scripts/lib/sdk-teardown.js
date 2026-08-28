@@ -307,6 +307,32 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteSecurityRole(item.id),
     tolerateNotFound: true, // a role already deleted (e.g. by a prior teardown) is "gone"
   },
+  businessRules: {
+    // A business rule is a `workflows` row (category 2), not something the SDK models as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord like the row it is.
+    //
+    // Scoped by (category, name, primaryentity) so a same-named rule on another table is never
+    // touched. An ACTIVE rule cannot be deleted, so it is deactivated first; that is a separate
+    // round trip and the platform runs it asynchronously (a WorkflowSetState job), which is why a
+    // solution uninstall immediately afterwards can transiently 429 — see the teardown notes.
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        filter: `category eq 2 and name eq '${odataLit(target.name)}' and primaryentity eq '${odataLit(target.entity)}'`,
+        top: 50,
+      });
+      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+    },
+    async del(sdk, item) {
+      // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
+      // returns names neither the rule nor the reason clearly.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      return sdk.deleteRecord('workflow', item.id);
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -493,6 +519,13 @@ function planTeardown(spec) {
   const specCreatedTables = new Set((spec.entities || []).filter((e) => e.existing !== true).map((e) => String(e.schemaName).toLowerCase()));
   for (const entity of Object.keys(commandsByEntity(spec))) {
     steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity, ownsTable: specCreatedTables.has(String(entity).toLowerCase()) } });
+  }
+  // Business rules BEFORE forms and tables: a rule is a workflow row bound to the entity, and an
+  // ACTIVE one blocks changes to what it references. It is also its own artifact rather than
+  // something a table delete cascades away.
+  for (const r of spec.businessRules || []) {
+    const entity = String(r.entity).toLowerCase();
+    steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
   }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV

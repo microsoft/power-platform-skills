@@ -33,6 +33,7 @@ const {
   FORM_TYPE_CODE,
   FORM_GUID_RE,
   canonicalPersonaName,
+  BUSINESS_RULE_VALUELESS_OPERATORS,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -94,7 +95,10 @@ const TILE_CLASS_ID = {
   iframe: 'FD2A7985-3187-444E-908D-6624B21F69C0',
   webresource: '9FDF5F91-88B1-47F4-AD53-C11EFC01A01D',
 };
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20 };
+// Solution component types. `workflow` is 29 — a business rule is a workflow row (category 2), so it
+// is added to the solution under that type, not under a bespoke one.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20, workflow: 29 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
@@ -310,6 +314,7 @@ function planFor(spec, opts) {
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
+  if (has('business-rules')) for (const r of spec.businessRules || []) items.push({ phase: 'business-rules', label: `business rule "${r.name}" on ${r.entity}` });
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
@@ -756,6 +761,56 @@ function appDef(spec, result, opts = {}) {
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
 
+// Map one App Spec business rule to the SDK's BusinessRuleArtifact shape.
+//
+// The SDK's condition model is NOT the obvious one, and getting it wrong is SILENT: `updateElement`
+// merges unknown keys onto the node, the compiler ignores them, and the push succeeds with XAML that
+// references none of the author's columns — a rule that deploys, activates, and never fires. So the
+// mapping is explicit and the App Spec shape is validated before we get here.
+//
+//   conditions[] -> rootCondition.clauses[]   (ANDed; `logic: 'AND'`)
+//   actions[]    -> rootCondition.trueBranch[]
+//
+// `valueType` is always `'Value'`: the compiler rejects `Field` and `Lookup`, so exposing that axis
+// would offer authors a choice they cannot use. The App Spec's `dataType` is the SDK's
+// `valueWorkflowType` — how the platform interprets the literal — renamed because `valueType` already
+// means something else here.
+function businessRuleDef(rule) {
+  const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
+  const clauseId = ids('c');
+  const actionId = ids('a');
+  const valueless = (op) => BUSINESS_RULE_VALUELESS_OPERATORS.has(op);
+  return {
+    name: rule.name,
+    entityLogicalName: String(rule.entity).toLowerCase(),
+    scope: rule.scope || 'Entity',
+    // Draft unless the author asks for Active. A rule is inert until activated, so defaulting to
+    // Active is what makes `businessRules[]` do something on the first build.
+    status: rule.status || 'Active',
+    rootCondition: {
+      id: 'r1',
+      displayName: rule.name,
+      logic: 'AND',
+      clauses: (rule.conditions || []).map((c) => ({
+        id: clauseId(),
+        field: String(c.field).toLowerCase(),
+        operator: c.operator,
+        valueType: 'Value',
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+      })),
+      trueBranch: (rule.actions || []).map((a) => {
+        const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
+        if (a.type === 'SetVisibility') node.visible = a.visible;
+        else if (a.type === 'LockUnlock') node.lock = a.lock;
+        else if (a.type === 'SetBusinessRequired') node.required = a.required;
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        return node;
+      }),
+      falseBranch: [],
+    },
+  };
+}
+
 // Map one App Spec persona to the vendored SDK's PersonaRoleSpec (cds-maker-sdk createPersonaRole).
 // Pure: spec shape -> SDK shape. Two normalizations:
 //   1. `entity` is lower-cased to a Dataverse logical name (the SDK resolves prv* ids from metadata
@@ -899,7 +954,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1377,6 +1432,39 @@ async function runSdkBuild(spec, opts = {}) {
   //     Pushed via the workspace-owning `provision` client (the appaction lands in the Default
   //     solution — it's not a standard solution-component type — but is entity-scoped so it shows
   //     on the entity's command bar in the app regardless).
+  // 6b-pre. Business rules. Additive discover-reconcile like charts/commands: a rule is identified by
+  // (entity, name), and re-pushing on every rebuild would stack duplicate rules on the table. The SDK
+  // routes to the supported bound member first and falls back to a classic `workflows` row carrying
+  // compiled WWF XAML when that member faults — see sdk-uptake-contract.test.js for the exact routing.
+  if (has('business-rules')) {
+    for (const rule of spec.businessRules || []) {
+      const entityLogical = String(rule.entity).toLowerCase();
+      const existing = await provision.queryRecords('workflow', {
+        select: ['workflowid'],
+        // category 2 = Business Rule. Scoped to the entity as well as the name so a same-named rule
+        // on a DIFFERENT table is not mistaken for this one.
+        filter: `category eq 2 and name eq '${odataLit(rule.name)}' and primaryentity eq '${odataLit(entityLogical)}'`,
+        top: 1,
+      });
+      const existingId = existing && existing[0] && existing[0].workflowid;
+      if (existingId) {
+        runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);
+        result.created.businessRules[`${entityLogical}|${rule.name}`] = existingId;
+        continue;
+      }
+      await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
+        const def = businessRuleDef(rule);
+        const art = provision.createArtifact('businessRule', def);
+        // The condition tree is a nested object, so it goes on through the generic element surface
+        // rather than the create payload — mirroring how the SDK's own workflow test authors one.
+        await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
+        result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
+        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+      });
+    }
+  }
+
   if (has('commands')) {
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
       // Additive discover-reconcile (design §14): one command artifact per entity (identity = entity).
@@ -2078,4 +2166,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, businessRuleDef, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };

@@ -372,6 +372,39 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
   lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
 
+## businessRules[] (optional — declarative form logic, no code)
+
+```jsonc
+{ "entity": "new_ticket", "name": "Hide notes on closed tickets",
+  "scope": "Entity",          // only Entity today
+  "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
+  "conditions": [             // ALL must hold (ANDed)
+    { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
+  ],
+  "actions": [
+    { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
+    { "type": "LockUnlock",          "field": "new_owner",  "lock": true },
+    { "type": "SetBusinessRequired", "field": "new_reason", "required": true },
+    { "type": "SetFieldValue",       "field": "new_owner",  "value": "unassigned" }
+  ] }
+```
+
+- **Operators**: `Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`. The last two test
+  presence, so they must **not** carry a `value`; the first two must.
+- **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
+  (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
+  string `"false"` is truthy and would invert the intent, so it is rejected.
+- **`dataType`** (optional, default `String`) is how the platform should read the literal:
+  `String` · `Picklist` · `Boolean` · `Integer` · `Decimal` · `Money` · `DateTime` · `Memo`. For a
+  Choice column use `Picklist` and give the option's **integer value**, not its label.
+- Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
+  lookup a relationship creates). A rule naming a column that does not exist is accepted by the
+  platform and then simply **never fires**, so this is validated up front.
+- Why this slice and not more: the vendored SDK compiles rules to classic workflow XAML, and these
+  four actions plus four operators are what that compiler supports. Anything else throws mid-build.
+- **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
+  edits are **not** re-applied. Recreate the rule to change it.
+
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
 { "name": "Operations", "tiles": [
