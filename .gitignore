@@ -31,6 +31,9 @@ wheels/
 venv/
 ENV/
 
+# Node.js
+node_modules/
+
 # Logs
 *.log
 

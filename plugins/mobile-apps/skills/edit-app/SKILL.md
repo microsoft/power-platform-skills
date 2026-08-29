@@ -523,10 +523,17 @@ When screen files changed, run the mobile plugin's report-mode validators explic
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-ast.js" \
+  --project-root "<working_dir>" --report <changed-screen-files-or-app-dir>
 ```
 
-Treat validator findings like create-flow gate failures: capture once, batch by root cause, repair, and rerun the same validator once. These scripts are invoked only inside the mobile workflow; do not register them as plugin-wide hooks.
+The lexical validator owns literal color/token policies. The AST
+validator owns behavioral TypeScript/React rules and resolves app-local shared
+components, hooks, aliases, navigation, payloads, and route-layout safe-area
+ownership through one TypeScript Program. Treat `status: fail` findings like
+create-flow gate failures: capture once, batch by root cause, repair, and rerun
+the same validator once. Keep `status: unknown` visible and non-blocking; never
+guess from regex when semantic analysis cannot prove the result.
 
 #### Step 7.1 — Targeted style-quality sweep
 
@@ -534,12 +541,14 @@ When screen files changed, run a focused version of `/create-mobile-app` Step 11
 
 Rules:
 
-1. Run `validate-screen-quality.js --report` and `validate-color-contrast.js --report` when available.
+1. Run `validate-screen-quality.js --report` and `validate-mobile-ast.js --project-root "<working_dir>" --report` for the changed screen batch.
 2. Merge issues by file and rule.
 3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
-5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator.
-6. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
+5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator; preserve `unknown` findings as non-blocking concerns.
+6. Run the canonical dispatcher once with one `--file` argument per changed file:
+   `node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" --project-root "<working_dir>" ...`
+7. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
 
 If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `memory-bank.md` with file/rule summaries.
 

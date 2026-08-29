@@ -1063,7 +1063,7 @@ export default function RootLayout() {
 Key points:
 - **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
-- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
+- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — recognized by the semantic AST validator as route-layout safe-area ownership.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
@@ -2219,26 +2219,39 @@ Run one controlled stylistic debt sweep after all screen-builder waves and TypeS
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-ast.js" \
+  --project-root "<working_dir>" --report <screen-files-or-app-dir>
 ```
 
-`validate-screen-quality` includes accessibility-label/role, safe-area, touch-target, raw-hex, token, empty-state, shadow, and status-visual checks. If future stylistic hooks exist (for example `validate-accessibility-labels.js`), include them here only if they support `--report` and emit the same JSON issue shape.
+`validate-screen-quality` owns lexical policies only: raw color literals and
+unresolvable token names.
+`validate-mobile-ast` owns TypeScript/React meaning: imports and aliases, JSX
+structure, shared components/hooks, accessibility, contrast, safe-area
+ownership, empty-state/list structure, navigation idempotency, Dataverse
+payloads, and cursor-list behavior. It builds one TypeScript Program for the
+whole batch and follows app-local abstractions. A semantic result of `unknown`
+is visible in the report but non-blocking; never convert it to a guessed pass or
+failure.
 
 For each available stylistic validator:
 
-1. Run in `--report` mode against all generated screens. Report mode is non-blocking; it emits JSON issues with `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`.
+1. Run both validators in `--report` mode against all generated screens. Reports emit JSON issues with `status`, `file`, `line`, `rule`, `match`, `fix`, and `autoFixable`; only AST issues with `status: fail` are proven semantic violations.
 2. Merge issues by file and rule. Keep exact line numbers for user/debug output, but do not rely on stale line numbers after the first edit in a file.
 3. Split findings into deterministic auto-fixes and judgement calls:
   - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
 4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
-5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
+5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator. Preserve unresolved `unknown` entries as concerns; do not loop on them.
 
 These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
 
-After all validators report no auto-fixable issues, run:
+After all validators report no auto-fixable issues, run the canonical
+post-write dispatcher once for the complete screen batch, then TypeScript:
 
 ```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
+  --project-root "<working_dir>" \
+  <one --file "<screen-file>" argument per generated screen>
 npx tsc --noEmit
 ```
 

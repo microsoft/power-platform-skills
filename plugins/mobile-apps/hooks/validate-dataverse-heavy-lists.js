@@ -1,16 +1,25 @@
 #!/usr/bin/env node
 
 /**
- * Explicit validator: enforce cursor-list contracts for heavy Dataverse screens.
+ * Legacy regex validator: cursor-list contracts for heavy Dataverse screens.
  *
- * The source of truth is native-app-plan.md. If a written app screen maps to a
- * per-screen spec whose Pagination field is `cursor`, it must not use the
- * bounded list helpers (`useListData`, `useSearchFilter`) and must wire an
- * actual cursor/infinite-list path.
+ * SUPERSEDED. The authoritative implementation is the semantic rule
+ * `scripts/lib/ast/rules/dataverse-heavy-lists.js`, run by
+ * `scripts/validate-mobile-ast.js`, which resolves app-local cursor hook
+ * wrappers and hoisted `getAll` option objects instead of requiring the literal
+ * tokens to appear in the screen file. This file is retained only so anything
+ * that still invokes it directly keeps working; it is no longer registered in
+ * `scripts/lib/mobile-validator-manifest.js`.
+ *
+ * The source of truth for which screens are in scope is native-app-plan.md.
  */
 
 const fs = require('fs');
 const path = require('path');
+
+// Plan lookup is shared with the semantic cursor-list rule so the two cannot
+// drift on which screens the `Pagination: cursor` contract applies to.
+const { findProjectRoot, findScreenSpec, isCursorSpec } = require('../scripts/lib/screen-plan-spec');
 
 function isWriteTool(toolName) {
   return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
@@ -44,54 +53,6 @@ function getContent(toolName, toolInput) {
     }
   }
   return '';
-}
-
-function findProjectRoot(filePath) {
-  let dir = path.dirname(path.resolve(filePath));
-  for (let depth = 0; depth < 14; depth += 1) {
-    if (fs.existsSync(path.join(dir, 'native-app-plan.md'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-function normalizePath(value) {
-  return String(value || '').replace(/\\/g, '/');
-}
-
-function findScreenSpec(planText, filePath, projectRoot) {
-  const relPath = normalizePath(path.relative(projectRoot, filePath));
-  const absPath = normalizePath(path.resolve(filePath));
-  const candidates = [absPath, relPath, `./${relPath}`];
-
-  let matchIndex = -1;
-  for (const candidate of candidates) {
-    matchIndex = normalizePath(planText).indexOf(candidate);
-    if (matchIndex >= 0) break;
-  }
-  if (matchIndex < 0) return null;
-
-  const startMarkers = ['\n### ', '\n#### '];
-  let start = -1;
-  for (const marker of startMarkers) {
-    const idx = planText.lastIndexOf(marker, matchIndex);
-    if (idx > start) start = idx;
-  }
-  if (start < 0) start = 0;
-
-  const nextMajor = planText.indexOf('\n### ', matchIndex + 1);
-  const nextMinor = planText.indexOf('\n#### ', matchIndex + 1);
-  const ends = [nextMajor, nextMinor].filter((idx) => idx > matchIndex);
-  const end = ends.length > 0 ? Math.min(...ends) : planText.length;
-
-  return planText.slice(start, end);
-}
-
-function isCursorSpec(spec) {
-  if (!spec) return false;
-  return /\bPagination\b[\s\S]{0,140}\bcursor\b/i.test(spec);
 }
 
 function findCursorViolations(content) {

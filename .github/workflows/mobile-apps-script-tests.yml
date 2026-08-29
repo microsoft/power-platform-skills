@@ -36,7 +36,12 @@ jobs:
               with:
                   node-version: ${{ matrix.node }}
 
+            - name: install-mobile-apps-script-dependencies
+              shell: bash
+              working-directory: plugins/mobile-apps
+              run: npm ci --ignore-scripts
+
             - name: run-mobile-apps-script-tests
               shell: bash
               working-directory: plugins/mobile-apps
-              run: node --test scripts/tests/*.test.js
+              run: npm test

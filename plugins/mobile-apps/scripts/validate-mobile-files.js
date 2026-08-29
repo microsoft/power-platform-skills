@@ -9,7 +9,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { VALIDATORS, isTextFile } = require('./lib/mobile-validator-manifest');
+const { BATCH_VALIDATORS, VALIDATORS, isTextFile } = require('./lib/mobile-validator-manifest');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
@@ -93,6 +93,32 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
   });
 }
 
+/**
+ * Runs a batch validator once for the whole set of matching files.
+ *
+ * Batch validators take CLI arguments instead of a stdin hook payload because
+ * they reason across files: the semantic validator builds a single TypeScript
+ * Program for every target so imports, shared components, and route contracts
+ * resolve against the same compilation.
+ */
+function runBatchValidator(validator, filePaths, projectRoot) {
+  const validatorPath = path.join(PLUGIN_ROOT, validator.directory || 'hooks', validator.script);
+  const args = [validatorPath, '--project-root', projectRoot];
+  for (const filePath of filePaths) {
+    args.push('--file', filePath);
+  }
+
+  return spawnSync(process.execPath, args, {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT,
+      PLUGIN_ROOT,
+    },
+  });
+}
+
 function main(argv) {
   const { approvedJsDependencies, errors, help, projectRoot: projectRootArg, targets } = parseArgs(argv);
   if (help) {
@@ -173,6 +199,22 @@ function main(argv) {
       } else if (result.status !== 0) {
         blocked = true;
       }
+    }
+  }
+
+  // Semantic validation runs once for the whole batch, after the per-file
+  // lexical pass. One invocation means one TypeScript Program for every target.
+  for (const batchValidator of BATCH_VALIDATORS) {
+    const batchFiles = [...files].filter((filePath) => batchValidator.appliesTo(filePath));
+    if (batchFiles.length === 0) continue;
+    const result = runBatchValidator(batchValidator, batchFiles, projectRoot);
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.error) {
+      process.stderr.write(`Validator ${batchValidator.script} failed to start: ${result.error.message}\n`);
+      blocked = true;
+    } else if (result.status !== 0) {
+      blocked = true;
     }
   }
 
