@@ -51,6 +51,7 @@ const DERIVED_COLUMN_TYPES = new Set([
   'computed',
 ]);
 const NULL_SOURCE_TYPE_IS_ORDINARY_TYPES = new Set([
+  'bigint',
   'file',
   'image',
   'lookup',

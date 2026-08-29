@@ -1504,7 +1504,7 @@ test('ordinary-column reuse requires complete compatible behavior evidence', () 
   }
 });
 
-test('ordinary Memo and Lookup columns accept nullable Dataverse SourceType', () => {
+test('ordinary BigInt, Memo, and Lookup columns accept nullable Dataverse SourceType', () => {
   const lookupReconciliation = fullyAppliedSnapshot();
   lookupReconciliation.tables
     .find((tableValue) => tableValue.logicalName === 'cr1_item')
@@ -1524,6 +1524,7 @@ test('ordinary Memo and Lookup columns accept nullable Dataverse SourceType', ()
     tables: [
       contractTable('cr1_note', 'extend', 0, [
         contractColumn('cr1_name', 'string', 'reuse', { primaryName: true }),
+        contractColumn('cr1_counter', 'bigint', 'reuse'),
         contractColumn('cr1_description', 'memo', 'reuse', {
           maxLength: 10000,
           format: 'TextArea',
@@ -1534,6 +1535,7 @@ test('ordinary Memo and Lookup columns accept nullable Dataverse SourceType', ()
   const memoManifest = buildManifest(buildInputs(memoContract, snapshot({
     tables: [table('cr1_note', [
       column('cr1_name', 'String', { primaryName: true }),
+      column('cr1_counter', 'BigInt', { sourceType: null }),
       column('cr1_description', 'Memo', { sourceType: null }),
     ])],
   })));

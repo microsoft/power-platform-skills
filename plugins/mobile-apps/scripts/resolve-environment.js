@@ -297,23 +297,28 @@ function parseArgs(argv) {
   return options;
 }
 
-async function resolveEnvironment(target, options = {}) {
+async function resolveEnvironment(target, options = {}, dependencies = {}) {
   if (!target) {
     throw new Error('Pass the environment ID from power.config.json, or pass the Dataverse environment URL directly.');
   }
 
-  const cached = readCachedResolution(target);
+  const readCache = dependencies.readCachedResolution || readCachedResolution;
+  const getTenantId = dependencies.getAzTenantId || getAzTenantId;
+  const resolveId = dependencies.resolveEnvironmentId || resolveEnvironmentId;
+  const getChallengeTenant = dependencies.getTenantFromDataverseChallenge
+    || getTenantFromDataverseChallenge;
+  const cached = options.noCache ? null : readCache(target);
   if (hasCachedEnvironmentDetails(cached)) {
     const result = toEnvironmentResult(cached, 'cache');
     writeCacheIfProject(result, options);
     return result;
   }
 
-  const loginTenantId = getAzTenantId();
+  const loginTenantId = getTenantId();
   let resolved;
   if (isUrl(target)) {
     const normalizedUrl = normalizeUrl(target);
-    const challengeTenant = await getTenantFromDataverseChallenge(normalizedUrl);
+    const challengeTenant = await getChallengeTenant(normalizedUrl);
     resolved = {
       environmentUrl: normalizedUrl,
       environmentId: cached && cached.environmentId ? cached.environmentId : null,
@@ -322,7 +327,7 @@ async function resolveEnvironment(target, options = {}) {
     };
   } else if (GUID_RE.test(target)) {
     try {
-      resolved = await resolveEnvironmentId(target, loginTenantId);
+      resolved = await resolveId(target, loginTenantId);
     } catch (error) {
       if (cached && cached.environmentUrl) {
         resolved = {
@@ -345,7 +350,7 @@ async function resolveEnvironment(target, options = {}) {
   }
 
   if (!resolved.tenantId) {
-    resolved.tenantId = await getTenantFromDataverseChallenge(resolved.environmentUrl);
+    resolved.tenantId = await getChallengeTenant(resolved.environmentUrl);
   }
 
   const result = toEnvironmentResult(resolved, resolved.source || (isUrl(target) ? 'environment-url' : 'environment-id'));

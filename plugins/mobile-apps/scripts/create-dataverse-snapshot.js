@@ -1356,6 +1356,7 @@ async function loadDetailedEntity(request, entity, {
   const effectiveDetailLevel = missingDetailClasses.length === 0 ? 'full' : detailLevel;
   const table = {
     logicalName,
+    metadataId: entity.MetadataId || null,
     schemaName: entity.SchemaName,
     displayName: labelText(entity.DisplayName),
     displayCollectionName: labelText(entity.DisplayCollectionName),

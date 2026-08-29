@@ -70,7 +70,7 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function assertFreshTemplate(projectRoot) {
+function assertFreshTemplate(projectRoot, { allowPlanArtifact = false } = {}) {
   const missing = REQUIRED_FILES.filter((relativePath) => (
     !fs.existsSync(path.join(projectRoot, relativePath))
   ));
@@ -84,7 +84,7 @@ function assertFreshTemplate(projectRoot) {
 
   const createdMarkers = [
     'memory-bank.md',
-    'native-app-plan.md',
+    ...(allowPlanArtifact ? [] : ['native-app-plan.md']),
     '.datamodel-manifest.json',
   ].filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)));
 
@@ -456,7 +456,9 @@ function prepareMobileTemplate(options) {
     throw new Error('displayName and slug are required');
   }
 
-  assertFreshTemplate(projectRoot);
+  assertFreshTemplate(projectRoot, {
+    allowPlanArtifact: Boolean(options.allowPlanArtifact),
+  });
   const originalState = capturePreparationState(projectRoot);
   let removedPowerConfig;
   let removedLegacyFiles;
@@ -495,6 +497,7 @@ function parseArgs(argv) {
     else if (argument === '--display-name') options.displayName = argv[++index];
     else if (argument === '--slug') options.slug = argv[++index];
     else if (argument === '--samples-root') options.samplesRoot = argv[++index];
+    else if (argument === '--allow-plan-artifact') options.allowPlanArtifact = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (!options.workingDir) throw new Error('--working-dir is required');

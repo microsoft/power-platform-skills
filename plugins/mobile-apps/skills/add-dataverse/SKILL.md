@@ -21,6 +21,47 @@ Two paths:
 
 ---
 
+### Approved-contract deterministic pipeline
+
+When `$ARGUMENTS` supplies `--schema-contract` and `--approval-receipt`, use one
+local pipeline invocation. This branch owns project/environment verification,
+fresh exact reconciliation, manifest build and validation, journaled metadata
+execution and publish, targeted verification, sequential service generation,
+schema generation, and typecheck. Do not schedule those commands individually
+and do not spawn an agent between them:
+
+```bash
+DATAVERSE_PIPELINE_OUTPUT="<working_dir>/.tmp/dataverse-execution-pipeline.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" execute \
+  --working-dir "<working_dir>" \
+  --contract "<schema-contract-path>" \
+  --approval-receipt "<approval-receipt-path>" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --solution "<solution-uniquename-or-Default>" \
+  --output "$DATAVERSE_PIPELINE_OUTPUT" \
+  --json
+
+DATAVERSE_PIPELINE_STATUS=$(node -e 'const j=require(process.argv[1]); console.log(j.status)' "$DATAVERSE_PIPELINE_OUTPUT")
+case "$DATAVERSE_PIPELINE_STATUS" in
+  DONE|DONE_WITH_PENDING_ACTIVATIONS) PIPELINE_DONE=1 ;;
+  UNCERTAIN_RECONCILIATION_REQUIRED|COLLISION_ADAPTATION_REQUIRED) exit 4 ;;
+  *) exit 2 ;;
+esac
+```
+
+Branch only on the structured `status`. `DONE` and
+`DONE_WITH_PENDING_ACTIVATIONS` skip Steps 1 through 8 and continue to Step 8.5.
+`UNCERTAIN_RECONCILIATION_REQUIRED` and `COLLISION_ADAPTATION_REQUIRED` stop at
+their existing recovery/approval boundary. The pipeline already performs one
+bounded fresh reconciliation, manifest rebuild, validation, and journal resume
+for uncertainty; this status means uncertainty persisted after that automatic
+attempt. `BLOCKED` stops and surfaces the pipeline's bounded error. A partially
+supplied approved handoff fails closed; never mix it with the fallback workflow
+below.
+
+**Hard control-flow gate:** when `PIPELINE_DONE=1`, jump directly to Step 8.5.
+Do not enter Step 1 and do not execute any fallback command in Steps 1 through 8.
+
 ### Step 1 — Verify project & auth
 
 Confirm Power Apps mobile app:

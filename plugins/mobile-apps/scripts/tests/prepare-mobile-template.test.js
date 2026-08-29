@@ -98,6 +98,27 @@ test('preparation is idempotent and preserves generated and existing helper file
   assertSnapshotsEqual(beforeSecondRun, afterSecondRun);
 });
 
+test('post-planning preparation allows only the approved plan marker', () => {
+  const projectRoot = copyTemplate();
+  fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved plan\n');
+  assert.doesNotThrow(() => prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName: 'Approved Plan App',
+    slug: 'approved-plan-app',
+    allowPlanArtifact: true,
+  }));
+
+  const blockedRoot = copyTemplate();
+  fs.writeFileSync(path.join(blockedRoot, 'native-app-plan.md'), '# Approved plan\n');
+  fs.writeFileSync(path.join(blockedRoot, 'memory-bank.md'), '# Existing app\n');
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: blockedRoot,
+    displayName: 'Blocked App',
+    slug: 'blocked-app',
+    allowPlanArtifact: true,
+  }), /memory-bank\.md/);
+});
+
 function writeLayoutFixture(source) {
   const projectRoot = tempDirectory('root-layout');
   fs.mkdirSync(path.join(projectRoot, 'app'), { recursive: true });

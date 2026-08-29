@@ -10,7 +10,10 @@ model: opus
 
 # Create Power Apps Code App (Native)
 
-Top-level orchestrator. Owns the user-visible flow; delegates planning to the `native-app-planner` agent and per-domain mutation to dedicated `/add-*` skills.
+Top-level orchestrator. Owns the user-visible flow; delegates semantic planning
+to the `native-app-planner`, runs deterministic planning/scaffold/Dataverse work
+through `run-mobile-app-pipeline.js`, and uses dedicated `/add-*` skills for
+remaining capability and connector domains.
 
 ## Workflow
 
@@ -456,7 +459,11 @@ must not run this command.
 
 ### Step 2d — Template-only mode
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
+No background scaffold job is used. The template is already present in
+`<working_dir>` and dependencies are expected to be installed before this skill
+starts (`npm install`). After approval, one foreground deterministic scaffold
+pipeline owns preparation, initialization, and the scaffold typecheck. Continue
+directly to Step 3.
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
 
@@ -465,11 +472,7 @@ First, create the working and planning-artifact directories:
 ```bash
 mkdir -p <working_dir> <working_dir>/.tmp
 PLANNING_TIMINGS_PATH="<working_dir>/.tmp/mobile-planning-timings.json"
-if [ -n "${PUBLISHER_PREFIX_DURATION_MS:-}" ]; then
-  node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-    --project-root "<working_dir>" --stage publisherPrefixDetection \
-    --action record --duration-ms "$PUBLISHER_PREFIX_DURATION_MS"
-fi
+PLANNING_PIPELINE_OUTPUT="<working_dir>/.tmp/planning-pipeline-output.json"
 ```
 
 For every timed command or agent dispatch below, call `planning-timings.js`
@@ -491,29 +494,17 @@ start, finish, or fail those stages around the command. The foreground owns only
 
 Planning stays read-only. Branch on `<dataverse_planning_mode>`:
 
-- `connector-only` — skip every command in this section. Set `SNAPSHOT_PATH`
-  and `ARCHITECT_EVIDENCE_PATH` to empty/not supplied, print
+- `connector-only` — run the context-only pipeline branch below. It resolves and
+  binds the environment but performs no Dataverse metadata request. Set
+  `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` to empty/not supplied, print
   `↷ Foreground planning snapshot skipped — the confirmed brief is connector-only.`, and
   continue to planner dispatch. Connector-only planning does not perform
   Dataverse metadata reads; the skill's existing global prerequisites remain
   unchanged.
-- `required` — resolve the already selected environment again in the
-  foreground and create one normalized foreground planning snapshot as below. Do not make the
-  nested planner or architect rediscover the tenant.
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage environmentResolution --action start
-PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache)
-ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
-ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
-test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
-  echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
-}
-echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage environmentResolution --action finish
-```
+- `required` — create the typed concept file described below, then run one
+  deterministic local pipeline invocation. Do not schedule environment,
+  snapshot, evidence, promotion, or timing commands separately, and do not make
+  the nested planner or architect rediscover the tenant.
 
 Build `<working_dir>/.tmp/dataverse-concepts.json` as a JSON array of typed
 concepts from the approved brief. Each item has `phrase`, `kind`,
@@ -549,41 +540,41 @@ Detailed advisory discovery is quality-bounded:
   bounded exact-name expansion.
 
 ```bash
-STAGED_SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-planning-staging.json"
-PLANNING_GENERATIONS_DIR="<working_dir>/.tmp/dataverse-planning-generations"
-PLANNING_POINTER_PATH="<working_dir>/.tmp/dataverse-planning-current.json"
 CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
-PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
-INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
+if [ "<dataverse_planning_mode>" = "required" ]; then
+  PLANNING_PIPELINE_JSON=$(node \
+    "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" planning \
+    --working-dir "<working_dir>" \
+    --environment-id "$ACTIVE_ENV_ID" \
+    --concepts-file "$CONCEPTS_PATH" \
+    --tables "<EXPLICIT_TABLES>" \
+    --proposed-tables "<PROPOSED_TABLES>" \
+    --progressive-detail \
+    --combined-base-read \
+    --read-concurrency 1 \
+    --output "$PLANNING_PIPELINE_OUTPUT" \
+    --json)
+else
+  PLANNING_PIPELINE_JSON=$(node \
+    "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" planning \
+    --working-dir "<working_dir>" \
+    --environment-id "$ACTIVE_ENV_ID" \
+    --connector-only \
+    --output "$PLANNING_PIPELINE_OUTPUT" \
+    --json)
+fi
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
-  --env-url "$ACTIVE_ENV_URL" \
-  --tenant-id "$ACTIVE_TENANT_ID" \
-  --output "$STAGED_SNAPSHOT_PATH" \
-  --concepts-file "$CONCEPTS_PATH" \
-  --tables "<EXPLICIT_TABLES>" \
-  --proposed-tables "<PROPOSED_TABLES>" \
-  --progressive-detail \
-  --combined-base-read \
-  --read-concurrency 1 \
-  --inventory-cache "$INVENTORY_CACHE_PATH" \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
+ACTIVE_ENV_URL=$(node -e 'const j=require(process.argv[1]); console.log(j.context.environmentUrl || "")' "$PLANNING_PIPELINE_OUTPUT")
+ACTIVE_TENANT_ID=$(node -e 'const j=require(process.argv[1]); console.log(j.context.tenantId || "")' "$PLANNING_PIPELINE_OUTPUT")
+DETECTED_PUBLISHER_PREFIX=$(node -e 'const j=require(process.argv[1]); console.log(j.context.publisherPrefix || "")' "$PLANNING_PIPELINE_OUTPUT")
+SNAPSHOT_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.snapshotPath || "")' "$PLANNING_PIPELINE_OUTPUT")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.evidencePath || "")' "$PLANNING_PIPELINE_OUTPUT")
+PLANNING_POINTER_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.pointerPath || "")' "$PLANNING_PIPELINE_OUTPUT")
+PLANNING_TELEMETRY_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.telemetryPath || "")' "$PLANNING_PIPELINE_OUTPUT")
+INVENTORY_CACHE_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.inventoryCachePath || "")' "$PLANNING_PIPELINE_OUTPUT")
+test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action start
-GENERATION_JSON=$(node \
-  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
-  --snapshot "$STAGED_SNAPSHOT_PATH" \
-  --generations-dir "$PLANNING_GENERATIONS_DIR" \
-  --pointer "$PLANNING_POINTER_PATH" \
-  --json)
-SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
-ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action finish
-
-node -e '
+if [ "<dataverse_planning_mode>" = "required" ]; then node -e '
   const s=require(process.argv[1]);
   const t=s.timings;
   const d=s.detailLoadSummary;
@@ -592,13 +583,11 @@ node -e '
   console.log(`✓ Detail loading: ${d.loadedCandidates} loaded (${d.coreCandidates || 0} core, ${d.fullCandidates || 0} full), ${d.failedCandidates} failed; ${s.tables.reduce((n,x)=>n+x.facts.columnCount,0)} columns, ${s.tables.reduce((n,x)=>n+x.facts.relationshipCount,0)} relationships, ${s.tables.reduce((n,x)=>n+x.facts.keyCount,0)} keys (${t.detailLoadingMs} ms)`);
   console.log(`✓ Exact names: requested [${s.exactNameResolution.requestedTables.join(", ")}], loaded [${s.exactNameResolution.loadedTables.join(", ")}], unavailable [${s.exactNameResolution.unavailableTables.join(", ")}]`);
   console.log(`✓ Proposed names: ${s.proposedNameChecks.collisions.length} collisions, ${s.proposedNameChecks.missing.length} missing; foreground planning snapshot total ${t.totalDurationMs} ms`);
-' "$SNAPSHOT_PATH"
-echo "✓ Compact architect evidence: $ARCHITECT_EVIDENCE_PATH"
-echo "✓ Planning generation pointer: $PLANNING_POINTER_PATH"
-echo "✓ Request telemetry: $PLANNING_TELEMETRY_PATH"
+' "$SNAPSHOT_PATH"; fi
+echo "✓ Deterministic planning pipeline: $PLANNING_PIPELINE_OUTPUT"
 ```
 
-The helper writes snapshot, sidecar, shard indexes, and a generation manifest
+The pipeline writes snapshot, sidecar, shard indexes, and a generation manifest
 under an immutable snapshot-hash directory. It atomically updates only
 `PLANNING_POINTER_PATH`, and only after the complete generation validates. A
 failed render or validation leaves the previous current generation active.
@@ -829,29 +818,19 @@ inventory, issue at most one exact-name metadata query for requested names
 absent from it, and do not run another broad inventory query:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
-  --env-url "$ACTIVE_ENV_URL" \
-  --tenant-id "$ACTIVE_TENANT_ID" \
+PLANNING_PIPELINE_JSON=$(node \
+  "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" planning \
+  --working-dir "<working_dir>" \
+  --environment-id "$ACTIVE_ENV_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
-  --output "$STAGED_SNAPSHOT_PATH" \
   --tables "<exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
-
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action start
-GENERATION_JSON=$(node \
-  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
-  --snapshot "$STAGED_SNAPSHOT_PATH" \
-  --generations-dir "$PLANNING_GENERATIONS_DIR" \
-  --pointer "$PLANNING_POINTER_PATH" \
+  --output "$PLANNING_PIPELINE_OUTPUT" \
   --json)
-SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
-ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action finish
+SNAPSHOT_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.snapshotPath)' "$PLANNING_PIPELINE_OUTPUT")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.evidencePath)' "$PLANNING_PIPELINE_OUTPUT")
+PLANNING_POINTER_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.pointerPath)' "$PLANNING_PIPELINE_OUTPUT")
 
 node -e '
   const s=require(process.argv[1]);
@@ -877,29 +856,19 @@ those names. This signal is valid only in `required` mode with a validated
 snapshot. Perform one collision-only foreground expansion:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
-  --env-url "$ACTIVE_ENV_URL" \
-  --tenant-id "$ACTIVE_TENANT_ID" \
+PLANNING_PIPELINE_JSON=$(node \
+  "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" planning \
+  --working-dir "<working_dir>" \
+  --environment-id "$ACTIVE_ENV_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
-  --output "$STAGED_SNAPSHOT_PATH" \
   --proposed-tables "<exact comma-separated logical names>" \
   --combined-base-read \
   --read-concurrency 1 \
-  --telemetry-output "$PLANNING_TELEMETRY_PATH" \
-  --planning-timings-output "$PLANNING_TIMINGS_PATH"
-
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action start
-GENERATION_JSON=$(node \
-  "${CLAUDE_SKILL_DIR}/../../scripts/refresh-dataverse-planning-evidence.js" \
-  --snapshot "$STAGED_SNAPSHOT_PATH" \
-  --generations-dir "$PLANNING_GENERATIONS_DIR" \
-  --pointer "$PLANNING_POINTER_PATH" \
+  --output "$PLANNING_PIPELINE_OUTPUT" \
   --json)
-SNAPSHOT_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.snapshotPath)' "$GENERATION_JSON")
-ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=JSON.parse(process.argv[1]); console.log(j.evidencePath)' "$GENERATION_JSON")
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
-  --project-root "<working_dir>" --stage artifactValidation --action finish
+SNAPSHOT_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.snapshotPath)' "$PLANNING_PIPELINE_OUTPUT")
+ARCHITECT_EVIDENCE_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.evidencePath)' "$PLANNING_PIPELINE_OUTPUT")
+PLANNING_POINTER_PATH=$(node -e 'const j=require(process.argv[1]); console.log(j.artifacts.pointerPath)' "$PLANNING_PIPELINE_OUTPUT")
 ```
 
 This expansion checks collisions only; it does not treat absent proposed names
@@ -960,10 +929,16 @@ is missing or malformed.
 ### Step 4 — Auth & environment selection
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
+ACTIVE_ENV_ID=$(node -e 'const j=require(process.argv[1]); console.log(j.context.environmentId || "")' "$PLANNING_PIPELINE_OUTPUT")
+ACTIVE_ENV_URL=$(node -e 'const j=require(process.argv[1]); console.log(j.context.environmentUrl || "")' "$PLANNING_PIPELINE_OUTPUT")
+ACTIVE_TENANT_ID=$(node -e 'const j=require(process.argv[1]); console.log(j.context.tenantId || "")' "$PLANNING_PIPELINE_OUTPUT")
+test -n "$ACTIVE_ENV_ID" -a -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID"
 ```
 
-If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
+These values come from the integrity-protected planning pipeline output used by
+the planner. Do not resolve the environment again here. If the user changes the
+target, return to the environment confirmation boundary and rerun the planning
+pipeline for that environment before scaffold.
 
 ### Step 5 — Prepare existing template
 
@@ -986,19 +961,27 @@ If any required template file is missing, STOP:
 If `node_modules/expo` is missing, STOP:
 > "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
-If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
+If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. The approved `native-app-plan.md` is expected at this post-planning boundary and is the only allowed plan artifact:
 > "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
 
-Run the deterministic preparation script once:
+Run the deterministic scaffold pipeline once. It owns template preparation,
+environment-safe `power-apps init`, dependency verification, and the scaffold
+TypeScript gate; do not invoke any of those commands separately:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
+SCAFFOLD_PIPELINE_OUTPUT="<working_dir>/.tmp/scaffold-pipeline-output.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" scaffold \
   --working-dir "<working_dir>" \
+  --planning-output "$PLANNING_PIPELINE_OUTPUT" \
   --display-name "<displayName>" \
-  --slug "<slug>"
+  --slug "<slug>" \
+  --prepare-template \
+  --output "$SCAFFOLD_PIPELINE_OUTPUT" \
+  --json
 ```
 
-The script is the only owner of Step 5 mutations. It updates identity, removes
+The pipeline is the only owner of Step 5/6/6.6 mutations and commands. Its
+preparation stage updates identity, removes
 only recognized legacy example hooks/query-client files, copies shared helpers
 only when missing, merges aliases without `baseUrl`, and structurally verifies
 the root provider/theme/safe-area contract. It preserves custom navigation,
@@ -1103,37 +1086,17 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ### Step 6 — Initialize
 
-**Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
-
-```bash
-cd <working_dir>
-CONFIG_ENV_ID=$(node -e "try { console.log(require('./power.config.json').environmentId || '') } catch { console.log('') }")
-if [ -n "$CONFIG_ENV_ID" ]; then
-  test "$(printf '%s' "$CONFIG_ENV_ID" | tr '[:upper:]' '[:lower:]')" = \
-       "$(printf '%s' "$ACTIVE_ENV_ID" | tr '[:upper:]' '[:lower:]')" || {
-    echo "BLOCKED: existing power.config.json targets $CONFIG_ENV_ID, but the approved environment is $ACTIVE_ENV_ID"
-    exit 2
-  }
-  echo "↷ Step 6 initialization skipped — power.config.json already targets the approved environment."
-else
-  npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id "$ACTIVE_ENV_ID" --non-interactive
-fi
-```
-
-Verify `power.config.json` exists and its `environmentId` matches Step 4. If
-initialization fails, report the exact error and STOP. Never run `init` over a
-populated configuration; the CLI requires a new or placeholder-free target.
+Initialization is already complete inside `SCAFFOLD_PIPELINE_OUTPUT`. Require
+`status: SCAFFOLD_READY`. The pipeline skips initialization only when the
+existing `power.config.json` already targets the approved environment; any
+mismatch or missing postcondition is `BLOCKED`. Do not run `power-apps init`
+again in the foreground.
 
 ### Step 6.5 — Verify dependencies
 
-This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
-
-```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
-```
-
-If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
+This postcondition is already enforced by the scaffold pipeline. If
+`node_modules/expo` was missing it returned `BLOCKED`; do not provision ADO
+tokens or run `npm install` from this skill.
 
 ### Step 6.5b — Root runtime contract verification
 
@@ -1145,16 +1108,13 @@ preparation script and stop if it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
 
-**Print before starting:**
-> "→ [Step 6.6/13] Running scaffold tsc smoke check (~10–30 seconds)."
+The scaffold pipeline has already run `npx tsc --noEmit`. Do **not** run
+`npm run generate-schemas` here just to produce an empty
+`connectorSchemas.ts`; the template is intentionally type-checkable before that
+file exists.
 
-With `node_modules/` populated, run the scaffold TypeScript gate. Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
-
-```bash
-npx tsc --noEmit
-```
-
-`tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 (Fixes 1–7) is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes against the current working dir contents and reapply any missed edit.
+The pipeline must report the `scaffoldTypecheck` stage as `DONE`. If it does
+not, do not proceed to data sources or screen builders.
 
 This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capture the full error list once, batch-fix scaffold/template causes, and rerun this gate. Do not continue to Step 6.7 or any app-specific mutation until this gate is clean. If the only failure is a missing generated schema import, preserve the template `@ts-ignore` boundary rather than generating an empty schema artifact.
 
@@ -1414,9 +1374,12 @@ and continue to Step 9. A non-empty Dataverse plan in this mode is a planning
 mismatch and must be corrected before continuing.
 
 **Print before starting:**
-> "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
+> "→ [Step 8/13] Running the approved deterministic Dataverse pipeline: fresh reconciliation, validated sequential writes, publish, verification, and service generation. Dataverse write time varies by environment."
 
-**Environment pre-check (before invoking /add-dataverse):** Verify that `.resolved-environment.json` / `power.config.json` match the environment captured in Step 1. If they differ, warn the user immediately — creating tables in the wrong environment is the #1 silent breakage in this step. `/add-dataverse` Step 3a does its own check, but catching it here saves a failed attempt.
+**Environment pre-check:** the pipeline freshly resolves the approved environment
+and compares its ID, URL, and tenant with the integrity-protected planning output
+and `power.config.json` before reconciliation or writes. Do not duplicate this
+check in the model orchestration.
 
 For the fast-v2 `required` path, keep the foreground planning snapshot as
 planning evidence only. It never authorizes a write. Without changing any
@@ -1434,7 +1397,44 @@ Step 8 also binds the structured artifact to the current fully approved plan
 content hash and the gate-owned approval receipt's exact contract hash and
 service dependencies. Step 8 cannot create or refresh this receipt. Use
 resolved context and these structured artifacts, never values inferred from
-free-form Markdown:
+free-form Markdown.
+
+Run the approved execution phase through one deterministic local invocation.
+This is the normal required-mode path and replaces the separate reconciliation,
+manifest, `/add-dataverse`, verification, `add-data-source`, schema generation,
+and typecheck commands documented later in this section:
+
+```bash
+DATAVERSE_PIPELINE_OUTPUT="<working_dir>/.tmp/dataverse-execution-pipeline.json"
+node "${CLAUDE_SKILL_DIR}/../../scripts/run-mobile-app-pipeline.js" execute \
+  --working-dir "<working_dir>" \
+  --planning-output "$PLANNING_PIPELINE_OUTPUT" \
+  --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
+  --approval-receipt "<working_dir>/.tmp/mobile-plan-status.json" \
+  --plan "<working_dir>/native-app-plan.md" \
+  --solution "Default" \
+  --output "$DATAVERSE_PIPELINE_OUTPUT" \
+  --json
+
+DATAVERSE_PIPELINE_STATUS=$(node -e 'const j=require(process.argv[1]); console.log(j.status)' "$DATAVERSE_PIPELINE_OUTPUT")
+case "$DATAVERSE_PIPELINE_STATUS" in
+  DONE|DONE_WITH_PENDING_ACTIVATIONS) ;;
+  UNCERTAIN_RECONCILIATION_REQUIRED|COLLISION_ADAPTATION_REQUIRED) exit 4 ;;
+  *) exit 2 ;;
+esac
+```
+
+On `DONE` or `DONE_WITH_PENDING_ACTIVATIONS`, skip the remainder of Step 8 and
+continue to Step 8.5. Do not invoke `/add-dataverse` or rerun any child command
+from the pipeline output. Recovery statuses stop at their existing semantic
+boundary. The pipeline already attempts one fresh deterministic uncertainty
+reconciliation and journal resume; a returned uncertainty status persisted after
+that attempt. Collision adaptation that changes the approved contract still
+returns to the approval workflow.
+
+The remaining Step 8 command blocks are a diagnostic reference for legacy or
+manual `/add-dataverse` entry points only. They must not execute after
+`DATAVERSE_PIPELINE_OUTPUT` exists with a successful status:
 
 ```bash
 SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
@@ -1520,8 +1520,9 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage manifestBuildValidation --action finish
 ```
 
-Invoke `/add-dataverse` with the working directory, approved plan, and exact
-artifact paths:
+Legacy/manual reference only: invoke `/add-dataverse` with the working directory,
+approved plan, and exact artifact paths only when the deterministic execution
+pipeline is unavailable before any Step 8 work began:
 
 ```
 Invoke skill: /add-dataverse
@@ -1551,7 +1552,9 @@ type-checks, and returns. Real matched A/B runs are still required to quantify
 the end-to-end time saved; do not present local manifest timing as a guaranteed
 1–3 minute Dataverse result.
 
-After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
+Legacy/manual reference only: after `/add-dataverse` returns, run the
+**Dataverse/generated-services gate**. The deterministic execution pipeline
+already owns this gate and must not run it twice:
 
 ```bash
 npm run generate-schemas

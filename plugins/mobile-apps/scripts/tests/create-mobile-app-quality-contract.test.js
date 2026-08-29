@@ -11,12 +11,13 @@ const skillPath = path.resolve(
 );
 const skill = fs.readFileSync(skillPath, 'utf8');
 
-test('template preparation is delegated to the deterministic script', () => {
+test('template preparation is delegated to the deterministic scaffold pipeline', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');
   const end = skill.indexOf('### Step 6 — Initialize');
   const step = skill.slice(start, end);
 
-  assert.match(step, /scripts\/prepare-mobile-template\.js/);
+  assert.match(step, /scripts\/run-mobile-app-pipeline\.js" scaffold/);
+  assert.match(step, /--prepare-template/);
   assert.match(step, /must not create, reset, delete, or\s+write anything under `src\/generated\/`/);
   assert.doesNotMatch(step, /rm\s+-rf[\s\S]*src\/generated/);
   assert.doesNotMatch(step, /src\/generated\/index\.ts[\s\S]*printf/);
@@ -36,10 +37,14 @@ test('environment discovery is non-persisting before the rough plan gate', () =>
   assert.doesNotMatch(beforePreview, /scripts\/lib\/app-identity\.js/);
 
   const planningStart = skill.indexOf('### Step 3.0 — Foreground Dataverse planning');
-  const planningEnd = skill.indexOf('Build `<DATAVERSE_CONCEPTS>`', planningStart);
+  const planningEnd = skill.indexOf('### Step 4', planningStart);
   assert.match(
     skill.slice(planningStart, planningEnd),
-    /resolve-environment\.js" "\$ACTIVE_ENV_ID" --no-cache/,
+    /run-mobile-app-pipeline\.js" planning[\s\S]*--environment-id "\$ACTIVE_ENV_ID"/,
+  );
+  assert.doesNotMatch(
+    skill.slice(planningStart, planningEnd),
+    /^\s*node .*resolve-environment\.js/m,
   );
 });
 
@@ -53,9 +58,10 @@ test('app identity and Power Apps initialization respect existing state', () => 
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /CONFIG_ENV_ID=/);
-  assert.match(initialize, /initialization skipped/);
-  assert.match(initialize, /existing power\.config\.json targets/);
+  assert.match(initialize, /SCAFFOLD_PIPELINE_OUTPUT/);
+  assert.match(initialize, /skips initialization/);
+  assert.match(initialize, /approved environment/);
+  assert.doesNotMatch(initialize, /^\s*npx power-apps init/m);
 });
 
 test('offline setup follows materialized Dataverse data and never infers connector-only from absence', () => {

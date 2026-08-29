@@ -12,6 +12,7 @@ const {
   formatRequestFailure,
   parseArgs,
   redactDiagnostic,
+  resolveEnvironment,
   writeCacheIfProject,
 } = require('../resolve-environment');
 
@@ -45,7 +46,7 @@ test('resolver argument parsing accepts no-cache in either position', () => {
   assert.deepStrictEqual(parseArgs(['--no-cache', id]), { noCache: true, target: id });
 });
 
-test('resolver CLI leaves cached project files byte-identical in no-cache mode', () => {
+test('resolver CLI can reuse and refresh cached project resolution', () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-cli-no-cache-'));
   const environment = {
     environmentId: '11111111-1111-1111-1111-111111111111',
@@ -58,17 +59,46 @@ test('resolver CLI leaves cached project files byte-identical in no-cache mode',
     environment,
   };
   fs.writeFileSync(authPath, `${JSON.stringify(authConfig, null, 2)}\n`);
-  const before = fs.readFileSync(authPath);
-
   const result = spawnSync(
     process.execPath,
-    [resolverPath, environment.environmentId, '--no-cache'],
+    [resolverPath, environment.environmentId],
     { cwd: projectRoot, encoding: 'utf8' },
   );
   assert.strictEqual(result.status, 0, result.stderr);
-  assert.deepStrictEqual(fs.readFileSync(authPath), before);
-  assert.ok(!fs.existsSync(path.join(projectRoot, '.resolved-environment.json')));
   assert.strictEqual(JSON.parse(result.stdout).source, 'cache');
+  const refreshed = JSON.parse(fs.readFileSync(authPath, 'utf8')).environment;
+  assert.strictEqual(refreshed.environmentId, environment.environmentId);
+  assert.strictEqual(refreshed.environmentUrl, environment.environmentUrl);
+  assert.ok(Number.isFinite(Date.parse(refreshed.cachedAt)));
+  assert.ok(fs.existsSync(path.join(projectRoot, '.resolved-environment.json')));
+});
+
+test('no-cache mode bypasses stale cache reads during environment resolution', async () => {
+  let cacheReads = 0;
+  const result = await resolveEnvironment(
+    '11111111-1111-1111-1111-111111111111',
+    { noCache: true },
+    {
+      readCachedResolution: () => {
+        cacheReads += 1;
+        return {
+          environmentId: '11111111-1111-1111-1111-111111111111',
+          environmentUrl: 'https://stale.crm.dynamics.com',
+          tenantId: '22222222-2222-2222-2222-222222222222',
+        };
+      },
+      getAzTenantId: () => '33333333-3333-3333-3333-333333333333',
+      resolveEnvironmentId: async () => ({
+        environmentId: '11111111-1111-1111-1111-111111111111',
+        environmentUrl: 'https://fresh.crm.dynamics.com',
+        tenantId: '33333333-3333-3333-3333-333333333333',
+        displayName: 'Fresh',
+      }),
+    },
+  );
+  assert.strictEqual(cacheReads, 0);
+  assert.strictEqual(result.environmentUrl, 'https://fresh.crm.dynamics.com');
+  assert.strictEqual(result.source, 'environment-id');
 });
 
 test('HTTP diagnostics report status and safe response shape without body contents', () => {

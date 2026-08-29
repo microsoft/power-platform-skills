@@ -1071,6 +1071,10 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
   );
+  const pipelineScript = fs.readFileSync(
+    path.join(pluginRoot, 'scripts', 'run-mobile-app-pipeline.js'),
+    'utf8',
+  );
   assert.match(architect, /## Snapshot-only fast path/);
   assert.match(architect, /Do \*\*not\*\* run Bash discovery/);
   assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>/);
@@ -1090,34 +1094,33 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planner, /screenPlanner/);
   assert.match(planner, /userApproval/);
   assert.match(planner, /planRevision/);
-  assert.match(createSkill, /refresh-dataverse-planning-evidence\.js/);
+  assert.match(createSkill, /run-mobile-app-pipeline\.js" planning/);
+  assert.match(pipelineScript, /create-dataverse-snapshot\.js/);
+  assert.match(pipelineScript, /promotePlanningGeneration/);
   assert.match(createSkill, /resolve-dataverse-architect-evidence\.js/);
   assert.match(createSkill, /performs no Dataverse request/);
   assert.match(createSkill, /PLANNING_POINTER_PATH/);
-  assert.match(createSkill, /STAGED_SNAPSHOT_PATH/);
   assert.match(createSkill, /Metadata timing exception/);
   assert.match(createSkill, /sole owner\s+of `metadataInventory`/s);
   assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
   assert.match(createSkill, /--progressive-detail/);
   assert.match(createSkill, /--combined-base-read/);
   assert.match(createSkill, /--read-concurrency 1/);
-  assert.match(createSkill, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
-  assert.match(createSkill, /--telemetry-output "\$PLANNING_TELEMETRY_PATH"/);
-  assert.match(createSkill, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
+  assert.match(pipelineScript, /--inventory-cache/);
+  assert.match(pipelineScript, /--telemetry-output/);
+  assert.match(pipelineScript, /--planning-timings-output/);
   assert.match(createSkill, /strongCollisionCandidates/);
   assert.match(createSkill, /coreCandidates/);
-  assert.match(createSkill, /--stage environmentResolution --action start/);
-  assert.match(createSkill, /--stage publisherPrefixDetection/);
-  assert.match(createSkill, /--stage executionReconciliation --action start/);
-  assert.match(createSkill, /--stage executionReconciliation --action finish/);
-  assert.equal((createSkill.match(/--stage manifestBuildValidation --action start/g) || []).length, 2);
-  assert.equal((createSkill.match(/--stage manifestBuildValidation --action finish/g) || []).length, 2);
+  assert.match(pipelineScript, /environmentResolution/);
+  assert.match(pipelineScript, /publisherPrefixDetection/);
+  assert.match(pipelineScript, /executionReconciliation/);
+  assert.match(pipelineScript, /manifestBuildValidation/);
   assert.match(createSkill, /metadata writes, publish, uncertain recovery, collision adaptation/);
   assert.match(createSkill, /--project-root "<working_dir>" --summary/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
   assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
-  assert.match(createSkill, /connector-only.*skip every command/s);
+  assert.match(createSkill, /connector-only.*context-only pipeline/s);
   assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);
   assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
