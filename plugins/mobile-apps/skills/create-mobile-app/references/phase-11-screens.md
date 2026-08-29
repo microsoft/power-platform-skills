@@ -1,54 +1,57 @@
 # Screen Generation and Launch
 
-### Step 11 — Build screens (parallel)
+### Step 11 — Build screens (parallel return, deterministic writes)
 
-**Build mode is NEVER a user-facing question.** Do not ask "Build mode? parallel/inline" or any variant. The orchestrator decides automatically per the preflight below.
+**Build mode is NEVER a user-facing question.** Do not ask about parallel or
+sequential execution. Resolve `parallel-return` or `foreground-return` through
+the shared host/runtime/plugin-version cache in
+[`return-only-agents.md`](return-only-agents.md).
 
-**Quality rule — screen count/time is NOT a fallback trigger.** If `Task` can spawn `mobile-app:screen-builder`, always use screen-builder waves, even for 10+ screens. Do NOT write "given the scale/time, I'll write screens inline" or any equivalent shortcut. Screen-builder agents carry the quality checklist, domain-pattern rules, resolved-import discipline, safe-area/contrast/a11y checks, and per-screen return protocol. Inline mode exists only for host/tooling failure, not for convenience.
+**Quality rule — screen count/time is NOT a mode trigger.** Use the same sealed
+one-screen work orders, semantic rules, and validators at every scale.
+`parallel-return` dispatches independent builder reasoning concurrently;
+`foreground-return` processes those work orders sequentially. Neither mode may
+reduce screen count, context, or quality.
 
 #### 11.0 — Host capability cache
 
-Do not spawn a no-op preflight agent. Reuse `## Host Capabilities` only when
-the entry matches the current host/runtime and plugin version and is no older
-than 30 minutes; legacy, expired, and mismatched entries are stale. Otherwise
-attempt the first real builder dispatch. Record the result with host/runtime,
-plugin version, and `checkedAt`. On a fresh agent-routing/tool-surface failure,
-read [`degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md)
-and continue inline with the identical builder contract.
+Do not spawn a no-op preflight agent and do not use `memory-bank.md` as the mode
+cache. Read `.tmp/agent-execution-mode.json` through
+`scripts/agent-return-runtime.js`. On a cache miss, the first real sealed screen
+work order is the capability check. Only custom-agent routing failure selects
+`foreground-return`; child response status never changes host mode.
 
 Resolve `BUILDER_CONCURRENCY` as documented below and print:
 
 > "→ [Step 11/13] Building <N> screens in <W> wave(s) of up to
 > <BUILDER_CONCURRENCY> concurrent. Wave 1/<W> starting: <screen names>."
 
-Read the Screen Map and per-screen specs. For each new screen, spawn
-`mobile-app:screen-builder` in one parallel Task batch. The fully qualified
-`mobile-app:` namespace is required.
+Read the Screen Map, compiled build pack, and per-screen specs in the
+foreground. Build and seal one work order per screen. Each work order contains
+inline only the assigned screen's:
 
-```
-Spawn N agents (parallel): mobile-app:screen-builder
+- exact `screen:<screen-id>` artifact ID and allowlisted absolute target path;
+- build-pack entry and compact spec;
+- Product Experience fields used by the screen;
+- design tokens and required signature components;
+- complete typed skeleton/import content;
+- exact generated-service signatures used by the screen;
+- route and parameter contract;
+- fixtures and required states;
+- selected archetype shard and code idioms;
+- validator findings for a repair attempt;
+- attempt number and foreground-generated fingerprint.
 
-Each prompt:
-  working_dir: <working_dir>
-  screen_name: <name>
-  route: <route>
-  target_file: <working_dir>/<File from Screen Map>
-  plan_path: <working_dir>/native-app-plan.md
-  generated_services_path: <working_dir>/.tmp/generated-services-snapshot.md
-  product_experience_path: <working_dir>/.tmp/product-experience-contract.json
-  screen_build_pack_path: <working_dir>/.tmp/compiled-screen-build-pack.json
-  skeleton_exists: true
+Never supply only a plan, pack, service, skeleton, or target-file path and tell
+the child to read it. In `parallel-return`, dispatch up to the configured wave
+cap as `mobile-app:screen-builder`; in `foreground-return`, process the same
+sealed work orders sequentially. Capture each exact JSON response without
+writing its TSX target.
 
-  Follow screen-builder.md. Read the Product Experience and this screen's
-  compiled build pack before the prose spec. Implement every required
-  first-viewport region, hierarchy item, primary action, trust signal, media
-  role, signature interaction, state, and forbidden default. Samples are
-  API/import references only, not layouts to copy. A typed skeleton already
-  exists at target_file; fill in the JSX without discarding resolved imports.
-  Return per AGENTS.md rule #10.
-```
-
-**`target_file` resolution (HARD):** read the **File** column from the Screen Map row for this screen and prefix it with `<working_dir>/`. The path may be nested (e.g. `<working_dir>/app/(app)/inspections/[id].tsx`). The folder is guaranteed to exist because Step 10b.2 created it and wrote the inner `_layout.tsx`. **Do NOT compute the path as `<working_dir>/app/(app)/<screen-name>.tsx`** — that strips the folder structure and produces phantom-tab files. If the Screen Map row has no File column (older planner output), fall back to the flat path and surface a `DONE_WITH_CONCERNS: Screen Map missing File column — used flat fallback paths, expect phantom tabs` after the wave.
+**Target resolution (HARD):** use the **File** column from the validated Screen
+Map and prefix it with `<working_dir>/`. The path may be nested. Never derive a
+flat path from the screen name. If the File value is absent, target-repair the
+screen-planner graph work order; do not dispatch a builder or invent a path.
 
 Resolve the wave cap once:
 
@@ -58,33 +61,56 @@ node -e '
   const value = Number(process.argv[1]);
   if (!Number.isInteger(value) || value < 1 || value > 10) process.exit(2);
 ' "$BUILDER_CONCURRENCY" || {
-  echo "BLOCKED: builder concurrency must be an integer from 1 to 10"; exit 2;
+  echo "Builder concurrency must be an integer from 1 to 10"; exit 2;
 }
 ```
 
 The default is 8 because the builder read set is budgeted below 40 KB. Batch
 larger screen sets into waves of `$BUILDER_CONCURRENCY`; never exceed 10.
 
-**Progress streaming — print one line per builder as the wave returns, then a wave summary.** The `Task` tool returns all parallel results together, but you can still narrate per-builder by iterating the returned results in order before doing the status-switch branching. Format:
+**Progress streaming — print one line per validated envelope, then a wave
+summary.** Iterate results in deterministic work-order order. Format:
 
 ```
-  ✓ [3/8] HomeScreen — DONE
-  ✓ [4/8] ListScreen — DONE_WITH_CONCERNS (1 connector stub)
-  ✓ [5/8] DetailScreen — DONE
+  ✓ [3/8] HomeScreen — ready
+  ✓ [4/8] ListScreen — ready_with_concerns (1 connector stub)
+  ✓ [5/8] DetailScreen — ready
 ─── Wave 1/2 complete (5/8 screens built; 0 blocked, 1 with concerns) ───
 ```
 
-Use `✓` for DONE / DONE_WITH_CONCERNS, `↻` for NEEDS_CONTEXT (will retry), `✗` for BLOCKED. Always print the running counter `[K/N]` so the user sees forward motion. The wave summary line goes on its own line after the per-builder block.
+Use `✓` for `ready`/`ready_with_concerns`, `↻` for `needs_context` or
+targeted repair, and `✗` for substantive `blocked`. Always print `[K/N]`.
 
 After the wave's TypeScript gate passes, and only then, print the next wave start line (if any):
 > "Wave 2/<W> starting: <names>."
 
-**After each wave returns, run the Step 3.0 status switch on every builder's first line.** Branch per builder:
+After each wave returns, parse every response with
+`scripts/agent-return-envelope.js`. Validate role, schema, sealed fingerprint,
+artifact identity, exact allowlisted path, complete content, and the full wave's
+unique target paths before any final write.
 
-- `DONE` → continue.
-- `DONE_WITH_CONCERNS: <list>` (typical case: a `// TODO(connector-not-yet-added)` stub was emitted because the referenced service is absent from `.tmp/generated-services-snapshot.md`) → batch concerns across all builders, surface the consolidated list to the user once at the end of the wave (not per-builder — that would be noise), and ask whether to fix any pending connectors via `/add-connector` before continuing to Step 12. Record in `memory-bank.md`.
-- `NEEDS_CONTEXT: <missing>` → re-spawn that one builder with the missing context appended to its prompt (cap 2 retries per screen, then `BLOCKED`). Print `↻ [K/N] <name> — retrying (missing: <missing>)` so the user understands the wave isn't fully clean yet.
-- `BLOCKED: <reason>` → STOP for that screen, print `✗ [K/N] <name> — BLOCKED (<reason>)` and ask the user whether to (1) fix and retry, (2) skip the screen and continue with a placeholder, or (3) abort the whole flow.
+- `ready` proceeds to staged validation.
+- `ready_with_concerns` proceeds and contributes to one foreground concern list.
+- `needs_context` adds only the exact missing fact to that screen's work order,
+  reseals it, and redispatches once.
+- `needs_clarification` persists foreground waiting state and asks only the
+  returned product question.
+- substantive `blocked` follows the existing user-facing stop policy.
+- invalid or truncated JSON retries the byte-identical work order once.
+
+Keep valid sibling responses unchanged while repairing one failed response. Do
+not regenerate successful sibling screens.
+
+Create a foreground validation plan that runs
+`validate-mobile-files.js --file {{artifact:screen:<id>}}` for every staged TSX
+artifact. Only after the complete response set has no duplicate target and all
+staged validators pass may the common materializer atomically rename files in
+deterministic target-path order. Builders never write concurrently.
+
+The exact materialization order is ascending target-path string order by
+Unicode code unit (`left < right`), with artifact ID as the tie-breaker. It does
+not use locale-aware comparison, response order, completion order, or Screen Map
+order. This produces the same write order across hosts and execution modes.
 
 After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
 
@@ -92,7 +118,12 @@ After handling every builder status in the wave, run the **Screen-wave gate** be
 npx tsc --noEmit
 ```
 
-If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
+If the wave gate fails, capture the full error list once, group failures by root
+cause, and repair only affected screen work orders. Include exact findings,
+increment the attempt, reseal, and redispatch affected builders concurrently in
+`parallel-return` or sequentially in `foreground-return`. Cap repair at two
+attempts per screen. Preserve successful siblings and do not launch the next
+wave until the current gate is clean.
 
 Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Generated service/model names: singular vs plural generated names, stale aliases after Dataverse rename.
@@ -118,7 +149,9 @@ This gate is required even when TypeScript passes. It detects duplicate normaliz
 
 Record the answer in `memory-bank.md` under `## Policies` as `tsc_error_policy: patch_continue` or `tsc_error_policy: stop_for_review`. **For every subsequent tsc/build error of the same class in the same run** (e.g., another screen failing typecheck after a builder retry, the cross-screen `tsc` after Step 11.4 fixes), apply the recorded policy automatically:
 
-- `patch_continue` → re-spawn the matching builder with the error appended (or auto-patch in inline mode), respecting the 2-retry cap. Do not re-prompt the user.
+- `patch_continue` → update and reseal only the matching screen work order with
+  the error appended, then process it through the active return mode, respecting
+  the 2-repair cap. Do not re-prompt the user.
 - `stop_for_review` → STOP and surface the new error.
 
 Reset the policy only if the user explicitly says "ask me again" or `/edit-app` is invoked. This avoids the same class of question being asked 3–5 times per run while still letting the user override at any point.
@@ -150,7 +183,10 @@ For each available stylistic validator:
 3. Split findings into deterministic auto-fixes and judgement calls:
   - **Auto-fixable:** weak foreground tokens, white-on-yellow/orange status pairs, missing icon-only `aria-label`, missing tappable `role`, tiny icon button `hitSlop`, obvious raw hex/token substitutions, top-only safe area with bottom UI, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
   - **Needs review:** complex safe-area restructuring, dominant red detail headers, redundant status cue design, ambiguous brand colors, empty-state restructuring that requires moving JSX across large blocks.
-4. Build one file-level edit batch per affected file. Apply affected files in parallel because screen files are independent. Do not run one edit per issue when multiple issues are in the same file; that reintroduces slow per-write loops and line-number drift.
+4. Build one file-level edit batch per affected file. Apply independent files in
+  deterministic target-path order. Do not run one edit per issue when multiple
+  issues are in the same file; that reintroduces slow per-write loops and
+  line-number drift.
 5. Re-run the same validator in `--report` mode for the touched files. Cap retries at 2 per file per validator.
 
 These validators are invoked explicitly by this mobile workflow. They are not registered as plugin-wide hooks because that would run them during unrelated Canvas Apps and other plugin operations.
@@ -163,9 +199,8 @@ npx tsc --noEmit
 
 If `tsc` fails, use the existing TypeScript batch-repair policy. If stylistic issues remain after 2 retries or are judgement calls, do not keep looping. Record them in `memory-bank.md` and surface them as:
 
-```text
-DONE_WITH_CONCERNS: Step 11.4 left <N> stylistic issue(s) for review: <file:line rule summary>
-```
+Record one foreground concern: `Step 11.4 left <N> stylistic issue(s) for
+review: <file:line rule summary>`.
 
 Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it may not leave the app in a broken TypeScript state.
 
@@ -308,7 +343,7 @@ Environment   : <env name> (<env id>)
 Data model    : <N tables — M reuse, K extend, L create>
 Native caps   : <list>
 Connectors    : <list>
-Screens       : <N total — M from template, K built in parallel>
+Screens       : <N total — M from template, K from return-only work orders>
 Planning      : metadata <N ms> | local <N ms> | architect <N ms> | screens <N ms>
 Approval wait : <N ms> (excluded from agent performance)
 Execution     : scaffold <N ms or not recorded> | mutation <N ms or not recorded>

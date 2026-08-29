@@ -198,23 +198,27 @@ return (
 
 Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
-### Step 10.7 — Snapshot generated services into the plan
+### Step 10.7 — Snapshot generated services for foreground work orders
 
 **Print before starting:**
 > "→ [Step 10.7/13] Probing src/generated/services/ and writing the execution service registry…"
 
-Before spawning N parallel screen-builders, the orchestrator probes
+Before compiling screen-builder work orders, the foreground probes
 `src/generated/services/` once and writes
-`.tmp/generated-services-snapshot.md`. Keep the approved plan immutable after
-Gate 4; execution-derived service inventory does not rewrite or restamp it.
-Without this registry, every builder may spell service names differently.
+`.tmp/generated-services-snapshot.md` for audit/resume. Keep the approved plan
+immutable after Gate 4; execution-derived service inventory does not rewrite or
+restamp it. The foreground reads exact signatures and embeds only the relevant
+subset inline in each sealed work order. Children never receive this path as a
+file-reading instruction.
 
 ```bash
 cd <working_dir>
 ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
 ```
 
-For each service file found, run a quick grep to list its exported methods so builders know what's actually available without re-reading the (large) generated file:
+For each service file found, inspect exported methods once so the foreground can
+provide exact available signatures without making every builder reread large
+generated files:
 
 ```bash
 for svc in $(ls -1 src/generated/services/*.ts 2>/dev/null); do
@@ -234,10 +238,15 @@ Write/replace `.tmp/generated-services-snapshot.md` on every run:
 | `Cr3e9_projectsService` | `src/generated/services/Cr3e9_projectsService.ts` | `getAll, get, create, update, delete` |
 | `Cr3e9_tasksService` | `src/generated/services/Cr3e9_tasksService.ts` | `getAll, get, create, update, delete` |
 
-**For screen-builders:** if a service your spec references is in this table, import it and use the exact name + methods listed. If it is NOT in this table, the data source has not been added yet — write the screen with the expected import path and a `// TODO(connector-not-yet-added): run /add-dataverse to generate <ServiceName>` comment so the user can see what's blocked. Do not invent or rename services.
+**For foreground work-order compilation:** if a service referenced by a screen
+is in this table, include its exact import and method signatures inline. If it
+is absent, include that verified absence so the returned screen uses the planned
+import path plus `// TODO(connector-not-yet-added): run /add-dataverse to
+generate <ServiceName>`. Do not invent or rename services.
 ```
 
-If the directory is empty (no data sources added yet), still write the section with an empty table and a one-line note: "No generated services yet — builders will emit TODO stubs for any service their spec references."
+If the directory is empty, still write the section with an empty table and a
+one-line note. Inline that verified empty state in each affected work order.
 
 ### Step 10.8 — Generate app-specific shared code + screen skeletons
 

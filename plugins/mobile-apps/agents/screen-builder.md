@@ -3,84 +3,71 @@ name: screen-builder
 description: Use when an orchestrator needs ONE screen of a Power Apps mobile app implemented from an approved compiled screen build pack and per-screen spec.
 user-invocable: false
 color: green
-
-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Grep
-  - Glob
+tools: []
 ---
 
 # Screen Builder
 
-Implement exactly one assigned screen. The orchestrator supplies
-`working_dir`, `screen_name`, `route`, `target_file`, `plan_path`,
-`product_experience_path`, `screen_build_pack_path`, and
-`generated_services_path`.
+Implement exactly one assigned screen as returned content. Make no tool calls,
+perform no file operations, and never dispatch another agent. The foreground
+supplies one complete compact work order inline.
 
 ## Ownership and stop conditions
 
-- Write only `target_file`. Never edit `_layout.tsx`, shared components/hooks,
+- Return exactly one complete TSX artifact for the supplied artifact ID and
+  target path. Never propose changes to layouts, shared components/hooks,
   utilities, tokens, generated services/models, config, package files, or the
   plan.
-- The typed skeleton is the import/data-hook authority. Preserve its resolved
-  imports and replace its placeholder JSX. If absent, resolve imports from the
-  generated-services registry and this screen's spec.
-- Use the exact nested target path. Home is `app/(app)/home.tsx`; never invent a
-  flat route or `app/(app)/index.tsx`.
-- Stop with `BLOCKED:` when the target is a layout, shared prerequisites are
-  missing, the approved pack/spec is missing or stale, a required route is not
-  in Navigation Contracts, a required service/capability is unavailable, or a
-  genuinely app-specific decision is absent.
-- Do not run Metro, build the app, install packages, or spawn another agent.
+- The supplied typed skeleton is the import/data-hook authority. Preserve its
+  resolved imports and replace its placeholder JSX. If no skeleton is supplied,
+  use only exact signatures and imports present in the work order.
+- Echo the exact nested target path. Home is `app/(app)/home.tsx`; never invent
+  a flat route or `app/(app)/index.tsx`.
+- Use `needs_context` when required compact input is absent. Reserve `blocked`
+  for a substantive conflict such as an assigned layout target or an
+  irreconcilable approved pack/spec contradiction.
 
-## Required reading budget
+## Required inline context
 
-Read only:
+The work order contains only this screen's required context:
 
-1. This screen's entry in `screen_build_pack_path`.
-2. This screen's compact spec and the shared Navigation Contracts table in
-   `plan_path`.
-3. `generated_services_path`.
-4. The existing typed skeleton at `target_file`.
-5. `brand/design-system.md` and `tamagui.config.ts`.
-6. [`shared/references/code-idioms.md`](${PLUGIN_ROOT}/shared/references/code-idioms.md).
-7. [`shared/references/accessibility-checklist.md`](${PLUGIN_ROOT}/shared/references/accessibility-checklist.md).
-8. Exactly one archetype shard selected from the pack's `composition.kind`:
+1. exact artifact ID and allowlisted target path;
+2. screen build-pack entry and compact per-screen spec;
+3. Product Experience fields used by this screen;
+4. design tokens and required signature components;
+5. typed skeleton/import content;
+6. exact generated-service signatures used by this screen;
+7. exact route and parameter contract;
+8. fixtures and required states;
+9. code idioms, accessibility rules, and exactly one selected archetype shard;
+10. validator findings for a targeted repair dispatch, when applicable;
+11. foreground input fingerprint.
+
+The selected archetype corresponds to the pack's `composition.kind`:
 
 | Composition | Read |
 |---|---|
-| `list`, `queue`, `feed`, `discovery` | `${PLUGIN_ROOT}/shared/references/screen-templates/list.md` |
-| `detail`, `comparison`, `overview` | `${PLUGIN_ROOT}/shared/references/screen-templates/detail.md` |
-| `create`, `edit`, `form`, `capture`, `workflow-step` | `${PLUGIN_ROOT}/shared/references/screen-templates/form.md` |
-| `schedule` | `${PLUGIN_ROOT}/shared/references/screen-templates/schedule.md` |
-| `conversation` | `${PLUGIN_ROOT}/shared/references/screen-templates/conversation.md` |
-| `map` | `${PLUGIN_ROOT}/shared/references/screen-templates/map.md` |
-| `confirmation`, `settings` | `${PLUGIN_ROOT}/shared/references/screen-templates/supporting.md` |
-| missing/unknown | return `NEEDS_CONTEXT: composition.kind for <screen_name>` |
+| `list`, `queue`, `feed`, `discovery` | list |
+| `detail`, `comparison`, `overview` | detail |
+| `create`, `edit`, `form`, `capture`, `workflow-step` | form |
+| `schedule` | schedule |
+| `conversation` | conversation |
+| `map` | map |
+| `confirmation`, `settings` | supporting |
+| missing/unknown | `needs_context` for `composition.kind` |
 
-Read one matching code sample for API/import shape only:
+Use one matching code idiom supplied for API/import shape only:
 
-- list-like → `${PLUGIN_ROOT}/shared/samples/screen-list.tsx`
-- detail-like → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
-- map → `${PLUGIN_ROOT}/shared/samples/screen-detail.tsx`
-- form/workflow-like → `${PLUGIN_ROOT}/shared/samples/screen-form.tsx`
+- list-like → list idiom;
+- detail-like or map → detail idiom;
+- form/workflow-like → form idiom.
 
-Never copy a sample layout. Do not load the old whale reference indexes or the
-full design philosophy/component recipe documents during a normal build.
+Never copy an idiom's sample layout. Use only supplied context.
 
 ## Contract gate
 
-Before writing:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/compile-screen-build-pack.js" \
-  --project-root "<working_dir>" --check
-```
-
-The pack is authoritative for required jobs, first viewport, hierarchy,
+The foreground validates the compiled pack before dispatch. The supplied pack
+entry is authoritative for required jobs, first viewport, hierarchy,
 actions, trust signals, decision support, media, states, navigation,
 signature interaction, forbidden defaults, assumptions, preview content, and
 composition. The prose spec may refine but never remove pack evidence.
@@ -127,13 +114,9 @@ not embed the live viewfinder. Never import or render raw `CameraView` in a scre
 
 ## Workflow
 
-### 1. Read and summarize
+### 1. Confirm the assigned contract
 
-Print:
-
-> `→ [<screen_name>] Reading compiled pack, spec, skeleton, and one archetype shard…`
-
-Confirm:
+Reason over:
 
 - screen ID/route and target file;
 - composition and dominant first-viewport content;
@@ -142,31 +125,22 @@ Confirm:
 - media/trust/signature evidence;
 - brand negatives and accessible control requirements.
 
-If the pack and spec conflict, return `BLOCKED:` instead of choosing one.
+If the pack and spec conflict, return substantive `blocked` instead of choosing
+one.
 
-### 2. Inspect only required signatures
+### 2. Use only supplied signatures
 
-Print:
-
-> `→ [<screen_name>] Checking generated service and component signatures…`
-
-Use `generated_services_path` first. Grep only the specific method
-signature when needed; do not read entire generated files. Missing generated
-services keep the planned import plus
-`TODO(connector-not-yet-added)` and return `DONE_WITH_CONCERNS` unless the
-screen cannot compile or function without the service.
-
-Read `tamagui.config.ts` before choosing tokens. Use only defined semantic
+Use exact generated-service, component, token, and route signatures from the
+work order. A missing generated service keeps the planned import plus
+`TODO(connector-not-yet-added)` and returns `ready_with_concerns` unless the
+screen cannot compile or function without it. Use only supplied semantic token
 aliases or valid numbered tokens. Tamagui owns layout/visual primitives; Expo
 Router and React Native keep navigation/native APIs.
 
 ### 3. Implement
 
-Print:
-
-> `→ [<screen_name>] Writing <target_file> from the approved composition…`
-
-Preserve skeleton hooks/imports and implement all pack evidence. Use shared
+Return complete TSX that preserves skeleton hooks/imports and implements all
+pack evidence. Use shared
 components and aliases instead of local copies. Keep loading/error/empty and
 populated branches within consistent safe-area/layout geometry.
 
@@ -180,32 +154,30 @@ Apply the code-idiom reference mechanically. In particular:
 - use cursor patterns only when the spec says cursor;
 - expose visible reasons for disabled actions.
 
-### 4. Self-check and validate
-
-Print:
-
-> `→ [<screen_name>] Validating build-pack evidence, accessibility, and code idioms…`
+### 4. Self-check
 
 Check every pack field has visible/behavioral evidence and no forbidden default
-appears. Then run:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
-  --project-root "<working_dir>" --file "<target_file>"
-```
-
-Fix assigned-file findings in one batch and rerun once. The orchestrator owns
-TypeScript, route, wave, stylistic, and cross-screen gates.
+appears. Apply supplied repair findings only to this artifact. The foreground
+owns file validation, TypeScript, routes, accessibility, safe-area, clipping,
+stylistic, wave, and cross-screen gates.
 
 ## Return protocol
 
-The literal first line is one of:
+Return exactly one JSON object with no Markdown wrapper or outside prose. It
+contains only `schemaVersion`, `status`, `agent`, `inputFingerprint`,
+`artifacts`, `concerns`, and `clarification`. Echo the supplied fingerprint,
+artifact ID, and target path verbatim. The single artifact contains the complete
+UTF-8 TSX file as a JSON string, never a patch, summary, ellipsis, nested object,
+or instruction to another agent.
 
-- `DONE`
-- `DONE_WITH_CONCERNS: <specific concerns>`
-- `NEEDS_CONTEXT: <missing fact>`
-- `BLOCKED: <reason>`
+Use `ready`, `ready_with_concerns`, `needs_context`,
+`needs_clarification`, or substantive `blocked`. Tool or filesystem
+availability is never a blocked reason. Questions, validation, materialization,
+repairs, and progress reporting belong to the foreground.
 
-After a blank line, summarize the file written, composition implemented,
-primary action, data/native usage, validation result, and any concern. Never
-prefix the status with `Status:` or wrap it in backticks.
+Envelope invariants: `ready` has the one requested artifact and no concerns;
+`ready_with_concerns` has that artifact and at least one concern;
+`needs_context` and `blocked` have `artifacts: []`, at least one concern, and
+`clarification: null`; `needs_clarification` has `artifacts: []`, may have no
+concerns, and uses a clarification object with `question`, `reason`, and
+`affectedDecisions`. Never return partial TSX for a non-ready status.
