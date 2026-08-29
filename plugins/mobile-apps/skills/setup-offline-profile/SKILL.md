@@ -13,6 +13,7 @@ model: opus
 - [offline-profile-schema.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-schema.md) — Dataverse entity field map
 - [dataverse-offline-api.md](${CLAUDE_SKILL_DIR}/../../shared/references/dataverse-offline-api.md) — Web API recipes for profile / item / association POSTs
 - [offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — the `schemaColumns` baseline this skill writes + the lifecycle delta check that consumes it
+- [return-only-agents.md](${CLAUDE_SKILL_DIR}/../create-mobile-app/references/return-only-agents.md) — common sealed work-order, response, interaction, validation, and materialization contract
 
 # Setup Offline Profile
 
@@ -27,7 +28,16 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Gather facts and dispatch return-only architect → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+
+**Interaction adapter:** every question and Gate 1–3 approval below is owned by
+the foreground. Use structured `AskUserQuestion`/Plan Mode when available; in
+Copilot CLI, VS Code, or any host without those tools, present the exact same
+question/options in normal foreground conversation. Before yielding, persist
+`status: waiting_for_user`, phase, section, affected decisions, and revision via
+`scripts/agent-return-runtime.js`. On the next user message, attach the answer
+and resume that same decision point. Never restart this workflow or select a
+reduced path because structured interaction tools are absent.
 
 ---
 
@@ -42,7 +52,9 @@ test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
-Capture **Environment URL** for `<envUrl>` and **manifest path** for the architect spawn (Step 3) and the artifacts write (Step 9).
+Capture **Environment URL** for foreground reads and the resolved manifest
+content for the Step 3 work order and Step 9 persistence. Never give the child
+only the manifest path.
 
 **Web-only target detection** — Mobile Offline Profiles only apply to native targets (iOS/Android). If the project is web-only, the profile will be created in Dataverse but **the generated app will never use it**:
 
@@ -140,38 +152,67 @@ Decision tree — evaluate in order:
 
 > **Why row #2 is critical (empirical 2026-05-25)**: the chanel-rm and FCB Tracker test runs hit this case. Without this check, the skill cascade-deleted the pinned profile silently. After this patch, the user gets a clear three-way choice and `delete` is always an explicit action.
 
-> **Extend mode (rows #2a, #4a) implementation**: re-spawn the architect with `Mode: extend, existingProfileId: <X>`. The architect compares its current proposal to the on-server items + associations and outputs three lists: (i) items to ADD, (ii) items to PATCH (scope/columns/sync diffs), (iii) items to DELETE (in-server but not in current data model). Surface to the user at Gate 2. After approval, the skill issues incremental writes — no profile-shell POST.
+> **Extend mode (rows #2a, #4a) implementation**: include `Mode: extend`,
+> `existingProfileId: <X>`, and complete foreground-read server item and
+> association facts in the same architect work order. The returned proposal has
+> three lists: items to ADD, PATCH, and DELETE. Surface them at Gate 2. After
+> approval, the foreground issues incremental writes; no profile-shell POST.
 
-### Step 3 — Spawn architect agent
+### Step 3 — Gather facts and dispatch return-only architect
 
 **Print before starting:**
-> "→ Spawning mobile-app:offline-profile-architect agent (read-only) to design the profile…"
+> "→ Gathering verified offline facts and dispatching the return-only offline architect…"
 
-Spawn via `Task`:
+The foreground reads the materialized model, screen-operation usage, prior
+offline section/config, and existing-profile facts. It then performs the
+required Dataverse reads sequentially:
 
-```text
-agent: mobile-app:offline-profile-architect
-prompt:
-  Working directory: <workdir>
-  Plugin root: ${PLUGIN_ROOT}
-  Environment URL: <envUrl>
-  Publisher prefix: <prefix>
-  Mode: default
-```
+1. For each app table, read `IsAvailableOffline`,
+   `ChangeTrackingEnabled`, and `OwnershipType`.
+2. Read bounded row-count facts used by the existing 500-row scope rule.
+3. Read candidate parent one-to-many relationship facts used for associations.
+4. In extend mode, read the selected profile's complete item and association
+   facts.
 
-The agent returns `_offline_section.md` in the working directory. Read it. Parse its first-line status code:
+Do not move these reads into the child and do not parallelize profile mutation.
 
-- `DONE` → continue
-- `DONE_WITH_CONCERNS: <list>` → surface concerns at Gate 2 / Gate 3 where relevant; continue
-- `NEEDS_CONTEXT: <missing>` → resolve the missing context (most often: data model file absent), re-spawn once (cap: 2 retries). If still failing, STOP with the agent's reason.
-- `BLOCKED: <reason>` → STOP, surface to user, do not silently retry.
+Build one `offline-profile-architect` work order containing all of those facts
+inline, the complete model and screen usage, mode, publisher prefix, selected
+column facts, prior section content for incremental mode, artifact descriptor
+`section:offline-profile` targeting `<workdir>/_offline_section.md`, attempt, and
+foreground-generated fingerprint. Seal it through
+`scripts/agent-return-envelope.js`.
+
+In `parallel-return`, dispatch `mobile-app:offline-profile-architect` with the
+complete sealed JSON object. In `foreground-return`, process that same work
+order sequentially and emit the same envelope. Capture the exact response and
+validate it through the common parser. Run a foreground staged-content check
+that requires the existing `## Offline Profile` section and all required
+subheadings before atomic materialization.
+
+- `ready` continues.
+- `ready_with_concerns` queues concerns for the owning Gate 2 or Gate 3.
+- `needs_context` adds only the exact missing fact, reseals, and redispatches
+  once.
+- `needs_clarification` persists interaction state and asks through the
+  foreground adapter.
+- substantive `blocked` stops.
+- malformed or truncated transport retries the byte-identical work order once.
+
+Tool, filesystem, shell, authentication-client, or structured-question
+availability can never be an architect block.
 
 ### Step 3.5 — Configuration review (interactive AskUserQuestion flow)
 
 **Print before starting:**
 > "→ Presenting the proposed offline profile configuration. You'll tap an option to accept, adjust, or cancel — no need to type."
 
-The skill renders the proposal as a one-screen summary (read-only context) and then drives the decision through structured `AskUserQuestion` prompts — the same click-style pattern `/create-mobile-app` uses for its 4 plan gates. This replaces the older "type `accept` / plain-English edits / `cancel`" reply flow, which was hit-or-miss when users typed something the parser didn't recognize.
+The foreground renders the proposal as a one-screen summary and drives the
+decision through `approveSection`. Use structured `AskUserQuestion` prompts when
+available. In Copilot CLI, VS Code, or any host without structured interaction,
+ask the same options in normal foreground conversation. Before yielding, persist
+`waiting_for_user`; resume the same gate/revision from the next answer. This
+replaces ambiguous free-text parsing without making structured tools mandatory.
 
 #### Step 3.5a — Print the summary (informational only)
 

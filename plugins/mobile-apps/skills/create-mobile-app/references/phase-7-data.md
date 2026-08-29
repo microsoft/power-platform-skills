@@ -302,7 +302,11 @@ The only Dataverse-mode skip condition is an existing `memory-bank.md`
 `## Offline profile` status of `done` or `not-applicable`. Print:
 `↷ Step 8.85 skipped — offline profile already <done|not-applicable> from a prior run.`
 
-Otherwise ask one neutral `AskUserQuestion`:
+Otherwise call the foreground `askUser` adapter with this one neutral question.
+Use structured `AskUserQuestion` when available and normal foreground chat in
+Copilot CLI or VS Code. Before yielding, persist `waiting_for_user` with phase
+`offline-opt-in`, section `offline-support`, and the affected decision; resume
+this same step from the next answer rather than restarting the data phase:
 
 > **Question header**: `Offline support`
 >
@@ -319,10 +323,11 @@ Otherwise ask one neutral `AskUserQuestion`:
 >   `status: not-applicable`, then continue to Step 9
 
 If the user picks Yes, invoke `/setup-offline-profile` from the project root.
-It consumes the materialized `.datamodel-manifest.json`, updates
-`memory-bank.md`, and writes `offline-profile.json`. Handle its return through
-the canonical status switch: `DONE` continues, `DONE_WITH_CONCERNS:` is
-surfaced and recorded, and `BLOCKED:` stops.
+That foreground skill gathers live facts, dispatches the return-only
+`offline-profile-architect` only when required, validates and materializes its
+proposal, runs the existing approval gates, updates `memory-bank.md`, and writes
+`offline-profile.json`. Handle the skill's own documented workflow result;
+surface concerns and stop on a substantive failure.
 
 New custom tables were configured for offline availability and change
 tracking by `/add-dataverse`, so the setup skill can validate rather than
