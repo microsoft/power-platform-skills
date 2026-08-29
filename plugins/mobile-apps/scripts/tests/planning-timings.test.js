@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  recordAgentExecutionMetrics,
   summarizePlanningTimings,
   updatePlanningTiming,
 } = require('../planning-timings');
@@ -140,9 +141,44 @@ test('planning timing summary keeps outer wall, model, and approval durations se
     postPlannerScreenPlannerMs: 0,
     postPlannerRevisionMs: 0,
     userApprovalWaitingMs: 60,
+    executionMode: null,
+    agentDispatchCount: 0,
+    agentRetryCount: 0,
+    agentToolCallCount: 0,
+    foregroundMaterializationMs: 0,
+    foregroundValidationMs: 0,
     retries: { nativePlanner: 1 },
     needsContext: { nativePlanner: 1 },
   });
+});
+
+test('planning timing records return-only execution metrics', () => {
+  const artifact = { schemaVersion: 1, stages: {} };
+  recordAgentExecutionMetrics(artifact, {
+    executionMode: 'parallel-return',
+    agentDispatchCount: 3,
+    agentRetryCount: 1,
+    agentToolCallCount: 0,
+    foregroundMaterializationMs: 12.5,
+    foregroundValidationMs: 8,
+  });
+  recordAgentExecutionMetrics(artifact, {
+    executionMode: 'parallel-return',
+    agentDispatchCount: 2,
+    foregroundMaterializationMs: 4.5,
+    foregroundValidationMs: 2,
+  });
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(summary.executionMode, 'parallel-return');
+  assert.equal(summary.agentDispatchCount, 5);
+  assert.equal(summary.agentRetryCount, 1);
+  assert.equal(summary.agentToolCallCount, 0);
+  assert.equal(summary.foregroundMaterializationMs, 17);
+  assert.equal(summary.foregroundValidationMs, 10);
+  assert.throws(() => recordAgentExecutionMetrics(artifact, {
+    executionMode: 'parallel-return',
+    agentToolCallCount: 1,
+  }), /must have agentToolCallCount 0/);
 });
 
 test('planning timing separates nested planner work from post-failure fallback work', () => {

@@ -19,6 +19,7 @@ const STAGES = new Set([
   'planRevision',
   'userApproval',
 ]);
+const EXECUTION_MODES = new Set(['parallel-return', 'foreground-return']);
 
 function parseArgs(argv) {
   const args = {};
@@ -32,10 +33,83 @@ function parseArgs(argv) {
     else if (argv[index] === '--token-count') args.tokenCount = argv[++index];
     else if (argv[index] === '--cost-usd') args.costUsd = argv[++index];
     else if (argv[index] === '--retry') args.retry = true;
+    else if (argv[index] === '--record-agent-execution') args.recordAgentExecution = true;
+    else if (argv[index] === '--execution-mode') args.executionMode = argv[++index];
+    else if (argv[index] === '--agent-dispatch-count') args.agentDispatchCount = argv[++index];
+    else if (argv[index] === '--agent-retry-count') args.agentRetryCount = argv[++index];
+    else if (argv[index] === '--agent-tool-call-count') args.agentToolCallCount = argv[++index];
+    else if (argv[index] === '--foreground-materialization-ms') {
+      args.foregroundMaterializationMs = argv[++index];
+    } else if (argv[index] === '--foreground-validation-ms') {
+      args.foregroundValidationMs = argv[++index];
+    }
     else if (argv[index] === '--summary') args.summary = true;
     else if (argv[index] === '--json') args.json = true;
   }
   return args;
+}
+
+function nonNegativeNumber(value, label, { integer = false } = {}) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0 || (integer && !Number.isInteger(parsed))) {
+    throw new Error(`${label} must be a non-negative ${integer ? 'integer' : 'number'}`);
+  }
+  return parsed;
+}
+
+function recordAgentExecutionMetrics(artifact, {
+  executionMode,
+  agentDispatchCount = 0,
+  agentRetryCount = 0,
+  agentToolCallCount = 0,
+  foregroundMaterializationMs = 0,
+  foregroundValidationMs = 0,
+}) {
+  if (!EXECUTION_MODES.has(executionMode)) {
+    throw new Error(`Unknown agent execution mode: ${executionMode}`);
+  }
+  const toolCallCount = nonNegativeNumber(
+    agentToolCallCount,
+    'agentToolCallCount',
+    { integer: true },
+  );
+  if (toolCallCount !== 0) {
+    throw new Error('converted return-only agents must have agentToolCallCount 0');
+  }
+  const previous = artifact.agentExecution || {
+    executionMode,
+    agentDispatchCount: 0,
+    agentRetryCount: 0,
+    agentToolCallCount: 0,
+    foregroundMaterializationMs: 0,
+    foregroundValidationMs: 0,
+  };
+  if (previous.executionMode !== executionMode) {
+    throw new Error('agent execution mode cannot change within one timing artifact');
+  }
+  artifact.agentExecution = {
+    executionMode,
+    agentDispatchCount: previous.agentDispatchCount + nonNegativeNumber(
+      agentDispatchCount,
+      'agentDispatchCount',
+      { integer: true },
+    ),
+    agentRetryCount: previous.agentRetryCount + nonNegativeNumber(
+      agentRetryCount,
+      'agentRetryCount',
+      { integer: true },
+    ),
+    agentToolCallCount: 0,
+    foregroundMaterializationMs: previous.foregroundMaterializationMs + nonNegativeNumber(
+      foregroundMaterializationMs,
+      'foregroundMaterializationMs',
+    ),
+    foregroundValidationMs: previous.foregroundValidationMs + nonNegativeNumber(
+      foregroundValidationMs,
+      'foregroundValidationMs',
+    ),
+  };
+  return artifact;
 }
 
 function readArtifact(file, fileSystem = fs) {
@@ -189,6 +263,7 @@ function stageOverlapDuration(artifact, stage, containerStage) {
 
 function summarizePlanningTimings(artifact) {
   const plannerCompletion = latestStageCompletion(artifact, 'nativePlanner');
+  const agentExecution = artifact.agentExecution || {};
   return {
     environmentResolutionMs: stageDuration(artifact, 'environmentResolution'),
     publisherPrefixDetectionMs: stageDuration(artifact, 'publisherPrefixDetection'),
@@ -223,6 +298,12 @@ function summarizePlanningTimings(artifact) {
       plannerCompletion,
     ),
     userApprovalWaitingMs: stageDuration(artifact, 'userApproval'),
+    executionMode: agentExecution.executionMode || null,
+    agentDispatchCount: agentExecution.agentDispatchCount || 0,
+    agentRetryCount: agentExecution.agentRetryCount || 0,
+    agentToolCallCount: agentExecution.agentToolCallCount || 0,
+    foregroundMaterializationMs: agentExecution.foregroundMaterializationMs || 0,
+    foregroundValidationMs: agentExecution.foregroundValidationMs || 0,
     retries: Object.fromEntries(Object.entries(artifact.stages || {})
       .filter(([, value]) => Number(value.retryCount || 0) > 0)
       .map(([stage, value]) => [stage, value.retryCount])),
@@ -245,12 +326,30 @@ function main(argv = process.argv) {
       return 2;
     }
   }
+  if (args.projectRoot && args.recordAgentExecution) {
+    try {
+      const root = path.resolve(args.projectRoot);
+      const output = path.resolve(root, args.output || '.tmp/mobile-planning-timings.json');
+      const artifact = recordAgentExecutionMetrics(readArtifact(output), args);
+      atomicWriteJson(output, artifact);
+      if (args.json) process.stdout.write(`${JSON.stringify(artifact, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      process.stderr.write(`planning-timings: ${error.message}\n`);
+      return 2;
+    }
+  }
   if (!args.projectRoot || !args.stage || !args.action) {
     process.stderr.write(
       'Usage: node planning-timings.js --project-root <dir> --stage <name> '
       + '--action <start|finish|fail|needs-context|record> [--reason <text>] '
       + '[--duration-ms <number>] [--token-count <number>] [--cost-usd <number>] '
       + '[--retry] [--output <path>] [--json]\n'
+      + '       node planning-timings.js --project-root <dir> --record-agent-execution '
+      + '--execution-mode <parallel-return|foreground-return> '
+      + '[--agent-dispatch-count <n>] [--agent-retry-count <n>] '
+      + '[--agent-tool-call-count 0] [--foreground-materialization-ms <n>] '
+      + '[--foreground-validation-ms <n>] [--output <path>] [--json]\n'
       + '       node planning-timings.js --project-root <dir> --summary [--output <path>]\n',
     );
     return 2;
@@ -271,10 +370,12 @@ function main(argv = process.argv) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  EXECUTION_MODES,
   STAGES,
   main,
   parseArgs,
   readArtifact,
+  recordAgentExecutionMetrics,
   stageDuration,
   summarizePlanningTimings,
   updatePlanningTiming,
