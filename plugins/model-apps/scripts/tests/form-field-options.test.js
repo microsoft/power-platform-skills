@@ -291,7 +291,35 @@ test('validation rejects `after` inside an explicit tabs layout — two competin
     layout: 'explicit',
     tabs: [{ label: 'G', sections: [{ fields: [{ name: 'new_points', after: 'new_name' }, 'new_name'] }] }],
   });
-  assert.ok(errsFor(spec).some((e) => /cannot use 'after' inside an explicit tabs layout/.test(e)), errsFor(spec).join(' | '));
+  assert.ok(errsFor(spec).some((e) => /cannot use 'after' for a field an explicit tabs layout already lists/.test(e)), errsFor(spec).join(' | '));
+});
+
+test('validation rejects a form-level `after` for a field the explicit layout LISTS (create and rebuild would disagree)', () => {
+  // The create path honours the authored list; the reconcile applies the anchor. Allowing both makes
+  // the same spec produce one order on a new form and another on its first rebuild.
+  const spec = specWithBigInt({
+    layout: 'explicit',
+    fieldOptions: { new_points: { after: 'new_name' } },
+    tabs: [{ label: 'G', sections: [{ fields: ['new_name', 'new_points'] }] }],
+  });
+  assert.ok(errsFor(spec).some((e) => /cannot use 'after' for a field an explicit tabs layout already lists/.test(e)), errsFor(spec).join(' | '));
+});
+
+test('validation ALLOWS a form-level `after` for a field the explicit layout does not list (the prune:false case)', () => {
+  const spec = specWithBigInt({
+    layout: 'explicit',
+    prune: false,
+    fieldOptions: { new_daysremaining: { after: 'new_duedate' } },
+    tabs: [{ label: 'G', sections: [{ fields: ['new_name'] }] }],
+  });
+  assert.deepStrictEqual(errsFor(spec), [], 'positioning a control the layout does not re-declare is the whole point of prune:false');
+});
+
+test('validation rejects a non-array fields[] instead of letting the compiler throw a raw TypeError', () => {
+  // A string is iterable and every character IS a string, so a naive per-entry check passes and the
+  // compiler then dies on `(s.fields || []).map is not a function`.
+  const spec = specWithBigInt({ layout: 'explicit', tabs: [{ label: 'G', sections: [{ fields: 'new_name' }] }] });
+  assert.ok(errsFor(spec).some((e) => /fields must be an array/.test(e)), errsFor(spec).join(' | '));
 });
 
 test('validation rejects a self-anchor', () => {

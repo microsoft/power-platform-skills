@@ -539,17 +539,30 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   // Every field this form declares an option for, from either route, so the checks below run once
   // per (field, source) pair with a source-accurate message.
   const seen = [];
+  // Fields the EXPLICIT layout lists by position. An `after` anchor for one of these — from either
+  // route — would give the form two competing orderings.
+  const listedByLayout = new Set();
 
   for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
     for (const s of ((t && t.sections) || [])) {
+      if (s && s.fields !== undefined && !Array.isArray(s.fields)) {
+        // Guard the compiler, which does `(s.fields || []).map(...)`. A string is iterable, so a
+        // `fields: "new_name"` typo would otherwise pass a naive per-entry check (each character IS
+        // a string) and then throw a raw TypeError at compile time instead of producing a finding.
+        errors.push(`${label}: a section's fields must be an array of column logical names`);
+        continue;
+      }
       for (const entry of ((s && s.fields) || [])) {
         if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
           if (!entry.name || typeof entry.name !== 'string') {
             errors.push(`${label}: a field entry object is missing a string 'name'`);
             continue;
           }
+          listedByLayout.add(String(entry.name).toLowerCase());
           seen.push({ name: String(entry.name).toLowerCase(), opt: entry, where: `field '${entry.name}'`, inline: true });
-        } else if (typeof entry !== 'string') {
+        } else if (typeof entry === 'string') {
+          listedByLayout.add(entry.toLowerCase());
+        } else {
           errors.push(`${label}: a field entry must be a column logical name or an object { name, readOnly?, hidden?, after? }`);
         }
       }
@@ -585,11 +598,15 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
         errors.push(`${label}: ${where} after must be the logical name of another field on this form`);
       } else if (String(opt.after).toLowerCase() === name) {
         errors.push(`${label}: ${where} anchors '${name}' after itself`);
-      } else if (inline) {
-        // An explicit layout already expresses order by listing position. Honouring `after` there too
-        // would give one form two competing orderings, and the reconcile (which applies `after`) would
-        // silently override the authored list on the first rebuild.
-        errors.push(`${label}: ${where} cannot use 'after' inside an explicit tabs layout — the listed order already positions the field. Move it in the list instead, or use form-level fieldOptions if you are anchoring against a field this layout does not list.`);
+      } else if (inline || listedByLayout.has(name)) {
+        // An explicit layout already expresses order by listing position, so honouring `after` for a
+        // listed field would give the form two competing orderings — and they would DISAGREE: the
+        // create path follows the authored list, while the reconcile applies the anchor, so the same
+        // spec would produce one order on a new form and another on the first rebuild.
+        // A form-level anchor for a field the layout does NOT list stays legal: that is the
+        // `prune: false` case, where the point is to position a control on a deployed form without
+        // re-declaring the rest of it.
+        errors.push(`${label}: ${where} cannot use 'after' for a field an explicit tabs layout already lists — the listed order positions it. Move it in the list instead, or drop it from the list if you mean to position it against fields this layout does not declare.`);
       }
     }
     // A BigInt has no Unified Interface control, so a form placement renders "Error loading control".
