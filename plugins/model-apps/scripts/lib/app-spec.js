@@ -546,9 +546,11 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
     for (const s of ((t && t.sections) || [])) {
       if (s && s.fields !== undefined && !Array.isArray(s.fields)) {
-        // Guard the compiler, which does `(s.fields || []).map(...)`. A string is iterable, so a
-        // `fields: "new_name"` typo would otherwise pass a naive per-entry check (each character IS
-        // a string) and then throw a raw TypeError at compile time instead of producing a finding.
+        // Guard the compiler, which does `(s.fields || []).map(...)`. A string is ITERABLE and every
+        // character of it IS a string, so a `fields: "new_name"` typo would pass a naive per-entry
+        // check and then throw a raw TypeError at compile time instead of producing a finding. A
+        // non-iterable value (`{}`, `3`) would throw right here. Note `spec-shape.js` does not model
+        // `fields`, so `normalizeSpecShape` does not coerce it — this check is load-bearing.
         errors.push(`${label}: a section's fields must be an array of column logical names`);
         continue;
       }
@@ -630,7 +632,11 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   if (explicit) {
     for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
       for (const s of ((t && t.sections) || [])) {
-        for (const entry of ((s && s.fields) || [])) {
+        // Re-guard: the array check in the first loop `continue`s that loop only. Without repeating
+        // it here a non-iterable `fields` (e.g. `{}` or `3`) throws a raw TypeError out of
+        // validateAppSpec — discarding the correct finding the first loop already pushed.
+        if (!Array.isArray(s && s.fields)) continue;
+        for (const entry of s.fields) {
           const nm = String((entry && typeof entry === 'object' ? entry.name : entry) || '').toLowerCase();
           if (nm && columnType(nm) === 'BigInt') {
             warnings.push(`${label}: field '${nm}' is a BigInt column — Big Integer has no Unified Interface form control, so it will render "Error loading control" on every record. Keep it off the form (it stays readable through the API).`);

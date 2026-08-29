@@ -235,6 +235,36 @@ test('after: an anchor that is not on the form is ignored, not an error (it may 
   assert.deepStrictEqual(fields, ['new_name', 'new_duedate', 'new_points', 'new_daysremaining'], 'order unchanged');
 });
 
+test('after: an anchored field CONVERGES in a 2-column section — a rebuild of a correct form issues no move', () => {
+  // The auto layout switches to 2 columns above 6 fields, so this is the common shape, not an edge
+  // case. A section is a grid: `[a|b] [c|d]` reads a, b, c, d, so a field can sit correctly
+  // immediately after its anchor while living in the NEXT row. Testing row-local adjacency reported
+  // that as misplaced and moved it on every rebuild, leaving a 3-cell row in a 2-column section.
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{
+      schemaName: 'new_item', displayName: 'Item',
+      primaryAttribute: { schemaName: 'new_name', displayName: 'Name' },
+      columns: ['new_c1', 'new_c2', 'new_c3', 'new_c4', 'new_c5', 'new_c6', 'new_c7'].map((n) => ({ schemaName: n, type: 'Text' })),
+    }],
+    relationships: [],
+    forms: [{ entity: 'new_item', name: 'F', fieldOptions: { new_c6: { after: 'new_c1' } } }],
+  };
+  const intent = compileFormIntent(spec, spec.forms[0]);
+  const section = intent.tabs[0].columns[0].sections[0];
+  assert.strictEqual(section.columns, 2, 'this fixture must produce the 2-column layout the bug needs');
+
+  // The compiled form is already correct: c6 sits flat-adjacent after c1, in the next row.
+  const form = { tabs: intent.tabs };
+  const from = findFieldCellLocation(form, 'new_c6');
+  const to = findFieldCellLocation(form, 'new_c1');
+  assert.notStrictEqual(from.rowIndex, to.rowIndex, 'the fixture must straddle a row boundary, or it proves nothing');
+  assert.strictEqual(from.sectionPointer, to.sectionPointer);
+  assert.strictEqual(from.flatIndex, to.flatIndex + 1,
+    'c6 must be flat-adjacent after c1 — this is the condition the reconcile uses to skip the move');
+});
+
 test('prune: __prune defaults true and is false only when the form opts out', () => {
   const base = specWithBigInt({ layout: 'explicit', tabs: [{ label: 'G', sections: [{ fields: ['new_name'] }] }] });
   assert.strictEqual(compileFormIntent(base, base.forms[0]).__prune, true);
@@ -246,7 +276,7 @@ test('prune: __prune defaults true and is false only when the form opts out', ()
 // findFieldCellLocation — the move target maths
 // ---------------------------------------------------------------------------
 
-test('findFieldCellLocation returns the containing arrays and indices a move needs', () => {
+test('findFieldCellLocation returns the containing arrays, indices, and the SECTION-FLAT position', () => {
   const form = {
     tabs: [{ columns: [{ sections: [{ rows: [
       { cells: [{ control: { fieldName: 'a' } }, { control: { fieldName: 'b' } }] },
@@ -254,13 +284,18 @@ test('findFieldCellLocation returns the containing arrays and indices a move nee
     ] }] }] }],
   };
   assert.deepStrictEqual(findFieldCellLocation(form, 'b'), {
+    sectionPointer: '/tabs/0/columns/0/sections/0',
     rowsPointer: '/tabs/0/columns/0/sections/0/rows',
     rowPointer: '/tabs/0/columns/0/sections/0/rows/0',
     cellsPointer: '/tabs/0/columns/0/sections/0/rows/0/cells',
     cellPointer: '/tabs/0/columns/0/sections/0/rows/0/cells/1',
-    rowIndex: 0, cellIndex: 1, rowCellCount: 2,
+    rowIndex: 0, cellIndex: 1, flatIndex: 1, rowCellCount: 2,
   });
-  assert.strictEqual(findFieldCellLocation(form, 'c').rowCellCount, 1, 'a lone cell is detected so the ROW can be moved');
+  // `c` is in the NEXT row but is flat-adjacent to `b` — the case row-local adjacency gets wrong.
+  const c = findFieldCellLocation(form, 'c');
+  assert.strictEqual(c.flatIndex, 2, 'flatIndex must continue across rows, not reset per row');
+  assert.strictEqual(c.rowIndex, 1);
+  assert.strictEqual(c.rowCellCount, 1, 'a lone cell is detected so the ROW can be moved');
   assert.strictEqual(findFieldCellLocation(form, 'zzz'), null);
 });
 
@@ -354,4 +389,16 @@ test('a spec using every new option validates clean', () => {
   const spec = specWithBigInt({ fieldOptions: { new_points: { readOnly: true }, new_duedate: { hidden: true }, new_daysremaining: { after: 'new_duedate' } } });
   const res = validateAppSpec(spec, { profile: 'deploy' });
   assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
+});
+
+test('validation does not THROW on a non-iterable fields (the BigInt scan re-iterates the same array)', () => {
+  // The array guard `continue`s the FIRST loop only; the explicit-layout BigInt scan re-iterates
+  // `s.fields`, so a non-iterable value threw a raw TypeError out of validateAppSpec and discarded
+  // the correct finding the first loop had already pushed.
+  for (const bad of [{}, 3, true]) {
+    const spec = specWithBigInt({ layout: 'explicit', tabs: [{ label: 'G', sections: [{ fields: bad }] }] });
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'deploy' }); }, `threw on fields: ${JSON.stringify(bad)}`);
+    assert.ok(res.errors.some((e) => /fields must be an array/.test(e)), `no finding for fields: ${JSON.stringify(bad)}`);
+  }
 });

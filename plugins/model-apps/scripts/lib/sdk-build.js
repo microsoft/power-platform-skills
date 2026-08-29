@@ -473,8 +473,16 @@ function subgridLabel(spec, sg) {
 }
 // True when a table has enough declared columns to make enriching its default views worthwhile
 // (opt out per-entity with enrichDefaultViews:false).
+//
+// `existing: true` tables are excluded outright. Enrichment REPLACES the Active/Inactive views'
+// column set, and `existing` means "this build did not create this table and cannot prove it owns
+// it" — the same reasoning that stops teardown from deleting such a table. Rewriting another app's
+// default views is destructive and unrecoverable from here, whereas leaving them alone costs
+// nothing. This matters most for a `download -> rebuild` round trip: `download-model-app` flags
+// every recovered table `existing: true` precisely because ownership is unprovable.
 function enrichesDefaultViews(spec, entity) {
-  return !!entity && entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
+  if (!entity || entity.existing === true) return false;
+  return entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
 }
 
 // Resolve the id of an EXISTING deployed form to reconcile, disambiguating by TYPE (form names are unique
@@ -1235,8 +1243,14 @@ async function runSdkBuild(spec, opts = {}) {
       // build over it.
       if (!from || !to) continue;
 
+      // "Already in place" is a SECTION-FLAT question, not a row-local one. A section is a grid: in
+      // a 2-column section `[a|b] [c|d]` the reading order is a, b, c, d, so a field can sit
+      // correctly immediately after its anchor while living in the NEXT row. Testing row adjacency
+      // reported such a field as misplaced and moved it on every rebuild — the auto layout switches
+      // to 2 columns above 6 fields, so this was the common case, not an edge case.
+      if (from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + 1) continue;
+
       if (from.rowCellCount === 1) {
-        if (from.rowsPointer === to.rowsPointer && from.rowIndex === to.rowIndex + 1) continue; // already there
         // moveElement resolves the TARGET ARRAY first, then removes the source, then splices. When
         // both live in the same array the removal shifts every later index down by one, so a target
         // computed against the pre-removal array overshoots by one. Compensate explicitly.
@@ -1246,7 +1260,6 @@ async function runSdkBuild(spec, opts = {}) {
         continue;
       }
 
-      if (from.cellsPointer === to.cellsPointer && from.cellIndex === to.cellIndex + 1) continue; // already there
       let index = to.cellIndex + 1;
       if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
       await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });

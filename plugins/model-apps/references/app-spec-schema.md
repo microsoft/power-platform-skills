@@ -500,7 +500,7 @@ in the designer, or drop the field and let the next build re-add it.
 the text *"Error loading control"* on every record. The `auto` layout therefore **skips BigInt
 columns** — the column is still created and still readable/writable through the API, it just is not
 placed. An explicit layout still honours a BigInt you list by name (you may be pairing it with a
-custom control), but the linter warns.
+custom control), but the spec validator emits a warning.
 
 ## commands[] (optional — modern command-bar buttons)
 ```jsonc

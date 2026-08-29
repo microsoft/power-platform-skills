@@ -285,6 +285,79 @@ test('readEntityWithDescriptions survives a raw client that throws', async () =>
   assert.ok(!('description' in e));
 });
 
+test('entityFromMetadata emits ONLY custom columns — a downloaded spec must not rewrite the org default views', async () => {
+  // `fetchEntityMetadata` returns the FULL attribute list. Emitting system attributes as spec
+  // columns is not merely noisy: `columns[]` feeds `defaultViewColumns`, and `enrichDefaultViews`
+  // REPLACES the Active/Inactive views' column set — so a `download -> rebuild` round trip would
+  // rewrite a customer's default views to Created On / Import Sequence Number, undoing fix #7.
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true },
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+      { logicalName: 'new_owner', displayName: 'Owner', attributeType: 'Lookup', isCustomAttribute: true, targets: ['systemuser'] },
+      { logicalName: 'createdon', displayName: 'Created On', attributeType: 'DateTime', isCustomAttribute: false },
+      { logicalName: 'versionnumber', displayName: 'Version Number', attributeType: 'BigInt', isCustomAttribute: false },
+      { logicalName: 'importsequencenumber', displayName: 'Import Sequence Number', attributeType: 'Integer', isCustomAttribute: false },
+      { logicalName: 'owningbusinessunit', displayName: 'Owning Business Unit', attributeType: 'Lookup', isCustomAttribute: false },
+    ],
+  };
+  const e = entityFromMetadata(meta, 'new_ticket');
+  const names = e.columns.map((c) => c.schemaName);
+  for (const sys of ['createdon', 'versionnumber', 'importsequencenumber', 'owningbusinessunit']) {
+    assert.ok(!names.includes(sys), `system attribute '${sys}' leaked into columns[]: ${names.join(', ')}`);
+  }
+  // The primary name column is declared as `primaryAttribute`; it must not ALSO be a column.
+  assert.ok(!names.includes('new_name'), 'the primary column must not be duplicated into columns[]');
+  // A custom Lookup comes from relationships[], not columns[] — it has no App Spec column type.
+  assert.ok(!names.includes('new_owner'), 'a Lookup is not an authorable spec column');
+  assert.deepStrictEqual(names, ['new_status', 'new_notes']);
+  // The SDK projects `attributeType`, not `type`. Reading the wrong key made every column type-less,
+  // which silently disabled DEFAULT_VIEW_SKIP_TYPES and the auto-form-layout type filter.
+  assert.strictEqual(e.columns.find((c) => c.schemaName === 'new_notes').type, 'Memo');
+  // A Choice column is emitted WITHOUT a type: declaring `type: "Choice"` obliges the spec to carry
+  // `options[]` or a `globalChoice`, which this hydrator cannot read, and the resulting spec fails
+  // its own validation. Live-caught — the download errored with
+  // "column ffo_status: Choice needs options[] or a globalChoice reference".
+  assert.ok(!('type' in e.columns.find((c) => c.schemaName === 'new_status')),
+    'a Choice column must not claim a type it cannot substantiate');
+});
+
+test('a hydrated entity always survives validateAppSpec — a downloaded spec that cannot be validated is useless', () => {
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_choices', displayName: 'Choices', attributeType: 'MultiSelectPicklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+      { logicalName: 'new_big', displayName: 'Big', attributeType: 'BigInt', isCustomAttribute: true },
+    ],
+  };
+  const res = validateAppSpec({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [entityFromMetadata(meta, 'new_ticket')],
+    appShell: { areas: [] },
+  }, { profile: 'deploy' });
+  assert.deepStrictEqual(res.errors, [], res.errors.join(' | '));
+});
+
+test('enrichesDefaultViews is FALSE for an existing:true table (download flags every recovered table that way)', () => {
+  const spec = {
+    entities: [{
+      schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, existing: true,
+      columns: [{ schemaName: 'new_status', type: 'Choice' }, { schemaName: 'new_tier', type: 'Choice' }],
+    }],
+    relationships: [],
+  };
+  // Enrichment REPLACES a view's column set, and `existing` means this build cannot prove it owns
+  // the table — the same reasoning that stops teardown from deleting it.
+  assert.strictEqual(enrichesDefaultViews(spec, spec.entities[0]), false);
+  const owned = { ...spec.entities[0], existing: false };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [owned] }, owned), true, 'a table this build owns still enriches');
+});
+
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
   const calls = [];
   const sdk = {
@@ -374,7 +447,15 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   const SOL_ID = '5111e0f2-0000-4000-8000-000000000006';
   const calls = [];
   const sdk = {
+    // A real table logical name is the ONLY thing queryRecords can take: it resolves its argument
+    // via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`. Anything else 404s. Fail
+    // loudly on a metadata collection so this mock cannot certify a call the real SDK rejects —
+    // which is exactly how the `GlobalOptionSetDefinitions` read passed review while always
+    // returning empty in production.
     queryRecords: async (set, opts) => {
+      if (!/^[a-z_][a-z0-9_]*$/.test(String(set))) {
+        throw new Error(`queryRecords resolves an entity SET name and cannot take the metadata path '${set}' — use sdk.dataverse.get`);
+      }
       calls.push({ set, opts });
       const filter = (opts && opts.filter) || '';
       if (set === 'appmodule') return [{ appmoduleidunique: APP_UNIQ_VALUE }];
@@ -387,10 +468,16 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
       if (set === 'solution') return [{ solutionid: SOL_ID }];
       if (set === 'solutioncomponent') return [{ objectid: RULE_ID, componenttype: 29 }];
       if (set === 'workflow') return [{ workflowid: RULE_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.' }];
-      if (set === 'GlobalOptionSetDefinitions') {
-        return [{ Name: 'new_priority', Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }];
-      }
       return [];
+    },
+    dataverse: {
+      get: async (url) => {
+        calls.push({ get: url });
+        if (/^\/GlobalOptionSetDefinitions\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [{ Name: 'new_priority', Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }] } };
+        }
+        return { status: 404, headers: {}, body: {} };
+      },
     },
   };
 
@@ -405,7 +492,8 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
   assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
   assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
-  assert.ok(calls.some((c) => c.set === 'GlobalOptionSetDefinitions' && c.opts.select.includes('Description')), 'global-choice read selects Description');
+  assert.ok(calls.some((c) => c.get === '/GlobalOptionSetDefinitions?$select=Name,Description'),
+    `global choices must be read through the RAW client (queryRecords cannot take a metadata path); calls: ${JSON.stringify(calls.map((c) => c.get || c.set))}`);
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
@@ -424,6 +512,9 @@ const { assignPageKeys, missingDownloads, runDownload, recoverAppSolution, appCo
 const { reconcilePageIds, buildManifest } = require('../lib/page-manifest.js');
 const { hydrateSpec } = require('../lib/hydrate-spec.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+// `enrichesDefaultViews` gates the destructive default-view rewrite; a DOWNLOADED table is flagged
+// `existing: true` because ownership is unprovable, so it must never trigger that rewrite.
+const { enrichesDefaultViews } = require('../lib/sdk-build.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
 

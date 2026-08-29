@@ -295,8 +295,17 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
     // Global option sets are not app components, but their Description is another Dataverse Label. This
     // is intentionally an inventory, not `globalChoices[]`: without options we cannot safely claim a
     // rebuildable choice definition.
-    const rows = await sdk.queryRecords('GlobalOptionSetDefinitions', { select: ['Name', 'Description'], top: 1000 });
-    inventory.globalChoices.push(...(rows || []).map((r) => withDescription({ name: r.Name }, r.Description)));
+    //
+    // Read through the RAW client, NOT `sdk.queryRecords`. `queryRecords` resolves its first argument
+    // to an entity SET name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`, and
+    // `GlobalOptionSetDefinitions` is a metadata collection rather than a table, so that lookup 404s
+    // and the catch below would swallow it — leaving this inventory permanently empty while the
+    // download still reported success. Same trap, and same fix, as readEntityWithDescriptions.
+    //
+    // `dataverse.get` RESOLVES on a non-2xx instead of throwing, so the status is checked explicitly.
+    const res = await sdk.dataverse.get('/GlobalOptionSetDefinitions?$select=Name,Description');
+    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || [];
+    inventory.globalChoices.push(...rows.map((r) => withDescription({ name: r.Name }, r.Description)));
   } catch { /* optional inventory */ }
 
   return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
@@ -397,15 +406,63 @@ function missingDownloads(a, b) {
 // missing primary name as a hard download failure, which is actionable at the point it happens rather
 // than as a confusing validation error later. Returns `null` for `primaryAttribute` so the caller can
 // detect and report it.
+// Dataverse `AttributeType` -> App Spec column type. Only types the App Spec can actually declare
+// are mapped; anything else (Lookup, Owner, State, Status, Uniqueidentifier, Virtual, ...) is a
+// column the author never wrote — a Lookup comes from `relationships[]`, and the rest are platform
+// plumbing — so it is left out of the hydrated spec entirely.
+// See: https://learn.microsoft.com/en-us/dotnet/api/microsoft.xrm.sdk.metadata.attributetypecode
+const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
+  String: 'Text', Memo: 'Memo', Picklist: 'Choice', MultiSelectPicklist: 'MultiChoice',
+  Boolean: 'Boolean', Money: 'Money', DateTime: 'DateTime', Integer: 'Integer',
+  BigInt: 'BigInt', Decimal: 'Decimal', Double: 'Double', File: 'File', Image: 'Image',
+};
+
+// Types whose App Spec declaration REQUIRES a companion field this hydrator cannot supply: a
+// `Choice`/`MultiChoice` column must carry `options[]` or a `globalChoice` reference, and reading
+// those needs a per-column typed-metadata expand the download does not perform.
+//
+// So the column is emitted WITHOUT a type rather than with one that makes the whole spec fail
+// validation ("column X: Choice needs options[] or a globalChoice reference") — which is what
+// happened the moment types started being carried, live. A type-less column is exactly the prior
+// behaviour and is harmless here: the build reuses a downloaded table's columns by discovery and
+// never creates them. Full choice round-trip is a separate piece of work.
+const TYPES_NEEDING_COMPANION_DATA = new Set(['Choice', 'MultiChoice']);
+
 function entityFromMetadata(meta, logical) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
   const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
-  const columns = attrs.map((a) => {
+  const primaryLower = String(primary || '').toLowerCase();
+  const columns = attrs.filter((a) => {
+    if (!a) return false;
+    const name = String(a.schemaName || a.SchemaName || a.logicalName || a.LogicalName || '').toLowerCase();
+    // The primary name column is declared separately as `primaryAttribute`, so it must not ALSO
+    // appear in `columns[]`.
+    if (!name || name === primaryLower) return false;
+    // CUSTOM attributes only. `fetchEntityMetadata` returns the FULL attribute list — `createdon`,
+    // `versionnumber`, `importsequencenumber`, `owningbusinessunit` and the rest — and emitting
+    // those as spec columns is not merely noisy, it is destructive: `columns[]` feeds
+    // `defaultViewColumns`, which `enrichDefaultViews` uses to REPLACE the Active/Inactive views'
+    // column set. A downloaded spec that listed system attributes would rewrite a customer's
+    // default views to `Created On` / `Import Sequence Number` on the next rebuild, undoing fix #7
+    // ("drop Created On from enriched default views") whose invariant is stated at
+    // sdk-build.js `defaultViewColumns`: the set only ever contains DECLARED spec columns.
+    const isCustom = a.isCustomAttribute !== undefined ? a.isCustomAttribute : a.IsCustomAttribute;
+    if (isCustom === false) return false;
+    // Keep only attribute types the App Spec can declare (see the map above).
+    const at = a.attributeType || a.AttributeType;
+    return at === undefined || SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at] !== undefined;
+  }).map((a) => {
     const schemaName = (a && (a.schemaName || a.SchemaName || a.logicalName || a.LogicalName)) || '';
+    // The SDK projects `attributeType`, NOT `type`. Reading `a.type` yielded `undefined` on every
+    // column, which silently disabled every type-based filter downstream (`DEFAULT_VIEW_SKIP_TYPES`
+    // skips Memo/File/Image; `SDK_COLUMN_TYPE` decides what an auto form layout places).
+    const at = a && (a.attributeType || a.AttributeType);
+    const mapped = a && a.type ? a.type : SPEC_TYPE_FROM_ATTRIBUTE_TYPE[at];
+    const specType = TYPES_NEEDING_COMPANION_DATA.has(mapped) ? undefined : mapped;
     return withDescription({
       schemaName,
       ...(a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {}),
-      ...(a && a.type ? { type: a.type } : {}),
+      ...(specType ? { type: specType } : {}),
     }, a && (a.description !== undefined ? a.description : a.Description));
   }).filter((c) => c.schemaName);
   return {
@@ -440,7 +497,7 @@ async function readEntityWithDescriptions(sdk, logical) {
   // This deliberately does NOT go through `sdk.queryRecords`. That helper first resolves its
   // argument to an entity SET name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`,
   // so handing it a metadata path produces a nested nonsense URL and a 404:
-  //   .../EntityDefinitions(LogicalName='EntityDefinitions(LogicalName=''ffo_workitem'')')?$select=EntitySetName
+  //   .../EntityDefinitions(LogicalName='EntityDefinitions(LogicalName=''contoso_workitem'')')?$select=EntitySetName
   // Combined with the best-effort catch below, that failed silently for EVERY table — the download
   // reported success and dropped every table and column description. `sdk.dataverse` is the raw
   // client and takes an API-relative path verbatim.

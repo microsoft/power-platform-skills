@@ -74,7 +74,7 @@ function fieldCellIntent(logical, opts) {
 // column itself is perfectly valid and stays readable/writable through the API; it simply cannot be
 // shown. Auto layout therefore skips these types rather than producing a visibly broken form out of
 // the box (ADO 6651696). An EXPLICIT layout still honours the author — they may be targeting a
-// custom control — but spec-lint warns so the choice is deliberate rather than accidental.
+// custom control — but validateAppSpec emits a warning so the choice is deliberate rather than accidental.
 const NON_FORM_RENDERABLE_TYPES = new Set(['BigInt']);
 
 // Normalize one entry of `tabs[].sections[].fields[]`.
@@ -612,20 +612,29 @@ function findFieldCellLocation(formJson, logical) {
       const sections = cols[ci].sections || [];
       for (let si = 0; si < sections.length; si++) {
         const rows = sections[si].rows || [];
+        // Row-major ordinal of each cell WITHIN the section. A section renders as a grid, so the
+        // reading order that matters is flat — in a 2-column section `[a|b] [c|d]` reads a, b, c, d,
+        // and "c immediately after b" is true even though they are in different rows. Row-local
+        // adjacency is therefore the wrong test for "already in place": it reports a correctly
+        // positioned field as misplaced and moves it on every rebuild.
+        let flat = 0;
         for (let ri = 0; ri < rows.length; ri++) {
           const cells = rows[ri].cells || [];
-          for (let celli = 0; celli < cells.length; celli++) {
+          for (let celli = 0; celli < cells.length; celli++, flat++) {
             const fn = cells[celli].control && cells[celli].control.fieldName;
             if (!fn || String(fn).toLowerCase() !== lg || isNonFieldControl(cells[celli].control)) continue;
-            const rowsPointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si + '/rows';
+            const sectionPointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
+            const rowsPointer = sectionPointer + '/rows';
             const rowPointer = rowsPointer + '/' + ri;
             return {
+              sectionPointer,
               rowsPointer,
               rowPointer,
               cellsPointer: rowPointer + '/cells',
               cellPointer: rowPointer + '/cells/' + celli,
               rowIndex: ri,
               cellIndex: celli,
+              flatIndex: flat,
               rowCellCount: cells.length,
             };
           }
