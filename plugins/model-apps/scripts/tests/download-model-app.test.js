@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -177,6 +177,114 @@ test('entityFromMetadata builds a minimal (reuse-friendly) entity spec', () => {
   assert.strictEqual(e.existing, true, 'downloaded tables must be flagged existing:true (teardown data-loss guard)');
 });
 
+test('entityFromMetadata carries table and column descriptions, unwrapping Dataverse Labels', () => {
+  const e = entityFromMetadata({
+    schemaName: 'new_order',
+    displayName: 'Order',
+    primaryNameAttribute: 'new_name',
+    Description: {
+      UserLocalizedLabel: { Label: 'Tracks orders through fulfillment.', LanguageCode: 1033 },
+      LocalizedLabels: [{ Label: 'fallback table text', LanguageCode: 1033 }],
+    },
+    attributes: [
+      {
+        LogicalName: 'new_status',
+        Description: {
+          LocalizedLabels: [{ Label: 'Current fulfillment state.', LanguageCode: 1033 }],
+        },
+      },
+      { LogicalName: 'new_internal', Description: null },
+    ],
+  }, 'new_order');
+
+  assert.strictEqual(e.description, 'Tracks orders through fulfillment.');
+  assert.strictEqual(e.columns[0].schemaName, 'new_status');
+  assert.strictEqual(e.columns[0].description, 'Current fulfillment state.');
+  assert.strictEqual('description' in e.columns[1], false, 'null Label descriptions must be omitted, not emitted as ""');
+  assert.strictEqual(validateAppSpec({
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [e],
+    appShell: { areas: [] },
+  }).ok, true);
+});
+
+test('readEntityWithDescriptions reads descriptions through the RAW dataverse client, not queryRecords', async () => {
+  // `sdk.queryRecords` cannot serve a metadata path: it first resolves its argument to an entity SET
+  // name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`, so a metadata path
+  // becomes a nested nonsense URL that 404s. This mock FAILS any queryRecords attempt so the test
+  // proves the raw client is used, rather than passing against a mock that models the wrong contract.
+  const gets = [];
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical,
+      schemaName: 'new_order',
+      displayName: 'Order',
+      primaryNameAttribute: 'new_name',
+      // The SDK supplies these; the description merge must PRESERVE them.
+      attributes: [
+        { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist' },
+        { logicalName: 'new_owner', displayName: 'Owner', attributeType: 'Lookup', targets: ['systemuser'] },
+      ],
+    }),
+    queryRecords: async (set) => { throw new Error(`queryRecords must not be used for metadata paths (got '${set}')`); },
+    dataverse: {
+      get: async (url) => {
+        gets.push(url);
+        if (/\/Attributes\?/.test(url)) {
+          return { status: 200, headers: {}, body: { value: [
+            { LogicalName: 'new_status', Description: { LocalizedLabels: [{ Label: 'State shown to dispatchers.', LanguageCode: 1033 }] } },
+          ] } };
+        }
+        return { status: 200, headers: {}, body: { Description: { UserLocalizedLabel: { Label: 'Order table purpose.', LanguageCode: 1033 }, LocalizedLabels: [] } } };
+      },
+    },
+  };
+
+  const meta = await readEntityWithDescriptions(sdk, 'new_order');
+  const e = entityFromMetadata(meta, 'new_order');
+
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\?\$select=LogicalName,Description$/.test(u)), `table read URL wrong: ${gets.join(' | ')}`);
+  assert.ok(gets.some((u) => /^\/EntityDefinitions\(LogicalName='new_order'\)\/Attributes\?\$select=LogicalName,Description$/.test(u)), `attribute read URL wrong: ${gets.join(' | ')}`);
+  assert.strictEqual(e.description, 'Order table purpose.');
+  const status = e.columns.find((c) => c.schemaName === 'new_status');
+  assert.strictEqual(status.description, 'State shown to dispatchers.');
+  // The merge must not discard SDK-only attribute facts (a replace would drop `targets`, breaking
+  // lookup handling elsewhere) nor drop attributes the description read did not return.
+  const owner = meta.attributes.find((a) => a.logicalName === 'new_owner');
+  assert.ok(owner, 'an attribute with no description was dropped by the merge');
+  assert.deepStrictEqual(owner.targets, ['systemuser'], 'the merge clobbered SDK-only attribute fields');
+});
+
+test('readEntityWithDescriptions treats a non-2xx from the raw client as "no description", not a crash', async () => {
+  // dataverse.get RESOLVES with { status } on a 404 instead of throwing, so a bare try/catch would
+  // let the error body through. The body here deliberately CARRIES a `Description` key: dropping the
+  // status check must not be survivable just because a real 404 body usually lacks one.
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [{ logicalName: 'new_status' }] }),
+    dataverse: {
+      get: async () => ({
+        status: 404,
+        headers: {},
+        body: { error: { code: '0x80060888', message: 'Resource not found' }, Description: { UserLocalizedLabel: { Label: 'GARBAGE FROM AN ERROR BODY', LanguageCode: 1033 } } },
+      }),
+    },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_order'), 'new_order');
+  assert.ok(!('description' in e), `a 404 body must never supply a description (got ${JSON.stringify(e.description)})`);
+  assert.ok(!('description' in e.columns[0]));
+});
+
+test('readEntityWithDescriptions survives a raw client that throws', async () => {
+  const sdk = {
+    fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name', attributes: [] }),
+    dataverse: { get: async () => { throw new Error('network down'); } },
+  };
+  const e = entityFromMetadata(await readEntityWithDescriptions(sdk, 'new_order'), 'new_order');
+  assert.strictEqual(e.schemaName, 'new_order', 'a description read failure must not sink the download');
+  assert.ok(!('description' in e));
+});
+
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {
   const calls = [];
   const sdk = {
@@ -227,19 +335,77 @@ test('readDashboards reconstructs supported tile shapes and skips unreadable das
         ],
       };
     },
-    queryRecords: async () => [{ name: 'Executive Dashboard' }],
+    queryRecords: async () => [{ name: 'Executive Dashboard', description: 'Leader view of revenue and work.' }],
   };
 
   const dashboards = await readDashboards(sdk, app);
 
   assert.strictEqual(dashboards.length, 1);
   assert.strictEqual(dashboards[0].name, 'Executive Dashboard');
+  assert.strictEqual(dashboards[0].description, 'Leader view of revenue and work.');
   assert.deepStrictEqual(dashboards[0].tiles, [
     { type: 'chart', name: 'Revenue', entity: 'account', viewId: '11111111-0000-4000-8000-000000000001', visualizationId: '22222222-0000-4000-8000-000000000002' },
     { type: 'list', name: 'Open Accounts', entity: 'account', viewId: '33333333-0000-4000-8000-000000000003' },
     { type: 'iframe', name: 'Portal', url: 'https://contoso.example' },
     { type: 'webresource', name: 'Help', webResource: 'new_help.htm' },
   ]);
+});
+
+test('readDashboards omits a null dashboard description instead of emitting a blank string', async () => {
+  const sdk = {
+    fetchArtifact: async () => ({ components: [{ type: 'iframe', name: 'Portal', parameters: { Url: 'https://contoso.example' } }] }),
+    queryRecords: async (_set, opts) => {
+      assert.ok(opts.select.includes('description'), 'dashboard name lookup also requests description');
+      return [{ name: 'Operations', description: null }];
+    },
+  };
+  const dashboards = await readDashboards(sdk, {
+    siteMap: { areas: [{ groups: [{ subAreas: [{ type: 'DashBoard', dashboardId: 'dash-1', title: 'Operations' }] }] }] },
+  });
+  assert.strictEqual('description' in dashboards[0], false, 'null descriptions are absent, not empty strings');
+});
+
+test('readDescriptionInventory captures view, chart, form, business-rule, and global-choice descriptions', async () => {
+  const APP_UNIQ_VALUE = '5111e0f2-0000-4000-8000-000000000001';
+  const VIEW_ID = '5111e0f2-0000-4000-8000-000000000002';
+  const CHART_ID = '5111e0f2-0000-4000-8000-000000000003';
+  const FORM_ID = '5111e0f2-0000-4000-8000-000000000004';
+  const RULE_ID = '5111e0f2-0000-4000-8000-000000000005';
+  const SOL_ID = '5111e0f2-0000-4000-8000-000000000006';
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      const filter = (opts && opts.filter) || '';
+      if (set === 'appmodule') return [{ appmoduleidunique: APP_UNIQ_VALUE }];
+      if (set === 'appmodulecomponent' && /componenttype eq 26/.test(filter)) return [{ objectid: VIEW_ID }];
+      if (set === 'appmodulecomponent' && /componenttype eq 59/.test(filter)) return [{ objectid: CHART_ID }];
+      if (set === 'appmodulecomponent' && /componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID }];
+      if (set === 'savedquery') return [{ savedqueryid: VIEW_ID, name: 'Active Orders', returnedtypecode: 'new_order', description: 'Work queue.' }];
+      if (set === 'savedqueryvisualization') return [{ savedqueryvisualizationid: CHART_ID, name: 'Orders by Status', primaryentitytypecode: 'new_order', description: null }];
+      if (set === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: 'Primary form.' }];
+      if (set === 'solution') return [{ solutionid: SOL_ID }];
+      if (set === 'solutioncomponent') return [{ objectid: RULE_ID, componenttype: 29 }];
+      if (set === 'workflow') return [{ workflowid: RULE_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.' }];
+      if (set === 'GlobalOptionSetDefinitions') {
+        return [{ Name: 'new_priority', Description: { LocalizedLabels: [{ Label: 'Shared priority choices.', LanguageCode: 1033 }] } }];
+      }
+      return [];
+    },
+  };
+
+  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+
+  assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
+  assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
+  assert.deepStrictEqual(inv.forms[0], { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
+  assert.deepStrictEqual(inv.businessRules[0], { id: RULE_ID, name: 'Lock Closed', entity: 'new_order', description: 'Closed rows are read-only.' });
+  assert.deepStrictEqual(inv.globalChoices[0], { name: 'new_priority', description: 'Shared priority choices.' });
+  assert.ok(calls.some((c) => c.set === 'savedquery' && c.opts.select.includes('description')), 'view read selects description');
+  assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
+  assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('description')), 'form read selects description');
+  assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('description')), 'business-rule read selects description');
+  assert.ok(calls.some((c) => c.set === 'GlobalOptionSetDefinitions' && c.opts.select.includes('Description')), 'global-choice read selects Description');
 });
 
 test('readDashboards keeps the sitemap title when the dashboard name lookup fails', async () => {
@@ -446,7 +612,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
         // The app belongs to a real unmanaged solution — recoverAppSolution returns its uniquename, but the
         // publisher PREFIX must still come from the app uniquename ('test'), NOT this solution (Sol F2).
         if (logical === 'solutioncomponent') return [{ _solutionid_value: 'sol-x' }];
-        if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false }];
+        if (logical === 'solution') return [{ solutionid: 'sol-x', uniquename: 'ContosoSln', ismanaged: false, description: 'The Contoso field-operations solution.' }];
         return [];
       },
       fetchEntityMetadata: async (logical) => ({
@@ -486,6 +652,11 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     // existing app even after a display-name rename) and the publisher prefix is derived FROM it.
     assert.strictEqual(spec.app.uniqueName, APP_UNIQUE, 'the app real uniquename round-trips into spec.app.uniqueName');
     assert.strictEqual(spec.solution.uniqueName, 'ContosoSln', 'the real unmanaged solution uniquename is recovered for teardown');
+    // `solution` is assembled field-by-field in runDownload (not spread from recoverAppSolution, so an
+    // unrecovered solution still gets its required defaults). That makes every field an explicit copy,
+    // and a field that is read but not copied is silently dropped — which is what happened here.
+    assert.strictEqual(spec.solution.description, 'The Contoso field-operations solution.',
+      'the recovered solution description must be carried into the spec, not dropped by the field-by-field copy');
     assert.strictEqual(spec.solution.publisherPrefix, 'test', 'this mock SDK exposes no getSolution, so the prefix falls back to the app uniquename (test_roundtrip → test); when getSolution IS available the solution publisher wins — see the recoverAppSolution tests');
     assert.strictEqual(appUniqueName(spec), APP_UNIQUE, 'appUniqueName resolves the REAL uniquename (identity lookup finds the existing app, no duplicate) even though the display name is "Test App"');
     assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
@@ -599,12 +770,12 @@ test('recoverAppSolution recovers the publisher prefix from the SOLUTION, not th
   const sdk = {
     queryRecords: async (set) => {
       if (set === 'solutioncomponent') return [{ _solutionid_value: 'sol-1' }];
-      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false }];
+      if (set === 'solution') return [{ solutionid: 'sol-1', uniquename: 'ContosoCustomerManagement', ismanaged: false, description: 'Customer management assets.' }];
       return [];
     },
     getSolution: async (uniqueName) => ({ uniqueName, publisherPrefix: 'contoso' }),
   };
-  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', publisherPrefix: 'contoso' });
+  assert.deepStrictEqual(await recoverAppSolution(sdk, 'app-1'), { uniqueName: 'ContosoCustomerManagement', description: 'Customer management assets.', publisherPrefix: 'contoso' });
 });
 
 test('recoverAppSolution degrades to uniqueName-only when the prefix cannot be recovered', async () => {

@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { hydrateSpec } = require('./lib/hydrate-spec.js');
+const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
@@ -51,7 +51,12 @@ async function readDashboards(sdk, app, warn) {
       continue;
     }
     let name = title || id;
-    try { const rows = await sdk.queryRecords('systemform', { select: ['name'], filter: `formid eq ${id}`, top: 1 }); if (rows && rows[0] && rows[0].name) name = rows[0].name; } catch { /* keep fallback */ }
+    let description;
+    try {
+      const rows = await sdk.queryRecords('systemform', { select: ['name', 'description'], filter: `formid eq ${id}`, top: 1 });
+      if (rows && rows[0] && rows[0].name) name = rows[0].name;
+      description = rows && rows[0] && rows[0].description;
+    } catch { /* keep fallback */ }
     const tiles = [];
     for (const c of art.components || []) {
       const p = c.parameters || {};
@@ -64,7 +69,7 @@ async function readDashboards(sdk, app, warn) {
     }
     // A dashboard that read cleanly but yielded no usable tile is ALSO a silent drop — the subarea
     // disappears with nothing said. Distinguish it from the unreadable case above.
-    if (tiles.length) out.push({ id, name, tiles });
+    if (tiles.length) out.push(withDescription({ id, name, tiles }, description));
     else if (typeof warn === 'function') {
       warn(`dashboard '${name}' (${id}) read OK but produced no recognizable tiles `
         + `(${(art.components || []).length} component(s)); its sitemap subarea will be dropped.`);
@@ -230,6 +235,73 @@ async function appComponentEntities(sdk, appId) {
   }
 }
 
+async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
+  const out = [];
+  const clean = [...new Set((ids || []).map((id) => String(id || '').replace(/[{}]/g, '')).filter(Boolean))];
+  for (let i = 0; i < clean.length; i += 20) {
+    const filter = clean.slice(i, i + 20).map((id) => `${idField} eq ${id}`).join(' or ');
+    const rows = await sdk.queryRecords(set, { select, filter, top: 1000 });
+    for (const r of rows || []) out.push(mapRow(r));
+  }
+  return out;
+}
+
+async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [] };
+  try {
+    const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
+    const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
+    const parent = appUniqueId ? String(appUniqueId).replace(/[{}]/g, '') : null;
+    if (parent) {
+      for (const src of APP_COMPONENT_ENTITY_SOURCES) {
+        const rows = await sdk.queryRecords('appmodulecomponent', {
+          select: ['objectid', 'componenttype'],
+          filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
+          top: COMPONENT_PAGE_CAP,
+        });
+        const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
+        if (src.set === 'savedquery') {
+          inventory.views.push(...await rowsByIds(sdk, 'savedquery', 'savedqueryid', ids, ['savedqueryid', 'name', 'returnedtypecode', 'description'], (r) =>
+            withDescription({ id: r.savedqueryid, name: r.name, entity: r.returnedtypecode }, r.description)));
+        } else if (src.set === 'savedqueryvisualization') {
+          inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
+            withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
+        } else if (src.set === 'systemform') {
+          const forms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description'], (r) =>
+            withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
+          inventory.forms.push(...forms.filter((f) => f.entity && f.entity !== 'none'));
+        }
+      }
+    }
+  } catch { /* inventory is best-effort; structural download still carries the rebuildable app spec */ }
+
+  try {
+    if (solutionUniqueName && !isRestrictedSolution(solutionUniqueName)) {
+      const esc = String(solutionUniqueName).replace(/'/g, "''");
+      const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${esc}'`, top: 1 });
+      const solId = sols && sols[0] && sols[0].solutionid;
+      if (solId) {
+        // Solution component type 29 is Workflow; business rules are workflow rows with category 2.
+        // See component type values: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+        const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, top: 1000 });
+        const ids = (comps || []).map((r) => r && r.objectid).filter(Boolean);
+        inventory.businessRules.push(...await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description'], (r) =>
+          withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description)));
+      }
+    }
+  } catch { /* business-rule descriptions are an inspection aid, not a rebuild prerequisite */ }
+
+  try {
+    // Global option sets are not app components, but their Description is another Dataverse Label. This
+    // is intentionally an inventory, not `globalChoices[]`: without options we cannot safely claim a
+    // rebuildable choice definition.
+    const rows = await sdk.queryRecords('GlobalOptionSetDefinitions', { select: ['Name', 'Description'], top: 1000 });
+    inventory.globalChoices.push(...(rows || []).map((r) => withDescription({ name: r.Name }, r.Description)));
+  } catch { /* optional inventory */ }
+
+  return Object.fromEntries(Object.entries(inventory).filter(([, value]) => value.length));
+}
+
 // Read pac's downloaded page tree (<pagesRoot>/<pageId>/{page.tsx,config.json,prompt.txt}) into
 // pages[] entries with codeFile paths relative to `outDir`.
 function parseDownloadedPages(pagesRoot, outDir, nameById) {
@@ -327,13 +399,23 @@ function missingDownloads(a, b) {
 // detect and report it.
 function entityFromMetadata(meta, logical) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
+  const attrs = Array.isArray(meta && meta.attributes) ? meta.attributes : (Array.isArray(meta && meta.Attributes) ? meta.Attributes : []);
+  const columns = attrs.map((a) => {
+    const schemaName = (a && (a.schemaName || a.SchemaName || a.logicalName || a.LogicalName)) || '';
+    return withDescription({
+      schemaName,
+      ...(a && (a.displayName || a.DisplayName) ? { displayName: descriptionFromDataverse(a.displayName || a.DisplayName) || a.displayName || a.DisplayName } : {}),
+      ...(a && a.type ? { type: a.type } : {}),
+    }, a && (a.description !== undefined ? a.description : a.Description));
+  }).filter((c) => c.schemaName);
   return {
     schemaName: (meta && (meta.schemaName || meta.logicalName)) || logical,
     displayName: (meta && meta.displayName) || logical,
+    ...(descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) ? { description: descriptionFromDataverse(meta && (meta.description !== undefined ? meta.description : meta.Description)) } : {}),
     // Never synthesized: a fabricated attribute name yields a spec that references a column Dataverse
     // does not have, which is exactly the bug this fixes.
     primaryAttribute: primary ? { schemaName: primary, displayName: 'Name' } : null,
-    columns: [],
+    columns,
     // Flag every recovered table as pre-existing so a teardown of THIS downloaded spec never deletes the
     // table (+ its data). Download cannot prove which tables the app CREATED vs merely REFERENCED, and
     // deleting a customer's table/data is unrecoverable while an orphaned table is not — so fail safe.
@@ -341,6 +423,51 @@ function entityFromMetadata(meta, logical) {
     // forms, so the build's `existing`-gated default-form promotion path is not reached here anyway.)
     existing: true,
   };
+}
+
+function metadataEntityPath(logical) {
+  return `EntityDefinitions(LogicalName='${String(logical).replace(/'/g, "''")}')`;
+}
+
+async function readEntityWithDescriptions(sdk, logical) {
+  const meta = { ...(await sdk.fetchEntityMetadata(logical)) };
+  // The SDK's fetchEntityMetadata projection is enough for identity but carries NO descriptions —
+  // measured against a live org, its entity keys are logicalName/schemaName/displayName/
+  // entitySetName/primaryNameAttribute/primaryIdAttribute/isCustomEntity/attributes/relationships,
+  // and each attribute is {logicalName, displayName, attributeType, isCustomAttribute, targets}.
+  // So descriptions require a second read against the metadata endpoints.
+  //
+  // This deliberately does NOT go through `sdk.queryRecords`. That helper first resolves its
+  // argument to an entity SET name via `EntityDefinitions(LogicalName='<arg>')?$select=EntitySetName`,
+  // so handing it a metadata path produces a nested nonsense URL and a 404:
+  //   .../EntityDefinitions(LogicalName='EntityDefinitions(LogicalName=''ffo_workitem'')')?$select=EntitySetName
+  // Combined with the best-effort catch below, that failed silently for EVERY table — the download
+  // reported success and dropped every table and column description. `sdk.dataverse` is the raw
+  // client and takes an API-relative path verbatim.
+  //
+  // NOTE `dataverse.get` RESOLVES with `{ status, headers, body }` on a non-2xx rather than throwing
+  // (a 404 returns status 404), so the status MUST be checked explicitly. A try/catch alone would
+  // reintroduce exactly the silence this replaces.
+  const entityPath = `/${metadataEntityPath(logical)}`;
+  try {
+    const res = await sdk.dataverse.get(`${entityPath}?$select=LogicalName,Description`);
+    if (res && res.status >= 200 && res.status < 300 && res.body) meta.Description = res.body.Description;
+  } catch { /* description best-effort — never sink an otherwise usable download */ }
+  try {
+    // Merge onto the SDK's attribute list rather than replacing it: `fetchEntityMetadata` supplies
+    // `targets` (lookup target tables) and `attributeType`, which this projection does not, and
+    // entityFromMetadata/other callers rely on them.
+    const res = await sdk.dataverse.get(`${entityPath}/Attributes?$select=LogicalName,Description`);
+    const rows = (res && res.status >= 200 && res.status < 300 && res.body && res.body.value) || null;
+    if (Array.isArray(rows)) {
+      const byLogical = new Map(rows.filter((r) => r && r.LogicalName).map((r) => [String(r.LogicalName).toLowerCase(), r.Description]));
+      meta.attributes = (meta.attributes || []).map((a) => {
+        const key = String((a && (a.logicalName || a.LogicalName)) || '').toLowerCase();
+        return byLogical.has(key) ? { ...a, Description: byLogical.get(key) } : a;
+      });
+    }
+  } catch { /* column descriptions are best-effort */ }
+  return meta;
 }
 
 // Image webresourcetypes (png/jpg/gif/ico/svg) — an icon reference must resolve to one of these to be
@@ -485,10 +612,10 @@ async function recoverAppSolution(sdk, appId) {
     // One OR-batched lookup for all candidate solutions (solutionid is a Guid, so it is unquoted in
     // the OData filter — mirrors the existing `solutionid eq ${id}` usage elsewhere in this file).
     const filter = solIds.map((id) => `solutionid eq ${id}`).join(' or ');
-    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged'], filter, top: 500 });
+    const sols = await sdk.queryRecords('solution', { select: ['solutionid', 'uniquename', 'ismanaged', 'description'], filter, top: 500 });
     const real = (sols || []).find((s) => s && s.ismanaged === false && !isRestrictedSolution(s.uniquename));
     if (!real) return null;
-    const out = { uniqueName: real.uniquename };
+    const out = withDescription({ uniqueName: real.uniquename }, real.description);
     // Authoritative publisher prefix for anything authored into THIS solution. Guarded on the method
     // existing so an older vendored bundle (pre-getSolution) degrades to the caller's fallback instead
     // of throwing away the solution we just recovered.
@@ -662,7 +789,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // the confusing downstream error the explicit branch below exists to avoid. Bucket it by origin
     // exactly like the no-primary-name case, so the user is told the table AND the reason.
     try {
-      e = entityFromMetadata(await sdk.fetchEntityMetadata(logical), logical);
+      e = entityFromMetadata(await readEntityWithDescriptions(sdk, logical), logical);
     } catch (err) {
       metadataErrors.set(logical, (err && err.message) || String(err));
       (sitemapSet.has(logical) ? noPrimaryName : droppedComponents).push(logical);
@@ -725,6 +852,11 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const trustedPrefix = solutionPrefix || appDerivedPrefix;
   const solution = { uniqueName: 'Default', publisherPrefix: trustedPrefix || 'new', prefixResolved: !!trustedPrefix };
   if (recovered && recovered.uniqueName) solution.uniqueName = recovered.uniqueName;
+  // `recoverAppSolution` already unwraps the solution's description; carry it across. This object is
+  // built fresh (rather than spread from `recovered`) so an unrecovered solution still gets its
+  // required defaults, which is why each field has to be copied deliberately — a field added to
+  // `recoverAppSolution` and not copied here is silently dropped, as this one was.
+  if (recovered && recovered.description) solution.description = recovered.description;
 
   // Icon web resources — looked up by NAME (the sitemap stores the web-resource name, not its id).
   // Bare-name icons are re-declared as-is; a CUSTOM (unmanaged) web resource referenced by a PLATFORM
@@ -772,6 +904,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     dashboards: async () => dashboards,
     solution: async () => solution,
     design: async () => (manifest ? manifest.design : undefined),
+    descriptionInventory: async () => readDescriptionInventory(sdk, appId, solution.uniqueName),
   };
   const spec = await hydrateSpec(read);
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
@@ -895,4 +1028,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

@@ -549,14 +549,29 @@ child view id. Each step emits `[n/total]`.
   checks **content** (a view's column set, relationship + command existence), so an unapplied edit
   surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
   `docs/app-builder-capabilities.md`.
-- Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
+- Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
   security surface today is role-per-persona only — a tracked SDK follow-up).
+- **Not possible through any API** (do not promise these — they are Dataverse platform limits, not
+  gaps in this skill):
+  - **Assigning a form to security role(s).** `systemform` reports
+    `CanBeInManyToMany: { Value: false, CanBeChanged: false }`, has zero many-to-many relationships,
+    and every candidate intersect (`systemformroles`, `systemuserprofiles`, …) returns 404. Measured
+    against a live org. A new form is selectable by **all** roles by default, so the usual reason to
+    ask for this — making a form reachable — is already satisfied. Restricting it remains a maker step.
+  - **Boolean default value**, **numeric `Format: Duration`**, and per-column
+    **`IsValidForCreate/Update/Read`**: the vendored SDK hardcodes `DefaultValue: false` and
+    `Format: "None"` on create and exposes no `IsValidFor*` on create or update. These are tracked
+    SDK gaps, not spec gaps.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status
-  reasons, alternate keys, **N:N + junction-with-payload**; adaptive main forms with **1:N / N:N
-  sub-grids**; **quick-create / quick-view forms** (`formType`) + **quick-view placement**
-  (`forms[].quickViews[]`); Choice-column charts; **security roles** (`personas[]` — one role per
+  reasons, alternate keys, **N:N + junction-with-payload**; **`required` reconciled on existing
+  columns** (an explicit `required` converges on rebuild; an omitted one never demotes); adaptive
+  main forms with **1:N / N:N sub-grids**; **per-field form control** (`readOnly` / `hidden` /
+  `after` positioning, plus `prune: false` to edit a subset of a form non-destructively);
+  **quick-create / quick-view forms** (`formType`) + **quick-view placement**
+  (`forms[].quickViews[]`); Choice-column charts; **business rules** (`businessRules[]` — compiled to
+  classic workflow XAML and activated); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
   placement**; **generative pages** (`pages[]` — the genpage-first default, uploaded via

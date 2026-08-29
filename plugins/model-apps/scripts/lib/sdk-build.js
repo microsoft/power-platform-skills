@@ -54,6 +54,7 @@ const {
   formFieldLogicals,
   firstSectionRowsPointer,
   findFieldCellPointer,
+  findFieldCellLocation,
   subgridCellIntent,
   subgridSectionIntent,
   quickViewCellIntent,
@@ -1182,6 +1183,76 @@ async function runSdkBuild(spec, opts = {}) {
   // (semantic identity = bound fieldName / relationship, so a rebuild never duplicates), PRUNE fields
   // an explicit layout dropped, then push (halt on a 412 conflict), publish, and ensure it's a
   // solution component. This is what makes editing a deployed form actually land.
+
+  // Re-assert `readOnly` / `hidden` on fields already placed on a deployed form.
+  //
+  // Only the ENABLED state is ever written (`isReadOnly: true`, `visible: false`) — never the
+  // negation. A spec that omits the flag means "I am not expressing an opinion", not "make it
+  // editable/visible", so blanking here would silently undo a lock or a hide a maker applied in the
+  // designer on a field the spec merely happens to list.
+  //
+  // Consequence, documented rather than worked around: turning a flag back OFF through the spec is
+  // not supported — remove the field and let the next build re-add it, or clear it in the designer.
+  const applyFieldControlOptions = async (formId, def, want, wantCellByLogical) => {
+    for (const logical of want) {
+      const wantCell = wantCellByLogical[logical];
+      if (!wantCell) continue;
+      const wantReadOnly = !!(wantCell.control && wantCell.control.isReadOnly);
+      const wantHidden = wantCell.visible === false;
+      if (!wantReadOnly && !wantHidden) continue; // nothing asserted for this field
+      // Re-read per field: each updateElement rewrites the artifact, and a stale pointer would
+      // patch whatever now sits at that index.
+      const loc = findFieldCellLocation(await provision.getArtifact('form', formId) || {}, logical);
+      if (!loc) continue;
+      if (wantReadOnly) await provision.updateElement('form', formId, `${loc.cellPointer}/control`, { isReadOnly: true });
+      if (wantHidden) await provision.updateElement('form', formId, loc.cellPointer, { visible: false });
+    }
+  };
+
+  // Move each anchored field so it immediately follows its anchor (`fieldOptions[x].after`).
+  //
+  // This is the non-destructive alternative to re-declaring a whole form just to move one control
+  // (ADO 6651439). It is a no-op when the field is already in place, so a rebuild converges instead
+  // of shuffling the form on every run.
+  //
+  // Two mechanics, chosen by the shape of the field's row, so the section grid is never left ragged:
+  //   * the field is ALONE in its row -> move the whole ROW after the anchor's row. A field added by
+  //     the reconcile above always lands this way (it is appended as `{ cells: [cell] }`), so this is
+  //     the common path.
+  //   * the field SHARES a row (a 2-column section) -> move just the CELL into the anchor's row,
+  //     directly after the anchor cell. The anchor's row then holds one extra cell; Dataverse renders
+  //     the overflow on the next line rather than rejecting it.
+  const applyFieldPositions = async (formId, def) => {
+    const positions = def.__fieldPositions || {};
+    for (const logical of Object.keys(positions)) {
+      const anchor = positions[logical];
+      // Re-read before every move: moveElement rewrites the artifact and shifts sibling indices.
+      const form = await provision.getArtifact('form', formId) || {};
+      const from = findFieldCellLocation(form, logical);
+      const to = findFieldCellLocation(form, anchor);
+      // A missing field or anchor is not an error: the anchor may be a column this build did not
+      // create, or the field may have been pruned. Positioning is a layout nicety — never fail a
+      // build over it.
+      if (!from || !to) continue;
+
+      if (from.rowCellCount === 1) {
+        if (from.rowsPointer === to.rowsPointer && from.rowIndex === to.rowIndex + 1) continue; // already there
+        // moveElement resolves the TARGET ARRAY first, then removes the source, then splices. When
+        // both live in the same array the removal shifts every later index down by one, so a target
+        // computed against the pre-removal array overshoots by one. Compensate explicitly.
+        let index = to.rowIndex + 1;
+        if (from.rowsPointer === to.rowsPointer && from.rowIndex < index) index -= 1;
+        await provision.moveElement('form', formId, from.rowPointer, to.rowsPointer, { index });
+        continue;
+      }
+
+      if (from.cellsPointer === to.cellsPointer && from.cellIndex === to.cellIndex + 1) continue; // already there
+      let index = to.cellIndex + 1;
+      if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
+      await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });
+    }
+  };
+
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
     // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
@@ -1201,12 +1272,26 @@ async function runSdkBuild(spec, opts = {}) {
       have.add(logical);
     }
     await addSubgrids(formId, def.__subgrids);
+    // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
+    // The add loop above only reaches fields it creates, so without this an author who marks an
+    // existing field `readOnly: true` gets a successful build and no change — the same
+    // create-only blind spot that made an existing column's RequiredLevel unchangeable.
+    //
+    // updateElement MERGES when both sides are objects (`{...current, ...patch}`), so patching
+    // `/…/control` with `{ isReadOnly: true }` preserves classId, label and every other adapter-derived
+    // value. It does NOT mint ids, which is exactly right here — the cell already has one.
+    await applyFieldControlOptions(formId, def, want, wantCellByLogical);
+    // Reposition any field the spec anchors after another (`fieldOptions[x].after`). Runs AFTER the
+    // add/attribute passes so a field created in this same run can be positioned in the same run.
+    await applyFieldPositions(formId, def);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.
+    // `prune: false` opts out entirely, so a subset of the form can be restyled or reordered without
+    // re-declaring every other field just to keep it (ADO 6651439).
     // removeElement is non-idempotent and shifts sibling indices, so re-locate each cell pointer from
     // a fresh read before removing it.
-    if (def.__explicitLayout) {
+    if (def.__explicitLayout && def.__prune !== false) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
       for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {

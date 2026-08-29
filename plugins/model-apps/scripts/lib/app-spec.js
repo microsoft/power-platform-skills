@@ -518,6 +518,112 @@ function validateDescription(value, label, errors, opts = {}) {
   }
 }
 
+// Per-control form-field options: `readOnly`, `hidden`, `after`.
+//
+// Reachable two ways — inline on an EXPLICIT layout's `sections[].fields[]` entry, or via the
+// form-level `fieldOptions` map (the only route under an AUTO layout, which has no field list).
+//
+// Only the ENABLED state is written by the build (`isReadOnly: true` / `visible: false`); `false` is
+// a no-op rather than an un-set, so it is rejected here instead of being accepted and quietly
+// ignored — an author who writes `readOnly: false` expecting it to clear an existing lock would
+// otherwise get a green build and no change.
+function validateFormFieldOptions(f, entityByLower, errors, warnings) {
+  const label = `form '${f.name || f.entity}'`;
+  const entity = entityByLower.get(String(f.entity || '').toLowerCase());
+  const columnType = (logical) => {
+    if (!entity) return undefined;
+    const c = (entity.columns || []).find((x) => x && x.schemaName && x.schemaName.toLowerCase() === logical);
+    return c && (c.type || 'Text');
+  };
+  const explicit = Array.isArray(f.tabs) || f.layout === 'explicit';
+  // Every field this form declares an option for, from either route, so the checks below run once
+  // per (field, source) pair with a source-accurate message.
+  const seen = [];
+
+  for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
+    for (const s of ((t && t.sections) || [])) {
+      for (const entry of ((s && s.fields) || [])) {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          if (!entry.name || typeof entry.name !== 'string') {
+            errors.push(`${label}: a field entry object is missing a string 'name'`);
+            continue;
+          }
+          seen.push({ name: String(entry.name).toLowerCase(), opt: entry, where: `field '${entry.name}'`, inline: true });
+        } else if (typeof entry !== 'string') {
+          errors.push(`${label}: a field entry must be a column logical name or an object { name, readOnly?, hidden?, after? }`);
+        }
+      }
+    }
+  }
+
+  if (f.fieldOptions !== undefined) {
+    if (!f.fieldOptions || typeof f.fieldOptions !== 'object' || Array.isArray(f.fieldOptions)) {
+      errors.push(`${label}: fieldOptions must be an object keyed by column logical name`);
+    } else {
+      for (const key of Object.keys(f.fieldOptions)) {
+        const v = f.fieldOptions[key];
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+          errors.push(`${label}: fieldOptions['${key}'] must be an object { readOnly?, hidden?, after? }`);
+          continue;
+        }
+        seen.push({ name: String(key).toLowerCase(), opt: v, where: `fieldOptions['${key}']`, inline: false });
+      }
+    }
+  }
+
+  for (const { name, opt, where, inline } of seen) {
+    for (const flag of ['readOnly', 'hidden']) {
+      if (opt[flag] === undefined) continue;
+      if (typeof opt[flag] !== 'boolean') {
+        errors.push(`${label}: ${where} ${flag} must be a boolean`);
+      } else if (opt[flag] === false) {
+        errors.push(`${label}: ${where} sets ${flag}: false, which the build cannot apply — it only ever writes the ENABLED state, so a maker's existing setting is never silently cleared. Omit the flag, or clear it in the form designer.`);
+      }
+    }
+    if (opt.after !== undefined) {
+      if (typeof opt.after !== 'string' || !opt.after.trim()) {
+        errors.push(`${label}: ${where} after must be the logical name of another field on this form`);
+      } else if (String(opt.after).toLowerCase() === name) {
+        errors.push(`${label}: ${where} anchors '${name}' after itself`);
+      } else if (inline) {
+        // An explicit layout already expresses order by listing position. Honouring `after` there too
+        // would give one form two competing orderings, and the reconcile (which applies `after`) would
+        // silently override the authored list on the first rebuild.
+        errors.push(`${label}: ${where} cannot use 'after' inside an explicit tabs layout — the listed order already positions the field. Move it in the list instead, or use form-level fieldOptions if you are anchoring against a field this layout does not list.`);
+      }
+    }
+    // A BigInt has no Unified Interface control, so a form placement renders "Error loading control".
+    // Auto layout skips them outright; an explicit layout still honours the author, but declaring
+    // per-control options for one is almost certainly a mistake worth surfacing.
+    if (columnType(name) === 'BigInt') {
+      warnings.push(`${label}: ${where} targets '${name}', a BigInt column — Big Integer has no Unified Interface form control, so it renders "Error loading control" wherever it is placed`);
+    }
+  }
+
+  if (f.prune !== undefined) {
+    if (typeof f.prune !== 'boolean') {
+      errors.push(`${label}: prune must be a boolean`);
+    } else if (f.prune === false && !explicit) {
+      warnings.push(`${label}: prune: false has no effect on an auto layout — an auto layout is already additive and never removes a field`);
+    }
+  }
+
+  // An explicit layout that names a BigInt column produces a broken control on a live record. It is a
+  // warning, not an error: the author asked for it by name and may be pairing it with a custom control.
+  if (explicit) {
+    for (const t of (Array.isArray(f.tabs) ? f.tabs : [])) {
+      for (const s of ((t && t.sections) || [])) {
+        for (const entry of ((s && s.fields) || [])) {
+          const nm = String((entry && typeof entry === 'object' ? entry.name : entry) || '').toLowerCase();
+          if (nm && columnType(nm) === 'BigInt') {
+            warnings.push(`${label}: field '${nm}' is a BigInt column — Big Integer has no Unified Interface form control, so it will render "Error loading control" on every record. Keep it off the form (it stays readable through the API).`);
+          }
+        }
+      }
+    }
+  }
+}
+
 function validateAppSpec(spec, opts = {}) {
   const profile = opts.profile || 'deploy';
   const errors = [];
@@ -736,6 +842,7 @@ function validateAppSpec(spec, opts = {}) {
         }
       }
     }
+    validateFormFieldOptions(f, entityByLower, errors, warnings);
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the

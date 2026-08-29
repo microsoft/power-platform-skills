@@ -421,13 +421,13 @@ test('businessRuleFilter selects the definition only', () => {
   assert.match(f, /name eq 'O''Brien rule'/, "a quote in the name must be OData-escaped, not left to break the filter");
 });
 
-test('every business-rule query in build, verify and teardown filters on type', () => {
-  // A guard on the SOURCE, because the three call sites are in different modules and it is the
-  // omission — not a wrong value — that caused the defect. Any new query that forgets the shared
-  // helper fails here.
+test('every business-rule query constrains workflow type intentionally', () => {
+  // A guard on the SOURCE, because the call sites are in different modules and it is the omission
+  // — not a wrong value — that caused the defect. Build/verify must select definitions only; teardown
+  // is the deliberate exception after #493, because it owns the activated copy before table deletion.
   const fs = require('node:fs');
   const path = require('node:path');
-  for (const file of ['sdk-build.js', 'verify-spec.js', 'sdk-teardown.js']) {
+  for (const file of ['sdk-build.js', 'verify-spec.js']) {
     const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', file), 'utf8');
     const raw = src.match(/category eq 2(?! and type eq 1)/g) || [];
     // The only permitted mention of `category eq 2` without `type eq 1` is inside businessRuleFilter
@@ -435,6 +435,8 @@ test('every business-rule query in build, verify and teardown filters on type', 
     // matching nothing.
     assert.deepStrictEqual(raw, [], `${file} has a business-rule query that does not constrain type: ${raw.join(' | ')}`);
   }
+  const teardown = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'sdk-teardown.js'), 'utf8');
+  assert.match(teardown, /type eq 1 or type eq 2/, 'teardown must include the activated-copy row it is responsible for deleting');
 });
 
 test('a rule with an activated copy present is NOT reported as duplicated', async () => {

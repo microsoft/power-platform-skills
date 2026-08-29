@@ -221,6 +221,68 @@ function isVisualizationUnsupported(err) {
   return /not found for the segment\s+'?controlconfigurations/i.test(msg);
 }
 
+function hasExplicitRequired(c) {
+  return c && Object.prototype.hasOwnProperty.call(c, 'required');
+}
+
+function requiredLevelValue(raw) {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw.Value === 'string') return raw.Value;
+  if (raw && typeof raw.value === 'string') return raw.value;
+  return undefined;
+}
+
+function columnRequiredLevel(c) {
+  if (!c) return undefined;
+  return requiredLevelValue(c.RequiredLevel) || requiredLevelValue(c.requiredLevel);
+}
+
+async function readAttributeRequiredLevels({ sdk, provision, logical }) {
+  const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
+  if (!client || typeof client.get !== 'function') return new Map();
+
+  // The public SDK discovery methods currently project RequiredLevel away: `findColumns` returns
+  // name/type/display fields, and `fetchEntityMetadata` returns its cached `attributes[]` in the
+  // same reduced shape. `updateColumn` can write RequiredLevel but does not expose its internal GET,
+  // so this is the narrow transport read that lets us avoid a blind metadata PUT. Dataverse returns:
+  //   {
+  //     "value": [{
+  //       "LogicalName": "contoso_title",
+  //       "RequiredLevel": { "Value": "ApplicationRequired", "CanBeChanged": true, ... }
+  //     }]
+  //   }
+  // `RequiredLevel.Value` is the same AttributeRequiredLevelManagedProperty enum value accepted by
+  // the SDK (`ApplicationRequired` | `Recommended` | `None`).
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributerequiredlevelmanagedproperty
+  const path = `/EntityDefinitions(LogicalName='${odataLit(logical)}')/Attributes?$select=LogicalName,RequiredLevel`;
+  const res = await client.get(path);
+  if (!res || res.status < 200 || res.status >= 300) {
+    const msg = res && res.body && res.body.error && res.body.error.message
+      ? res.body.error.message
+      : `HTTP ${res && res.status}`;
+    throw new Error(`could not read RequiredLevel for ${logical}: ${msg}`);
+  }
+  const out = new Map();
+  for (const a of (res.body && res.body.value) || []) {
+    const name = a && (a.LogicalName || a.logicalName);
+    const level = columnRequiredLevel(a);
+    if (name && level) out.set(String(name).toLowerCase(), level);
+  }
+  return out;
+}
+
+async function runBestEffort(runner, phase, label, fn, warn, warning) {
+  try {
+    return await runner.run(phase, label, fn, { recoverable: true });
+  } catch (err) {
+    if (typeof warn === 'function') {
+      const cause = err && err.cause ? err.cause : err;
+      warn(`${warning}: ${(cause && cause.message) || cause}`);
+    }
+    return undefined;
+  }
+}
+
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
 // raises SQL-deadlock risk). Preserves input order in the result.
 async function mapLimit(items, limit, fn) {
@@ -380,10 +442,10 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // that construct the SDK themselves and for the existing unit tests.
   const resolvedLanguageCode = preResolvedLanguageCode
     || await resolveLanguageCode({ provision, spec, languageCode, warn, provisionedLanguages });
-  
+
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
-  
+
   // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
   // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
   // its MetadataId) instead of failing a duplicate-Name POST. So a rerun captures the existing set's
@@ -397,17 +459,19 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       globalChoiceIds[gc.name] = r.metadataId;
     });
   }
-  
+
   // 2b. Tables -> columns (all types + customer) -> status reasons -> alternate keys.
   for (const e of spec.entities) {
     const logical = e.schemaName.toLowerCase();
     const hits = await provision.findTables(e.schemaName, { top: 50 });
     const existingTable = (hits || []).find((t) => t.logicalName === logical);
     let existingCols = new Set();
+    let existingColRows = [];
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
-      existingCols = new Set(((await provision.findColumns(logical)) || []).map((c) => c.logicalName));
+      existingColRows = (await provision.findColumns(logical)) || [];
+      existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
     } else {
       await runner.run('data-model', `table ${e.schemaName}`, async () => {
         const createOpts = { schemaName: e.schemaName, displayName: e.displayName, pluralName: e.pluralName || `${e.displayName}s`,
@@ -456,6 +520,55 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
         : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)),
       { skipIf: isAlreadyExists }));
+    if (existingTable) {
+      const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
+      const requiredTargets = [
+        e.primaryAttribute,
+        ...buildable,
+      ].filter((c) => c && c.schemaName && hasExplicitRequired(c) && existingCols.has(c.schemaName.toLowerCase()));
+      const requiredLevels = new Map();
+      for (const c of requiredTargets) {
+        const current = columnRequiredLevel(existingColMeta.get(c.schemaName.toLowerCase()));
+        if (current) requiredLevels.set(c.schemaName.toLowerCase(), current);
+      }
+      const missingLevels = requiredTargets.filter((c) => !requiredLevels.has(c.schemaName.toLowerCase()));
+      if (missingLevels.length) {
+        try {
+          for (const [name, level] of await readAttributeRequiredLevels({ sdk, provision, logical })) {
+            requiredLevels.set(name, level);
+          }
+        } catch (err) {
+          if (typeof warn === 'function') {
+            warn(`could not read required levels for ${logical}: ${(err && err.message) || err} — existing columns with explicit required values were left unchanged`);
+          }
+        }
+      }
+      const toUpdateRequired = [];
+      for (const c of requiredTargets) {
+        const columnLogical = c.schemaName.toLowerCase();
+        const desired = REQUIRED(c);
+        const current = requiredLevels.get(columnLogical);
+        // Omitted `required` is intentionally NOT reconciled. REQUIRED(c) maps an absent property to
+        // `None` for the CREATE payload, but applying that same default to an existing column would
+        // demote a maker-authored Business Required field on a rebuild — a destructive surprise. Only
+        // an explicit spec value owns the existing column's RequiredLevel.
+        if (!current) {
+          runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (current level unknown — skipped)`);
+        } else if (current === desired) {
+          runner.skip('data-model', `required ${e.schemaName}.${c.schemaName} (already ${desired})`);
+        } else {
+          toUpdateRequired.push({ schemaName: c.schemaName, logicalName: columnLogical, required: desired });
+        }
+      }
+      await runner.mapLimit(toUpdateRequired, 1, (c) => runBestEffort(
+        runner,
+        'data-model',
+        `required ${e.schemaName}.${c.schemaName} -> ${c.required}`,
+        () => sdk.updateColumn(logical, c.logicalName, { required: c.required }),
+        warn,
+        `could not update required level for ${logical}.${c.logicalName} to ${c.required} — the rest of the build continues`
+      ));
+    }
     // Capture real column results (logicalName + metadataId)
     toCreate.forEach((c, i) => {
       const res = colResults[i];
@@ -520,7 +633,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         { recoverable: true, skipIf: isAlreadyExists });
     }
   }
-  
+
   // 2c. Relationships — 1:N and N:N; skip those already present. The publisher prefix is threaded
   //     into the schema-name defaulting so a relationship to a standard/system table gets a valid,
   //     prefixed name Dataverse accepts (see prefixedRelationshipName).
@@ -555,7 +668,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       }, { skipIf: isAlreadyExists });
     }
   }
-  
+
   return result;
 }
 

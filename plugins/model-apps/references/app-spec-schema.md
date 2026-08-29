@@ -164,6 +164,13 @@ truncates silently past it, so it is rejected at author time instead). Omit the 
 than setting `""`; every write site omits an absent description, so **a rebuild never blanks one a
 maker typed in the UI**.
 
+**Download/read-back:** `download-model-app` preserves descriptions on artifacts it can already
+reconstruct as rebuildable spec (`solution`, `entities[]`, `entities[].columns[]`, `dashboards[]`).
+Views, charts, forms, business rules and global choices are not fully reconstructed yet, so their
+deployed descriptions are exposed under `descriptionInventory` for inspection only rather than as
+partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted, never written as
+`""`.
+
 ## entities[]
 ```jsonc
 {
@@ -232,6 +239,12 @@ maker typed in the UI**.
   DateTime → `dateFormat` (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`;
   File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber → `autoNumberFormat`
   (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` + `formula`.
+- **`required` converges on rebuild only when authored explicitly.** For a new column, `true` creates
+  Dataverse `ApplicationRequired` and `"recommended"` creates `Recommended`. For a column that
+  already exists (including the primary/name column), a rebuild first reads its current
+  `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
+  the build leaves the existing column alone instead of treating omission as `None`, so it never
+  silently demotes a field a maker already made Business Required.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
@@ -386,6 +399,21 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   "tabs": [ { "label": "General", "sections": [
     { "label": "Details", "columns": 2, "fields": ["new_name","new_budget","new_status"] } ] } ] }
 
+// per-field control options: read-only, hidden, and targeted positioning
+{ "entity": "new_workitem", "name": "Work Item", "layout": "auto",
+  "fieldOptions": {
+    "new_workitemnumber": { "readOnly": true },          // visible but locked (e.g. an AutoNumber)
+    "new_storypoints":    { "hidden": true },            // on the form for scripts, not shown
+    "new_daysremaining":  { "after": "new_duedate" }     // move it directly after Due Date
+  } }
+
+// the same options inline, when an explicit layout already lists the fields
+{ "entity": "new_workitem", "name": "Work Item", "layout": "explicit", "prune": false,
+  "tabs": [ { "label": "General", "sections": [ { "columns": 1, "fields": [
+    "new_name",
+    { "name": "new_workitemnumber", "readOnly": true },
+    { "name": "new_storypoints", "hidden": true } ] } ] } ] }
+
 // form JS: wire onload/onsave/onchange handlers to a web-resource library
 { "entity": "new_ticket", "type": "main", "name": "Ticket", "layout": "auto",
   "events": [
@@ -435,6 +463,44 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
   The build fetches the pushed form, injects the handlers, then publishes it.
+
+### Per-field control options — `readOnly`, `hidden`, `after`
+
+A form field can carry three per-control options. Declare them **form-level** in `fieldOptions`
+(keyed by column logical name) — the only route under an `auto` layout, which has no field list —
+or **inline** on an explicit layout's `fields[]` entry as `{ "name": …, "readOnly": …, "hidden": … }`.
+Where both apply to one field the inline entry wins; a plain string entry keeps working unchanged.
+
+- **`readOnly: true`** locks the control (`disabled="true"`), leaving it visible. Use it for a value
+  the platform generates but does **not** make immutable — an AutoNumber column is writable through
+  the API, so "read-only" for it is a form-level statement, not a metadata one.
+- **`hidden: true`** places the field as a hidden control (`visible="false"`) — present for form
+  scripts and business rules, not shown to the user.
+- **`after: "<logical>"`** moves the field so it immediately follows the named anchor. This is the
+  **non-destructive** way to reposition one control: it works on an already-deployed form and does
+  not require re-declaring the rest of the form. An anchor that is not on the form is ignored.
+  Only valid in `fieldOptions` — inside an explicit `tabs` layout the listed order already positions
+  the field, so `after` there is rejected rather than silently overriding the list.
+
+**Only the enabled state is ever written.** The build emits `readOnly`/`hidden` when you ask for
+them and writes *nothing* when you do not, so a rebuild never clears a lock or a hide someone applied
+in the form designer. The corollary is that `readOnly: false` / `hidden: false` cannot turn a flag
+back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
+in the designer, or drop the field and let the next build re-add it.
+
+- **`prune`** *(optional, default `true`, explicit layouts only)* — an explicit `tabs` layout is
+  normally the complete desired state, so a rebuild removes any deployed field it does not list. Set
+  `prune: false` to keep those fields, which lets you restyle or reorder a **subset** of a form
+  without re-declaring every other field just to preserve it. It has no effect on an `auto` layout
+  (already additive) and is warned about there.
+
+### Column types that cannot go on a form
+
+**Big Integer (`BigInt`) has no Unified Interface form control.** A BigInt placed on a form renders
+the text *"Error loading control"* on every record. The `auto` layout therefore **skips BigInt
+columns** — the column is still created and still readable/writable through the API, it just is not
+placed. An explicit layout still honours a BigInt you list by name (you may be pairing it with a
+custom control), but the linter warns.
 
 ## commands[] (optional — modern command-bar buttons)
 ```jsonc

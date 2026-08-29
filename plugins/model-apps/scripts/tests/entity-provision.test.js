@@ -12,6 +12,7 @@ function mockSdk(existing = {}) {
       createTable: async (o) => { calls.push(['createTable', o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: `tbl-${o.schemaName}` }; },
       updateTable: async (l, o) => { calls.push(['updateTable', l, o]); return {}; },
       createColumn: async (l, o) => { calls.push(['createColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
+      updateColumn: async (l, c, o) => { calls.push(['updateColumn', l, c, o]); return {}; },
       createCustomerColumn: async (l, o) => { calls.push(['createCustomerColumn', l, o.schemaName]); return { logicalName: o.schemaName.toLowerCase(), metadataId: `col-${o.schemaName}` }; },
       createRelationship: async (o) => { calls.push(['createRelationship', o.schemaName]); return { schemaName: o.schemaName, metadataId: `rel-${o.schemaName}`, lookupLogicalName: o.lookupSchemaName ? o.lookupSchemaName.toLowerCase() : undefined }; },
       createGlobalOptionSet: async (o) => { calls.push(['createGlobalOptionSet', o.name]); return { metadataId: `gc-${o.name}` }; },
@@ -65,13 +66,13 @@ test('provisionDataModel recovers from createTable already-exists error and redi
   };
   // findTables returns the existing table with entitySetName
   m.provision.findTables = async (s) => [{ logicalName: s.toLowerCase(), entitySetName: `${s.toLowerCase()}s_custom` }];
-  
+
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
     { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
   ], relationships: [] };
   const runner = makeRunner({ emit: () => {}, total: 10 });
   const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
-  
+
   assert.ok(dm.entities['new_ticket'], 'new_ticket entity present');
   assert.strictEqual(dm.entities['new_ticket'].entitySetName, 'new_tickets_custom', 'entitySetName recovered from findTables');
   assert.strictEqual(dm.entities['new_ticket'].logicalName, 'new_ticket', 'logicalName captured');
@@ -99,21 +100,21 @@ test('provisionDataModel recovers from a transient-retry table duplicate ("Entit
 test('provisionDataModel recovers from createColumn already-exists error', async () => {
   const m = mockSdk();
   // createColumn throws an already-exists error
-  m.sdk.createColumn = async () => { 
+  m.sdk.createColumn = async () => {
     const err = new Error('Column already exists');
     err.statusCode = 409;
     throw err;
   };
-  
+
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
     { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
       columns: [{ schemaName: 'new_priority', type: 'Text' }] },
   ], relationships: [] };
   const runner = makeRunner({ emit: () => {}, total: 10 });
-  
+
   // Should not throw - column create should skip on already-exists
   const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
-  
+
   assert.ok(dm.entities['new_ticket'], 'table created despite column error');
   // Column not captured because skipIf returned undefined
   assert.ok(!dm.columns['new_ticket'] || dm.columns['new_ticket'].length === 0, 'column not captured on skip');
@@ -139,6 +140,171 @@ test('provisionDataModel serializes column creation within an entity (per-entity
   await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
   assert.strictEqual(maxInFlight, 1, 'never more than one column create in flight per entity');
   assert.strictEqual(m.calls.filter((c) => c[0] === 'createColumn').length, 3, 'all three columns created');
+});
+
+test('provisionDataModel updates an existing column when explicit required:true differs', async () => {
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority', requiredLevel: 'None' },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: true }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.deepStrictEqual(
+    m.calls.find((c) => c[0] === 'updateColumn'),
+    ['updateColumn', 'new_ticket', 'new_priority', { required: 'ApplicationRequired' }]
+  );
+});
+
+test('provisionDataModel updates an existing column when explicit required:"recommended" differs', async () => {
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority', RequiredLevel: { Value: 'None' } },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: 'recommended' }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.deepStrictEqual(
+    m.calls.find((c) => c[0] === 'updateColumn'),
+    ['updateColumn', 'new_ticket', 'new_priority', { required: 'Recommended' }]
+  );
+});
+
+test('provisionDataModel skips the required update when an existing column already matches', async () => {
+  const events = [];
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority', RequiredLevel: { Value: 'ApplicationRequired' } },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: true }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: (e) => events.push(e), total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'no metadata PUT when RequiredLevel already matches');
+  assert.ok(events.some((e) => e.status === 'skip' && /required new_ticket\.new_priority \(already ApplicationRequired\)/.test(e.label)));
+});
+
+test('provisionDataModel does not demote an existing required column when the spec omits required', async () => {
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority', RequiredLevel: { Value: 'ApplicationRequired' } },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text' }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'omitted required is not interpreted as None on an existing column');
+});
+
+test('provisionDataModel leaves a new required column on the create path without updateColumn', async () => {
+  const m = mockSdk();
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: true }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(m.calls.some((c) => c[0] === 'createColumn' && c[2] === 'new_priority'), 'new column still uses createColumn');
+  assert.ok(!m.calls.some((c) => c[0] === 'updateColumn'), 'new column required is handled by createColumn only');
+});
+
+test('provisionDataModel warns and continues when an existing-column required update fails', async () => {
+  const warnings = [];
+  const events = [];
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority', RequiredLevel: { Value: 'None' } },
+  ];
+  m.sdk.updateColumn = async (l, c, o) => {
+    m.calls.push(['updateColumn', l, c, o]);
+    const err = new Error('metadata lock busy');
+    err.statusCode = 429;
+    throw err;
+  };
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: true }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: (e) => events.push(e), total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, warn: (m) => warnings.push(m) });
+  assert.ok(m.calls.some((c) => c[0] === 'updateColumn'), 'the reconcile was attempted');
+  assert.ok(events.some((e) => e.status === 'error' && /required new_ticket\.new_priority/.test(e.label)), 'the failed best-effort step is visible');
+  assert.ok(warnings.some((w) => /could not update required level for new_ticket\.new_priority/.test(w)));
+});
+
+test('provisionDataModel serializes required-level updates within an entity', async () => {
+  const m = mockSdk({ new_ticket: true });
+  const mapLimits = [];
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_a', schemaName: 'new_a', RequiredLevel: { Value: 'None' } },
+    { logicalName: 'new_b', schemaName: 'new_b', RequiredLevel: { Value: 'None' } },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [
+        { schemaName: 'new_a', type: 'Text', required: true },
+        { schemaName: 'new_b', type: 'Text', required: 'recommended' },
+      ] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  const realMapLimit = runner.mapLimit;
+  runner.mapLimit = async (items, limit, fn) => { mapLimits.push({ count: items.length, limit }); return realMapLimit(items, limit, fn); };
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.ok(mapLimits.some((m) => m.count === 2 && m.limit === 1), 'required-level metadata PUTs must be serialized');
+  assert.strictEqual(m.calls.filter((c) => c[0] === 'updateColumn').length, 2);
+});
+
+test('provisionDataModel can reconcile required on the primary name column of an existing table', async () => {
+  const m = mockSdk({ new_ticket: true });
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_name', schemaName: 'new_name', RequiredLevel: { Value: 'None' } },
+  ];
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket',
+      primaryAttribute: { schemaName: 'new_name', displayName: 'Name', required: true }, columns: [] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.deepStrictEqual(
+    m.calls.find((c) => c[0] === 'updateColumn'),
+    ['updateColumn', 'new_ticket', 'new_name', { required: 'ApplicationRequired' }]
+  );
+});
+
+test('provisionDataModel reads RequiredLevel once when discovery omits it', async () => {
+  const m = mockSdk({ new_ticket: true });
+  const rawGets = [];
+  m.provision.findColumns = async () => [
+    { logicalName: 'new_priority', schemaName: 'new_priority' },
+  ];
+  m.sdk.dataverse = {
+    get: async (url) => {
+      rawGets.push(url);
+      return {
+        status: 200,
+        body: { value: [{ LogicalName: 'new_priority', RequiredLevel: { Value: 'None' } }] },
+      };
+    },
+  };
+  const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
+    { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' },
+      columns: [{ schemaName: 'new_priority', type: 'Text', required: true }] },
+  ], relationships: [] };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+  await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true });
+  assert.strictEqual(rawGets.length, 1, 'one entity-level metadata read supplies all required levels');
+  assert.match(rawGets[0], /\/EntityDefinitions\(LogicalName='new_ticket'\)\/Attributes\?\$select=LogicalName,RequiredLevel/);
+  assert.ok(m.calls.some((c) => c[0] === 'updateColumn' && c[3].required === 'ApplicationRequired'));
 });
 
 test('provisionDataModel binds the reused global-choice metadataId on an idempotent re-run (SDK probe-then-reuse)', async () => {
@@ -237,17 +403,17 @@ test('provisionDataModel enables quick-create even for an EXISTING (reused) tabl
 test('provisionDataModel still throws on NON-already-exists createTable error', async () => {
   const m = mockSdk();
   // createTable throws a different error (bad request, not already-exists)
-  m.sdk.createTable = async () => { 
+  m.sdk.createTable = async () => {
     const err = new Error('Invalid schema name');
     err.statusCode = 400;
     throw err;
   };
-  
+
   const spec = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, entities: [
     { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
   ], relationships: [] };
   const runner = makeRunner({ emit: () => {}, total: 10 });
-  
+
   // Should throw - this is NOT an already-exists error
   await assert.rejects(
     async () => await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 }),
@@ -259,28 +425,28 @@ test('provisionDataModel still throws on NON-already-exists createTable error', 
 test('provisionDataModel recovers from createRelationship already-exists error (1:N)', async () => {
   const m = mockSdk({ new_ticket: true, new_customer: true });
   // createRelationship throws an already-exists error
-  m.sdk.createRelationship = async () => { 
+  m.sdk.createRelationship = async () => {
     const err = new Error('Relationship with the same name already exists');
     err.statusCode = 409;
     throw err;
   };
-  
-  const spec = { 
-    solution: { uniqueName: 'S', publisherPrefix: 'new' }, 
+
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
     entities: [
       { schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
       { schemaName: 'new_customer', displayName: 'Customer', primaryAttribute: { schemaName: 'new_name' }, columns: [] }
     ],
     relationships: [
-      { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket', 
+      { type: 'OneToMany', referenced: 'new_customer', referencing: 'new_ticket',
         lookup: { schemaName: 'new_customerId', displayName: 'Customer' } }
     ]
   };
   const runner = makeRunner({ emit: () => {}, total: 10 });
-  
+
   // Should not throw - relationship create should skip on already-exists
   const dm = await provisionDataModel({ sdk: m.sdk, provision: m.provision, runner, spec, apply: true, concurrency: 2 });
-  
+
   assert.ok(dm.entities['new_ticket'], 'tables created despite relationship error');
   // Relationship not captured because skipIf returned undefined
   assert.strictEqual(dm.relationships.length, 0, 'relationship not captured on skip');

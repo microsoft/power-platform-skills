@@ -32,6 +32,31 @@ is controllable per capability, and on/off is read with the platform's real sema
   file upload (`formFillFiles`), instead of one flag that only ever governed the toolbar.
 
 ### Fixed
+- **Forms can now control individual fields.** A form field takes `readOnly` (locked but visible),
+  `hidden` (placed but not shown) and `after` (move it directly below another field), via a
+  form-level `fieldOptions` map or inline on an explicit layout's `fields[]` entry. Previously a
+  field was a bare logical name with no control attributes, so "visible but read-only", "present but
+  hidden", and "move this one control" all needed a manual maker or FormXML step. Only the *enabled*
+  state is ever written, so a rebuild never clears a lock or hide applied in the designer.
+- **Reordering one control no longer means re-declaring the whole form.** An explicit layout still
+  prunes fields it does not list by default, but `prune: false` opts out — and `after` repositions a
+  control on an already-deployed form without touching anything else.
+- **Big Integer columns are no longer placed on auto-generated forms.** Big Integer has no Unified
+  Interface control, so the field rendered "Error loading control" on every record of any table that
+  had one. The column is still created and still reachable through the API; it is simply left off the
+  form. An explicit layout that names one is honoured but warned about.
+- **Downloaded specs now preserve deployed descriptions where possible.** Tables, columns, dashboards
+  and solutions round-trip descriptions, while currently non-reconstructed artifacts are listed in a
+  read-only description inventory for inspection. Missing Dataverse descriptions are omitted rather
+  than emitted as blank strings, so downloaded specs still validate and never blank maker-authored
+  text on rebuild.
+- **Existing columns now honor explicit `required` changes on rebuild.** If a spec sets
+  `required: true` or `"recommended"` on a column that already exists, the data-model phase reads
+  the live RequiredLevel and updates it only when it differs; omitted `required` values leave the
+  live column unchanged.
+- **Active business rules no longer leave undeletable workflow copies after teardown.** Teardown now
+  removes the activated `workflow` copy before the table is dropped, so active rules cannot strand
+  rows that later fail with MetadataCache errors.
 - **AI on/off was read wrongly.** The form-fill family uses `0 = platform default`, `1 = disabled`,
   `2 = enabled`, so treating any non-zero value as "on" reported a deliberately **disabled** feature
   as enabled — and reported `0` as off when it actually means "defer to flighting". Readiness is now

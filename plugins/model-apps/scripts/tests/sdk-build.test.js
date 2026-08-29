@@ -254,7 +254,32 @@ function mockSdk(opts = {}) {
     updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
       calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
-      jpSet(art, ptr, clone(patch));
+      // The real SDK MERGES when the current value and the patch are BOTH plain objects, and
+      // replaces otherwise:  `Xu(o) && Xu(i) ? {...o, ...i} : i`.
+      // Measured against the vendored bundle: updateElement('/…/cells/0/control', {isReadOnly:true})
+      // returns {"fieldName":"aaa","id":"…","isReadOnly":true} — the identity survives.
+      // The mock used to REPLACE unconditionally, which is strictly more destructive than production:
+      // a partial control patch would have looked like it wiped fieldName here while working fine on
+      // a real org, so a test written against the old mock measured the wrong thing.
+      // Arrays are NOT plain objects, so '/columns' and '/siteMap' still replace wholesale.
+      const cur = jpGet(art, ptr);
+      const mergeable = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+      jpSet(art, ptr, mergeable(cur) && mergeable(patch) ? Object.assign({}, cur, clone(patch)) : clone(patch));
+      return clone(art);
+    },
+    moveElement: async (t, id, fromPtr, toPtr, o) => { await Promise.resolve();
+      calls.push({ name: 'moveElement', args: [t, id, fromPtr, toPtr, o] });
+      const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
+      const el = jpGet(art, fromPtr);
+      const target = jpGet(art, toPtr);
+      if (el === undefined || !Array.isArray(target)) return clone(art);
+      // Mirrors the bundle's order exactly — resolve the target array, REMOVE the source, THEN
+      // splice. So when both live in the same array the index is interpreted against the
+      // POST-removal array. Verified against the real bundle: moving index 0 to index 1 in
+      // [aaa,bbb,ccc,ddd] yields [bbb,aaa,ccc,ddd].
+      jpRemove(art, fromPtr);
+      const idx = (o && o.index !== undefined) ? o.index : target.length;
+      target.splice(Math.max(0, Math.min(idx, target.length)), 0, el);
       return clone(art);
     },
     removeElement: async (t, id, ptr) => { await Promise.resolve();
@@ -1483,6 +1508,145 @@ test('form reconcile: an AUTO layout is additive — a deployed field not in the
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   assert.strictEqual(find(calls, 'removeElement').length, 0, 'auto layout never removes fields');
+});
+
+// ---------------------------------------------------------------------------
+// Per-field control options on a DEPLOYED form (ADO 6648516 / 6651241 / 6651439 / 6651696).
+//
+// These live here rather than in form-field-options.test.js because the compile-level tests cannot
+// see this code path: reconcileForm builds its own updateElement/moveElement payloads inline, so a
+// def-builder assertion would pass while the engine wrote nothing. Same gap that hid the dashboard
+// and form description phases until build-level tests were added.
+// ---------------------------------------------------------------------------
+
+test('form reconcile: readOnly is applied to an EXISTING field via updateElement on the CONTROL', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patch = find(calls, 'updateElement').find((c) => /\/control$/.test(String(c.args[2])));
+  assert.ok(patch, `no control patch issued; updateElement pointers: ${find(calls, 'updateElement').map((c) => c.args[2]).join(', ')}`);
+  assert.deepStrictEqual(patch.args[3], { isReadOnly: true });
+  // Row 1 is new_tier in the seeded form — proves the RIGHT field was targeted, not just any.
+  assert.strictEqual(patch.args[2], '/tabs/0/columns/0/sections/0/rows/1/cells/0/control');
+});
+
+test('form reconcile: hidden is applied to an EXISTING field via updateElement on the CELL', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { hidden: true } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patch = find(calls, 'updateElement').find((c) => /\/cells\/\d+$/.test(String(c.args[2])));
+  assert.ok(patch, 'no cell patch issued');
+  assert.deepStrictEqual(patch.args[3], { visible: false });
+  assert.strictEqual(patch.args[2], '/tabs/0/columns/0/sections/0/rows/1/cells/0');
+});
+
+test('form reconcile: a partial control patch PRESERVES fieldName (updateElement merges, it does not replace)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_tier: { readOnly: true } } }];
+  const { sdk } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  // Read the mutated artifact back: if the patch had REPLACED the control, fieldName would be gone
+  // and the field would silently vanish from the form on the next push.
+  const form = await sdk.getArtifact('form', 'form-existing');
+  const control = form.tabs[0].columns[0].sections[0].rows[1].cells[0].control;
+  assert.strictEqual(control.fieldName, 'new_tier', 'the control lost its binding');
+  assert.strictEqual(control.isReadOnly, true);
+});
+
+test('form reconcile: no control/cell patch is issued when the spec asserts neither flag', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const patches = find(calls, 'updateElement').filter((c) => /\/(control|cells\/\d+)$/.test(String(c.args[2])));
+  assert.deepStrictEqual(patches.map((c) => c.args[2]), [],
+    'an ordinary rebuild must not rewrite control attributes — that would clobber maker-applied locks/hides');
+});
+
+test('form reconcile: an anchored field is MOVED after its anchor, with the index compensated for same-array removal', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { after: 'new_tier' } } }];
+  // Seeded order: new_name (row 0), new_tier (row 1). Moving new_name after new_tier.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const move = find(calls, 'moveElement')[0];
+  assert.ok(move, 'no moveElement issued');
+  assert.strictEqual(move.args[2], '/tabs/0/columns/0/sections/0/rows/0', 'moves the whole ROW (the cell is alone in it)');
+  assert.strictEqual(move.args[3], '/tabs/0/columns/0/sections/0/rows');
+  // Anchor is at row 1, so the naive target is 2; the source sits BEFORE it in the same array and
+  // moveElement removes before splicing, so the correct index is 1. Verified against the real bundle.
+  assert.deepStrictEqual(move.args[4], { index: 1 });
+  const form = await sdk.getArtifact('form', 'form-existing');
+  const order = form.tabs[0].columns[0].sections[0].rows.map((r) => r.cells[0].control.fieldName);
+  assert.deepStrictEqual(order, ['new_tier', 'new_name'], 'the deployed form ends up in the authored order');
+});
+
+test('form reconcile: repositioning is idempotent — a second build issues no further move', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { after: 'new_tier' } } }];
+  // Already in the anchored order, so the reconcile must recognise it and do nothing.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_tier', 'new_name'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.strictEqual(find(calls, 'moveElement').length, 0, 'a converged form was reshuffled anyway');
+});
+
+test('form reconcile: a field SHARING a row is moved as a CELL, with the same index compensation', async () => {
+  // The seeded form puts every field in its own row, so build a 2-cell row by hand to exercise the
+  // other branch. Without this, the cell-move path (and its off-by-one guard) is never executed.
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_name: { after: 'new_tier' } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: [] });
+  // Pre-seed the deployed form with one row holding [new_name, new_tier, new_other].
+  await sdk.fetchArtifact('form', 'form-existing');
+  const seeded = await sdk.getArtifact('form', 'form-existing');
+  seeded.tabs[0].columns[0].sections[0].rows = [{ cells: [
+    { control: { fieldName: 'new_name' } },
+    { control: { fieldName: 'new_tier' } },
+    { control: { fieldName: 'new_other' } },
+  ] }];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const move = find(calls, 'moveElement')[0];
+  assert.ok(move, 'no moveElement issued for a shared-row field');
+  assert.strictEqual(move.args[2], '/tabs/0/columns/0/sections/0/rows/0/cells/0', 'moves the CELL, not the row');
+  assert.strictEqual(move.args[3], '/tabs/0/columns/0/sections/0/rows/0/cells');
+  // Anchor new_tier is at cell index 1, so the naive target is 2; the source is earlier in the SAME
+  // array and moveElement removes before splicing, so the correct index is 1.
+  assert.deepStrictEqual(move.args[4], { index: 1 });
+  const form = await sdk.getArtifact('form', 'form-existing');
+  const order = form.tabs[0].columns[0].sections[0].rows[0].cells.map((c) => c.control.fieldName);
+  assert.deepStrictEqual(order, ['new_tier', 'new_name', 'new_other'], 'cell landed one slot too far right');
+});
+
+test('form reconcile: an explicit layout with prune:false keeps fields it does not list', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', prune: false,
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.strictEqual(find(calls, 'removeElement').length, 0,
+    'prune:false must let an author restyle/reorder a subset without re-declaring the whole form');
+});
+
+test('form reconcile: an explicit layout still prunes BY DEFAULT (prune:false is opt-in, not the new default)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.ok(find(calls, 'removeElement').length > 0, 'default explicit-layout pruning regressed');
+});
+
+test('form build: a BigInt column is never added to a form by the auto layout', async () => {
+  const spec = makeSpec();
+  spec.entities[0].columns.push({ schemaName: 'new_tracking', displayName: 'Tracking', type: 'BigInt' });
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const added = find(calls, 'addElement')
+    .flatMap((c) => (c.args[3] && c.args[3].cells) || [])
+    .map((cell) => cell.control && cell.control.fieldName);
+  assert.ok(!added.includes('new_tracking'),
+    `BigInt reached the form: ${added.filter(Boolean).join(', ')} — UCI cannot render it ("Error loading control")`);
+  assert.ok(added.includes('new_tier'), 'the BigInt skip must not suppress ordinary columns');
 });
 
 test('form reconcile: the entity primary field is never pruned, even when an explicit layout omits it', async () => {

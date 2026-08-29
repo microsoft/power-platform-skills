@@ -76,6 +76,12 @@ function isNotFound(err) {
   return /not found|does not exist|could not find|but 0 were found/.test(msg);
 }
 
+function isMethodNotAllowed(err) {
+  if (!err) return false;
+  const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
+  return status === 405;
+}
+
 // Detect a system/managed artifact that Dataverse refuses to delete (e.g. the auto-generated
 // "Active <Entity>" view whose name a spec view may reuse). It is not ours to remove, so a
 // teardown skips it instead of failing — the same best-effort spirit as isNotFound. Deliberately
@@ -316,12 +322,22 @@ const KIND_HANDLERS = {
     // round trip and the platform runs it asynchronously (a WorkflowSetState job), which is why a
     // solution uninstall immediately afterwards can transiently 429 — see the teardown notes.
     async resolve(sdk, target) {
+      const filter = businessRuleFilter(target.name, target.entity).replace('type eq 1', '(type eq 1 or type eq 2)');
       const rows = await sdk.queryRecords('workflow', {
-        select: ['workflowid', 'statecode'],
-        // DEFINITION rows only (see businessRuleFilter in sdk-build.js). Activating a rule makes the
-        // platform create a second `type 2` activated copy whose parent is the definition; the
-        // platform refuses to delete that copy directly (405). An unfiltered query therefore
-        // produced a guaranteed per-rule teardown failure.
+        select: ['workflowid', 'statecode', 'type', '_parentworkflowid_value'],
+        // Teardown deliberately widens businessRuleFilter from the build's definition-only query:
+        //
+        //   category eq 2 and (type eq 1 or type eq 2) and name eq '<rule>' and primaryentity eq '<entity>'
+        //
+        // Dataverse stores activated business rules as TWO `workflow` rows:
+        //   type=1, _parentworkflowid_value=(null) -> editable definition
+        //   type=2, _parentworkflowid_value=<def> -> activated copy
+        //
+        // Build/verify must ignore type 2 because it is platform-derived, but teardown owns both
+        // rows while the table still exists. If the type-2 row survives until the table delete, its
+        // entity ObjectTypeCode can no longer resolve and every later write fails with 400
+        // 0x80041102 ("The entity with ObjectTypeCode = N was not found in the MetadataCache...").
+        // Workflow row/type semantics: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
         //
         // The copy is NOT removed with its parent — live-measured: after a full teardown the type-2
         // row survives with `parent` pointing at the deleted definition, and once the table is gone
@@ -329,14 +345,61 @@ const KIND_HANDLERS = {
         // not found in the MetadataCache"), because the platform cannot resolve the entity it
         // references. So every teardown of an ACTIVE rule strands one row while still reporting
         // `0 failed`. Tracking: https://github.com/microsoft/power-platform-skills/issues/493
-        filter: businessRuleFilter(target.name, target.entity),
+        filter,
         top: 50,
       });
-      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+      const items = (rows || []).map((r) => ({
+        id: r.workflowid,
+        name: target.name,
+        statecode: r.statecode,
+        type: r.type,
+        parentDefinitionId: r._parentworkflowid_value,
+      }));
+      // ORDER MATTERS, and it is the opposite of the intuitive one. Live-measured on a real org:
+      //
+      //   * Deleting the type-2 copy FIRST is refused, because the definition still points at it:
+      //       405 "Cascade Delete failed due to cascade restrict relation. Restricting entity
+      //            Workflow has Id: <type-1> and is collected by Relationship with name:
+      //            workflow_active_workflow."
+      //   * Deactivating the definition does NOT remove the copy — it only flips the copy to Draft
+      //     (statecode 0 / statuscode 1) alongside its parent.
+      //   * Deleting the DEFINITION succeeds and leaves the copy behind, now unreferenced.
+      //   * That orphaned copy then deletes cleanly — but ONLY while its table still exists. Once
+      //     the table is dropped it is undeletable forever (400 0x80041102).
+      //
+      // So: definition first, activated copy second, and both strictly before the tables phase.
+      return [
+        ...items.filter((r) => r.type !== 2),
+        ...items.filter((r) => r.type === 2),
+      ];
     },
     async del(sdk, item) {
+      if (item.type === 2) {
+        // Reached only after the definition above was deleted, so the workflow_active_workflow
+        // restrict no longer applies and the row deletes normally. A 404 here is success by another
+        // name (some platform versions may cascade it away with the parent) and `tolerateNotFound`
+        // records it as already gone.
+        try {
+          await sdk.deleteRecord('workflow', item.id);
+          return;
+        } catch (err) {
+          if (!isMethodNotAllowed(err)) throw err;
+          // Defence in depth: if a platform version still restricts the delete, put the definition
+          // into Draft (statecode 0 / statuscode 1 — the documented business-rule lifecycle) and
+          // retry once. Not expected to fire now that the definition is deleted first, but a silent
+          // leftover here becomes permanent the moment the table is dropped, so the retry is cheap
+          // insurance rather than dead code.
+          // Workflow states/statuses: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
+          if (item.parentDefinitionId && typeof sdk.updateRecord === 'function') {
+            try { await sdk.updateRecord('workflow', item.parentDefinitionId, { statecode: 0, statuscode: 1 }); } catch { /* retry the copy delete so the real leftover, if any, is reported */ }
+          }
+          await sdk.deleteRecord('workflow', item.id);
+          return;
+        }
+      }
       // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
-      // returns names neither the rule nor the reason clearly.
+      // returns names neither the rule nor the reason clearly. This also flips the activated copy to
+      // Draft, which is what makes the copy deletable in the step that follows.
       if (item.statecode === 1) {
         try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
       }

@@ -69,6 +69,7 @@ const SKILL_SDK_SURFACE = [
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
+  'moveElement',
   'publishArtifact',
   'pushArtifact',
   'queryRecords',
@@ -87,6 +88,7 @@ const SKILL_SDK_SURFACE = [
   // write because the value is a Number TRI-STATE where ON is '2', not '1' — writing '1' is accepted
   // by the API and silently fails to enable the feature. The SDK owns that encoding.
   'setHeaderAndNavigationRefresh',
+  'updateColumn',
   'updateElement',
   'updateRecord',
   'updateTable',

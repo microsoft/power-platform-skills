@@ -770,6 +770,161 @@ test('forms without names are skipped (cannot be resolved)', () => {
   assert.strictEqual(formSteps[0].label, 'form "MyForm" (new_x)');
 });
 
+function businessRuleTeardownSdk(rows, { refuseActivatedCopyOnce = false, refuseActivatedCopyAlways = false, staleGoneIds = [] } = {}) {
+  const live = new Map(rows.map((r) => [String(r.workflowid), { ...r }]));
+  const calls = [];
+  const staleGone = new Set(staleGoneIds.map(String));
+  const refused = new Set();
+  return {
+    calls,
+    async resolveArtifact(kind) {
+      calls.push({ method: 'resolveArtifact', kind });
+      return [];
+    },
+    async queryRecords(entitySet, opts = {}) {
+      calls.push({ method: 'queryRecords', entitySet, filter: String(opts.filter || '') });
+      if (entitySet !== 'workflow') return [];
+      const filter = String(opts.filter || '');
+      const wantsType1 = /type eq 1/.test(filter);
+      const wantsType2 = /type eq 2/.test(filter);
+      return [...live.values()].filter((r) => {
+        if (!/category eq 2/.test(filter) || !filter.includes(`name eq '${r.name}'`) || !filter.includes(`primaryentity eq '${r.primaryentity}'`)) return false;
+        if (wantsType1 && wantsType2) return r.type === 1 || r.type === 2;
+        if (wantsType1) return r.type === 1;
+        if (wantsType2) return r.type === 2;
+        return true;
+      });
+    },
+    async updateRecord(entitySet, id, data) {
+      calls.push({ method: 'updateRecord', entitySet, id, data });
+      const row = live.get(String(id));
+      if (row) Object.assign(row, data);
+    },
+    async deleteRecord(entitySet, id) {
+      calls.push({ method: 'deleteRecord', entitySet, id });
+      const row = live.get(String(id));
+      if (staleGone.has(String(id)) && !row) {
+        const err = new Error('workflow not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      if ((refuseActivatedCopyAlways || refuseActivatedCopyOnce) && row && row.type === 2 && (refuseActivatedCopyAlways || !refused.has(String(id)))) {
+        refused.add(String(id));
+        const err = new Error('The requested action is not supported for activated business rules.');
+        err.statusCode = 405;
+        throw err;
+      }
+      if (!row) {
+        const err = new Error('workflow not found');
+        err.statusCode = 404;
+        throw err;
+      }
+      live.delete(String(id));
+    },
+    async deleteTable(logical) {
+      calls.push({ method: 'deleteTable', logical });
+      const err = new Error('Could not find an entity with the specified logical name');
+      err.statusCode = 404;
+      throw err;
+    },
+  };
+}
+
+test('active business-rule teardown deletes the DEFINITION first, then the activated copy, then the table', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ]);
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.deepStrictEqual(res.deleted.businessRules, ['def-1', 'active-1'], 'both workflow rows are counted as this step\'s responsibility');
+  const writes = sdk.calls.filter((c) => c.method === 'deleteRecord' || c.method === 'deleteTable');
+  // Live-measured order. The definition holds a cascade-restrict reference to the activated copy via
+  // `workflow_active_workflow`, so the copy CANNOT be deleted first:
+  //   405 "Cascade Delete failed due to cascade restrict relation. Restricting entity Workflow has
+  //        Id: <type-1> and is collected by Relationship with name: workflow_active_workflow."
+  // Deleting the definition releases it, and the now-orphaned copy deletes cleanly — but ONLY while
+  // its table still exists. After the table drop it is undeletable forever (400 0x80041102), which
+  // is why both rows must precede the tables phase.
+  assert.deepStrictEqual(writes.map((c) => c.method === 'deleteRecord' ? `${c.entitySet}:${c.id}` : `table:${c.logical}`), [
+    'workflow:def-1',
+    'workflow:active-1',
+    'table:new_ticket',
+  ]);
+});
+
+test('draft-only business-rule teardown keeps the existing definition-only behavior', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Draft Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 0 },
+  ]);
+  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Draft Gate' });
+  assert.deepStrictEqual(items.map((i) => i.id), ['def-1']);
+  await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  assert.deepStrictEqual(
+    sdk.calls.filter((c) => c.method === 'updateRecord' || c.method === 'deleteRecord').map((c) => `${c.method}:${c.id}`),
+    ['deleteRecord:def-1'],
+    'a never-activated Draft rule is still just deleted directly'
+  );
+});
+
+test('business-rule teardown falls back through definition deactivation when the activated-copy delete returns 405', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ], { refuseActivatedCopyOnce: true });
+  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Gate' });
+  await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  const writes = sdk.calls.filter((c) => c.method === 'deleteRecord' || c.method === 'updateRecord').map((c) => (
+    c.method === 'updateRecord' ? `update:${c.id}:${c.data.statecode}/${c.data.statuscode}` : `delete:${c.id}`
+  ));
+  // The definition is handled first (deactivate -> delete), so by the time the copy is attempted the
+  // cascade-restrict is already released. This 405 path is defence in depth for a platform version
+  // that still refuses: deactivate the definition again and retry the copy once. A silent leftover
+  // here becomes PERMANENT as soon as the table is dropped, so the retry must not be optimised away.
+  assert.deepStrictEqual(writes, [
+    'update:def-1:0/1',
+    'delete:def-1',
+    'delete:active-1',
+    'update:def-1:0/1',
+    'delete:active-1',
+  ], `unexpected write order: ${writes.join(' | ')}`);
+});
+
+test('business-rule teardown is idempotent when a resolved activated copy is already gone', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 0 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ]);
+  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Gate' });
+  // Simulate a re-run race: the row existed at resolve time but another teardown already removed it.
+  sdk.calls.length = 0;
+  await sdk.deleteRecord('workflow', 'active-1');
+  sdk.calls.length = 0;
+  const r = await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  assert.deepStrictEqual(r.deletedIds, ['def-1', 'active-1'], 'already-gone rows count as removed rather than failing the run');
+  assert.deepStrictEqual(r.skippedIds, []);
+});
+
+test('business-rule teardown reports a failure when the activated copy still cannot be removed', async () => {
+  const sdk = businessRuleTeardownSdk([
+    { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
+    { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
+  ], { refuseActivatedCopyAlways: true });
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  const res = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+  assert.strictEqual(res.ok, false, 'an undeleted activated copy makes teardown report a failed step');
+  assert.ok(res.errors.some((e) => /business rule "Gate"/.test(e.step) && /not supported/.test(e.message)), 'the failure names the business-rule step and platform reason');
+});
+
 // --- helpers ----------------------------------------------------------------------------
 
 test('odataStr doubles single quotes (OData literal escaping)', () => {
