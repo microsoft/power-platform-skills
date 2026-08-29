@@ -9,6 +9,10 @@
     "homepage": "https://github.com/microsoft/power-platform-skills/",
     "repository": "https://github.com/microsoft/power-platform-skills/",
     "license": "MIT",
+    "agents": [
+        "agents/",
+        "com.github.copilot/agents/"
+    ],
     "keywords": [
         "power-platform",
         "power-apps",
