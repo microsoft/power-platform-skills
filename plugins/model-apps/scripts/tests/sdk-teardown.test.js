@@ -798,7 +798,15 @@ function businessRuleTeardownSdk(rows, { refuseActivatedCopyOnce = false, refuse
     async updateRecord(entitySet, id, data) {
       calls.push({ method: 'updateRecord', entitySet, id, data });
       const row = live.get(String(id));
-      if (row) Object.assign(row, data);
+      // The real SDK routes updateRecord through `ensureSuccess`, so a PATCH against a row that no
+      // longer exists THROWS 404. Silently no-op'ing here let a fallback that deactivated an
+      // already-DELETED definition look like working defence-in-depth when it could never fire.
+      if (!row) {
+        const err = new Error(`workflow ${id} not found`);
+        err.statusCode = 404;
+        throw err;
+      }
+      Object.assign(row, data);
     },
     async deleteRecord(entitySet, id) {
       calls.push({ method: 'deleteRecord', entitySet, id });
@@ -872,27 +880,28 @@ test('draft-only business-rule teardown keeps the existing definition-only behav
   );
 });
 
-test('business-rule teardown falls back through definition deactivation when the activated-copy delete returns 405', async () => {
+test('business-rule teardown makes ONE attempt at the activated copy — no retry that cannot succeed', async () => {
   const sdk = businessRuleTeardownSdk([
     { workflowid: 'def-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 1, statecode: 1 },
     { workflowid: 'active-1', name: 'Gate', primaryentity: 'new_ticket', category: 2, type: 2, statecode: 1, _parentworkflowid_value: 'def-1' },
-  ], { refuseActivatedCopyOnce: true });
-  const items = await KIND_HANDLERS.businessRules.resolve(sdk, { entity: 'new_ticket', name: 'Gate' });
-  await deleteStep(sdk, KIND_HANDLERS.businessRules, items);
+  ], { refuseActivatedCopyAlways: true });
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' } }],
+    businessRules: [{ entity: 'new_ticket', name: 'Gate' }],
+  };
+  await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
   const writes = sdk.calls.filter((c) => c.method === 'deleteRecord' || c.method === 'updateRecord').map((c) => (
-    c.method === 'updateRecord' ? `update:${c.id}:${c.data.statecode}/${c.data.statuscode}` : `delete:${c.id}`
+    c.method === 'updateRecord' ? `update:${c.id}` : `delete:${c.id}`
   ));
-  // The definition is handled first (deactivate -> delete), so by the time the copy is attempted the
-  // cascade-restrict is already released. This 405 path is defence in depth for a platform version
-  // that still refuses: deactivate the definition again and retry the copy once. A silent leftover
-  // here becomes PERMANENT as soon as the table is dropped, so the retry must not be optimised away.
-  assert.deepStrictEqual(writes, [
-    'update:def-1:0/1',
-    'delete:def-1',
-    'delete:active-1',
-    'update:def-1:0/1',
-    'delete:active-1',
-  ], `unexpected write order: ${writes.join(' | ')}`);
+  // Definition first (deactivate -> delete), then exactly ONE attempt at the copy. An earlier
+  // version deactivated `parentDefinitionId` and re-issued the same delete, which reads like
+  // defence in depth but cannot work: the definition row is already gone by then, so the deactivate
+  // 404s and the retry is byte-identical to the call that just failed. It only looked correct
+  // because the mock silently no-op'd updateRecord on a missing row.
+  assert.deepStrictEqual(writes, ['update:def-1', 'delete:def-1', 'delete:active-1'],
+    `expected exactly one copy-delete attempt and no post-delete retry; got: ${writes.join(' | ')}`);
+  assert.strictEqual(writes.filter((w) => w === 'delete:active-1').length, 1, 'the copy delete was retried');
 });
 
 test('business-rule teardown is idempotent when a resolved activated copy is already gone', async () => {

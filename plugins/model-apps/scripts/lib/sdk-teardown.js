@@ -375,27 +375,20 @@ const KIND_HANDLERS = {
     },
     async del(sdk, item) {
       if (item.type === 2) {
-        // Reached only after the definition above was deleted, so the workflow_active_workflow
-        // restrict no longer applies and the row deletes normally. A 404 here is success by another
-        // name (some platform versions may cascade it away with the parent) and `tolerateNotFound`
-        // records it as already gone.
-        try {
-          await sdk.deleteRecord('workflow', item.id);
-          return;
-        } catch (err) {
-          if (!isMethodNotAllowed(err)) throw err;
-          // Defence in depth: if a platform version still restricts the delete, put the definition
-          // into Draft (statecode 0 / statuscode 1 — the documented business-rule lifecycle) and
-          // retry once. Not expected to fire now that the definition is deleted first, but a silent
-          // leftover here becomes permanent the moment the table is dropped, so the retry is cheap
-          // insurance rather than dead code.
-          // Workflow states/statuses: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
-          if (item.parentDefinitionId && typeof sdk.updateRecord === 'function') {
-            try { await sdk.updateRecord('workflow', item.parentDefinitionId, { statecode: 0, statuscode: 1 }); } catch { /* retry the copy delete so the real leftover, if any, is reported */ }
-          }
-          await sdk.deleteRecord('workflow', item.id);
-          return;
-        }
+        // Reached only AFTER the definition above was deleted, so the workflow_active_workflow
+        // cascade-restrict no longer applies and the row deletes normally. A 404 here is success by
+        // another name (a platform version may cascade the copy away with its parent) and
+        // `tolerateNotFound` records it as already gone.
+        //
+        // There is deliberately NO 405 retry. An earlier version deactivated `parentDefinitionId`
+        // and re-issued the same delete, which reads like defence in depth but cannot work: by this
+        // point the definition row no longer EXISTS, so the deactivate 404s and the retry is
+        // byte-identical to the call that just failed. It only passed review because the test mock
+        // silently no-ops `updateRecord` on a missing row — a contract the real SDK does not have.
+        // A genuine 405 here is a real leftover that becomes PERMANENTLY undeletable once the table
+        // is dropped, so it must surface as a reported failure rather than be papered over by a
+        // retry that can only ever fail the same way. See issue #493.
+        return sdk.deleteRecord('workflow', item.id);
       }
       // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
       // returns names neither the rule nor the reason clearly. This also flips the activated copy to
