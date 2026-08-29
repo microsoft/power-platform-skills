@@ -30,8 +30,10 @@ and routes mutations to dedicated `/add-*` skills.
 - Product Experience, Product Scope, Workflow Journey, the approved Dataverse
   contract, and the compiled screen build pack are execution authorities.
   Markdown is the human-readable plan, not a substitute for missing sidecars.
-- Every agent return uses the literal first-line protocol from `AGENTS.md`:
-  `DONE`, `DONE_WITH_CONCERNS:`, `NEEDS_CONTEXT:`, or `BLOCKED:`.
+- Converted planning/build agents declare `tools: []`, receive complete sealed
+  work orders inline, and return the schema-backed JSON envelope from
+  `references/return-only-agents.md`. The foreground owns all side effects,
+  questions, approvals, validation, persistence, timing, and resume state.
 - Generated files remain owned by the Power Apps CLI/schema generators. Never
   hand-write or reset generated artifacts to make a gate pass.
 
@@ -66,7 +68,7 @@ pipeline state and artifact revisions before skipping any phase.
 | Auth, data, offline, native, connectors | 7–10 | [`references/phase-7-data.md`](${CLAUDE_SKILL_DIR}/references/phase-7-data.md) |
 | Navigation, services, shared code, skeletons | 10b–10.8 | [`references/phase-10-navigation.md`](${CLAUDE_SKILL_DIR}/references/phase-10-navigation.md) |
 | Screen waves, validation, Metro, summary | 11–13 | [`references/phase-11-screens.md`](${CLAUDE_SKILL_DIR}/references/phase-11-screens.md) |
-| Spawn/tool failure only | on demand | [`references/degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md) |
+| Custom-agent dispatch unavailable | on demand | [`references/degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md) |
 
 ## Runtime flags and compatibility
 
@@ -101,6 +103,7 @@ artifacts.
 ## Reference
 
 - [Mobile Apps agent protocol](${CLAUDE_SKILL_DIR}/../../AGENTS.md)
+- [Return-only agent orchestration](${CLAUDE_SKILL_DIR}/references/return-only-agents.md)
 - [Shared instruction index](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions-core.md)
 - [Product experience compiler](${CLAUDE_SKILL_DIR}/../../shared/references/product-experience-compiler.md)
 - [A/B quality protocol](${CLAUDE_SKILL_DIR}/../../docs/optimization-quality-protocol.md)

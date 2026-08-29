@@ -450,10 +450,11 @@ must not run this command.
 > For Dataverse-required apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
 > seconds. Connector-only apps skip those metadata milestones. While the
-> architect runs, new milestone IDs from
-> `.tmp/data-model-planning-status.json` are rendered without inventing
+> return-only agents run, the foreground records measured planning and agent
+> execution facts in `.tmp/mobile-planning-timings.json` without inventing
 > percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
-> applicable milestone before interrupting. Screen graph/spec compilation runs
-> internally between Gates 2 and 3 without adding another prompt."
+> applicable foreground milestone before interrupting. Screen graph/spec
+> compilation runs internally between Gates 2 and 3 without adding another
+> prompt."
 
 ### Step 2d — Template-only mode

@@ -64,24 +64,32 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions-core.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
-12. **Sub-agent return-status protocol** — Every agent in this plugin (`native-app-planner`, `data-model-architect`, `screen-planner`, `screen-builder`) MUST return a status code as the **literal first line** of its final message. Orchestrators (skills that invoke agents via `Task`) MUST parse the first line and branch:
+12. **Return-only child-agent protocol** — `native-app-planner`,
+    `data-model-architect`, `screen-planner`, `screen-builder`, and
+    `offline-profile-architect` MUST declare explicit `tools: []`, receive all
+    required context inline, make zero tool calls, and return exactly one JSON
+    envelope. They never dispatch another child. The common statuses are
+    `ready`, `ready_with_concerns`, `needs_context`, `needs_clarification`, and
+    substantive `blocked`.
 
-    | Code | Meaning | Orchestrator action |
-    |---|---|---|
-    | `DONE` | Completed cleanly | Log and continue |
-    | `DONE_WITH_CONCERNS: <list>` | Worked but flagged doubts | Surface to user before next step; record in `memory-bank.md` |
-    | `NEEDS_CONTEXT: <missing>` | Cannot proceed without more info | Re-dispatch with the info filled in (cap 2 retries) |
-    | `BLOCKED: <reason>` | Hit a hard wall | STOP, escalate to user, never silently retry |
+    The foreground owns every read, write, question, approval, command,
+    validation, mutation, timing record, and resume checkpoint. It computes and
+    seals the complete work-order fingerprint; children echo that fingerprint,
+    artifact IDs, and allowlisted absolute target paths verbatim. The foreground
+    rejects unknown fields, mismatches, incomplete content, truncation markers,
+    and duplicate targets before any final write. Independent children may
+    reason concurrently, but all validated artifacts are materialized in
+    deterministic order by the foreground.
 
-    Hard rules:
-    - Status code is the literal first line — no `Status:` prefix, no backticks, no preamble. After it, blank line, then the agent's normal summary.
-    - Agents MUST NOT downgrade `BLOCKED` to `DONE_WITH_CONCERNS` to keep the workflow moving — the orchestrator's job is to handle the block, not the agent's.
-    - `DONE_WITH_CONCERNS` requires at least one concern. If none, use `DONE`.
-    - `DESIGN_VIBE_REQUESTED:` is accepted only as a legacy compatibility
-      signal and is normalized into the Step 6.75 design-system flow.
-      `INDUSTRY_CONFIRM_REQUESTED:` is obsolete; industry is vocabulary only
-      and cannot choose product scope or visual direction.
-    - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
+    `needs_context` and targeted repairs are bounded; a clarification is asked
+    and persisted by the foreground. Tool-surface absence, missing Plan Mode,
+    missing structured question UI, and child filesystem restrictions are never
+    product `blocked` results. If custom-agent dispatch is unavailable, the
+    foreground uses the same work order, envelope parser, materialization path,
+    semantic rules, validators, and gates sequentially. See
+    [`skills/create-mobile-app/references/return-only-agents.md`](./skills/create-mobile-app/references/return-only-agents.md)
+    for the canonical contract. Unrelated agents not listed above retain their
+    documented compatibility protocol until separately migrated.
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
@@ -114,7 +122,10 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
   presets are explicit-only.
 - ✅ Offline profile creation is **author-only in v0.1** — `/setup-offline-profile` and `/enable-tables-offline` POST `mobileofflineprofile` / `mobileofflineprofileitem` / `mobileofflineprofileitemassociation` to Dataverse and write `offline-profile.json` to the project, but do NOT scaffold offline runtime code (SQLite store, sync engine, write queue) into the generated app. Runtime support is gated on upstream `@microsoft/power-apps-native-host` confirmation.
 - ✅ Custom filter mode (`recorddistributioncriteria=3`, `profileitemrule` → `savedquery`) is **deferred to v0.5**. v0.1 supports Related-rows-only / All-records / Organization-rows radio options only.
-- ✅ `offline-profile-architect` agent follows the existing `mobile-app:` namespace + status-code protocol (`DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:`). Read-only — proposes scope; never mutates Dataverse. Mutation lives in `/setup-offline-profile` after the 3 gates.
+- ✅ `offline-profile-architect` is a return-only `tools: []` role. The
+  foreground supplies complete verified model/profile facts inline, validates
+  and materializes its JSON-envelope artifacts, and owns all questions, three
+  gates, environment reads, and sequential mutation in `/setup-offline-profile`.
 - ✅ **Offline profile ↔ schema reconciliation across the lifecycle.** Any schema change (`/add-dataverse`, `/setup-datamodel`, `/edit-app`) reconciles an existing offline profile, and `/deploy` gates the final push on offline coverage. Mechanism: `scripts/offline-profile-delta.js` — a purely LOCAL, no-network diff of `.datamodel-manifest.json` (schema) vs `offline-profile.json` (offline coverage) reporting `missingTables` + new columns; `status` ∈ `no-manifest`/`no-profile`/`in-sync`/`delta`/`error` (exit 0 = ran, 1 = fatal). It is distinct from `verify-offline-profile.js`, which is a Dataverse-network drift check of the snapshot vs the live published profile. Column delta is computed against a per-table `schemaColumns` baseline (all schema columns present at reconciliation time), written by `/setup-offline-profile`, `/add-table-to-offline-profile`, and refreshed by `/edit-offline-profile` — NOT against the curated `selectedColumns`, so deliberate exclusions aren't false-flagged; legacy snapshots without it degrade to table-only delta. The one canonical flow (prompt wording, reconcile ordering, deploy gate/override) lives in [`shared/references/offline-profile-reconciliation.md`](shared/references/offline-profile-reconciliation.md); the four skills reference it rather than duplicating it. Orchestrator-invoked `/add-dataverse` (`--skip-planning`) suppresses its own Step 8.5 so the orchestrator owns reconciliation once.
 
 ## Maintaining This File

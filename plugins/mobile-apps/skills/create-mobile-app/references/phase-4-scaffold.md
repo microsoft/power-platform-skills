@@ -280,7 +280,8 @@ generic or incomplete preview advance to React Native generation.
 #### Consolidated plan review (optional)
 
 When `--consolidated-review` is present, replace the two prompts below and the
-planner's earlier Gate 1–2 prompts with one `EnterPlanMode` review containing:
+earlier pending Gate 1–2 review with one foreground `approveSection` review
+containing:
 
 - Product Experience, Product Scope, and verified Data Model;
 - native capabilities and connectors;
@@ -295,10 +296,17 @@ only the owning section, regenerate its dependent contracts, rerender the
 preview, and present the consolidated review again. `--gated` or no review flag
 uses the four prompts below.
 
+For consolidated review and Gates 3–4, use structured Plan Mode/question tools
+when available and normal foreground conversation in Copilot CLI, VS Code, or
+any host without those tools. Before yielding, persist `waiting_for_user` with
+the exact section, question, affected decisions, and revision. Resume the same
+gate/revision from the next answer; never restart planning because Plan Mode is
+absent.
+
 #### Gate 3 — Experience + interactive HTML preview
 
 Open or print `file://<working_dir>/_plan_preview.html` according to
-`<visual_companion>`, then use `EnterPlanMode` with:
+`<visual_companion>`, then call `approveSection` with:
 
 ```text
 ## Gate 3 of 4 — Product Experience
@@ -329,7 +337,7 @@ and preview hashes.
 
 #### Gate 4 — Final implementation confirmation
 
-Use `EnterPlanMode` once more with the exact implementation summary:
+Call `approveSection` once more with the exact implementation summary:
 
 ```text
 ## Gate 4 of 4 — Ready to build
@@ -348,6 +356,11 @@ If rejected, stop before Dataverse mutation, dependency installation, or
 screen/source generation. If approved, mark Gate 4 and
 `implementation.status` approved, refresh the receipt integrity hash, and
 continue to Step 7.
+
+No mutation command or mutating skill may run unless the approval receipt's
+current `implementation.status` is `approved` and its bound plan/contract hashes
+still match. `pending-consolidated-review`, `waiting_for_user`, rejected, stale,
+missing, or malformed approval state always stops before mutation.
 
 After approval, record the materialized experience checkpoint:
 
