@@ -1558,7 +1558,7 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
-    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+    /foreground, never a child,[\s\S]*creates and updates `\.tmp\/mobile-plan-status\.json`/,
   );
   const planner = fs.readFileSync(path.join(
     __dirname,
@@ -1566,11 +1566,11 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   ), 'utf8');
   assert.match(
     planner,
-    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+    /eventual `mobile-plan-status\.json` `dataModel` approval record must bind/,
   );
   assert.match(
     planner,
-    /Do not call the manifest builder to create or restamp this receipt/,
+    /Do not create or restamp the receipt[\s\S]*foreground creates it only after/,
   );
 });
 

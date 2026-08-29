@@ -17,7 +17,7 @@ fi
 For every timed command or agent dispatch below, call `planning-timings.js`
 with `--action start` immediately before it and `--action finish` immediately
 after success. On `BLOCKED` or command failure use `--action fail --reason
-<short-safe-classification>`; on `NEEDS_CONTEXT` use `--action needs-context
+<short-safe-classification>`; on an envelope `needs_context` use `--action needs-context
 --reason <short-safe-classification>`, then start the re-dispatch with
 `--retry`. Never put prompts, requirements, credentials, URLs, or response
 bodies in `reason`. Model token/cost fields are optional and must be omitted
@@ -178,47 +178,51 @@ exact failure and **do not** treat an unreadable response as an empty inventory:
 
 The snapshot script emits factual `DATAVERSE_SNAPSHOT_PROGRESS` lines after
 inventory, candidate selection, and detail loading. Print them immediately;
-never replace them with estimates or percentages. Once the architect starts,
-watch `<working_dir>/.tmp/data-model-planning-status.json` and print each new
-milestone ID once with its counts and elapsed time. The first environment or
-snapshot milestone must be visible within 30 seconds. The foreground
-orchestrator owns this rendering; the architect only owns the status artifact.
+never replace them with estimates or percentages. The first environment or
+snapshot milestone must be visible within 30 seconds. Children do not write or
+own progress artifacts.
 
-For `required`, pass `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim to
-the planner prompt and every direct `data-model-architect` fallback/revision.
-The model reads the compact sidecar, not the full snapshot; deterministic tools
-retain the full snapshot for hash binding and validation. A supplied matching
-pair activates the architect's `snapshot-only` path: no Bash discovery and no
-live Dataverse calls inside the agent. For `connector-only`, pass the mode
-explicitly and state that both paths are not supplied; never provide placeholder
-file paths.
+For `required`, the foreground reads the validated compact architect evidence
+and only the relevant verified snapshot facts, then embeds that content in the
+sealed `data-model-architect` work order. Do not give the child a path and ask it
+to read. Deterministic foreground tools retain the full snapshot for hash
+binding, bounded expansion, and decision validation. For `connector-only`, pass
+the mode explicitly and omit Dataverse evidence rather than inventing
+placeholder content.
 
 Benchmark method and acceptance criteria:
 [`references/dataverse-planning-benchmark.md`](dataverse-planning-benchmark.md).
 
-**Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
+**Hard rule — foreground-only persistence during Step 3.** Read
+[`return-only-agents.md`](return-only-agents.md) now. Every child receives
+complete inline context and returns content; only the foreground may write
+`native-app-plan.md`, `_dm_section.md`, `_screens_section.md`, `.tmp/*`, or any
+other project path. Children never mutate `app/`, `src/`, package/config files,
+brand files, generated files, or `memory-bank.md`.
 
-- `<working_dir>/native-app-plan.md`
-- `<working_dir>/_screens_section.md`
-- `<working_dir>/.tmp/*`
+Collect `ready_with_concerns` strings in foreground-owned
+`DEFERRED_CONCERNS[]`. Step 6.7 flushes them into `memory-bank.md` `## Concerns`
+after that file exists.
 
-All other paths in `<working_dir>/` (notably `app/`, `src/`, `package.json`, `power.config.json`, `tamagui.config.ts`, `tsconfig.json`, `node_modules/`, `memory-bank.md`) are owned by the foreground setup phases. Do not mutate them during planning.
+**Resume-from-draft check.** Before dispatch, inspect the foreground-owned
+interaction and pipeline state. If a sealed work order and validated response
+already exist for the current input fingerprint, resume after that artifact.
+If an older `native-app-plan.md` exists without matching return-only state, read
+its content into the new work order as prior-draft context; do not tell a child
+to read the path and do not restart already-approved interactions.
 
-If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-model architect, screen-planner), add it to an in-memory queue `DEFERRED_CONCERNS[]` during Step 3. Do not write `memory-bank.md` yet. Step 6.7 must always flush `DEFERRED_CONCERNS[]` into `memory-bank.md` `## Concerns` immediately after the file is created.
+**Agent execution mode cache.** Do not spawn a no-op probe and do not use
+`memory-bank.md` for host capability state. Resolve the cached
+`parallel-return` or `foreground-return` mode with
+`scripts/agent-return-runtime.js` exactly as documented in
+[`return-only-agents.md`](return-only-agents.md). The binding includes host,
+runtime/session, and plugin version and expires after 30 minutes. On a miss,
+attempt the first real return-only dispatch. Only custom-agent routing failure
+selects `foreground-return`; an application `blocked`, malformed envelope, or
+validator finding does not change the mode.
 
-**Resume-from-draft check.** Before spawning, check if `<working_dir>/native-app-plan.md` already exists with content. If yes, a previous planner run (possibly in a degraded context with no `Task`/gate tools) already drafted sections. Read it. If it has populated `## Data Model` / `## Native Capabilities` / `## Connectors` but the gates were never run (no `## Approvals` block, or the file was authored by an agent that returned `BLOCKED: tool surface missing`), pass `resume_from_draft: true` and the existing path to the planner so it loads the draft as baseline instead of regenerating from scratch.
-
-**Planner host capability cache.** Do not spawn a no-op probe. Read
-`memory-bank.md` `## Host Capabilities` when it exists. A cached result is
-usable only when its host/runtime identifier and plugin version match the
-current invocation and `checkedAt` is no older than 30 minutes; unscoped,
-expired, or host/plugin-mismatched entries are stale. A fresh matching
-`native_app_planner: unavailable` entry loads `degraded-hosts.md`; otherwise
-attempt the real planner dispatch. Record availability, host/runtime, plugin
-version, and `checkedAt`. Application-level `BLOCKED:` results are not
-capability failures and must not poison this cache.
-
-**Announce the handoff before the Task call** (so the user isn't staring at a blank screen while the planner spins up):
+**Announce the handoff before the planner work order** so the user is not
+waiting without context:
 - First run:
 
   ```bash
@@ -229,76 +233,113 @@ capability failures and must not poison this cache.
 - When `sampleCount > 0`, report the measured p50 and prior-run duration, for
   example `~3 min measured p50 (last run 2m40s)`. When no samples exist, say
   `ETA pending first measurement`; do not substitute a static promise.
-- `required`: > "→ Spawning planner agent from the verified foreground planning snapshot. I will print each factual `data-model-planning-status.json` milestone and elapsed count as it lands. <measured ETA or first-measurement notice>"
-- `connector-only`: > "→ Spawning planner agent in connector-only mode; a foreground planning snapshot and data-model mutation are not required."
+- `required`: > "→ Dispatching the return-only planner from verified foreground context. <measured ETA or first-measurement notice>"
+- `connector-only`: > "→ Dispatching the return-only planner in connector-only mode; no Dataverse evidence or mutation is required."
 
-Then spawn the `mobile-app:native-app-planner` agent via `Task` (the plugin name `mobile-app:` prefix is required — without it `Task` returns `Agent type not found`):
+#### 3.1 — Native planner work order
 
-Immediately before dispatch, start `nativePlanner` timing. Close it with
-`finish`, `needs-context`, or `fail` according to the literal first-line return.
-Every re-dispatch after bounded expansion uses `start --retry`.
+The foreground writes and seals one `native-app-planner` work order. Its inline
+context contains the confirmed requirements, original prompt, wizard answers,
+platforms, approval mode, Dataverse planning mode, detected publisher prefix,
+design mode, visual-companion choice, native allowlist facts, connector facts,
+exact contents of `schema-product-experience-contract.json` and
+`schema-product-scope-contract.json`, their applicable semantic-rule
+requirements, and prior-draft content when resuming. Do not include a path in
+place of any required content.
 
-```
-Spawn agent: mobile-app:native-app-planner
+Request exactly these artifacts:
 
-Prompt:
-  Plan a Power Apps mobile app.
+| Artifact ID | Allowlisted target |
+|---|---|
+| `plan:native-app-draft` | `<working_dir>/.tmp/native-app-plan.draft.md` |
+| `contract:product-experience` | `<working_dir>/.tmp/product-experience-contract.json` |
+| `contract:product-scope` | `<working_dir>/.tmp/product-scope-contract.json` |
 
-  Requirements brief (confirmed with user):
-  <requirements_brief — bullet points from Step 2b>
+The draft contains `<!-- RETURN_ONLY_DATA_MODEL_SECTION -->` and
+`<!-- RETURN_ONLY_SCREENS_SECTION -->` exactly once. It contains every other
+existing plan section and Gate 1–2 review content, but no approved claim.
 
-  Design vibe opt-in: <design_vibe_opt_in — use "deferred" normally and
-  "fast" when `--no-design` is in $ARGUMENTS. Never infer a direction from
-  industry.>
-  Visual companion: <visual_companion — "yes" or "no">
+Seal the complete work order with `agent-return-envelope.js`, start the
+`nativePlanner` timing stage, record `planning:native` with dispatch reason
+`initial` through `agent-return-runtime.js`, and dispatch the complete sealed
+JSON inline. In
+`parallel-return`, invoke `mobile-app:native-app-planner`; in
+`foreground-return`, perform that same role from the same work order and emit
+the same envelope. Capture the exact response text. The healthy path dispatches
+this role once. Only one genuine clarification or targeted validator repair may
+cause a bounded follow-up; ordinary approvals never redispatch the planner.
 
-  Original prompt: <full $ARGUMENTS verbatim>
-  Wizard answers: <Step 2 answers>
-  Working directory: <absolute path of <working_dir>>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
-  Dataverse planning mode: <required | connector-only>
-  Dataverse planning failure reason: none
-  Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
-  Compact Dataverse architect evidence: <absolute ARCHITECT_EVIDENCE_PATH verbatim for required; otherwise NOT SUPPLIED>
-  Structured schema contract: <absolute
-  `<working_dir>/.tmp/dataverse-schema-contract.json` for required; otherwise
-  NOT SUPPLIED>
-  Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
+The dispatch ledger rejects a second `initial` call and has no `approval`
+reason. Gate feedback routes to the owning Product Experience, Product Scope,
+Data Model, or foreground approval-persistence step. A genuine child
+clarification uses `needs_clarification`; malformed transport uses the same
+fingerprint with `transport_retry`; exact validator findings use
+`targeted_repair`. Do not redispatch the planner merely to reword gate text or
+write approval-receipt content.
 
-  Approval mode: <consolidated when --consolidated-review is present; gated otherwise>
+Validate the envelope and run the Product Experience and Product Scope
+validators through a foreground validation plan before materialization. The
+plan first runs `bind-return-only-contracts.js` against the staged Experience
+and Scope files, replacing only Scope's 64-zero `experienceRevision`, then runs
+both semantic validators. On
+`ready_with_concerns`, queue concerns. On `needs_clarification`, persist
+`waiting_for_user`, ask through `askUser`, attach the answer, reseal, and resume.
+Malformed or truncated transport retries the byte-identical work order once.
+Substantive `blocked` stops. Tool-surface absence is a dispatch-mode concern,
+never a product block.
 
-  Follow native-app-planner.md. In gated mode, run approval Gates 1-2. In
-  consolidated mode, compile those same review sections and receipts as
-  pending without prompting; the orchestrator owns the single approval after
-  the materialized experience preview. Then compile the
-  Workflow Journey and screen build packs. The orchestrator owns Gate 3
-  (experience preview) and Gate 4 (final implementation confirmation). On
-  terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` /
-  `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule
-  #10.
-```
+#### 3.2 — Data Model work order
 
-The planner runs Gates 1-2, compiles the screen contracts, and writes
-`<working_dir>/native-app-plan.md`. Wait for it to return before continuing.
-On a successful `required` return, require both
-`.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
-before continuing. If the receipt is missing, STOP as `BLOCKED`; this
-orchestrator must not synthesize it after the planner has returned.
+After Product Experience and Product Scope validate, build one
+`data-model-architect` work order. Its inline context contains the confirmed
+brief, complete approved/pending Product Scope content, planning mode, detected
+publisher prefix, compact architect evidence content, relevant verified
+snapshot facts, screen-operation facts when this is a targeted cross-entity
+audit, exact normalized Dataverse contract shape and semantic validation
+requirements, prior section content for incremental repair, and output
+descriptors.
 
-#### 3.0a — Degraded-host fallback
+Request `_dm_section.md` as `section:data-model`. In `required`, also request
+`.tmp/dataverse-schema-contract.json` as `contract:dataverse-schema`. In
+`connector-only`, request no schema contract.
 
-Only after the real planner spawn fails with an agent-routing/tool-surface error, read [`degraded-hosts.md`](${CLAUDE_SKILL_DIR}/references/degraded-hosts.md) and execute the inline-gate recovery. Do not load fallback instructions on the healthy path.
+Dispatch `mobile-app:data-model-architect` in return mode, or perform the same
+work order in `foreground-return`. For `needs_context`, accept only the existing
+bounded signals in `concerns`:
 
-#### 3.0 — Sub-agent return-status switch (canonical)
+- `detailed-dataverse-metadata:<sorted logical names>`;
+- `proposed-dataverse-names:<sorted logical names>`;
+- `matching-dataverse-snapshot-and-evidence`;
+- `product-scope-approval-required:<N>-new-tables`.
 
-Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+The foreground performs exact-name expansion below, refreshes inline evidence,
+reseals only this work order, and redispatches once. Before materialization in
+`required`, the validation plan normalizes the staged schema contract and runs
+`validate-dataverse-planning-decisions.js` against the full foreground snapshot.
+Exit `3` becomes the existing exact detail request; exit `2` is substantive
+`blocked`. Never approve Reuse, Extend, or Adapt from core/missing detail.
 
-**Data-model exact-name expansion:** when the planner or direct architect
-returns exactly
-`NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>`, sort and
-de-duplicate those names. This signal is valid only in `required` mode with a
-validated base snapshot, whether it came from the planner or the direct
-architect fallback; receiving it in `connector-only` mode is `BLOCKED`.
+#### 3.3 — Canonical response handling
+
+Use `scripts/agent-return-envelope.js` for every converted-child response. Do
+not parse first lines or extract JSON from prose. `ready` continues after staged
+validation and atomic materialization. `ready_with_concerns` does the same and
+queues its actionable concerns. `needs_context` updates only the owning work
+order and is capped as documented below. `needs_clarification` persists the
+foreground interaction, asks once, and resumes the same phase. Substantive
+`blocked` stops. Invalid/truncated transport retries the byte-identical work
+order once; role-validator repair includes exact findings and never regenerates
+unaffected artifacts.
+
+If custom-agent routing fails, select `foreground-return` through the cached
+mode contract and process the same work order sequentially. Do not first attempt
+write-capable children and do not load a second inline planning workflow.
+
+**Data-model exact-name expansion:** when a validated `data-model-architect`
+envelope has status `needs_context` and one concern is exactly
+`detailed-dataverse-metadata:<logical names>`, sort and de-duplicate those
+names. This signal is valid only in `required` mode with a validated base
+snapshot; receiving it in `connector-only` mode is substantive `blocked`.
 Perform one bounded foreground expansion. Reuse the existing snapshot
 inventory, issue at most one exact-name metadata query for requested names
 absent from it, and do not run another broad inventory query:
@@ -332,15 +373,16 @@ node -e '
 ```
 
 Print the expansion's requested/loaded/unavailable names and timings
-immediately, then re-dispatch the same planner or architect once with the same
-snapshot/architect-evidence paths. A second detailed-metadata signal is `BLOCKED`; do not
-loop, broaden concepts, or defer exact validation to mutation.
+immediately. Read the refreshed compact evidence and relevant facts into the
+same architect work order, increment its attempt, reseal it, and redispatch once.
+A second detailed-metadata signal is substantive `blocked`; do not loop,
+broaden concepts, or defer exact validation to mutation.
 
-**Data-model proposed-name expansion:** when the planner or direct architect
-returns exactly
-`NEEDS_CONTEXT: proposed-dataverse-names:<logical names>`, sort and de-duplicate
-those names. This signal is valid only in `required` mode with a validated
-snapshot. Perform one collision-only foreground expansion:
+**Data-model proposed-name expansion:** when a validated architect envelope has
+status `needs_context` and one concern is exactly
+`proposed-dataverse-names:<logical names>`, sort and de-duplicate those names.
+This signal is valid only in `required` mode with a validated snapshot. Perform
+one collision-only foreground expansion:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
@@ -360,15 +402,89 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" 
 ```
 
 This expansion checks collisions only; it does not treat absent proposed names
-as required existing tables or load their details. Re-dispatch once. A second
-proposed-name signal is `BLOCKED`. If a collision is found and the architect
-needs compatibility facts, it may then use the separate one-time
+as required existing tables or load their details. Refresh inline evidence,
+reseal the same architect work order, and redispatch once. A second
+proposed-name signal is substantive `blocked`. If a collision is found and the
+architect needs compatibility facts, it may then use the separate one-time
 `detailed-dataverse-metadata` expansion for that existing table.
 
-Planner-only legacy `DESIGN_VIBE_REQUESTED:` returns are normalized to
-`Design vibe opt-in: deferred`, then the planner is re-spawned once. Do not
-handle or emit `INDUSTRY_CONFIRM_REQUESTED:`. Low-confidence product or visual
-inference belongs in Gate 1 with its evidence and confidence.
+#### 3.4 — Foreground Gates 1–2
+
+After the Data Model is validated and materialized, the foreground renders
+Gate 1 from Product Experience, Product Scope, and Data Model content. It
+renders Gate 2 from the planner's architecture, native-capability, connector,
+and dependency content. Use `approveSection` from the shared interaction
+adapter. Structured Plan Mode/question tools are used when available; Copilot
+CLI and VS Code use normal foreground conversation. Before yielding, persist
+`waiting_for_user`, then resume the same phase and revision with the answer.
+
+Gated mode preserves both prompts and records their approval revisions.
+Consolidated mode records both as `pending-consolidated-review`; Step 6.75 still
+presents the existing consolidated review. The foreground, never a child,
+creates and updates `.tmp/mobile-plan-status.json` from exact validated content.
+
+#### 3.5 — Screen graph and specs work orders
+
+After Gate 2 approval or consolidated pending compilation, create the existing
+two separate `screen-planner` work orders.
+
+The `graph` work order includes inline validated Product Experience, Product
+Scope, Data Model summary, capabilities, connectors, workflow constraints,
+navigation rules, platforms, exact Workflow Journey JSON schema and semantic
+requirements, and output descriptors. Request complete
+`_screens_section.md` graph content as `section:screens` and
+`.tmp/workflow-journey-contract.json` as `contract:workflow-journey`. Validate
+the staged journey by first binding its zero revision placeholders with
+`bind-return-only-contracts.js --scope-input <approved-scope> --journey
+<staged-journey>`, then checking it against the exact Product Scope and Product
+Experience contracts before materialization. The binder must not rewrite either
+approved upstream contract.
+
+The `specs` work order includes inline validated graph content, design and
+foundation contracts available at this phase, exact data/service signatures,
+fixtures, states, selected archetype shards, code idioms, and output
+descriptors, plus the exact screen build-pack JSON schema and semantic
+requirements. Request complete `_screens_section.md` as `section:screens` and
+`.tmp/screen-build-pack.json` as `contract:screen-build-pack`. Validate the
+staged build pack by first binding its zero revision placeholders with
+`--scope-input <approved-scope> --journey-input <approved-journey> --build-pack
+<staged-pack>`, then running the existing compiler against the exact journey,
+scope, and experience contracts. The binder must not rewrite approved upstream
+contracts. Materialize only after that check, then run
+`compile-screen-build-pack.js` normally to produce and check
+`.tmp/compiled-screen-build-pack.json`.
+
+In `parallel-return`, invoke `mobile-app:screen-planner` once for `graph` and
+once for `specs`; these phases remain ordered, not concurrent. In
+`foreground-return`, process those same sealed work orders sequentially. Missing
+hierarchy, focal point, signature interaction, media prominence, states, or
+`forbiddenDefaults` triggers targeted repair; the foreground never fills those
+semantic decisions with generic defaults.
+
+#### 3.6 — Final plan and approval receipt
+
+Compose the existing final plan shape deterministically:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/compose-return-only-plan.js" \
+  --project-root "<working_dir>" \
+  --draft ".tmp/native-app-plan.draft.md" \
+  --data-model "_dm_section.md" \
+  --screens "_screens_section.md" \
+  --output "native-app-plan.md"
+```
+
+The foreground writes `.tmp/mobile-plan-status.json` only after the relevant
+approval state exists. Preserve its current shape and bind the final plan hash,
+Product Experience and Product Scope revisions, exact normalized Data Model
+contract/hash when required, Gate 1 and Gate 2 records, screen-plan status,
+compiled build-pack hash, structured service dependencies, and integrity hash.
+A changed approved semantic section invalidates only its approval record and
+downstream hashes until the owning review approves it again.
+
+Record `executionMode`, dispatch/retry counts, zero child tool calls,
+foreground validation time, and foreground materialization time through
+`planning-timings.js --record-agent-execution`.
 
 The planner does not render or open HTML. The single interactive experience
 preview is produced at Step 6.75 from the approved Product Experience,
@@ -376,7 +492,9 @@ Workflow Journey, design tokens, and screen build packs.
 
 #### 3.9 — Post-plan publisher-prefix gate
 
-Before continuing to Step 4, verify the written `native-app-plan.md` actually uses `$DETECTED_PUBLISHER_PREFIX` from Step 1.7. Catches both the inline-fallback path missing the prefix and an architect that ignored the instruction.
+Before continuing to Step 4, verify the foreground-composed
+`native-app-plan.md` actually uses `$DETECTED_PUBLISHER_PREFIX` from Step 1.7.
+This catches an owning role that ignored the supplied identity.
 
 ```bash
 if [ -n "$DETECTED_PUBLISHER_PREFIX" ]; then
@@ -389,15 +507,20 @@ if [ -n "$DETECTED_PUBLISHER_PREFIX" ]; then
 fi
 ```
 
-If mismatches are reported, sweep `native-app-plan.md` (and any auxiliary files like `.datamodel-manifest.json` if already written) replacing the wrong prefix with `${DETECTED_PUBLISHER_PREFIX}_` before Step 4. Do NOT proceed to Step 5 with a wrong-prefix plan — the sweep cost grows ~500 occurrences once services are generated.
+If mismatches are reported, do not search-and-replace approved semantics in the
+foreground. Send one targeted repair to the owning Data Model work order with
+the exact mismatch findings, reseal it, validate the returned section/contract,
+and recompose the plan. Repair the planner draft only if a non-Data-Model
+section independently contains the wrong prefix. Do not regenerate unrelated
+sections or screens, and do not continue while identities disagree.
 
-For `required`, apply the same prefix correction to
-`.tmp/dataverse-schema-contract.json`, then normalize it. Before Step 4, require
-both approved artifacts:
+For `required`, normalize and validate the repaired staged schema contract
+before materialization. Before Step 4, require all approval-bound artifacts:
 
 ```bash
 test -f "$WORKING_DIR/native-app-plan.md"
 test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
+test -f "$WORKING_DIR/.tmp/mobile-plan-status.json"
 node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
@@ -406,13 +529,13 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js
   --snapshot "$SNAPSHOT_PATH"
 ```
 
-The same validation MUST run before Gate 1 is shown in the planner and inline
-paths. Exit `3` is the canonical
-`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` signal and consumes
-the one bounded detail-expansion allowance before architect re-dispatch. Exit
-`2` is `BLOCKED`. Do not approve Reuse, Extend, or Adapt from `core` or missing
-detail, and do not fall back to parsing the Markdown ER diagram when a sidecar
-is missing or malformed.
+The same validation MUST run in the foreground before Gate 1. Exit `3` becomes
+the validated architect-envelope concern
+`detailed-dataverse-metadata:<sorted-names>` and consumes the one bounded
+detail-expansion allowance before architect redispatch. Exit `2` is substantive
+`blocked`. Do not approve Reuse, Extend, or Adapt from `core` or missing detail,
+and do not fall back to parsing the Markdown ER diagram when a sidecar is
+missing or malformed.
 
 Record measured planning history now. Do not checkpoint the plan, approval
 receipt, or build pack yet: Gate 3 may reopen Gates 1-2, and Gate 4 still
