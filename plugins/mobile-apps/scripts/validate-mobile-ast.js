@@ -129,7 +129,10 @@ function expandTargets(projectRoot, targets, { allowMissing = false } = {}) {
 }
 
 function formatFinding(finding) {
-  return `  ${finding.status.toUpperCase()} [${finding.rule}] ${finding.file}:${finding.line}\n    ${finding.message}`;
+  const target = finding.target && finding.target !== finding.file
+    ? ` (screen: ${finding.target})`
+    : '';
+  return `  ${finding.status.toUpperCase()} [${finding.rule}] ${finding.file}:${finding.line}${target}\n    ${finding.message}`;
 }
 
 function main(argv) {
@@ -189,6 +192,7 @@ function main(argv) {
       issues: findings.map((finding) => ({
         validator: 'validate-mobile-ast',
         status: finding.status,
+        target: finding.target,
         file: finding.file,
         line: finding.line,
         rule: finding.rule,

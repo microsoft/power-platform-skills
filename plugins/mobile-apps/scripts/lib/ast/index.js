@@ -106,6 +106,7 @@ function analyzeMobileFiles({ projectRoot, files }) {
       findings.push({
         status,
         rule,
+        target: context.currentTarget || relativeTo(resolvedRoot, sourceFile.fileName),
         file: relativeTo(resolvedRoot, sourceFile.fileName),
         line: node ? lineOf(node) : 1,
         message,
@@ -115,11 +116,13 @@ function analyzeMobileFiles({ projectRoot, files }) {
 
   const analyzedFiles = [];
   for (const target of targets) {
+    context.currentTarget = relativeTo(resolvedRoot, target);
     const sourceFile = program.getSourceFile(target);
     if (!sourceFile) {
       findings.push({
         status: 'unknown',
         rule: 'source-not-parsed',
+        target: relativeTo(resolvedRoot, target),
         file: relativeTo(resolvedRoot, target),
         line: 1,
         message: 'TypeScript did not parse this file, so semantic rules were skipped for it.',
@@ -136,6 +139,7 @@ function analyzeMobileFiles({ projectRoot, files }) {
         findings.push({
           status: 'unknown',
           rule: `${rule.id}-error`,
+          target: relativeTo(resolvedRoot, target),
           file: relativeTo(resolvedRoot, target),
           line: 1,
           message: `Rule "${rule.id}" could not complete: ${error && error.message ? error.message : error}`,
@@ -150,6 +154,7 @@ function analyzeMobileFiles({ projectRoot, files }) {
     const key = [
       finding.status,
       finding.rule,
+      finding.target,
       finding.file,
       finding.line,
       finding.message,

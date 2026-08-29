@@ -1160,13 +1160,22 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 
 ## Step 4 — Validate the written screen
 
-Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
+Before returning a status, run the mobile changed-file dispatcher in lexical-only
+mode against exactly `target_file`:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
+  --project-root "<working_dir>" \
+  --lexical-only \
+  --file "<target_file>"
 ```
 
-If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.
+If it exits `2`, repair every reported violation and rerun it. Do not return
+`DONE` until it exits `0`. The foreground orchestrator owns semantic AST
+validation once for the complete builder wave; do not run
+`validate-mobile-ast.js` or a non-lexical dispatcher invocation inside this
+builder. This keeps immediate path/package/literal safety without constructing
+one TypeScript Program per screen.
 
 ## Step 5 — Return Status
 

@@ -2167,13 +2167,44 @@ After the wave's TypeScript gate passes, and only then, print the next wave star
 - `NEEDS_CONTEXT: <missing>` → re-spawn that one builder with the missing context appended to its prompt (cap 2 retries per screen, then `BLOCKED`). Print `↻ [K/N] <name> — retrying (missing: <missing>)` so the user understands the wave isn't fully clean yet.
 - `BLOCKED: <reason>` → STOP for that screen, print `✗ [K/N] <name> — BLOCKED (<reason>)` and ask the user whether to (1) fix and retry, (2) skip the screen and continue with a placeholder, or (3) abort the whole flow.
 
-After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
+After handling every builder status in the wave, run the **Screen-wave semantic
+gate** once for the complete set of target files from that wave. Pass one
+`--file` argument per wave screen in the same invocation:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-mobile-files.js" \
+  --project-root "<working_dir>" \
+  <one --file "<target_file>" argument per screen in the current wave>
+```
+
+This is the semantic ownership boundary: individual builders run lexical-only
+checks, while this invocation constructs one TypeScript Program and runs every
+AST rule across the wave. Diagnostics include both `file` and the owning
+`screen` target when a reachable shared helper contains the violation.
+`unknown` findings remain visible and non-blocking.
+
+If the semantic gate exits `2`, group diagnostics by owning screen target and
+re-spawn only the affected screen-builders, in parallel, with their consolidated
+findings appended. If a finding belongs to a shared helper, use its reported
+owning screen target(s); when the shared file itself is the single clear owner,
+repair it once inline rather than re-running unaffected builders. Cap semantic
+repairs at 2 per affected screen. After repairs, rerun the same complete-wave
+batch—not one validator per screen—so cross-screen and shared-helper behavior is
+rechecked consistently. Do not run TypeScript or launch the next wave until this
+gate exits `0`.
+
+After the semantic gate passes, run the **Screen-wave TypeScript gate**:
 
 ```bash
 npx tsc --noEmit
 ```
 
-If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
+If the TypeScript gate fails, capture the full error list once, group failures
+by root cause, and repair in batch. For screen-owned files, re-spawn the affected
+screen-builder(s) with the consolidated TypeScript output appended to their
+prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per
+screen, then surface the failure to the user. Do not launch the next wave until
+both the semantic and TypeScript gates are clean.
 
 Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Generated service/model names: singular vs plural generated names, stale aliases after Dataverse rename.

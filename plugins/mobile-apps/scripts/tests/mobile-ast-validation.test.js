@@ -618,6 +618,15 @@ test('finds payload and connector violations inside imported local helpers', (t)
         return <SafeAreaView />;
       }
     `,
+    'app/helper-violations-two.tsx': `
+      import { SafeAreaView } from 'react-native-safe-area-context';
+      import { loadDirect, saveInvalid } from '@/services/incidents';
+      export default function HelperViolationsTwo() {
+        loadDirect();
+        saveInvalid();
+        return <SafeAreaView />;
+      }
+    `,
     'src/services/incidents.ts': `
       import { IncidentsService } from '@/generated/services/IncidentsService';
       export function loadDirect() {
@@ -632,13 +641,17 @@ test('finds payload and connector violations inside imported local helpers', (t)
     `,
   });
 
-  const result = runAst(root, ['app/helper-violations.tsx']);
+  const result = runAst(root, ['app/helper-violations.tsx', 'app/helper-violations-two.tsx']);
   assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
   const helperIssues = issuesFor(result, 'src/services/incidents.ts');
   assert.ok(helperIssues.some((issue) => issue.rule === 'connector-first' && issue.status === 'fail'));
   assert.ok(helperIssues.some(
     (issue) => issue.rule === 'dataverse-server-managed-payload' && issue.status === 'fail',
   ));
+  assert.deepEqual(
+    [...new Set(helperIssues.map((issue) => issue.target))].sort(),
+    ['app/helper-violations-two.tsx', 'app/helper-violations.tsx'],
+  );
 });
 
 test('checks every nested return path from local payload builders', (t) => {
@@ -1087,6 +1100,18 @@ test('dispatcher builds one TypeScript Program for a multi-file batch', (t) => {
       import { SafeAreaView } from 'react-native-safe-area-context';
       export default function Two() { return <SafeAreaView />; }
     `,
+    'app/three.tsx': `
+      import { SafeAreaView } from 'react-native-safe-area-context';
+      export default function Three() { return <SafeAreaView />; }
+    `,
+    'app/four.tsx': `
+      import { SafeAreaView } from 'react-native-safe-area-context';
+      export default function Four() { return <SafeAreaView />; }
+    `,
+    'app/five.tsx': `
+      import { SafeAreaView } from 'react-native-safe-area-context';
+      export default function Five() { return <SafeAreaView />; }
+    `,
   });
   const traceFile = path.join(root, 'program-trace.log');
   const result = spawnSync(
@@ -1099,6 +1124,12 @@ test('dispatcher builds one TypeScript Program for a multi-file batch', (t) => {
       'app/one.tsx',
       '--file',
       'app/two.tsx',
+      '--file',
+      'app/three.tsx',
+      '--file',
+      'app/four.tsx',
+      '--file',
+      'app/five.tsx',
     ],
     {
       cwd: root,
@@ -1112,6 +1143,66 @@ test('dispatcher builds one TypeScript Program for a multi-file batch', (t) => {
   assert.equal(lines.length, 1);
 });
 
+test('dispatcher lexical-only mode builds no TypeScript Program', (t) => {
+  const root = makeProject(t, {
+    'app/one.tsx': `
+      import { SafeAreaView } from 'react-native-safe-area-context';
+      export default function One() { return <SafeAreaView />; }
+    `,
+  });
+  const traceFile = path.join(root, 'program-trace.log');
+  const result = spawnSync(
+    process.execPath,
+    [
+      dispatcherScript,
+      '--project-root',
+      root,
+      '--lexical-only',
+      '--file',
+      'app/one.tsx',
+    ],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, MOBILE_AST_PROGRAM_TRACE_FILE: traceFile },
+    },
+  );
+
+  assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+  assert.match(result.stdout, /Mobile lexical validation passed/);
+  assert.equal(fs.existsSync(traceFile), false);
+});
+
+test('dispatcher lexical-only mode still blocks lexical screen violations', (t) => {
+  const root = makeProject(t, {
+    'app/unsafe.tsx': `
+      import { Text } from 'tamagui';
+      export default function Unsafe() { return <Text color="#ffffff">Unsafe</Text>; }
+    `,
+  });
+  const traceFile = path.join(root, 'program-trace.log');
+  const result = spawnSync(
+    process.execPath,
+    [
+      dispatcherScript,
+      '--project-root',
+      root,
+      '--lexical-only',
+      '--file',
+      'app/unsafe.tsx',
+    ],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, MOBILE_AST_PROGRAM_TRACE_FILE: traceFile },
+    },
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /raw-hex|Raw hex/);
+  assert.equal(fs.existsSync(traceFile), false);
+});
+
 test('missing TypeScript emits unknown and exits successfully', (t) => {
   const root = makeProject(t, {
     'app/unknown.tsx': 'export default function Unknown() { return null; }',
@@ -1123,6 +1214,35 @@ test('missing TypeScript emits unknown and exits successfully', (t) => {
   assert.equal(output.summary.fail, 0);
   assert.equal(output.summary.unknown, 1);
   assert.equal(output.issues[0].rule, 'analyzer-unavailable');
+});
+
+test('missing TypeScript remains non-blocking in canonical and dispatcher modes', (t) => {
+  const root = makeProject(t, {
+    'app/unknown.tsx': 'export default function Unknown() { return null; }',
+  });
+  const env = { MOBILE_AST_DISABLE_TYPESCRIPT: '1' };
+
+  const canonical = runAstCheck(root, ['app/unknown.tsx'], env);
+  assert.equal(canonical.status, 0, canonical.stderr);
+  assert.match(canonical.stderr, /warnings and do not block|UNKNOWN \[analyzer-unavailable\]/);
+
+  const dispatcher = spawnSync(
+    process.execPath,
+    [
+      dispatcherScript,
+      '--project-root',
+      root,
+      '--file',
+      'app/unknown.tsx',
+    ],
+    {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    },
+  );
+  assert.equal(dispatcher.status, 0, dispatcher.stderr);
+  assert.match(dispatcher.stderr, /UNKNOWN \[analyzer-unavailable\]/);
 });
 
 test('standalone report rejects targets outside the project root', (t) => {

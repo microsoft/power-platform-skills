@@ -15,9 +15,10 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> --file <path> [--file <path> ...] [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> [--lexical-only] --file <path> [--file <path> ...] [--approved-js-dependency <name>@<exact-version> ...]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
+    '--lexical-only runs path/package/literal policy checks without constructing a TypeScript Program.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
   ].join('\n');
 }
@@ -34,7 +35,13 @@ function parseApprovedJsDependency(value) {
 }
 
 function parseArgs(argv) {
-  const parsed = { approvedJsDependencies: [], errors: [], projectRoot: null, targets: [] };
+  const parsed = {
+    approvedJsDependencies: [],
+    errors: [],
+    lexicalOnly: false,
+    projectRoot: null,
+    targets: [],
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -52,6 +59,8 @@ function parseArgs(argv) {
         parsed.errors.push(`Invalid --approved-js-dependency value: ${argv[index + 1] || '<missing>'}`);
       }
       index += 1;
+    } else if (arg === '--lexical-only') {
+      parsed.lexicalOnly = true;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     } else {
@@ -120,7 +129,14 @@ function runBatchValidator(validator, filePaths, projectRoot) {
 }
 
 function main(argv) {
-  const { approvedJsDependencies, errors, help, projectRoot: projectRootArg, targets } = parseArgs(argv);
+  const {
+    approvedJsDependencies,
+    errors,
+    help,
+    lexicalOnly,
+    projectRoot: projectRootArg,
+    targets,
+  } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
     return 0;
@@ -204,23 +220,26 @@ function main(argv) {
 
   // Semantic validation runs once for the whole batch, after the per-file
   // lexical pass. One invocation means one TypeScript Program for every target.
-  for (const batchValidator of BATCH_VALIDATORS) {
-    const batchFiles = [...files].filter((filePath) => batchValidator.appliesTo(filePath));
-    if (batchFiles.length === 0) continue;
-    const result = runBatchValidator(batchValidator, batchFiles, projectRoot);
-    if (result.stdout) process.stdout.write(result.stdout);
-    if (result.stderr) process.stderr.write(result.stderr);
-    if (result.error) {
-      process.stderr.write(`Validator ${batchValidator.script} failed to start: ${result.error.message}\n`);
-      blocked = true;
-    } else if (result.status !== 0) {
-      blocked = true;
+  if (!lexicalOnly) {
+    for (const batchValidator of BATCH_VALIDATORS) {
+      const batchFiles = [...files].filter((filePath) => batchValidator.appliesTo(filePath));
+      if (batchFiles.length === 0) continue;
+      const result = runBatchValidator(batchValidator, batchFiles, projectRoot);
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.error) {
+        process.stderr.write(`Validator ${batchValidator.script} failed to start: ${result.error.message}\n`);
+        blocked = true;
+      } else if (result.status !== 0) {
+        blocked = true;
+      }
     }
   }
 
   if (blocked) return 2;
   const binarySummary = binaryFiles > 0 ? `; ${binaryFiles} binary file path(s) checked` : '';
-  process.stdout.write(`Mobile validation passed for ${files.size} file(s)${binarySummary}.\n`);
+  const mode = lexicalOnly ? 'lexical ' : '';
+  process.stdout.write(`Mobile ${mode}validation passed for ${files.size} file(s)${binarySummary}.\n`);
   return 0;
 }
 
