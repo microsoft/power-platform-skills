@@ -29,6 +29,7 @@ offline, and native UX artifact shapes retain their existing responsibilities.
 8. `3a54ba15` - Document return-only agent verification
 9. `9e2e0c40` - Harden mobile create integration
 10. `931a4f24` - Resolve architecture inputs before data modeling
+11. `e87afa84` - Tighten mobile screen scope heuristics
 
 ## Execution Contract
 
@@ -53,6 +54,15 @@ Native capabilities, connector/system-of-record ownership, and the persistence
 boundary are resolved before Data Model dispatch and passed to the architect as
 binding inline inputs. This adds no prompt or approval, and final plan heading
 order remains unchanged.
+
+Screen scope now uses soft composition bands rather than treating 16-20 routes
+as the expected multi-role outcome: focused `3-6`, standard `5-9`, complex
+`7-12`, and multi-role `8-14`. Routes above the target or repeated within one
+job/composition family require structured hard-boundary reasons and an explicit
+composition note. States never justify routes by themselves. The validator
+preserves justified native, commit, resumability, role/security, incompatible
+composition, and density/usability boundaries, so route reduction cannot force
+an overloaded screen merely to hit a count.
 
 ## Host Verification
 
@@ -178,7 +188,12 @@ POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1 \
   node --test scripts/tests/*.test.js
 ```
 
-Latest result: 433 tests passed, 0 failed, 0 skipped in 7,013.375 ms.
+Latest integrated result: 438 tests passed, 0 failed, 0 skipped in 7,221.931 ms.
+
+Real-plan regression checks also passed: the earlier 16-screen ICRC Field
+Receiving scope is rejected until its excess routes carry exceptional and
+screen-level separation evidence, while the focused two-screen checklist scope
+remains valid with non-blocking under-band/cross-reference warnings.
 
 Additional checks passed:
 
@@ -207,7 +222,11 @@ plugins/mobile-apps/scripts/bind-return-only-contracts.js
 plugins/mobile-apps/scripts/compose-return-only-plan.js
 plugins/mobile-apps/scripts/lib/agent-return-envelope.js
 plugins/mobile-apps/scripts/lib/agent-return-runtime.js
+plugins/mobile-apps/scripts/lib/product-experience-contracts.js
+plugins/mobile-apps/scripts/lib/product-scope-rules.js
 plugins/mobile-apps/scripts/planning-timings.js
+plugins/mobile-apps/scripts/prepare-mobile-template.js
+plugins/mobile-apps/scripts/schema-product-scope-contract.json
 plugins/mobile-apps/scripts/tests/agent-return-envelope.test.js
 plugins/mobile-apps/scripts/tests/agent-return-runtime.test.js
 plugins/mobile-apps/scripts/tests/bind-return-only-contracts.test.js
@@ -215,10 +234,14 @@ plugins/mobile-apps/scripts/tests/compose-return-only-plan.test.js
 plugins/mobile-apps/scripts/tests/dataverse-operation-manifest.test.js
 plugins/mobile-apps/scripts/tests/dataverse-planning-snapshot.test.js
 plugins/mobile-apps/scripts/tests/fixtures/agents/planner-smoke-test.md
+plugins/mobile-apps/scripts/tests/helpers/product-experience-fixtures.js
 plugins/mobile-apps/scripts/tests/planning-timings.test.js
+plugins/mobile-apps/scripts/tests/prepare-mobile-template.test.js
 plugins/mobile-apps/scripts/tests/product-experience-agent-contracts.test.js
+plugins/mobile-apps/scripts/tests/product-scope-contract.test.js
 plugins/mobile-apps/scripts/tests/return-only-agent-contracts.test.js
 plugins/mobile-apps/scripts/tests/return-only-orchestration-contracts.test.js
+plugins/mobile-apps/shared/references/product-experience-compiler.md
 plugins/mobile-apps/skills/create-mobile-app/SKILL.md
 plugins/mobile-apps/skills/create-mobile-app/references/degraded-hosts.md
 plugins/mobile-apps/skills/create-mobile-app/references/phase-0-setup.md
