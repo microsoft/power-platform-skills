@@ -50,6 +50,9 @@ const LEGACY_EXAMPLE_FILES = [
   'src/queryClient.ts',
 ];
 
+const CUSTOMIZATION_START = '// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT';
+const CUSTOMIZATION_END = '// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT';
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -70,7 +73,53 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function assertFreshTemplate(projectRoot) {
+function customizationBlock(source, label) {
+  const start = source.indexOf(CUSTOMIZATION_START);
+  const endMarker = source.indexOf(CUSTOMIZATION_END, start);
+  if (start < 0 || endMarker < 0) {
+    throw new Error(`${label} does not contain the supported customization markers`);
+  }
+  const end = endMarker + CUSTOMIZATION_END.length;
+  return { start, end, content: source.slice(start, end) };
+}
+
+function ensureSemanticTamaguiBaseline(projectRoot, baselinePath = path.join(
+  __dirname,
+  '..',
+  'template',
+  'tamagui.config.ts',
+)) {
+  const configPath = path.join(projectRoot, 'tamagui.config.ts');
+  let source = fs.readFileSync(configPath, 'utf8');
+  const original = source;
+
+  if (!source.includes('function withSemanticAliases')
+    || !source.includes('mono: defaultConfig.fonts.body')) {
+    const targetBlock = customizationBlock(source, 'tamagui.config.ts');
+    const baseline = fs.readFileSync(baselinePath, 'utf8');
+    const semanticBlock = customizationBlock(baseline, 'bundled tamagui.config.ts');
+    if (!semanticBlock.content.includes('function withSemanticAliases')
+      || !semanticBlock.content.includes('mono: defaultConfig.fonts.body')) {
+      throw new Error('Bundled tamagui.config.ts lacks the semantic token baseline');
+    }
+    source = source.slice(0, targetBlock.start)
+      + semanticBlock.content
+      + source.slice(targetBlock.end);
+  }
+
+  source = source.replace(
+    /declare module ['"]tamagui['"]\s*\{/,
+    "declare module '@tamagui/core' {",
+  );
+  if (!/declare module ['"]@tamagui\/core['"]\s*\{/.test(source)) {
+    throw new Error('tamagui.config.ts lacks the supported @tamagui/core type augmentation');
+  }
+
+  if (source !== original) fs.writeFileSync(configPath, source);
+  return source !== original;
+}
+
+function assertFreshTemplate(projectRoot, { allowPlanningArtifacts = false } = {}) {
   const missing = REQUIRED_FILES.filter((relativePath) => (
     !fs.existsSync(path.join(projectRoot, relativePath))
   ));
@@ -84,7 +133,7 @@ function assertFreshTemplate(projectRoot) {
 
   const createdMarkers = [
     'memory-bank.md',
-    'native-app-plan.md',
+    ...(allowPlanningArtifacts ? [] : ['native-app-plan.md']),
     '.datamodel-manifest.json',
   ].filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)));
 
@@ -388,6 +437,7 @@ function capturePreparationState(projectRoot) {
     'app.config.js',
     'package.json',
     'power.config.json',
+    'tamagui.config.ts',
     'tsconfig.json',
     'app/_layout.tsx',
     ...LEGACY_EXAMPLE_FILES,
@@ -456,16 +506,20 @@ function prepareMobileTemplate(options) {
     throw new Error('displayName and slug are required');
   }
 
-  assertFreshTemplate(projectRoot);
+  assertFreshTemplate(projectRoot, {
+    allowPlanningArtifacts: options.allowPlanningArtifacts === true,
+  });
   const originalState = capturePreparationState(projectRoot);
   let removedPowerConfig;
   let removedLegacyFiles;
   let sharedFiles;
+  let upgradedTamaguiConfig;
   try {
     updateIdentity(projectRoot, options.displayName, options.slug);
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
+    upgradedTamaguiConfig = ensureSemanticTamaguiBaseline(projectRoot);
     mergeAliases(projectRoot);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
@@ -482,6 +536,7 @@ function prepareMobileTemplate(options) {
     projectRoot,
     removedPowerConfig,
     removedLegacyFiles,
+    upgradedTamaguiConfig,
     copiedSharedFiles: sharedFiles.copied,
     preservedSharedFiles: sharedFiles.preserved,
   };
@@ -495,6 +550,7 @@ function parseArgs(argv) {
     else if (argument === '--display-name') options.displayName = argv[++index];
     else if (argument === '--slug') options.slug = argv[++index];
     else if (argument === '--samples-root') options.samplesRoot = argv[++index];
+    else if (argument === '--allow-planning-artifacts') options.allowPlanningArtifacts = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
   if (!options.workingDir) throw new Error('--working-dir is required');
@@ -513,6 +569,7 @@ module.exports = {
   copySharedFiles,
   ensureProviderProps,
   ensureSafeAreaProviderWrapper,
+  ensureSemanticTamaguiBaseline,
   mergeAliases,
   prepareMobileTemplate,
   prepareRootLayout,

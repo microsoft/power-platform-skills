@@ -98,6 +98,76 @@ test('preparation is idempotent and preserves generated and existing helper file
   assertSnapshotsEqual(beforeSecondRun, afterSecondRun);
 });
 
+test('orchestrated preparation allows only the current planning artifact', () => {
+  const projectRoot = copyTemplate();
+  fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved planning draft\n');
+
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName: 'Planning Probe',
+    slug: 'planning-probe',
+  }), /native-app-plan\.md/);
+
+  prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName: 'Planning Probe',
+    slug: 'planning-probe',
+    allowPlanningArtifacts: true,
+  });
+
+  assert.strictEqual(
+    fs.readFileSync(path.join(projectRoot, 'native-app-plan.md'), 'utf8'),
+    '# Approved planning draft\n',
+  );
+});
+
+test('orchestrated preparation still rejects post-planning mutation markers', () => {
+  for (const marker of ['memory-bank.md', '.datamodel-manifest.json']) {
+    const projectRoot = copyTemplate();
+    fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Planning draft\n');
+    fs.writeFileSync(path.join(projectRoot, marker), '{}\n');
+    assert.throws(() => prepareMobileTemplate({
+      workingDir: projectRoot,
+      displayName: 'Mutation Guard',
+      slug: 'mutation-guard',
+      allowPlanningArtifacts: true,
+    }), new RegExp(marker.replace('.', '\\.')));
+  }
+});
+
+test('preparation upgrades the legacy Tamagui customization block', () => {
+  const projectRoot = copyTemplate();
+  const configPath = path.join(projectRoot, 'tamagui.config.ts');
+  const legacyBlock = `// CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT
+// Preserve this unrelated line outside the replaced declarations.
+const customConfig = {
+  ...defaultConfig,
+  animations,
+};
+// CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT`;
+  const current = fs.readFileSync(configPath, 'utf8');
+  const legacy = current
+    .replace(
+      /\/\/ CUSTOMIZATION START - DO NOT REMOVE OR RENAME THE COMMENT[\s\S]*?\/\/ CUSTOMIZATION END - DO NOT REMOVE OR RENAME THE COMMENT/,
+      legacyBlock,
+    )
+    .replace("declare module '@tamagui/core' {", "declare module 'tamagui' {");
+  fs.writeFileSync(configPath, legacy);
+
+  const result = prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName: 'Semantic Baseline',
+    slug: 'semantic-baseline',
+  });
+  const upgraded = fs.readFileSync(configPath, 'utf8');
+
+  assert.strictEqual(result.upgradedTamaguiConfig, true);
+  assert.match(upgraded, /function withSemanticAliases/);
+  assert.match(upgraded, /accentBase:/);
+  assert.match(upgraded, /mono: defaultConfig\.fonts\.body/);
+  assert.match(upgraded, /declare module '@tamagui\/core'/);
+});
+
 function writeLayoutFixture(source) {
   const projectRoot = tempDirectory('root-layout');
   fs.mkdirSync(path.join(projectRoot, 'app'), { recursive: true });

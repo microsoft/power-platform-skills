@@ -38,15 +38,24 @@ Run the deterministic preparation script once:
 node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
   --working-dir "<working_dir>" \
   --display-name "<displayName>" \
-  --slug "<slug>"
+  --slug "<slug>" \
+  --allow-planning-artifacts
 ```
+
+`--allow-planning-artifacts` is reserved for this foreground Phase 3 → Phase 5
+handoff. It permits the validated `native-app-plan.md` produced earlier in the
+same create run, but still rejects `memory-bank.md`, `.datamodel-manifest.json`,
+and generated service markers. Standalone preparation remains fail-closed.
 
 The script is the only owner of Step 5 mutations. It updates identity, removes
 only recognized legacy example hooks/query-client files, copies shared helpers
-only when missing, merges aliases without `baseUrl`, and structurally verifies
-the root provider/theme/safe-area contract. It preserves custom navigation,
-existing helper bytes, `offlineProfile`, provider props, and the template's
-`@ts-ignore` generation boundaries.
+only when missing, upgrades the marked Tamagui customization block to the
+bundled semantic-token baseline when an older supported template is detected,
+merges aliases without `baseUrl`, and structurally verifies the root
+provider/theme/safe-area contract. It preserves content outside the Tamagui
+customization markers, custom navigation, existing helper bytes,
+`offlineProfile`, provider props, and the template's `@ts-ignore` generation
+boundaries.
 
 **Generated ownership boundary:** Step 5 must not create, reset, delete, or
 write anything under `src/generated/`. Only Power Apps schema/data-source

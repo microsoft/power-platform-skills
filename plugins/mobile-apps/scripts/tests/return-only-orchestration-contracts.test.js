@@ -118,6 +118,15 @@ test('Dataverse and connector mutation remain sequential', () => {
   assert.match(files.degraded, /Dataverse and connector mutation are never parallelized/);
 });
 
+test('environment fallback does not redirect a cache-writing resolver onto its cache', () => {
+  assert.match(files.phase7, /ENV_JSON=\$\(node[^\n]+resolve-environment\.js[^\n]+--no-cache\)/);
+  assert.match(files.phase7, /printf '%s\\n' "\$ENV_JSON" > \.resolved-environment\.json/);
+  assert.doesNotMatch(
+    files.phase7,
+    /resolve-environment\.js" "\$ENV_ID" > \.resolved-environment\.json/,
+  );
+});
+
 test('no mutation can begin before current final approval', () => {
   assert.match(files.phase4, /No mutation command or mutating skill may run/);
   assert.match(files.phase4, /implementation\.status` is `approved`/);

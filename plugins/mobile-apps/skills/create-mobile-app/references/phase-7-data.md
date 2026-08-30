@@ -42,9 +42,15 @@ If `TENANT_ID` is empty, rerun `scripts/resolve-environment.js` using the enviro
 
 ```bash
 ENV_ID=$(node -e "console.log(require('./power.config.json').environmentId || '')")
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID" > .resolved-environment.json
+ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENV_ID" --no-cache)
+printf '%s\n' "$ENV_JSON" > .resolved-environment.json
 TENANT_ID=$(node -e "const j=require('./.resolved-environment.json'); console.log(j.tenantId || '')")
 ```
+
+Do not redirect a cache-writing resolver invocation directly onto
+`.resolved-environment.json`; the resolver may atomically update that same path.
+Capture the no-cache JSON first, then persist it as a separate foreground step
+as shown above.
 
 If `TENANT_ID` is still empty, STOP and ask the user to fix environment resolution before continuing. Do not guess the tenant and do not copy `msal.tenantId` from `auth.config.json`.
 
