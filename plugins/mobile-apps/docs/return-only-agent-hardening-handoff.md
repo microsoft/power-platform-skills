@@ -7,11 +7,15 @@
 - Runtime used for repository tests: Node.js `22.23.2`
 - Copilot CLI used for host verification: `1.0.82-0`
 - Source under test: this branch's `plugins/mobile-apps` files
-- Installed marketplace plug-ins and VS Code settings were not modified.
+- Initial host verification used isolated copies of the branch definitions.
+  Subsequent local dogfood synchronized the managed plugin copies; those local
+  installation settings are not part of the repository commits.
 
-This change moves execution ownership only. Product Experience, Product Scope,
-Workflow Journey, Dataverse, screen build-pack, approval, navigation, offline,
-and native UX contracts retain their existing semantic responsibilities.
+The core change moves execution ownership. Subsequent dogfood hardening repairs
+template compatibility and resolves native-capability, connector ownership, and
+persistence inputs before Data Model architecture. Product Experience, Product
+Scope, Workflow Journey, Dataverse, screen build-pack, approval, navigation,
+offline, and native UX artifact shapes retain their existing responsibilities.
 
 ## Implementation Commits
 
@@ -22,6 +26,9 @@ and native UX contracts retain their existing semantic responsibilities.
 5. `1a54fad5` - Make screen builds return-only
 6. `80599f33` - Move offline planning to return-only execution
 7. `b382ef6d` - Unify foreground return-only orchestration
+8. `3a54ba15` - Document return-only agent verification
+9. `9e2e0c40` - Harden mobile create integration
+10. `931a4f24` - Resolve architecture inputs before data modeling
 
 ## Execution Contract
 
@@ -42,6 +49,10 @@ resume state, strict parsing, allowlisting, staged validation, transactional
 materialization, rollback, timing, pipeline state, and every external mutation.
 Both `parallel-return` and `foreground-return` use the same work orders,
 envelopes, validators, retry ledger, and deterministic materialization path.
+Native capabilities, connector/system-of-record ownership, and the persistence
+boundary are resolved before Data Model dispatch and passed to the architect as
+binding inline inputs. This adds no prompt or approval, and final plan heading
+order remains unchanged.
 
 ## Host Verification
 
@@ -167,7 +178,7 @@ POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1 \
   node --test scripts/tests/*.test.js
 ```
 
-Result: 427 tests passed, 0 failed, 0 skipped in 9,171.445 ms.
+Latest result: 433 tests passed, 0 failed, 0 skipped in 7,013.375 ms.
 
 Additional checks passed:
 
