@@ -30,6 +30,7 @@ offline, and native UX artifact shapes retain their existing responsibilities.
 9. `9e2e0c40` - Harden mobile create integration
 10. `931a4f24` - Resolve architecture inputs before data modeling
 11. `e87afa84` - Tighten mobile screen scope heuristics
+12. `46852b54` - Limit initial experience preview to three screens
 
 ## Execution Contract
 
@@ -63,6 +64,12 @@ composition note. States never justify routes by themselves. The validator
 preserves justified native, commit, resumability, role/security, incompatible
 composition, and density/usability boundaries, so route reduction cannot force
 an overloaded screen merely to hit a count.
+
+Gate 3 now renders exactly three representative primary-journey screens when
+available: entry, midpoint/core workflow, and outcome/detail. One- and
+two-screen apps render every available screen. `_plan_preview.html` remains the
+single create-flow HTML approval artifact; the workflow does not offer a second
+post-build preview or run Playwright, route crawling, or React Native Web.
 
 ## Host Verification
 
@@ -188,7 +195,7 @@ POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1 \
   node --test scripts/tests/*.test.js
 ```
 
-Latest integrated result: 438 tests passed, 0 failed, 0 skipped in 7,221.931 ms.
+Latest integrated result: 440 tests passed, 0 failed, 0 skipped in 7,170.433 ms.
 
 Real-plan regression checks also passed: the earlier 16-screen ICRC Field
 Receiving scope is rejected until its excess routes carry exceptional and
@@ -226,6 +233,7 @@ plugins/mobile-apps/scripts/lib/product-experience-contracts.js
 plugins/mobile-apps/scripts/lib/product-scope-rules.js
 plugins/mobile-apps/scripts/planning-timings.js
 plugins/mobile-apps/scripts/prepare-mobile-template.js
+plugins/mobile-apps/scripts/render-product-experience-preview.js
 plugins/mobile-apps/scripts/schema-product-scope-contract.json
 plugins/mobile-apps/scripts/tests/agent-return-envelope.test.js
 plugins/mobile-apps/scripts/tests/agent-return-runtime.test.js
@@ -238,6 +246,7 @@ plugins/mobile-apps/scripts/tests/helpers/product-experience-fixtures.js
 plugins/mobile-apps/scripts/tests/planning-timings.test.js
 plugins/mobile-apps/scripts/tests/prepare-mobile-template.test.js
 plugins/mobile-apps/scripts/tests/product-experience-agent-contracts.test.js
+plugins/mobile-apps/scripts/tests/product-experience-preview.test.js
 plugins/mobile-apps/scripts/tests/product-scope-contract.test.js
 plugins/mobile-apps/scripts/tests/return-only-agent-contracts.test.js
 plugins/mobile-apps/scripts/tests/return-only-orchestration-contracts.test.js
@@ -251,6 +260,7 @@ plugins/mobile-apps/skills/create-mobile-app/references/phase-3-planning.md
 plugins/mobile-apps/skills/create-mobile-app/references/phase-4-scaffold.md
 plugins/mobile-apps/skills/create-mobile-app/references/phase-7-data.md
 plugins/mobile-apps/skills/create-mobile-app/references/return-only-agents.md
+plugins/mobile-apps/skills/design-system/SKILL.md
 plugins/mobile-apps/skills/setup-offline-profile/SKILL.md
 ```
 
