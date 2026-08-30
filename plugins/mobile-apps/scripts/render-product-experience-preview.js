@@ -75,13 +75,13 @@ function selectPreviewScreens(compiled, journey) {
     [...(primary?.steps || [])]
       .sort((left, right) => left.order - right.order)
       .map((step) => step.surface?.screenId),
-  );
+  ).filter((screenId) => byId.has(screenId));
 
   let selectedIds;
-  if (journeyIds.length <= 5) {
+  if (journeyIds.length <= 3) {
     selectedIds = journeyIds;
   } else {
-    const indexes = unique([0, 1, Math.floor(journeyIds.length / 2), journeyIds.length - 2, journeyIds.length - 1]);
+    const indexes = [0, Math.floor(journeyIds.length / 2), journeyIds.length - 1];
     selectedIds = indexes.map((index) => journeyIds[index]);
   }
 
@@ -433,11 +433,12 @@ function renderProductExperiencePreview({ experience, scope, journey, buildPack,
     };
   }
   const screens = selectPreviewScreens(compiled, journey);
-  if (screens.length < Math.min(3, compiled.screens.length)) {
+  const expectedScreenCount = Math.min(3, compiled.screens.length);
+  if (screens.length !== expectedScreenCount) {
     return {
       ok: false,
       tool: TOOL,
-      errors: [finding('insufficient-preview-screens', 'preview must contain at least three user-facing screens when available')],
+      errors: [finding('invalid-preview-screen-count', `preview must contain exactly ${expectedScreenCount} user-facing screen(s)`)],
       warnings: [],
     };
   }

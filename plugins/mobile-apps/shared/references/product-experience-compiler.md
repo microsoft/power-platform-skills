@@ -252,14 +252,11 @@ node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
   --project-root "<working_dir>"
 ```
 
-- Render at least three representative user-facing screens.
-- When the primary journey has five or fewer critical screens, render all of
-  them.
-- For larger apps, render Home/entry, the core workflow, and outcome/detail,
-  plus up to two additional screens needed to understand the primary journey.
-- Show every selected phone frame together on one presentation board. Keep all
-  critical screens visible simultaneously when the journey has five or fewer;
-  for larger journeys, show the five representative screens together.
+- Render exactly three representative user-facing screens when at least three
+  are available; render every available screen when the app has only one or two.
+- Select the first ordered primary-journey screen for entry, its midpoint for
+  the core workflow, and its final screen for outcome/detail.
+- Show every selected phone frame together on one presentation board.
 - Use tabs and journey actions only to focus or scroll to a phone. They must
   never replace or hide another selected screen.
 - Use the approved design tokens, screen build packs, journey order, populated
@@ -267,7 +264,8 @@ node "${PLUGIN_ROOT}/scripts/render-product-experience-preview.js" \
 
 Reject the preview before implementation when it:
 
-- misses a core job or critical journey step;
+- does not represent entry, core workflow, and outcome when those surfaces are
+  available;
 - substitutes generic CRUD screens for the approved journey;
 - omits required media or trust/decision-support information;
 - has no meaningful first viewport or visible primary action;
@@ -275,6 +273,7 @@ Reject the preview before implementation when it:
 - relies on unsupported production assumptions;
 - exceeds the approved scope without justification.
 
-Native screenshot or emulator visual QA is not part of this workflow. The HTML
-experience gate, source validators, and TypeScript checks are the supported
-quality path.
+Playwright, route crawling, React Native Web, native screenshots, and emulator
+visual QA are not part of this workflow. Review the generated
+`_plan_preview.html`; source validators and TypeScript checks remain the
+non-visual quality path.

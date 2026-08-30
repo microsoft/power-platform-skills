@@ -213,25 +213,11 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/mobile-pipeline-state.js" \
   --artifact-tree "source=src"
 ```
 
-#### Optional static preview
+#### Static preview boundary
 
-After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
-
-> "→ N screens built and type-checked. The live app starts next.
->
-> Want a static HTML preview first, or go straight to the live app?
->
-> (a) Preview all screens — HTML phone frames for every screen
-> (b) Preview primary journey — the 3-5 approved experience screens
-> (c) Skip preview
->
-> [default: c]"
-
-- **(a)** → invoke `/preview-screens` (all screens)
-- **(b)** → invoke `/preview-screens` with the routes from
-  `.tmp/workflow-journey-contract.json` (skip Login, Splash, Profile, OAuth
-  unless Profile is itself a core journey step)
-- **(c)** → proceed directly to Step 12
+Do not offer or invoke `/preview-screens` during the create flow. The Gate 3
+`_plan_preview.html` containing the three representative experience screens is
+the only HTML preview. After `tsc` passes, proceed directly to Step 12.
 
 ---
 

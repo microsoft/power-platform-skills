@@ -18,6 +18,7 @@ const files = {
   phase4: read('skills/create-mobile-app/references/phase-4-scaffold.md'),
   phase7: read('skills/create-mobile-app/references/phase-7-data.md'),
   phase11: read('skills/create-mobile-app/references/phase-11-screens.md'),
+  design: read('skills/design-system/SKILL.md'),
   degraded: read('skills/create-mobile-app/references/degraded-hosts.md'),
   common: read('skills/create-mobile-app/references/return-only-agents.md'),
   offline: read('skills/setup-offline-profile/SKILL.md'),
@@ -73,10 +74,23 @@ test('Phase 11 validates complete builder waves before deterministic writes', ()
   assert.match(files.phase11, /does\s+not use locale-aware comparison/);
   assert.match(files.phase11, /Keep valid sibling responses unchanged/);
   assert.match(files.phase11, /validate-mobile-files\.js --file/);
+  assert.match(files.phase11, /Do not offer or invoke `\/preview-screens` during the create flow/);
+  assert.match(files.phase11, /`_plan_preview\.html`[\s\S]*the only HTML preview/);
   assert.doesNotMatch(files.phase11, /Return per AGENTS\.md rule/);
   assert.doesNotMatch(files.phase11, /builder's first line/);
   assert.doesNotMatch(files.phase11, /Apply affected files in parallel/);
   assert.doesNotMatch(files.phase11, /target_file:\s*<working_dir>/);
+  assert.doesNotMatch(files.phase11, /Want a static HTML preview first/);
+});
+
+test('create flow renders one three-screen HTML approval preview before implementation', () => {
+  assert.match(files.phase4, /renders the interactive\s+journey preview at `_plan_preview\.html`/);
+  assert.match(files.phase4, /FIRST and ONLY HTML experience preview/);
+  assert.match(files.phase4, /exactly three representative user-facing screens when available/);
+  assert.match(files.design, /render-product-experience-preview\.js/);
+  assert.match(files.design, /Render exactly three primary-journey\s+screens when available/);
+  assert.match(files.phase11, /Do not offer or invoke `\/preview-screens` during the create flow/);
+  assert.doesNotMatch(files.phase11, /Want a static HTML preview first/);
 });
 
 test('foreground-return is one shared workflow without leaf tool assumptions', () => {

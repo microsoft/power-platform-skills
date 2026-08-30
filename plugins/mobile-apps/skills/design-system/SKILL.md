@@ -210,10 +210,10 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
      `brand/tokens.ts`. No-brand is not a reason to omit the design spec.
   3. **Journey preview** — run `compile-screen-build-pack.js --project-root
      <working_dir> --check`, then render the primary journey from
-     `.tmp/compiled-screen-build-pack.json`. Preview at least three
-     representative screens and all
-     critical journey screens when there are five or fewer. Option (d) skips
-     the separate component gallery, not this experience preview.
+      `.tmp/compiled-screen-build-pack.json`. Preview exactly three
+      representative screens when available, or every available screen when the
+      app has only one or two. Option (d) skips the separate component gallery,
+      not this experience preview.
   4. **Return DONE** so Step 9b of the orchestrator applies
      [`references/tamagui-integration.md`](./references/tamagui-integration.md)
      in brand-import mode.
@@ -510,28 +510,25 @@ It selects screens from `.tmp/compiled-screen-build-pack.json`, applies
 revision. A non-zero exit is `BLOCKED`; do not hand-author a fallback preview.
 
 **Orchestrator mode (all paths, including `--fast-experience`):** do not ask a
-preview question and do not allow skip. Render every critical screen in the
-primary journey when there are five or fewer. For larger journeys, render
-entry, core workflow, and outcome plus up to two supporting screens. Always
-render at least three user-facing screens when available.
+preview question and do not allow skip. Render exactly three primary-journey
+screens when available: entry, midpoint/core workflow, and outcome. When the
+app has only one or two screens, render all of them.
 
 **Standalone mode only:** ask:
 ```
 Re-render screen preview with your brand tokens?
 
-(a) All screens     — every user-facing screen with your design applied
-(b) Primary journey — 3-5 screens selected from the approved journey
-(c) Skip preview    — I'll see them when the app builds
+(a) Primary journey — entry, core workflow, and outcome
+(b) Skip preview    — I'll see them when the app builds
 
-[default: b]
+[default: a]
 ```
 
-- **(a)** → re-render all screens from plan with brand tokens applied
-- **(b)** → re-render the primary journey selection described above
-- **(c)** → skip, proceed to Sub-step 7
+- **(a)** → re-render the primary journey selection described above
+- **(b)** → skip, proceed to Sub-step 7
 
 The preview must show every selected phone frame together on one presentation
-board, including all critical journey screens when there are five or fewer.
+board.
 Tabs and actions may focus or horizontally scroll to a phone, but must not hide
 the other selected screens. Include populated sample content and
 loading/empty/error state controls. Preserve approved first-viewport order,

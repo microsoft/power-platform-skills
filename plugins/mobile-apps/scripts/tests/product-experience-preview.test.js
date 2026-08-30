@@ -56,22 +56,22 @@ function renderBundle(bundle) {
   });
 }
 
-test('renderer creates a deterministic five-screen interactive commerce preview', () => {
+test('renderer creates a deterministic three-screen interactive commerce preview', () => {
   const projectRoot = makeProjectDir('experience-preview');
   try {
     prepare(projectRoot, bundleFor('commerce'));
 
     const first = runCli('render-product-experience-preview.js', ['--project-root', projectRoot]);
     assert.strictEqual(first.code, 0);
-    assert.deepStrictEqual(first.json.screenIds, ['discover', 'product', 'cart', 'checkout', 'confirmation']);
+    assert.deepStrictEqual(first.json.screenIds, ['discover', 'cart', 'confirmation']);
 
     const outputPath = path.join(projectRoot, '_plan_preview.html');
     const html = fs.readFileSync(outputPath, 'utf8');
-    assert.strictEqual((html.match(/<article class="phone/g) || []).length, 5);
-    assert.match(html, /class="preview-grid" style="--screen-count:5"/);
+    assert.strictEqual((html.match(/<article class="phone/g) || []).length, 3);
+    assert.match(html, /class="preview-grid" style="--screen-count:3"/);
     assert.match(html, /<strong>1\. DISCOVER<\/strong>/);
-    assert.match(html, /<strong>5\. CONFIRMATION<\/strong>/);
-    assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 5);
+    assert.match(html, /<strong>3\. CONFIRMATION<\/strong>/);
+    assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 3);
     assert.doesNotMatch(html, /\.phone\.extra\{display:none\}/);
     assert.doesNotMatch(html, /phone\.style\.display/);
     assert.match(html, /phone\.classList\.toggle\('focused',phone===target\)/);
@@ -82,11 +82,9 @@ test('renderer creates a deterministic five-screen interactive commerce preview'
     assert.match(html, /SAMPLE PREVIEW/);
     assert.match(html, /--primary:#5b3fd1/);
     assert.match(html, /data:image\/svg\+xml;base64,/);
-    assert.strictEqual((html.match(/class="hero-media"/g) || []).length, 5);
-    assert.match(html, /data-target="product"/);
-    assert.match(html, /data-target="cart"/);
-    assert.match(html, /data-target="checkout"/);
-    assert.match(html, /data-target="confirmation"/);
+    assert.strictEqual((html.match(/class="hero-media"/g) || []).length, 3);
+    assert.doesNotMatch(html, /data-target="product"/);
+    assert.match(html, /Not shown/);
     assert.match(html, /Cloud Runner/);
     assert.match(html, /\$196\.00/);
     assert.match(html, /#SKY-20481/);
@@ -181,7 +179,7 @@ test('renderer rejects a stale compiled build pack', () => {
   }
 });
 
-test('large journeys select entry, core, outcome, and at most five screens', () => {
+test('large journeys select exactly entry, core, and outcome screens', () => {
   const screens = Array.from({ length: 7 }, (_, index) => ({
     screenId: `screen-${index}`,
     pack: {},
@@ -198,7 +196,7 @@ test('large journeys select entry, core, outcome, and at most five screens', () 
 
   assert.deepStrictEqual(
     selectPreviewScreens(compiled, journey).map((screen) => screen.screenId),
-    ['screen-0', 'screen-1', 'screen-3', 'screen-5', 'screen-6'],
+    ['screen-0', 'screen-3', 'screen-6'],
   );
 });
 
@@ -223,6 +221,26 @@ test('three-screen journeys use the same visible presentation board', () => {
   assert.match(html, /class="preview-grid" style="--screen-count:3"/);
   assert.strictEqual((html.match(/class="screen-label"/g) || []).length, 3);
   assert.doesNotMatch(html, /\.phone\.extra\{display:none\}|phone\.style\.display/);
+});
+
+test('journeys with fewer than three screens preview every available screen', () => {
+  const screens = Array.from({ length: 2 }, (_, index) => ({
+    screenId: `screen-${index}`,
+    pack: {},
+  }));
+  const journey = {
+    journeys: [{
+      steps: screens.map((screen, index) => ({
+        order: index + 1,
+        surface: { screenId: screen.screenId },
+      })),
+    }],
+  };
+
+  assert.deepStrictEqual(
+    selectPreviewScreens({ screens }, journey).map((screen) => screen.screenId),
+    ['screen-0', 'screen-1'],
+  );
 });
 
 test('large-journey actions to omitted screens are visibly disabled', () => {
@@ -253,8 +271,8 @@ test('large-journey actions to omitted screens are visibly disabled', () => {
     colors: readColors('/path/that/does/not/exist'),
   });
 
-  const second = screenHtml(html, 'screen-1');
-  assert.doesNotMatch(second, /data-target="screen-2"/);
-  assert.match(second, /disabled aria-disabled="true"/);
-  assert.match(second, /Not shown/);
+  const entry = screenHtml(html, 'screen-0');
+  assert.doesNotMatch(entry, /data-target="screen-1"/);
+  assert.match(entry, /disabled aria-disabled="true"/);
+  assert.match(entry, /Not shown/);
 });

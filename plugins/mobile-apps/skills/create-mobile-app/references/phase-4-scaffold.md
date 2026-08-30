@@ -263,9 +263,11 @@ After `/design-system` returns `DONE`, require
 artifacts are `BLOCKED`; do not silently continue with a generic fallback.
 
 The preview is the **FIRST and ONLY HTML experience preview** in the flow. It
-must contain at least three representative user-facing screens and all
-critical screens in a primary journey of five or fewer. It must be selected
-from the Workflow Journey, not from List/Form/Detail archetypes.
+must contain exactly three representative user-facing screens when available,
+or every available screen when the app has only one or two. Select primary
+journey entry, midpoint/core workflow, and outcome/detail surfaces from the
+Workflow Journey, not from List/Form/Detail archetypes. Do not run Playwright,
+crawl routes, launch React Native Web, or generate another HTML preview.
 
 Before continuing, verify the product-experience, scope, journey, and build-pack
 contracts:
