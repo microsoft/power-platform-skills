@@ -319,8 +319,28 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 
 **Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
-Classify Dataverse planning before Step 2c and stash
-`<dataverse_planning_mode>`:
+Resolve the architecture inputs that constrain the Data Model before classifying
+Dataverse planning. Stash all three as complete inline facts for Step 3:
+
+- `<native_capability_decisions>` — each required template-allowlisted
+  capability, its owning job, whether it captures or retains data, and its
+  schema/offline consequence; use an explicit empty list when none are needed;
+- `<connector_decisions>` — each connector/API, the entities for which it is
+  system of record, read/write direction, authentication expectation, and
+  owning jobs; use an explicit empty list when none are needed;
+- `<persistence_boundary>` — for each record/evidence concept, exactly one
+  owner: Dataverse, an approved connector, bundled local configuration, or
+  transient UI state, plus retention and offline requirements.
+
+These are semantic planning facts, not mutations or connection probes. Derive
+them from the confirmed brief and record consequential uncertainty as a
+classified assumption for the existing Gate 1–2/consolidated review. Do not add
+another question merely because this ordering changed. Ask through the normal
+foreground clarification path only when the missing ownership fact makes safe
+planning impossible.
+
+Classify Dataverse planning from those resolved architecture inputs before Step
+2c and stash `<dataverse_planning_mode>`:
 
 - `connector-only` only when every record source and write target is an
   explicit non-Dataverse connector/system of record, and the app needs no
@@ -328,6 +348,10 @@ Classify Dataverse planning before Step 2c and stash
   artifact, existing Dataverse table, or Dataverse-backed native capability.
 - `required` for every other case, including ambiguity. Do not infer
   connector-only merely because the brief names a connector.
+
+For a mixed connector/Dataverse app, only Dataverse-owned concepts enter
+proposed-table discovery. Connector-owned concepts remain inline architect
+context so the Data Model cannot duplicate the external system of record.
 
 Also stash `<exact_target_facts_required> = yes` when planning depends on any
 existing/standard/managed table, reuse or extension decision, proposed-name

@@ -42,6 +42,8 @@ The foreground supplies inline:
 - wizard answers and target platforms;
 - `approval mode: gated | consolidated`;
 - `Dataverse planning mode: required | connector-only`;
+- resolved native-capability facts, connector/system-of-record facts, and the
+  foreground persistence boundary from the confirmed brief;
 - validated Product Experience/Product Scope inputs and relevant Dataverse
   evidence facts when required;
 - exact Product Experience and Product Scope JSON schemas plus the applicable
@@ -89,7 +91,32 @@ Return complete JSON contract content for the requested Product Experience and
 Product Scope artifacts. The foreground runs the existing validators before
 materialization and approval.
 
-## Step 2 — Data Model
+## Step 2 — Native capabilities, connectors, and persistence
+
+Resolve these decisions before defining the Data Model handoff.
+
+Infer only capabilities required by approved jobs and present in the template
+allowlist. For each capability, state its owning job and whether it captures or
+retains data, requires offline behavior, or implies a schema field, alternate
+key, File/Image column, or location value. Pure-JavaScript dependencies belong
+to the screen planner's exact installation contract, not Native Capabilities.
+
+Select connectors by system-of-record need. Record purpose, API name, owned
+entities, read/write direction, authentication expectation, and owning jobs or
+screens. Dataverse is not listed as a generic connector when it is represented
+by the Data Model.
+
+Resolve one persistence owner for every record/evidence concept: Dataverse, an
+approved connector, bundled local configuration, or transient UI state. Never
+propose a Dataverse duplicate for an entity owned by a connector unless the
+approved scope explicitly requires a retained Dataverse projection and explains
+its synchronization/staleness boundary.
+
+Do not mutate or test live connections. This reasoning-order change adds no
+question or approval; uncertainty is surfaced through the existing foreground
+clarification and Gate 1–2/consolidated review paths.
+
+## Step 3 — Data Model handoff
 
 ### Connector-only
 
@@ -105,19 +132,6 @@ provided inline by the foreground. If either required artifact is missing,
 return `needs_context` naming exactly what is absent. Reuse, Extend, and Adapt
 require full supporting detail, not `detailLevel: core`; do not repair or
 reinterpret an architect decision.
-
-## Step 3 — Native capabilities and connectors
-
-Infer only capabilities required by approved jobs and present in the template
-allowlist. Pure-JavaScript dependencies belong to the screen planner's exact
-installation contract, not Native Capabilities.
-
-Connectors are selected by system-of-record need. Dataverse is not listed as a
-generic connector when it is already represented by the Data Model. Record
-purpose, API name, data direction, authentication expectation, and owning
-screens.
-
-Do not mutate or test live connections.
 
 ## Step 4 — Human plan draft
 

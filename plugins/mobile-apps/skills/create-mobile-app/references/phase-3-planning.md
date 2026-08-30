@@ -241,7 +241,9 @@ waiting without context:
 The foreground writes and seals one `native-app-planner` work order. Its inline
 context contains the confirmed requirements, original prompt, wizard answers,
 platforms, approval mode, Dataverse planning mode, detected publisher prefix,
-design mode, visual-companion choice, native allowlist facts, connector facts,
+design mode, visual-companion choice, resolved native-capability decisions,
+resolved connector/system-of-record decisions, the complete persistence
+boundary, and native allowlist facts,
 exact contents of `schema-product-experience-contract.json` and
 `schema-product-scope-contract.json`, their applicable semantic-rule
 requirements, and prior-draft content when resuming. Do not include a path in
@@ -288,16 +290,28 @@ Malformed or truncated transport retries the byte-identical work order once.
 Substantive `blocked` stops. Tool-surface absence is a dispatch-mode concern,
 never a product block.
 
+Before Data Model architecture, require the validated planner draft to contain
+complete `## Native Capabilities` and `## Connectors` sections consistent with
+the work order's resolved architecture facts. Read those exact heading-bounded
+sections into the architect work order; do not summarize them from memory. The
+foreground also passes the original structured native-capability decisions,
+connector/system-of-record decisions, and persistence boundary so the architect
+can validate cross-section consistency. This changes reasoning and handoff
+order only: final plan heading order and existing Gate 1–2/consolidated approval
+content remain unchanged, and no additional user prompt is introduced.
+
 #### 3.2 — Data Model work order
 
 After Product Experience and Product Scope validate, build one
 `data-model-architect` work order. Its inline context contains the confirmed
 brief, complete approved/pending Product Scope content, planning mode, detected
-publisher prefix, compact architect evidence content, relevant verified
-snapshot facts, screen-operation facts when this is a targeted cross-entity
-audit, exact normalized Dataverse contract shape and semantic validation
-requirements, prior section content for incremental repair, and output
-descriptors.
+publisher prefix, exact resolved `## Native Capabilities` and `## Connectors`
+draft sections, structured native-capability decisions, structured
+connector/system-of-record decisions, the complete persistence boundary,
+compact architect evidence content, relevant verified snapshot facts,
+screen-operation facts when this is a targeted cross-entity audit, exact
+normalized Dataverse contract shape and semantic validation requirements, prior
+section content for incremental repair, and output descriptors.
 
 Request `_dm_section.md` as `section:data-model`. In `required`, also request
 `.tmp/dataverse-schema-contract.json` as `contract:dataverse-schema`. In
@@ -311,9 +325,11 @@ bounded signals in `concerns`:
 - `proposed-dataverse-names:<sorted logical names>`;
 - `matching-dataverse-snapshot-and-evidence`;
 - `product-scope-approval-required:<N>-new-tables`.
+- `resolved-architecture-inputs:<comma-separated native-capabilities,connectors,persistence-boundary>`.
 
 The foreground performs exact-name expansion below, refreshes inline evidence,
-reseals only this work order, and redispatches once. Before materialization in
+or supplies only a missing validated architecture input, reseals only this work
+order, and redispatches once. Before materialization in
 `required`, the validation plan normalizes the staged schema contract and runs
 `validate-dataverse-planning-decisions.js` against the full foreground snapshot.
 Exit `3` becomes the existing exact detail request; exit `2` is substantive

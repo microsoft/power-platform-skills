@@ -17,6 +17,13 @@ operations, and never dispatch another agent.
 
 - complete confirmed brief and approved Product Scope content;
 - `Dataverse planning mode: required | connector-only`;
+- resolved native-capability decisions, including captured/retained outputs,
+  offline consequences, and schema implications;
+- resolved connector decisions, including system-of-record entities,
+  read/write direction, authentication expectation, and owning jobs;
+- the complete persistence boundary assigning every record/evidence concept to
+  Dataverse, an approved connector, bundled local configuration, or transient
+  UI state;
 - validated compact architect evidence content and relevant snapshot facts;
 - exact normalized Dataverse schema-contract shape and semantic validation
   requirements supplied by the foreground in required mode;
@@ -43,8 +50,22 @@ content is missing context.
 - Return a concise `## Data Model` section, not request-body JSON.
 - New tables require independent lifecycle, ownership, history, offline,
   assignment, retention, or cross-journey query needs. UI nouns are not tables.
+- Native-capability, connector, and persistence decisions are binding model
+  inputs. Do not create a Dataverse duplicate of a connector-owned entity unless
+  Product Scope explicitly approves a retained projection and its
+  synchronization/staleness boundary.
+- Reflect required native data consequences explicitly: captured retained media
+  needs File/Image ownership, barcode identity may need an alternate key,
+  retained location needs schema fields, and Dataverse offline needs compatible
+  table behavior. Do not add these when the capability output is transient.
 - Existing standard identity/location/organization concepts should reuse
   verified standard tables unless Product Scope records a reason not to.
+
+If any of the three resolved architecture inputs is absent, return
+`needs_context` with
+`resolved-architecture-inputs:<comma-separated native-capabilities,connectors,persistence-boundary>`
+in `concerns`. The foreground supplies only the missing validated planner facts
+and redispatches this work order once.
 
 ## Connector-only short circuit
 

@@ -21,6 +21,7 @@ const files = {
   degraded: read('skills/create-mobile-app/references/degraded-hosts.md'),
   common: read('skills/create-mobile-app/references/return-only-agents.md'),
   offline: read('skills/setup-offline-profile/SKILL.md'),
+  phase0: read('skills/create-mobile-app/references/phase-0-setup.md'),
 };
 
 test('Phase 3 uses one return-only planner and foreground planning roles', () => {
@@ -43,6 +44,18 @@ test('Phase 3 uses one return-only planner and foreground planning roles', () =>
   assert.doesNotMatch(files.phase3, /planner runs Gates 1.2/i);
   assert.doesNotMatch(files.phase3, /BLOCKED: tool surface missing/i);
   assert.doesNotMatch(files.phase3, /DESIGN_VIBE_REQUESTED:/);
+});
+
+test('architecture ownership resolves before Data Model dispatch without another prompt', () => {
+  assert.match(files.phase0, /<native_capability_decisions>/);
+  assert.match(files.phase0, /<connector_decisions>/);
+  assert.match(files.phase0, /<persistence_boundary>/);
+  assert.match(files.phase0, /Classify Dataverse planning from those resolved architecture inputs/);
+  assert.match(files.phase3, /Before Data Model architecture/);
+  assert.match(files.phase3, /exact resolved `## Native Capabilities` and `## Connectors`/);
+  assert.match(files.phase3, /structured\s+connector\/system-of-record decisions/);
+  assert.match(files.phase3, /no additional user prompt is introduced/);
+  assert.match(files.phase3, /final plan heading order[\s\S]*remain unchanged/);
 });
 
 test('Phase 11 validates complete builder waves before deterministic writes', () => {

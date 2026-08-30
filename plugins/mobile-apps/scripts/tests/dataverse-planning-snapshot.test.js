@@ -1076,6 +1076,9 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /proposed-dataverse-names:<comma-separated-logical-names>/);
   assert.match(architect, /foreground normalizes the returned JSON and validates decisions/);
   assert.match(architect, /A path without its required\s+content is missing context/);
+  assert.match(architect, /resolved connector decisions/);
+  assert.match(architect, /complete persistence boundary/);
+  assert.match(architect, /Do not create a Dataverse duplicate of a connector-owned entity/);
   assert.match(architect, /detailLevel: core/);
   assert.match(planner, /^tools: \[\]$/m);
   assert.match(planner, /Treat inline Dataverse evidence as immutable/);
@@ -1084,6 +1087,9 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planner, /foreground measures and records all timing/);
   assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
   assert.match(createSkill, /data-model-architect` work order/);
+  assert.match(createSkill, /exact resolved `## Native Capabilities` and `## Connectors`/);
+  assert.match(createSkill, /connector\/system-of-record decisions/);
+  assert.match(createSkill, /complete persistence boundary/);
   assert.match(createSkill, /compact architect evidence content/);
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);

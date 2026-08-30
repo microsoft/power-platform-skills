@@ -92,6 +92,23 @@ test('screen planner preserves the existing Screens section boundary', () => {
   assert.match(planner, /specs-phase Markdown artifact also begins with exactly `## Screens`/);
 });
 
+test('native and connector decisions constrain Data Model architecture first', () => {
+  const planner = source('native-app-planner.md');
+  const architect = source('data-model-architect.md');
+  const architectureIndex = planner.indexOf('## Step 2 — Native capabilities, connectors, and persistence');
+  const dataModelIndex = planner.indexOf('## Step 3 — Data Model handoff');
+
+  assert.ok(architectureIndex >= 0, 'planner must resolve architecture inputs');
+  assert.ok(dataModelIndex > architectureIndex, 'Data Model handoff must follow architecture inputs');
+  assert.match(planner, /one persistence owner for every record\/evidence concept/);
+  assert.match(planner, /adds no\s+question or approval/);
+  assert.match(architect, /resolved native-capability decisions/);
+  assert.match(architect, /resolved connector decisions/);
+  assert.match(architect, /complete persistence boundary/);
+  assert.match(architect, /Do not create a Dataverse duplicate of a connector-owned entity/);
+  assert.match(architect, /resolved-architecture-inputs:/);
+});
+
 test('tested plugin manifests preserve both registered agent roots', () => {
   for (const relative of ['.plugin/plugin.json', '.claude-plugin/plugin.json']) {
     const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, relative), 'utf8'));
