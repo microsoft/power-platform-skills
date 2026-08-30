@@ -85,16 +85,16 @@ const EVIDENCE_REQUIRED_DIMENSIONS = [
 ];
 
 // Adaptive review budgets for user-facing screens, keyed by declared product complexity.
-// These are budgets to argue against, not universal low caps: a genuinely multi-role product
-// is expected to land near 20 screens, and a single-journey product near 6.
+// These are soft composition targets, not forced caps: justified hard interaction boundaries
+// may exceed a target, while roles, entities, and workflow states never create routes by count.
 const SCREEN_BUDGETS = {
-  focused: { min: 4, max: 7 },
-  standard: { min: 7, max: 12 },
-  complex: { min: 12, max: 16 },
-  'multi-role': { min: 16, max: 20 },
+  focused: { min: 3, max: 6 },
+  standard: { min: 5, max: 9 },
+  complex: { min: 7, max: 12 },
+  'multi-role': { min: 8, max: 14 },
   // `exceptional` has no upper bound in the table; it is unlocked only by an explicit
-  // justification naming the independent roles and journeys that cannot be composed.
-  exceptional: { min: 20, max: null },
+  // justification naming independent roles and journeys that cannot be composed safely.
+  exceptional: { min: 12, max: null },
 };
 
 // Adaptive budgets for NEW Dataverse tables. A noun in the brief is not table justification;
@@ -109,7 +109,17 @@ const TABLE_BUDGETS = {
 
 // Above this count of user-facing screens the contract must declare complexity `exceptional`
 // AND supply an exceptional justification, regardless of how it was classified.
-const ABSOLUTE_SCREEN_CEILING = 20;
+const ABSOLUTE_SCREEN_CEILING = 14;
+
+const SCREEN_SEPARATION_REASONS = [
+  'independent-journey',
+  'dedicated-native-surface',
+  'commit-or-confirmation',
+  'resumable-or-deep-link',
+  'role-or-security-boundary',
+  'incompatible-composition',
+  'density-or-usability-boundary',
+];
 
 // The generic record patterns. Repeating these per entity is the specific failure mode scope
 // validation guards against — they are legitimate individually, suspicious in bulk.
@@ -295,6 +305,7 @@ module.exports = {
   EXPERIENCE_DIMENSIONS,
   GENERIC_RECORD_PATTERNS,
   SCREEN_BUDGETS,
+  SCREEN_SEPARATION_REASONS,
   TABLE_BUDGETS,
   UNSUPPORTED_PRODUCTION_CLASSIFICATIONS,
   canonicalJson,

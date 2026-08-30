@@ -54,8 +54,18 @@ prompt. A substantive irreconcilable approved constraint may be `blocked`.
 
 - A table does not imply List, Detail, Create, and Edit screens.
 - Compile screens from jobs, workflow decisions, roles, and handoff points.
-- Stay within the approved adaptive screen budget. Add a surface only when it
-  has a distinct user question, state boundary, or navigation purpose.
+- Stay within the approved adaptive screen budget. Product Scope already owns
+  the route set; do not add another screen during graph compilation.
+- Preserve a separate route only for an approved `separationReasons` hard
+  boundary: independent journey, dedicated native surface, commit/confirmation,
+  resumable/deep-link lifecycle, role/security workspace, incompatible
+  composition, or density/usability protection.
+- Loading, empty, error, permission, offline, and success remain states of the
+  owning screen. A state transition alone never creates a route.
+- Merge consecutive steps into sections, sheets, modals, or flow steps when
+  actor, record context, interaction type, and navigation lifecycle agree.
+- Reuse parameterized detail routes and one create/edit form route when the
+  fields and commit behavior agree.
 - Critical journey steps remain directly reachable. Secondary work may use
   sheets, sections, inline expansion, or contextual actions.
 - Industry changes vocabulary and familiar concepts only. It never selects a
@@ -207,6 +217,8 @@ Never propose new native code/config outside the template allowlist.
 - Required media earns its space; incidental media stays subordinate.
 - Trust evidence sits near the action/decision it validates.
 - Repeated compositions need a real product reason, not entity-name changes.
+- Never merge screens when that would hide critical evidence, create competing
+  primary actions, mix role/security contexts, or make recovery ambiguous.
 - Empty/error/permission copy names the domain condition and recovery.
 - The graph should feel like one product journey, not a sitemap of tables.
 

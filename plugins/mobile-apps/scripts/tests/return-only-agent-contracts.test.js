@@ -109,6 +109,20 @@ test('native and connector decisions constrain Data Model architecture first', (
   assert.match(architect, /resolved-architecture-inputs:/);
 });
 
+test('screen planning uses hard boundaries instead of entity or state counts', () => {
+  const planner = source('native-app-planner.md');
+  const screenPlanner = source('screen-planner.md');
+
+  assert.match(planner, /target = clamp\(3, 12, 1 \+ J \+ C \+ D \+ R \+ Q\)/);
+  assert.match(planner, /focused `3-6`, standard `5-9`, complex\s+`7-12`, multi-role `8-14`/);
+  assert.match(planner, /Loading, empty, error, offline,[\s\S]*never justify a\s+route/);
+  assert.match(planner, /separationReasons/);
+  assert.match(planner, /target is never a mandate to overload a\s+screen/);
+  assert.match(screenPlanner, /do not add another screen during graph compilation/);
+  assert.match(screenPlanner, /state transition alone never creates a route/);
+  assert.match(screenPlanner, /Never merge screens when that would hide critical evidence/);
+});
+
 test('tested plugin manifests preserve both registered agent roots', () => {
   for (const relative of ['.plugin/plugin.json', '.claude-plugin/plugin.json']) {
     const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, relative), 'utf8'));

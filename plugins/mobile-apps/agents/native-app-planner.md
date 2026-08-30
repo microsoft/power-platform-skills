@@ -87,6 +87,42 @@ Compile Product Scope from jobs and lifecycle boundaries. Enforce adaptive
 screen/table budgets and explicit exclusions. Tables never automatically
 create CRUD screen sets.
 
+Derive the screen target from interaction boundaries, never from entity,
+feature, role, or state counts:
+
+```text
+target = clamp(3, 12, 1 + J + C + D + R + Q)
+```
+
+- `J`: independent user journeys, not the number of core-job statements;
+- `C`: irreversible commit, confirmation, or handoff boundaries;
+- `D`: dedicated full-screen native surfaces such as a scanner;
+- `R`: genuinely distinct role/security workspaces, not raw role count;
+- `Q`: reusable browse/detail families, not one family per entity.
+
+Use these soft composition bands: focused `3-6`, standard `5-9`, complex
+`7-12`, multi-role `8-14`. More than 14 user-facing screens requires
+`exceptional` complexity and its existing explicit justification.
+
+Merge consecutive work into one screen when actor, record context, interaction
+type, and navigation lifecycle agree. Use sections, sheets, modals, flow steps,
+and contextual actions for supporting work. Loading, empty, error, offline,
+permission, and success are states of their owning screen and never justify a
+route by themselves. Create/edit share one form route when their fields and
+commit behavior agree; repeated records share parameterized routes.
+
+When the screen count exceeds `screenBudget.target`, at least that many screens
+must declare `separationReasons`. Repeated screens with the same job set and
+composition family all require a reason plus a `compositionNote` explaining why
+merging would reduce UX quality. Allowed reasons are
+`independent-journey`, `dedicated-native-surface`,
+`commit-or-confirmation`, `resumable-or-deep-link`,
+`role-or-security-boundary`, `incompatible-composition`, and
+`density-or-usability-boundary`. The target is never a mandate to overload a
+screen; retain a justified boundary when composition would hide evidence,
+create competing primary actions, mix security contexts, or make recovery
+ambiguous.
+
 Return complete JSON contract content for the requested Product Experience and
 Product Scope artifacts. The foreground runs the existing validators before
 materialization and approval.

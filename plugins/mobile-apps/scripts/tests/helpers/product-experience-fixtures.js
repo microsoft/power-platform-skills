@@ -112,7 +112,7 @@ function buildScope(experience, overrides = {}) {
     coreJobs: [],
     supportingJobs: [],
     deferredJobs: [],
-    screenBudget: { target: 6, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: [],
     newTableBudget: { target: 2, max: 4 },
     newTables: [],
@@ -309,7 +309,7 @@ function scenarioBundle(descriptor) {
       evidence: descriptor.job.evidence,
     }],
     screens,
-    screenBudget: descriptor.screenBudget || { target: Math.max(4, steps.length), max: 7 },
+    screenBudget: descriptor.screenBudget || { target: Math.max(3, steps.length), max: 6 },
     newTableBudget: { target: 2, max: 4 },
     newTables: [{
       name: primaryEntity,

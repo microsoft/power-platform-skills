@@ -11,12 +11,14 @@ const {
   ABSOLUTE_SCREEN_CEILING,
   GENERIC_RECORD_PATTERNS,
   SCREEN_BUDGETS,
+  SCREEN_SEPARATION_REASONS,
   TABLE_BUDGETS,
   finding,
 } = require('./product-experience-contracts');
 
 const GENERIC_PATTERNS = new Set(GENERIC_RECORD_PATTERNS);
 const EDITOR_PATTERNS = new Set(['create', 'edit', 'form']);
+const SEPARATION_REASONS = new Set(SCREEN_SEPARATION_REASONS);
 
 function indexById(items) {
   const map = new Map();
@@ -150,6 +152,36 @@ function validateScreenBudget(contract, errors, warnings, summary) {
   }
 
   const declared = contract.screenBudget || {};
+  const justified = facing.filter((screen) => (screen.separationReasons || []).length > 0);
+  const excessOverTarget = Math.max(0, count - declared.target);
+  const excessOverCeiling = Math.max(0, count - ABSOLUTE_SCREEN_CEILING);
+  const requiredJustifications = Math.max(excessOverTarget, excessOverCeiling);
+  summary.screenCountOverTarget = excessOverTarget;
+  summary.separationJustifiedScreenCount = justified.length;
+
+  for (const screen of justified) {
+    const reasons = screen.separationReasons || [];
+    const unknown = reasons.filter((reason) => !SEPARATION_REASONS.has(reason));
+    if (unknown.length > 0) {
+      errors.push(finding(
+        'unknown-screen-separation-reason',
+        `screen "${screen.id}" uses unsupported separation reason(s): ${unknown.join(', ')}`,
+      ));
+    }
+    if (!screen.compositionNote || screen.compositionNote.trim().length < 20) {
+      errors.push(finding(
+        'screen-separation-without-composition-note',
+        `screen "${screen.id}" declares a hard separation reason but lacks a compositionNote explaining why merging would reduce UX quality`,
+      ));
+    }
+  }
+
+  if (justified.length < requiredJustifications) {
+    errors.push(finding(
+      'screen-count-over-target-without-separation',
+      `${count} user-facing screens require at least ${requiredJustifications} hard-boundary justification(s), but only ${justified.length} screen(s) declare separationReasons`,
+    ));
+  }
   if (declared.target > declared.max) {
     errors.push(finding('invalid-screen-budget', 'screenBudget.target exceeds screenBudget.max'));
   }
@@ -286,6 +318,23 @@ function validateCompositionEconomy(contract, errors, warnings, summary) {
   const screens = indexById(contract.screens || []);
   const coreJobIds = new Set((contract.coreJobs || []).map((job) => job.id));
   const facing = userFacingScreens(contract);
+
+  const byJobAndComposition = new Map();
+  for (const screen of facing) {
+    const key = `${jobKey(screen.jobIds || [])}|${screen.pattern}`;
+    if (!byJobAndComposition.has(key)) byJobAndComposition.set(key, []);
+    byJobAndComposition.get(key).push(screen);
+  }
+  for (const repeated of byJobAndComposition.values()) {
+    if (repeated.length < 2) continue;
+    const unjustified = repeated.filter((screen) => !(screen.separationReasons || []).length);
+    if (unjustified.length > 0) {
+      errors.push(finding(
+        'repeated-composition-without-separation',
+        `screens ${repeated.map((screen) => `"${screen.id}"`).join(', ')} repeat one job/composition family; every separate route needs a hard separation reason (missing: ${unjustified.map((screen) => screen.id).join(', ')})`,
+      ));
+    }
+  }
 
   for (const screen of facing) {
     if (screen.entity && !(contract.dataEntities || []).some((entity) => entity.name === screen.entity)) {

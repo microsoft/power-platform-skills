@@ -403,7 +403,7 @@ preset.
 |---|---|---|---|
 | Tables | Independently persistent records implied by core jobs | Count only concepts likely to have their own lifecycle/ownership/history, then show `max(1, count - 1)` to `count + 1` | low — scope compiler may use columns, Choices, local state, or reuse |
 | Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
-| Screens | Independent journeys and roles | Focused journey `4-7`; 2-3 connected journeys `7-12`; complex workflow `12-16`; multi-role `16-20` | medium — critical steps may share one surface |
+| Screens | Independent journeys and hard interaction boundaries | Focused `3-6`; standard `5-9`; complex `7-12`; multi-role `8-14`; use `1 + J + C + D + R + Q`, clamped to `3-12`, as the target proxy | medium — sections, sheets, modals, and flow steps may share one route |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
 | Build min | Screens, configurable parallel cap | `ceil(screens / <builder-cap>) × 0.6`; default cap 8 | medium |

@@ -4,9 +4,9 @@
 // Run with: node --test plugins/mobile-apps/scripts/tests/
 //
 // The rules under test all answer one question: does this surface or table exist because a
-// user has a job, or because an entity existed? Budgets are adaptive review budgets — a
-// multi-role product is expected to reach 20 screens, and nothing here caps every product at
-// a small number.
+// user has a job and hard interaction boundary, or because an entity/state existed? Budgets
+// are adaptive composition targets; justified boundaries may exceed a target without making
+// 16-20 routes the default for a multi-role product.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -70,6 +70,8 @@ function fillerScreens(count, jobId = 'job-a') {
   return Array.from({ length: count }, (_, index) => screen(`filler-${index + 1}`, {
     pattern: 'overview',
     jobIds: [jobId],
+    separationReasons: ['incompatible-composition'],
+    compositionNote: `Fixture surface ${index + 1} represents a distinct composition boundary for this budget test.`,
   }));
 }
 
@@ -98,10 +100,10 @@ test('scope binds to the experience revision it was derived from', () => {
 
 test('each complexity band accepts a screen count inside its own range', () => {
   const cases = [
-    ['focused', 6, 7],
-    ['standard', 10, 12],
-    ['complex', 14, 16],
-    ['multi-role', 18, 20],
+    ['focused', 5, 6],
+    ['standard', 7, 9],
+    ['complex', 10, 12],
+    ['multi-role', 12, 14],
   ];
   for (const [complexity, count, max] of cases) {
     const scope = buildScope(EXPERIENCE, {
@@ -124,8 +126,8 @@ test('each complexity band accepts a screen count inside its own range', () => {
 test('a screen count above the declared complexity band is rejected rather than silently allowed', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 6, max: 7 },
-    screens: fillerScreens(9),
+    screenBudget: { target: 6, max: 6 },
+    screens: fillerScreens(7),
     dataEntities: [entity('Work item')],
   });
   const result = validateScopeContract(scope, EXPERIENCE);
@@ -137,8 +139,8 @@ test('a screen count above the declared complexity band is rejected rather than 
 test('a budget raised above its band is rejected instead of unlocking more screens', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 9, max: 12 },
-    screens: fillerScreens(9),
+    screenBudget: { target: 7, max: 9 },
+    screens: fillerScreens(7),
     dataEntities: [entity('Work item')],
   });
   assert.ok(codes(validateScopeContract(scope, EXPERIENCE)).includes('screen-budget-exceeds-band'));
@@ -147,8 +149,8 @@ test('a budget raised above its band is rejected instead of unlocking more scree
 test('a screen count below the band is a warning, not a rejection', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 4, max: 7 },
-    screens: fillerScreens(3),
+    screenBudget: { target: 3, max: 6 },
+    screens: fillerScreens(2),
     dataEntities: [entity('Work item')],
   });
   const result = validateScopeContract(scope, EXPERIENCE);
@@ -164,7 +166,7 @@ test('infrastructure routes do not consume screen budget', () => {
   ];
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens,
     dataEntities: [entity('Work item')],
   });
@@ -173,13 +175,88 @@ test('infrastructure routes do not consume screen budget', () => {
   assert.strictEqual(result.summary.userFacingScreenCount, 4);
 });
 
+test('screens above the target require structured hard-boundary justification', () => {
+  const screens = [
+    screen('home', { pattern: 'overview' }),
+    screen('work', { pattern: 'workflow-step' }),
+    screen('review', { pattern: 'comparison' }),
+    screen('confirm', { pattern: 'confirmation' }),
+  ];
+  const base = {
+    coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'home' } })],
+    screenBudget: { target: 3, max: 6 },
+    screens,
+    dataEntities: [entity('Work item')],
+  };
+
+  const rejected = validateScopeContract(buildScope(EXPERIENCE, base), EXPERIENCE);
+  assert.ok(codes(rejected).includes('screen-count-over-target-without-separation'));
+
+  const accepted = validateScopeContract(buildScope(EXPERIENCE, {
+    ...base,
+    screens: screens.map((value) => value.id === 'confirm' ? {
+      ...value,
+      separationReasons: ['commit-or-confirmation'],
+      compositionNote: 'Confirmation owns the irreversible outcome and safe next action.',
+    } : value),
+  }), EXPERIENCE);
+  assert.deepStrictEqual(accepted.errors, []);
+  assert.strictEqual(accepted.summary.screenCountOverTarget, 1);
+  assert.strictEqual(accepted.summary.separationJustifiedScreenCount, 1);
+});
+
+test('repeated job and composition routes require a hard separation reason', () => {
+  const repeated = [
+    screen('work-a', { pattern: 'workflow-step' }),
+    screen('work-b', { pattern: 'workflow-step' }),
+    screen('review', { pattern: 'comparison' }),
+  ];
+  const base = {
+    coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'work-a' } })],
+    screenBudget: { target: 3, max: 6 },
+    screens: repeated,
+    dataEntities: [entity('Work item')],
+  };
+
+  const rejected = validateScopeContract(buildScope(EXPERIENCE, base), EXPERIENCE);
+  assert.ok(codes(rejected).includes('repeated-composition-without-separation'));
+
+  const accepted = validateScopeContract(buildScope(EXPERIENCE, {
+    ...base,
+    screens: repeated.map((value) => value.pattern === 'workflow-step' ? {
+      ...value,
+      separationReasons: ['density-or-usability-boundary'],
+      compositionNote: `${value.title} remains separate because merging both workflows would overload one reading surface.`,
+    } : value),
+  }), EXPERIENCE);
+  assert.deepStrictEqual(accepted.errors, []);
+});
+
+test('workflow states are not valid route separation reasons', () => {
+  const scope = buildScope(EXPERIENCE, {
+    coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'home' } })],
+    screenBudget: { target: 3, max: 6 },
+    screens: [
+      screen('home', {
+        pattern: 'overview',
+        separationReasons: ['loading-state'],
+        compositionNote: 'Loading state was incorrectly promoted into a separate route.',
+      }),
+      screen('work', { pattern: 'workflow-step' }),
+      screen('review', { pattern: 'comparison' }),
+    ],
+    dataEntities: [entity('Work item')],
+  });
+  assert.ok(codes(validateScopeContract(scope, EXPERIENCE)).includes('schema'));
+});
+
 test(`more than ${ABSOLUTE_SCREEN_CEILING} screens is rejected without an exceptional justification`, () => {
-  const screens = fillerScreens(22);
+  const screens = fillerScreens(16);
   const base = {
     productComplexity: 'multi-role',
     complexityJustification: 'Four independent roles each with their own workspace and journey',
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 20, max: 20 },
+    screenBudget: { target: 14, max: 14 },
     screens,
     dataEntities: [entity('Work item')],
   };
@@ -192,7 +269,7 @@ test(`more than ${ABSOLUTE_SCREEN_CEILING} screens is rejected without an except
     ...base,
     productComplexity: 'exceptional',
     complexityJustification: 'Five independent role workspaces that cannot be composed into shared surfaces',
-    screenBudget: { target: 22, max: 24 },
+    screenBudget: { target: 16, max: 16 },
     exceptionalJustification: {
       statement: 'Five roles each own an end-to-end journey with no shared surface; composing them would hide each role behind another role\u2019s navigation.',
       independentRoles: ['Dispatcher', 'Operator', 'Supervisor', 'Auditor', 'Client'],
@@ -208,7 +285,7 @@ test('new tables over the declared budget without lifecycle justification are re
   const tables = ['t-one', 't-two', 't-three', 't-four', 't-five'];
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: fillerScreens(4),
     newTableBudget: { target: 2, max: 4 },
     newTables: tables.map((name) => newTable(name)),
@@ -224,7 +301,7 @@ test('new tables over budget with a lifecycle reason and a written rationale dow
   const tables = ['t-one', 't-two', 't-three', 't-four', 't-five'];
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: fillerScreens(4),
     newTableBudget: {
       target: 2,
@@ -277,7 +354,7 @@ test('a noun realized as a Choice column needs no table and no screen', () => {
 test('two generic screens for one entity serving the identical job set are rejected', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'orders-list' } })],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: [
       screen('orders-list', { pattern: 'list', entity: 'Order', jobIds: ['job-a'] }),
       screen('orders-detail', { pattern: 'detail', entity: 'Order', jobIds: ['job-a'] }),
@@ -298,7 +375,7 @@ test('generic screens for one entity are fine when each serves a distinct declar
       job('job-a', { surface: { kind: 'screen', screenId: 'orders-list' } }),
       job('job-b', { criticality: 'important', surface: { kind: 'screen', screenId: 'orders-detail' } }),
     ],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: [
       screen('orders-list', { pattern: 'list', entity: 'Order', jobIds: ['job-a'] }),
       screen('orders-detail', { pattern: 'detail', entity: 'Order', jobIds: ['job-b'] }),
@@ -330,7 +407,7 @@ test('generating a list, detail, and editor for every entity is rejected as temp
     productComplexity: 'standard',
     complexityJustification: 'Three record types each managed end to end by the same operations role',
     coreJobs,
-    screenBudget: { target: 9, max: 12 },
+    screenBudget: { target: 9, max: 9 },
     screens,
     newTables: [],
     newTableBudget: { target: 0, max: 4 },
@@ -352,7 +429,7 @@ test('a supporting entity given its own record screen with no core job is reject
       outcome: 'The code is understood',
       surface: { kind: 'screen', screenId: 'codes-list' },
     }],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: [
       ...fillerScreens(3),
       screen('codes-list', { pattern: 'list', entity: 'Code', jobIds: ['job-lookup'] }),

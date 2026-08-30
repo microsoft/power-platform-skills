@@ -26,7 +26,7 @@ typography, density, radius, Home composition, or a design preset.
 ```text
 confirmed requirements
   -> UX DNA + product jobs
-  -> product scope and adaptive budgets
+  -> product scope, route-boundary composition, and adaptive budgets
   -> minimum supporting data model
   -> workflow journey
   -> design materialization
@@ -81,14 +81,24 @@ Adaptive screen guidance:
 
 | Product shape | Expected user-facing screens |
 |---|---:|
-| One focused journey | 4-7 |
-| Two or three connected journeys | 7-12 |
-| Complex enterprise workflow | 12-16 |
-| Multiple independent roles/workspaces | 16-20 |
+| One focused journey | 3-6 |
+| Standard connected workflow | 5-9 |
+| Complex enterprise workflow | 7-12 |
+| Multiple independent roles/workspaces | 8-14 |
 
-These ranges are review budgets, not hard caps. More than 20 user-facing
-screens requires an explicit exceptional justification naming the independent
-roles and journeys that cannot be composed into fewer surfaces.
+Use `clamp(3, 12, 1 + J + C + D + R + Q)` for the target, where `J` is
+independent journeys, `C` is commit/confirmation boundaries, `D` is dedicated
+native surfaces, `R` is distinct role/security workspaces, and `Q` is reusable
+browse/detail families. These ranges are review budgets, not hard caps. More
+than 14 user-facing screens requires an explicit exceptional justification
+naming the independent roles and journeys that cannot be composed safely.
+
+An extra or repeated route must use a structured `separationReasons` value and
+an explanatory `compositionNote`. Valid reasons are independent journey,
+dedicated native surface, commit/confirmation, resumable/deep-link lifecycle,
+role/security boundary, incompatible composition, or density/usability
+protection. Loading, empty, error, permission, offline, and success are states
+inside the owning screen, not route reasons.
 
 Authentication redirects, OAuth callbacks, layouts, and infrastructure routes
 do not count as user-facing product screens.
@@ -120,6 +130,11 @@ Every core job must map to a usable surface, but a surface may be:
 Do not create a route merely to satisfy coverage. Supporting/reference entities
 normally have no dedicated screen. Only independently managed entities require
 their own destination.
+
+Do not merge merely to hit a target when composition would hide critical
+evidence, create competing primary actions, mix security contexts, or make
+navigation/recovery ambiguous. In that case preserve the route and record the
+hard boundary.
 
 Create and edit should share one form contract when their fields and workflow
 are substantially the same.

@@ -58,6 +58,12 @@ test('architecture ownership resolves before Data Model dispatch without another
   assert.match(files.phase3, /final plan heading order[\s\S]*remain unchanged/);
 });
 
+test('cost preview uses route-boundary screen estimates', () => {
+  assert.match(files.phase0, /Independent journeys and hard interaction boundaries/);
+  assert.match(files.phase0, /Focused `3-6`; standard `5-9`; complex `7-12`; multi-role `8-14`/);
+  assert.doesNotMatch(files.phase0, /multi-role `16-20`/);
+});
+
 test('Phase 11 validates complete builder waves before deterministic writes', () => {
   assert.match(files.phase11, /one work order per screen/);
   assert.match(files.phase11, /complete typed skeleton\/import content/);
