@@ -62,6 +62,7 @@ test('rejects prereleases without explicit confirmation', () => {
 
   assert.equal(result.viable, false);
   assert.match(result.failures.join('\n'), /prerelease/);
+  assert.deepEqual(result.failureCodes, ['prerelease-not-approved']);
 });
 
 test('rejects stale, deprecated, incompatible, or disallowed-license packages', () => {
@@ -78,6 +79,12 @@ test('rejects stale, deprecated, incompatible, or disallowed-license packages', 
   assert.match(failures, /License/);
   assert.match(failures, /previous 24 months/);
   assert.match(failures, /does not support project version/);
+  assert.deepEqual(result.failureCodes, [
+    'package-deprecated',
+    'license-not-approved',
+    'package-stale',
+    'framework-peer-incompatible',
+  ]);
 });
 
 test('understands common peer dependency ranges', () => {
@@ -96,6 +103,7 @@ test('requires mode evidence for unknown alternatives', () => {
   assert.equal(result.status, 'inconclusive');
   assert.equal(result.requiresConfirmation, true);
   assert.equal(result.failures.length, 0);
+  assert.deepEqual(result.failureCodes, ['mode-inconclusive']);
   assert.match(result.warnings.join('\n'), /does not establish runtime localization support/);
 });
 

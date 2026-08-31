@@ -11,6 +11,7 @@ const {
   modifiesVisibleSource,
 } = require('../scripts/lib/powerpages-hook-utils');
 const { planDataPath } = require('../scripts/lib/alm-paths');
+const telemetry = require('../scripts/lib/telemetry/power-pages-telemetry');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
@@ -32,6 +33,8 @@ process.stdin.on('end', () => {
   let validatorStatus = 0;
   let skillName = null;
   let input = null;
+  let localizationFailureClass = '';
+  let cwd = process.cwd();
 
   try {
     input = JSON.parse(inputData);
@@ -41,7 +44,7 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    const cwd = input.cwd || process.cwd();
+    cwd = input.cwd || process.cwd();
 
     const validatorScript = getValidatorScript(skillName);
     if (validatorScript) {
@@ -54,6 +57,9 @@ process.stdin.on('end', () => {
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);
       validatorStatus = getBlockingSpawnStatus(result);
+      if (skillName === 'add-localization' && validatorStatus !== 0) {
+        localizationFailureClass = 'localization-validation-failed';
+      }
       if (result.error || result.signal) {
         process.stderr.write(
           `[power-pages] Skill validator did not complete: ` +
@@ -76,6 +82,9 @@ process.stdin.on('end', () => {
       if (integrity.stdout) process.stdout.write(integrity.stdout);
       if (integrity.stderr) process.stderr.write(integrity.stderr);
       validatorStatus = getBlockingSpawnStatus(integrity);
+      if (skillName === 'add-localization' && validatorStatus !== 0) {
+        localizationFailureClass = 'site-integrity-validation-failed';
+      }
       if (integrity.error || integrity.signal) {
         process.stderr.write(
           `[power-pages] Site integrity validator did not complete: ` +
@@ -147,7 +156,55 @@ process.stdin.on('end', () => {
     }
   } catch (err) {
     process.stderr.write(`[power-pages hook] Unexpected error: ${err.message}\n`);
+    if (skillName === 'add-localization') {
+      localizationFailureClass = 'posttool-hook-failed';
+    }
     validatorStatus = 0;
+  }
+
+  if (skillName === 'add-localization') {
+    try {
+      const manifestPath = path.join(cwd, '.powerpages-localization.json');
+      let manifest = null;
+      try {
+        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      } catch {
+        if (!localizationFailureClass) {
+          localizationFailureClass = 'localization-manifest-missing';
+        }
+      }
+      const outcome =
+        validatorStatus === 0 && !localizationFailureClass ? 'success' : 'failure';
+      const readiness = manifest?.bidirectionalReadiness?.status;
+      telemetry.emitLocalizationCompleted(cwd, {
+        sessionId:
+          typeof input?.session_id === 'string'
+            ? input.session_id
+            : typeof input?.sessionId === 'string'
+              ? input.sessionId
+              : '',
+        outcome,
+        errorClass: localizationFailureClass,
+        eventInfo: telemetry.buildLocalizationCompletionEventInfo({
+          validationOutcome: outcome === 'success' ? 'passed' : 'failed',
+          bidirectionalReadiness:
+            typeof readiness === 'string' ? readiness : 'not-required',
+          unavailableLocaleCount: Array.isArray(manifest?.unavailableLocales)
+            ? manifest.unavailableLocales.length
+            : 0,
+          configuredLocaleCount: Array.isArray(manifest?.locales)
+            ? manifest.locales.length
+            : 0,
+          translationMethod:
+            manifest?.translationMethod === 'agent' ||
+            manifest?.translationMethod === 'blank'
+              ? manifest.translationMethod
+              : undefined,
+        }),
+      });
+    } catch {
+      // Completion telemetry must never affect the validator's exit status.
+    }
   }
 
   process.exit(validatorStatus);
