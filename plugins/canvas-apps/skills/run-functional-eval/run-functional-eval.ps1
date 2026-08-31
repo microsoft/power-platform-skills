@@ -174,6 +174,13 @@ function ConvertTo-ProcessArgument {
     return '"' + $text.Replace('"', '\"') + '"'
 }
 
+function ConvertTo-PowerShellLiteral {
+    param([object]$Value)
+
+    $text = [string]$Value
+    return "'" + $text.Replace("'", "''") + "'"
+}
+
 function ConvertTo-PpevalRelativePath {
     param(
         [string]$Root,
@@ -306,7 +313,7 @@ $command = @(
     "--output-dir", (ConvertTo-PpevalRelativePath -Root $resolvedRepoPath -Path $outputDir),
     "--output", "json"
 )
-$commandDisplay = $command -join " "
+$commandDisplay = "& " + (($command | ForEach-Object { ConvertTo-PowerShellLiteral $_ }) -join " ")
 Set-Content -LiteralPath $commandPath -Value $commandDisplay -NoNewline -Encoding utf8
 
 $studioArgs = @(
