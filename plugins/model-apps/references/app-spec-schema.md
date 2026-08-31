@@ -486,6 +486,9 @@ Where both apply to one field the inline entry wins; a plain string entry keeps 
   not require re-declaring the rest of the form. An anchor that is not on the form is ignored.
   Only valid in `fieldOptions` — inside an explicit `tabs` layout the listed order already positions
   the field, so `after` there is rejected rather than silently overriding the list.
+  Two anchor shapes are **rejected**, because neither has a satisfiable answer: only **one** field may
+  sit immediately after a given anchor (to place several in sequence, *chain* them — anchor the second
+  after the first), and anchors may not form a **cycle**.
 
 **Only the enabled state is ever written.** The build emits `readOnly`/`hidden` when you ask for
 them and writes *nothing* when you do not, so a rebuild never clears a lock or a hide someone applied

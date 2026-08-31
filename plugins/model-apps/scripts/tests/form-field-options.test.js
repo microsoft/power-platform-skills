@@ -216,9 +216,14 @@ test('after: a chain declared in REVERSE dependency order still produces a creat
   // can place a field against an anchor that is itself relocated later — leaving a create order that
   // violates its own anchors, which the first rebuild then silently "fixes". The reorder therefore
   // runs to a fixed point. Declaration order must not matter.
-  const forward = specWithBigInt({ fieldOptions: { new_daysremaining: { after: 'new_duedate' }, new_points: { after: 'new_daysremaining' } } });
-  const reverse = specWithBigInt({ fieldOptions: { new_points: { after: 'new_daysremaining' }, new_daysremaining: { after: 'new_duedate' } } });
-  const want = ['new_name', 'new_duedate', 'new_daysremaining', 'new_points'];
+  //
+  // The fixture matters: the chain must have a NON-PARTICIPATING cell between the anchor and its
+  // dependent, or the dependency-violating move is a no-op and single-pass code passes too. Here the
+  // second move must cross `new_duedate`. Verified red-green — the pre-fix single-pass body yields
+  // `new_name, new_daysremaining, new_duedate, new_points`, which does not satisfy its own anchors.
+  const forward = specWithBigInt({ fieldOptions: { new_daysremaining: { after: 'new_name' }, new_points: { after: 'new_daysremaining' } } });
+  const reverse = specWithBigInt({ fieldOptions: { new_points: { after: 'new_daysremaining' }, new_daysremaining: { after: 'new_name' } } });
+  const want = ['new_name', 'new_daysremaining', 'new_points', 'new_duedate'];
   assert.deepStrictEqual(logicalsOf(compileFormIntent(forward, forward.forms[0])), want);
   assert.deepStrictEqual(logicalsOf(compileFormIntent(reverse, reverse.forms[0])), want, 'declaration order changed the result');
 });
