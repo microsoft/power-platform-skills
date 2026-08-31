@@ -555,11 +555,18 @@ child view id. Each step emits `[n/total]`.
   security surface today is role-per-persona only — a tracked SDK follow-up).
 - **Not possible through any API** (do not promise these — they are Dataverse platform limits, not
   gaps in this skill):
-  - **Assigning a form to security role(s).** `systemform` reports
+  - **Assigning a form to security role(s).** There is no API for it, in Dataverse or the SDK.
+    Measured against a live org: across 1730 entities and 138 intersect tables there is **no**
+    `systemform`↔`role` association of any kind — `systemform` reports
     `CanBeInManyToMany: { Value: false, CanBeChanged: false }`, has zero many-to-many relationships,
-    and every candidate intersect (`systemformroles`, `systemuserprofiles`, …) returns 404. Measured
-    against a live org. A new form is selectable by **all** roles by default, so the usual reason to
-    ask for this — making a form reachable — is already satisfied. Restricting it remains a maker step.
+    carries no role/security column, and every candidate intersect (`systemformroles`,
+    `systemuserprofiles`, …) returns 404. `role`'s six many-to-many partners are systemuser,
+    privilege, appmodule, team, application and applicationuser — not systemform. The vendored SDK's
+    only form-role affordance is `getEnableSecurityRolesUrl`, which builds a link to the **legacy
+    ASPX dialog** `tools/FormEditor/Dialogs/FormRoleAssignment.aspx` — i.e. the maker UI does this
+    through a browser page, not a data-model relationship, which is why nothing is scriptable.
+    A new form is selectable by **all** roles by default, so the usual reason to ask for this —
+    making a form reachable — is already satisfied. Restricting it remains a maker step.
   - **Boolean default value**, **numeric `Format: Duration`**, and per-column
     **`IsValidForCreate/Update/Read`**: the vendored SDK hardcodes `DefaultValue: false` and
     `Format: "None"` on create and exposes no `IsValidFor*` on create or update. These are tracked
