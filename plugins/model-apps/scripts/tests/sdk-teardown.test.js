@@ -1153,3 +1153,82 @@ test('genpage deletes nothing when the manifest is absent or unreadable', async 
   const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
   assert.deepStrictEqual(items, []);
 });
+
+// --- command teardown: delete order must respect the real hierarchy depth -----------------------
+//
+// A flyout is THREE levels: anchor (no parent) -> intervening group (parent = anchor) -> buttons
+// (parent = group). `_parentappactionid_value` is set on the group AND on the leaves, so ordering by
+// "has a parent" collapses them into one bucket and can delete the group while its buttons still
+// hang off it — which Dataverse rejects. Seen for real while resetting a command bar by hand: a leaf
+// answered 404 because its group had already gone, i.e. the platform cascaded rather than the order
+// being right.
+//
+// Also: the individual rows must go BEFORE the bar. They are the ones holding the web-resource
+// dependency that previously stranded a form-JS resource at teardown.
+test('command teardown deletes deepest-first, rows before the bar', async () => {
+  const ANCHOR = 'a-anchor';
+  const GROUP = 'b-group';
+  const LEAF1 = 'c-leaf1';
+  const LEAF2 = 'd-leaf2';
+  const TOP = 'e-top';
+  const sdk = {
+    resolveArtifact: async () => [{ id: 'bar-1', entity: 'new_ticket' }],
+    queryRecords: async (entity) => {
+      assert.strictEqual(entity, 'appaction');
+      // Deliberately returned shallow-first, so a correct implementation must REORDER them.
+      return [
+        { appactionid: ANCHOR, _parentappactionid_value: null },
+        { appactionid: TOP, _parentappactionid_value: null },
+        { appactionid: GROUP, _parentappactionid_value: ANCHOR },
+        { appactionid: LEAF1, _parentappactionid_value: GROUP },
+        { appactionid: LEAF2, _parentappactionid_value: GROUP },
+      ];
+    },
+  };
+  const items = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'new_ticket', ownsTable: true });
+  const order = items.map((i) => i.id);
+
+  const pos = (id) => order.indexOf(id);
+  assert.ok(pos(LEAF1) < pos(GROUP), `leaf must precede its group: ${order.join(' -> ')}`);
+  assert.ok(pos(LEAF2) < pos(GROUP), `leaf must precede its group: ${order.join(' -> ')}`);
+  assert.ok(pos(GROUP) < pos(ANCHOR), `group must precede its anchor: ${order.join(' -> ')}`);
+  assert.ok(pos(LEAF1) < pos(TOP), 'deeper rows come before unrelated top-level rows');
+  assert.strictEqual(order[order.length - 1], 'bar-1', 'the bar is deleted LAST, after every row');
+});
+
+test('command teardown survives a self-referential parent pointer', async () => {
+  // Depth is computed by walking parent pointers; a cycle must not spin forever. Bad data is not
+  // hypothetical here — these rows are written by several different tools.
+  const sdk = {
+    resolveArtifact: async () => [],
+    queryRecords: async () => [
+      { appactionid: 'x', _parentappactionid_value: 'y' },
+      { appactionid: 'y', _parentappactionid_value: 'x' },
+    ],
+  };
+  const items = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'new_ticket', ownsTable: true });
+  assert.strictEqual(items.length, 2, 'both rows are still scheduled for deletion');
+});
+
+test('command teardown still refuses to touch a bar on a table the spec does not own', async () => {
+  // The fail-closed rule that predates all of this: deleting the bar on an adopted table would
+  // destroy another app's buttons.
+  const sdk = {
+    resolveArtifact: async () => { throw new Error('must not resolve'); },
+    queryRecords: async () => { throw new Error('must not query'); },
+  };
+  const res = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'account', ownsTable: false });
+  assert.deepStrictEqual(res.items, []);
+  assert.match(res.skipReason, /existing\/external table/);
+});
+
+test('command teardown proceeds with the bar when the row listing fails', async () => {
+  // Best-effort: an unreadable appaction list must not block the bar delete, which is the
+  // pre-existing behaviour.
+  const sdk = {
+    resolveArtifact: async () => [{ id: 'bar-1', entity: 'new_ticket' }],
+    queryRecords: async () => { throw new Error('HTTP 401'); },
+  };
+  const items = await KIND_HANDLERS.commands.resolve(sdk, { entity: 'new_ticket', ownsTable: true });
+  assert.deepStrictEqual(items.map((i) => i.id), ['bar-1']);
+});

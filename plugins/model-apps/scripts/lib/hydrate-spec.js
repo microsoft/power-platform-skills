@@ -105,6 +105,36 @@ async function hydrateSpec(read) {
     })),
   };
 
+  // BACK-COMPAT: a page reconstructed from an app deployed BEFORE `directEntry` existed carries
+  // `pageInput` and no `directEntry`. App Spec validation requires the pair, and download validates
+  // BEFORE writing — so without a default, downloading such an app fails and writes NO spec file at
+  // all, leaving the author nothing to edit and no way back into the round-trip. That is precisely
+  // the "one unrelated nav entry blocks the whole download → edit → rebuild flow" failure #430 was
+  // filed for, and it would have been reintroduced by the rule that fixed a different hole.
+  //
+  // Default to the CONSERVATIVE behaviour. `emptyState` does not promise a picker the already-
+  // deployed `.tsx` never had, which `selector` would. It is a prospective intent for the NEXT
+  // rebuild, not a claim about what the deployed page does today — that is genuinely unknown here,
+  // since the page was written before the field existed and implements neither behaviour explicitly.
+  // The value is written into the spec visibly, with a note saying where it came from, so the author
+  // can decide rather than discover it later.
+  //
+  // This deliberately does NOT weaken the rule for hand-authored specs: those do not come through
+  // hydration, so an author writing a new page with `pageInput` still has to decide.
+  const directEntryDefaulted = [];
+  const directEntryOf = (p) => {
+    if (p.directEntry !== undefined) return { directEntry: p.directEntry };
+    // Match the validation condition exactly: only a pageInput that declares DATA keys requires it.
+    if (!Object.keys((p.pageInput && p.pageInput.data) || {}).length) return {};
+    directEntryDefaulted.push(p.key || p.name);
+    return {
+      directEntry: {
+        behavior: 'emptyState',
+        note: 'Defaulted on download: this app predates directEntry. Change to "selector" if opening this page from the navigation should show a record picker.',
+      },
+    };
+  };
+
   const spec = {
     // schemaVersion 2 only when pages carry keys (v2 shape); omitted for legacy back-compat.
     ...(hasKeys ? { schemaVersion: 2 } : {}),
@@ -123,7 +153,7 @@ async function hydrateSpec(read) {
     // SYSTEM "Inactive" view FALSE, so no `isdefault`/`querytype` filter isolates author views — it
     // grabbed the wrong one). Charts/forms/commands also need structured reads the SDK doesn't expose.
     // All four survive on the live app — a rebuild preserves them by discovery — but are absent from the
-    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-roadmap.
+    // downloaded spec, so edit them in Maker or a fresh spec. See download docs / app-builder-capabilities.
     charts: [],
     forms: [],
     commands: [],
@@ -146,6 +176,7 @@ async function hydrateSpec(read) {
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
+          ...directEntryOf(p),
           ...(p.prompt ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }
@@ -166,6 +197,10 @@ async function hydrateSpec(read) {
   Object.defineProperties(spec, {
     droppedSubareas: { value: droppedSubareaDetails.length, enumerable: false },
     droppedSubareaDetails: { value: droppedSubareaDetails, enumerable: false },
+    // Page keys that received a defaulted `directEntry` (see directEntryOf above). Surfaced so the
+    // download CLI can tell the author a value was chosen FOR them — a silently injected behaviour
+    // would be its own bug, quieter than the hard failure it replaces.
+    directEntryDefaulted: { value: directEntryDefaulted, enumerable: false },
   });
   return spec;
 }

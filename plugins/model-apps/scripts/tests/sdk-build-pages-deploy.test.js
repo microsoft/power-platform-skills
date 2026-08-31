@@ -74,13 +74,13 @@ function mockSdk(opts = {}) {
     updateWebResource: async (id, o) => { calls.push({ name: 'updateWebResource', args: [id, o] }); return {}; },
     enrichDefaultViews: async () => ({ updated: [] }),
     createArtifact: (t, def) => { calls.push({ name: 'createArtifact', args: [t, def] }); const id = `${t}-${++idc}`; store[`${t}:${id}`] = Object.assign({ id }, def); return JSON.parse(JSON.stringify(store[`${t}:${id}`])); },
-    getArtifact: (t, id) => store[`${t}:${id}`] || { id },
-    addElement: () => ({}),
-    updateElement: (t, id, ptr, patch) => { calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
-    removeElement: () => ({}),
-    pushArtifact: async (t, id) => ({ type: t, id, success: true }),
+    getArtifact: async (t, id) => { await Promise.resolve(); return store[`${t}:${id}`] || { id }; },
+    addElement: async () => { await Promise.resolve(); return {}; },
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve(); calls.push({ name: 'updateElement', args: [t, id, ptr, patch] }); return {}; },
+    removeElement: async () => { await Promise.resolve(); return {}; },
+    pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
-    publishArtifact: async () => {},
+    publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
   };
   return { sdk, calls };
 }

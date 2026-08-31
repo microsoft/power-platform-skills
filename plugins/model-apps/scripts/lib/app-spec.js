@@ -358,6 +358,68 @@ function resolveChoiceValue(byLabel, v, isMulti) {
 // See docs/app-builder-design.md §7.1.
 const VALIDATION_PROFILES = ['design', 'plan', 'deploy', 'structural'];
 
+// What a page does when a user opens it straight from the app navigation with no caller input.
+// Every page is sitemap-placed, so this state is always reachable for a page that declares
+// `pageInput`; these are the two honest answers.
+//   selector   — render a picker/list so the user can choose the record the page needs.
+//   emptyState — render an explanatory empty state ("open a row from X to see its detail").
+const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
+
+// Per-column grid data visualization (PREVIEW). MIRRORS the vendored SDK's `ColumnVisualizationType`
+// (types/schema.ts) exactly — widening here without widening there produces a mid-build throw.
+//
+// Semantics are per COLUMN, not per view: the platform renders the graphic in EVERY grid and view
+// that shows the column, which is why this lives on `entities[].columns[]` rather than on `views[]`.
+// Persisted as a `controlconfiguration` row bound to the attribute.
+//
+// `None` is the platform default (plain text) and is accepted so a spec can explicitly CLEAR a
+// visualization set by an earlier build or by a maker in the portal. OMITTING the field is NOT the
+// same as `None`: an omitted column is left exactly as deployed, because converging every undeclared
+// column to "plain text" would cost one extra read per column on every build to find out whether
+// there was anything to clear.
+const COLUMN_VISUALIZATIONS = ['None', 'RadialDial', 'LineChart', 'HeatMap', 'StarRating'];
+
+// Business rules. These MIRROR the vendored SDK's supported slice — but NARROWER, and the gap is
+// deliberate: the SDK advertises four operators and only two of them survive contact with the
+// platform.
+//
+// LIVE-MEASURED 2026-08-27. `ContainsData` and `DoesNotContainData` compile to XAML the platform
+// cannot process: every attempt answers
+//   HTTP 500 ... Error generating UiData for workflow: <name>
+// Isolated across six probes on a real org — it fails on a Text column and on a Memo column, with
+// the action on the same field or a different one, and in both directions (`DoesNotContainData`
+// too). `Equals` and `DoesNotEqual` succeed in the same probes, so it is the presence operators
+// specifically, not the rule shape. Offering an operator that reliably 500s is worse than not
+// offering it, so they are rejected at the spec gate with a message pointing at the tracking issue.
+// Re-widen here (and in the schema doc) once the compiler is fixed upstream.
+const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual'];
+// Recognised by the SDK but not usable: kept separate so validation can explain WHY rather than
+// just listing them as unknown.
+const BUSINESS_RULE_BLOCKED_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
+// Operators that take NO value: they test presence, so a `value` would be meaningless. Retained
+// because the mapper still handles them correctly — only the platform side is broken.
+const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
+// action type -> the field carrying its payload. `null` = no payload (none currently).
+const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
+const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
+// Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
+// inverting the author's intent — the same trap `app.newLook` validation exists to close.
+const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'SetBusinessRequired']);
+// `valueWorkflowType` in SDK terms: how the platform should interpret the literal. Named `dataType`
+// in the App Spec because `valueType` in the SDK means something else (Value vs Field vs Lookup),
+// and only `Value` is supported — so exposing that name would invite a distinction authors cannot use.
+//
+// This list MIRRORS the compiler's literal-type map exactly (the `Q5`/type table in the vendored
+// bundle). It previously included `DateTime`, which the compiler does NOT have: such a spec passed
+// validation and then threw a ValidationError from inside the push — the worst place for it, because
+// the bound member may already have committed a workflow row (#482), leaving an orphan behind a
+// "failed" build. `column-visualization`-style drift protection is in business-rules.test.js, which
+// pins this list against the bundle's own map.
+const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status', 'Boolean', 'Integer', 'Double', 'Decimal', 'Money'];
+// Only entity scope is supported. A form-scoped rule needs `processtriggerscope 1` plus a form id,
+// which cannot be resolved before the forms phase has run.
+const BUSINESS_RULE_SCOPES = ['Entity'];
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -453,6 +515,19 @@ function validateAppSpec(spec, opts = {}) {
   if (!spec.app || !spec.app.name) {
     errors.push('app.name is required');
   }
+  // The modern ("new look") shell is an opt-in per-app SETTING, not an appmodule column —
+  // `navigationtype` only selects Single/Multi session and is unrelated. Boolean-only: a string
+  // "false" is truthy in JS and would silently turn the new look ON for an author who meant to
+  // disable it.
+  if (spec.app && spec.app.newLook !== undefined && typeof spec.app.newLook !== 'boolean') {
+    errors.push('app.newLook must be a boolean');
+  }
+  // The Wave 2 header/navigation refresh is a SEPARATE public-preview setting from the new look;
+  // enabling one does not enable the other. Boolean-only for the same reason as newLook — a string
+  // "false" is truthy and would silently turn the feature ON for an author who meant to disable it.
+  if (spec.app && spec.app.headerNavigationRefresh !== undefined && typeof spec.app.headerNavigationRefresh !== 'boolean') {
+    errors.push('app.headerNavigationRefresh must be a boolean');
+  }
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     errors.push('languageCode must be a positive integer LCID');
   }
@@ -480,6 +555,14 @@ function validateAppSpec(spec, opts = {}) {
       }
       if ((c.type === 'Choice' || c.type === 'MultiChoice') && !(Array.isArray(c.options) && c.options.length) && !c.globalChoice) {
         errors.push(`column ${c.schemaName}: ${c.type} needs options[] or a globalChoice reference`);
+      }
+      // Grid data visualization (preview). Only the enum is enforced. Column-TYPE compatibility is
+      // deliberately NOT enforced: the SDK does not constrain it either, and the sensible pairings
+      // are not a clean "numeric only" rule (LineChart is documented for a TEXT column holding
+      // comma-separated numbers). Guessing a constraint the platform does not have would reject
+      // valid specs, so type guidance lives in the schema doc instead.
+      if (c.visualization !== undefined && !COLUMN_VISUALIZATIONS.includes(c.visualization)) {
+        errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown visualization '${c.visualization}' — must be one of ${COLUMN_VISUALIZATIONS.join('|')}`);
       }
     }
   }
@@ -560,6 +643,18 @@ function validateAppSpec(spec, opts = {}) {
       else if (!webResourceNames.has(String(ev.library).toLowerCase())) errors.push(`form ${f.entity}: ${ev.event} handler references undeclared web resource '${ev.library}'`);
       if (!ev.function) errors.push(`form ${f.entity}: ${ev.event} handler is missing a function name`);
       if (ev.event === 'onchange' && !ev.attribute) errors.push(`form ${f.entity}: onchange handler requires an attribute (column logical name)`);
+      // These three are documented as optional with defaults, and are now actually honoured by the
+      // build (they used to be hardcoded and the authored value discarded). Validate the types so a
+      // string "false" — which is truthy in JS and would silently enable a handler the author meant
+      // to disable — is rejected rather than coerced.
+      for (const flagKey of ['enabled', 'passExecutionContext']) {
+        if (ev[flagKey] !== undefined && typeof ev[flagKey] !== 'boolean') {
+          errors.push(`form ${f.entity}: ${ev.event} handler ${flagKey} must be a boolean (got ${JSON.stringify(ev[flagKey])})`);
+        }
+      }
+      if (ev.parameters !== undefined && typeof ev.parameters !== 'string') {
+        errors.push(`form ${f.entity}: ${ev.event} handler parameters must be a string (a comma-separated argument list)`);
+      }
     }
     for (const qv of f.quickViews || []) {
       if (!qv || !qv.lookup) { errors.push(`form ${f.entity}: a quickView is missing lookup (the lookup column logical name on this form)`); continue; }
@@ -658,6 +753,92 @@ function validateAppSpec(spec, opts = {}) {
       }
     } else {
       checkCmdAction(`command '${c.label}' on ${c.entity}`, c.library, c.function);
+    }
+  }
+  // Business rules. Every reference is checked against the spec's own columns, because a rule that
+  // names a column the app does not create is authored against nothing — and the platform accepts it
+  // silently (the rule just never fires), so nothing downstream would catch it.
+  for (const r of spec.businessRules || []) {
+    const label = `business rule '${(r && r.name) || '(unnamed)'}'`;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) { errors.push('businessRules[] entries must be objects'); continue; }
+    if (!r.name) errors.push(`${label}: name is required`);
+    if (!r.entity || !entityNames.has(r.entity)) { errors.push(`${label}: references unknown entity '${r.entity}'`); continue; }
+    if (r.scope !== undefined && !BUSINESS_RULE_SCOPES.includes(r.scope)) {
+      errors.push(`${label}: scope must be ${BUSINESS_RULE_SCOPES.join('|')} (a form-scoped rule needs a form id that does not exist until the forms phase runs)`);
+    }
+    if (r.status !== undefined && !['Active', 'Draft'].includes(r.status)) {
+      errors.push(`${label}: status must be Active|Draft`);
+    }
+
+    // Columns the rule may reference: the entity's own declared columns plus its primary name.
+    const ent = (spec.entities || []).find((e) => e && e.schemaName === r.entity);
+    const cols = new Set();
+    if (ent) {
+      if (ent.primaryAttribute && ent.primaryAttribute.schemaName) cols.add(String(ent.primaryAttribute.schemaName).toLowerCase());
+      for (const c of ent.columns || []) if (c && c.schemaName) cols.add(String(c.schemaName).toLowerCase());
+      // A lookup created by a relationship is a real column on the referencing table.
+      for (const rel of spec.relationships || []) {
+        if (rel && rel.referencing === r.entity && rel.lookup && rel.lookup.schemaName) cols.add(String(rel.lookup.schemaName).toLowerCase());
+      }
+    }
+    const checkField = (field, what) => {
+      if (!field) { errors.push(`${label}: ${what} needs a field`); return; }
+      if (cols.size && !cols.has(String(field).toLowerCase())) {
+        errors.push(`${label}: ${what} references '${field}', which is not a column on ${r.entity}`);
+      }
+    };
+
+    if (!Array.isArray(r.conditions) || !r.conditions.length) {
+      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the compiler emits as an empty rule that silently never fires)`);
+    }
+    for (const c of r.conditions || []) {
+      if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }
+      checkField(c.field, 'condition');
+      if (!BUSINESS_RULE_OPERATORS.includes(c.operator)) {
+        // Name the platform failure rather than pretending the operator is unrecognised: an author
+        // who reaches for ContainsData has written something reasonable that we cannot deploy.
+        if (BUSINESS_RULE_BLOCKED_OPERATORS.has(c.operator)) {
+          errors.push(`${label}: operator '${c.operator}' is not usable — the SDK compiles it to XAML the platform rejects with "Error generating UiData" (HTTP 500), live-measured on every column type. Use ${BUSINESS_RULE_OPERATORS.join(' or ')}, or test the value directly. Tracking: https://github.com/microsoft/power-platform-skills/issues/481`);
+        } else {
+          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+        }
+        continue;
+      }
+      const valueless = BUSINESS_RULE_VALUELESS_OPERATORS.has(c.operator);
+      if (valueless && c.value !== undefined) {
+        errors.push(`${label}: '${c.operator}' tests presence, so it must not carry a value`);
+      }
+      if (!valueless && (c.value === undefined || c.value === null || c.value === '')) {
+        errors.push(`${label}: '${c.operator}' needs a value`);
+      }
+      if (c.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(c.dataType)) {
+        // Name the offending value: this list mirrors the compiler's literal-type map, and the most
+        // likely mistake is a plausible-but-absent type (DateTime is the classic one), so echoing
+        // what was written is what makes the message actionable.
+        errors.push(`${label}: condition dataType '${c.dataType}' is not supported — must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+      }
+    }
+
+    if (!Array.isArray(r.actions) || !r.actions.length) {
+      errors.push(`${label}: actions[] is required (a rule that does nothing is not worth deploying)`);
+    }
+    for (const a of r.actions || []) {
+      if (!a || typeof a !== 'object') { errors.push(`${label}: each action must be an object`); continue; }
+      if (!BUSINESS_RULE_ACTION_TYPES.includes(a.type)) {
+        errors.push(`${label}: action type must be one of ${BUSINESS_RULE_ACTION_TYPES.join('|')} (got '${a.type}')`);
+        continue;
+      }
+      checkField(a.field, `action '${a.type}'`);
+      const payload = BUSINESS_RULE_ACTIONS[a.type];
+      if (a[payload] === undefined) {
+        errors.push(`${label}: action '${a.type}' needs '${payload}'`);
+      } else if (BUSINESS_RULE_BOOLEAN_ACTIONS.has(a.type) && typeof a[payload] !== 'boolean') {
+        // A string "false" is truthy, so coercing here would invert the author's intent silently.
+        errors.push(`${label}: action '${a.type}'.${payload} must be a boolean`);
+      }
+      if (a.type === 'SetFieldValue' && a.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(a.dataType)) {
+        errors.push(`${label}: action dataType must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
+      }
     }
   }
   // Dashboards: chart/list tiles reference a declared chart/view; iframe needs a url; webresource a
@@ -830,6 +1011,58 @@ function validateAppSpec(spec, opts = {}) {
       }
       if (p.pageInput !== undefined) {
         if (typeof p.pageInput !== 'object' || p.pageInput === null || Array.isArray(p.pageInput)) errors.push(`page '${p.key || p.name}': pageInput must be an object`);
+      }
+    }
+    // INPUT CONTRACT. These two rules together resolve a policy conflict that was previously left
+    // implicit, and that a page author had no way to satisfy:
+    //
+    //   - Every page MUST be sitemap-placed (the MEMBERSHIP invariant above): the sitemap is the
+    //     download's only membership oracle, so a page reached only by navigation is invisible to
+    //     download and gets re-created as a duplicate on the next build.
+    //   - But a DETAIL page declares `pageInput` (e.g. `{ data: { orderId: 'string' } }`) because it
+    //     is opened from a list with a row id.
+    //
+    // Being sitemap-placed means the page is ALSO reachable straight from the app's navigation, with
+    // NO input at all. That is a real, user-reachable state — it is what a user gets by clicking the
+    // nav entry — and previously nothing made the author account for it, so the generated page would
+    // render against `undefined` context. Rather than weaken the membership invariant (which would
+    // reintroduce duplicate pages on every rebuild), require the author to say what direct entry
+    // does. `directEntry` is that answer, and page-plan feeds it to the generator.
+    for (const p of spec.pages || []) {
+      const key = p.key || p.name;
+      const inputKeys = Object.keys((p.pageInput && p.pageInput.data) || {});
+      if (!inputKeys.length) continue;
+
+      if (p.directEntry === undefined) {
+        errors.push(`page '${key}' declares pageInput (${inputKeys.join(', ')}) but no directEntry — every page is sitemap-placed, so a user can open it from the app navigation with no input. Declare directEntry: { "behavior": "selector" | "emptyState", "note": "…" } to say what that shows.`);
+      } else if (typeof p.directEntry !== 'object' || p.directEntry === null || Array.isArray(p.directEntry)) {
+        errors.push(`page '${key}': directEntry must be an object`);
+      } else if (!DIRECT_ENTRY_BEHAVIORS.includes(p.directEntry.behavior)) {
+        errors.push(`page '${key}': directEntry.behavior must be one of ${DIRECT_ENTRY_BEHAVIORS.join('|')}`);
+      }
+
+      // Trace each declared input back to a navigation edge that actually produces it. An input no
+      // caller supplies is either a typo or a page that can ONLY ever be entered directly — both are
+      // worth failing on, because the generated page would read a key nothing ever sets.
+      //
+      // EXCEPT when the spec was RECONSTRUCTED from a deployed app (`opts.reconstructed`, set by
+      // download). This is an authoring rule: it gates what you are about to create. A reconstruction
+      // describes an app that ALREADY EXISTS, and download validates before it writes — so treating
+      // it as fatal there produces no spec file at all and strands the author with nothing to edit,
+      // which is the #430 failure this release exists to fix. A page whose manifest predates the rule
+      // (input supplied externally, or from its own .tsx) hits exactly that. Reported as a warning
+      // instead: the author gets the file, the finding, and the chance to fix it.
+      const produced = new Set();
+      for (const other of spec.pages || []) {
+        for (const nav of other.navigatesTo || []) {
+          if (nav && nav.targetKey === key) for (const k of Object.keys((nav.data) || {})) produced.add(k);
+        }
+      }
+      const orphaned = inputKeys.filter((k) => !produced.has(k));
+      if (orphaned.length) {
+        const msg = `page '${key}': pageInput declares ${orphaned.map((k) => `'${k}'`).join(', ')} but no page navigates to it with that data — add it to the producing page's navigatesTo[].data, or drop it from pageInput.`;
+        if (opts.reconstructed) warnings.push(msg);
+        else errors.push(msg);
       }
     }
   }
@@ -1311,6 +1544,14 @@ module.exports = {
   SDK_ROLE_MARKER,
   canonicalPersonaName,
   VALIDATION_PROFILES,
+  DIRECT_ENTRY_BEHAVIORS,
+  COLUMN_VISUALIZATIONS,
+  BUSINESS_RULE_OPERATORS,
+  BUSINESS_RULE_VALUELESS_OPERATORS,
+  BUSINESS_RULE_ACTIONS,
+  BUSINESS_RULE_ACTION_TYPES,
+  BUSINESS_RULE_DATA_TYPES,
+  BUSINESS_RULE_SCOPES,
   migrateAppSpec,
   columnTypeMap,
   TYPE_MAP,

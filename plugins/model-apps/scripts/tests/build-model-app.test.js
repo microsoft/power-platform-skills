@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
 
 const desk = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8')
@@ -47,15 +48,15 @@ function mockSdk() {
       art.id = id; store[`${t}:${id}`] = art; return jclone(art);
     },
     createWebResource: async (o) => { calls.push(['createWebResource', o.name]); return { id: `wr-${++idc}`, name: o.name }; },
-    pushArtifact: async (t, id) => ({ type: t, id, success: true }),
+    pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     fetchArtifact: async (t, id) => { if (!store[`${t}:${id}`]) store[`${t}:${id}`] = t === 'form' ? seedForm(id) : t === 'app' ? { id, siteMap: { areas: [] } } : { id, columns: [] }; return store[`${t}:${id}`]; },
-    getArtifact: (t, id) => store[`${t}:${id}`] || { id, columns: [] },
-    addElement: (t, id, ptr, el) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
-    updateElement: (t, id, ptr, patch) => { const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
-    removeElement: (t, id, ptr) => { const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
+    getArtifact: async (t, id) => { await Promise.resolve(); return store[`${t}:${id}`] || { id, columns: [] }; },
+    addElement: async (t, id, ptr, el) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); const arr = jpGet(a, ptr); if (Array.isArray(arr)) arr.push(jclone(el)); return jclone(a); },
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve(); const a = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id }); jpSet(a, ptr, jclone(patch)); return jclone(a); },
+    removeElement: async (t, id, ptr) => { await Promise.resolve(); const a = store[`${t}:${id}`]; if (a) jpRemove(a, ptr); return jclone(a || { id }); },
     updateRecord: async () => undefined,
     addSolutionComponent: async () => undefined,
-    publishArtifact: async () => undefined,
+    publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
     findArtifact: async (kind, identity) => null,
   };
   return { sdk, calls };
@@ -422,7 +423,7 @@ test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYP
       return [{ publisherid: 'pub-1' }];
     },
     fetchArtifact: async () => ({ id: 'main-form-1' }),
-    getArtifact: () => ({ id: 'main-form-1', tabs: [] }),
+    getArtifact: async () => { await Promise.resolve(); return { id: 'main-form-1', tabs: [] }; },
   };
   const spec = {
     solution: { uniqueName: 'S', publisherPrefix: 'zava' },
@@ -708,4 +709,426 @@ test('a supplied-but-invalid language override is reported, not silently discard
   const w3 = [];
   await resolveLanguageCode({ provision: { queryRecords: async () => [{ languagecode: 1031 }] }, spec: {}, warn: (m) => w3.push(m) });
   assert.deepStrictEqual(w3, [], 'omitting the override is not a problem and must not warn');
+});
+
+// #456: the two flag spellings are aliases, so passing both with DIFFERENT values means the user
+// believes one is in effect and is wrong about which. `a ?? b` silently prefers the kebab form and
+// discards the other, producing a build nobody asked for with no indication why.
+test('a conflicting --language-code / --languageCode pair is rejected, not silently resolved', () => {
+  const { readAliasedFlag } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  assert.throws(
+    () => readAliasedFlag({ 'language-code': '1031', languageCode: '1036' }, 'language-code', 'languageCode'),
+    /disagree/,
+    'two different values must be an error'
+  );
+  // Agreeing duplicates are harmless, and either alone is fine.
+  assert.strictEqual(readAliasedFlag({ 'language-code': '1031', languageCode: '1031' }, 'language-code', 'languageCode'), '1031');
+  assert.strictEqual(readAliasedFlag({ 'language-code': '1031' }, 'language-code', 'languageCode'), '1031');
+  assert.strictEqual(readAliasedFlag({ languageCode: '1036' }, 'language-code', 'languageCode'), '1036');
+  assert.strictEqual(readAliasedFlag({}, 'language-code', 'languageCode'), undefined);
+  // Surrounding whitespace is never meaningful in a shell argument, so a pair that differs only by
+  // padding is the SAME request and must not be rejected. The un-trimmed value is still what gets
+  // returned — normalizing is the caller's job.
+  assert.strictEqual(readAliasedFlag({ 'language-code': ' 1031 ', languageCode: '1031' }, 'language-code', 'languageCode'), ' 1031 ');
+  // But value-domain equivalence stays a conflict: this helper is domain-agnostic and cannot know
+  // that '01031' and '1031' mean the same LCID (for an id flag, '007' and '7' would not). A loud
+  // error the user fixes in seconds beats a silent guess at which spelling wins.
+  assert.throws(
+    () => readAliasedFlag({ 'language-code': '1031', languageCode: '01031' }, 'language-code', 'languageCode'),
+    /disagree/,
+    'leading zeros are not collapsed — the helper has no value domain to collapse them in'
+  );
+});
+
+// #456 item 1: an EXPLICIT language override that the organization has not provisioned must fail
+// fast and say so.
+//
+// Live-verified premise, against a 1033-only org writing labels at LanguageCode 1036:
+//   * EntityDefinitions create      -> HTTP 204, label silently stored at 1033
+//   * GlobalOptionSetDefinitions    -> HTTP 204, label silently stored at 1033
+//   * DateTime / Memo column create -> HTTP 400 "The language code 1036 is not a valid language
+//                                      for this organization"
+// So without this guard the build neither fails cleanly nor succeeds: it creates the table with
+// silently wrong labels and then dies on the first DateTime or Memo column, phases away from the
+// flag that caused it, leaving a half-provisioned data model.
+//
+// Only explicit overrides are checked. The org's own base language is provisioned by definition,
+// so probing it would cost a round trip to learn nothing.
+test('an explicit --language-code that is not provisioned halts, naming the provisioned set', async () => {
+  const provisionedLanguages = async () => [1033, 1031];
+  await assert.rejects(
+    () => resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1036, provisionedLanguages }),
+    (err) => {
+      assert.match(err.message, /1036 is not provisioned/, 'names the rejected LCID');
+      assert.match(err.message, /1033, 1031/, 'names what IS provisioned so the user can pick one');
+      assert.match(err.message, /--language-code/, 'names the input that caused it');
+      // The message must describe what Dataverse ACTUALLY does. It is inconsistent -- some writes are
+      // silently coerced to the base language, DateTime/Memo columns are rejected -- and a message
+      // claiming only one of those sends the user looking for the wrong symptom.
+      assert.match(err.message, /silently stored under the organization's base language/,
+        'explains the silent-coercion half');
+      assert.match(err.message, /DateTime and Memo columns are rejected/,
+        'explains the hard-failure half');
+      assert.match(err.message, /stop partway through the columns/,
+        'warns that the failure leaves a half-provisioned data model');
+      assert.strictEqual(err.name, 'BuildHalt');
+      return true;
+    }
+  );
+});
+
+test('a spec languageCode that is not provisioned halts too, labelled as the spec field', async () => {
+  const provisionedLanguages = async () => [1033];
+  await assert.rejects(
+    () => resolveLanguageCode({ provision: {}, spec: { languageCode: 1036 }, provisionedLanguages }),
+    (err) => {
+      // The label must distinguish the two explicit sources -- telling someone to change a flag they
+      // never passed sends them looking in the wrong place.
+      assert.match(err.message, /^languageCode 1036 is not provisioned/, 'labelled as the spec field, not the flag');
+      return true;
+    }
+  );
+});
+
+test('an explicit language that IS provisioned passes through untouched', async () => {
+  const lc = await resolveLanguageCode({
+    provision: {}, spec: {}, languageCode: 1031,
+    provisionedLanguages: async () => [1033, 1031],
+  });
+  assert.strictEqual(lc, 1031);
+});
+
+test('the org base language is never probed -- it is provisioned by definition', async () => {
+  // A round trip that cannot change the answer is pure latency on the common path, where no override
+  // was given at all.
+  let probed = 0;
+  const lc = await resolveLanguageCode({
+    provision: { queryRecords: async () => [{ languagecode: 1031 }] },
+    spec: {},
+    provisionedLanguages: async () => { probed += 1; return [1033]; },
+  });
+  assert.strictEqual(lc, 1031, 'the org language is still resolved');
+  assert.strictEqual(probed, 0, 'no provisioned-languages probe on the no-override path');
+});
+
+// The probe is a diagnostic: it exists to turn a silently-ignored override into a clear message. If
+// it cannot answer, the build must proceed EXACTLY as it did before -- a diagnostic that can fail a
+// build is worse than no diagnostic.
+test('a failing or unhelpful provisioned-languages probe never blocks the build', async () => {
+  const cases = [
+    ['throws', async () => { throw new Error('403 forbidden'); }],
+    ['null', async () => null],
+    ['empty list', async () => []],
+    ['non-array', async () => ({ RetrieveProvisionedLanguages: [1033] })],
+    ['absent', undefined],
+    ['not a function', 1033],
+  ];
+  for (const [name, provisionedLanguages] of cases) {
+    const lc = await resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1036, provisionedLanguages });
+    assert.strictEqual(lc, 1036, `probe "${name}" must not block; got ${lc}`);
+  }
+});
+
+// readProvisionedLanguages is the transport half, and its single most dangerous failure mode is
+// reading a non-2xx envelope as "zero languages provisioned" -- indistinguishable from a real empty
+// list, and it would reject every otherwise-valid LCID. dataverseRequest resolves { status, data }
+// for EVERY response rather than throwing, so the status gate is the only thing preventing that.
+test('readProvisionedLanguages returns null (not []) for a non-2xx response', async () => {
+  // Live-verified 200 shape:
+  //   { status: 200, data: { '@odata.context': '...', RetrieveProvisionedLanguages: [1033] } }
+  const responses = {
+    ok: { status: 200, data: { '@odata.context': 'x', RetrieveProvisionedLanguages: [1033, 1031] } },
+    forbidden: { status: 403, data: { error: { code: '0x80072560', message: 'no access' } } },
+    notFound: { status: 404, data: { error: { message: 'Resource not found' } } },
+    serverError: { status: 500, data: 'Internal Server Error' },
+    empty200: { status: 200, data: {} },
+    // Status is authoritative, NOT payload shape. This case is the only one the status gate alone
+    // decides -- every other error body simply lacks the key, so the shape check below would have
+    // caught it anyway. Asserting it keeps the gate from being refactored away as "redundant".
+    forbiddenButShaped: { status: 403, data: { RetrieveProvisionedLanguages: [1033] } },
+  };
+  const call = (key) => readProvisionedLanguages('https://contoso.crm.dynamics.com', async () => responses[key]);
+
+  assert.deepStrictEqual(await call('ok'), [1033, 1031]);
+  for (const bad of ['forbidden', 'notFound', 'serverError']) {
+    assert.strictEqual(await call(bad), null, `HTTP error "${bad}" must read as unknown, never as an empty list`);
+  }
+  assert.strictEqual(
+    await call('forbiddenButShaped'), null,
+    'a non-2xx must be rejected on STATUS even when the body happens to carry a well-shaped array'
+  );
+  assert.strictEqual(await call('empty200'), null, 'a 200 with no payload is also "unknown"');
+  // A transport that throws is unknown too -- never a build failure.
+  assert.strictEqual(
+    await readProvisionedLanguages('https://contoso.crm.dynamics.com', async () => { throw new Error('ENOTFOUND'); }),
+    null
+  );
+});
+
+// The OTHER way this diagnostic can break a build, and the more dangerous one because the status
+// gate above does not touch it: a 2xx whose ARRAY carries values that are not LCIDs.
+//
+// `Number(null)` and `Number('')` are both 0 -- finite, so a `Number.isFinite` filter kept them.
+// The result was a NON-EMPTY list of garbage, and `checkProvisioned` treats any non-empty list as
+// authoritative (`entity-provision.js`: `if (!Array.isArray(list) || !list.length) return lcid`).
+// So a malformed payload rejected every genuinely valid LCID and HALTED the build -- the exact
+// inverse of the fail-soft contract this function documents.
+test('readProvisionedLanguages never returns a non-empty list of non-LCIDs (it would halt builds)', async () => {
+  const call = (payload) => readProvisionedLanguages(
+    'https://contoso.crm.dynamics.com',
+    async () => ({ status: 200, data: { RetrieveProvisionedLanguages: payload } })
+  );
+
+  // Each of these previously produced a truthy, non-empty array and would have halted a 1033 build.
+  // `Number()` coerces all of them into something that looks like an LCID: `true`->1, `[1033]`->1033,
+  // `'1e3'`->1000, `null`/`''`->0. The repo already documents why bare Number() is wrong for this
+  // (app-spec.js normalizeLanguageCode); the probe now uses that same normalizer.
+  for (const payload of [[null], [''], [-1], [0], [1.5], [Number.NaN], [{}], [[]], ['abc'],
+    [true], [false], [[1033]], ['1e3'], ['0x40D'], [' '], ['1033abc'], [null, undefined]]) {
+    assert.strictEqual(await call(payload), null,
+      `payload ${JSON.stringify(payload)} yields nothing trustworthy, which is "unknown" (null)`);
+  }
+  // An org always has at least its base language, so an empty array is a payload we did not
+  // understand -- "unknown", not "zero languages provisioned" (which would reject every LCID).
+  assert.strictEqual(await call([]), null);
+
+  // ALL-OR-NOTHING. A PARTIALLY malformed payload must NOT be silently reduced to the elements we
+  // could parse: `checkProvisioned` treats any non-empty list as COMPLETE, so handing it a shorter
+  // list makes it reject languages the org may actually have. An earlier version of this test
+  // asserted the opposite -- it codified `[1033, null, 1031, 'x'] -> [1033, 1031]` as correct, which
+  // is exactly the silent-truncation bug.
+  assert.strictEqual(await call([1033, null, 1031, 'x']), null,
+    'one unparseable element makes the WHOLE payload untrustworthy');
+  assert.strictEqual(await call([1031, null]), null);
+  assert.strictEqual(await call([1033, true]), null);
+
+  // Clean payloads still parse, including the numeric-string form and the boundary value.
+  assert.deepStrictEqual(await call([1033, 1031]), [1033, 1031]);
+  assert.deepStrictEqual(await call(['1033']), [1033]);
+  assert.deepStrictEqual(await call([65535]), [65535]);
+  // Above the bound the plugin enforces (see normalizeLanguageCode) -- a policy limit shared with
+  // the App Spec and the CLI flag, not a claim about the width of a Windows LCID.
+  assert.strictEqual(await call([65536]), null);
+});
+
+// END-TO-END on the consumer: prove the fail-soft contract at the level that actually matters --
+// a build must not halt because the diagnostic returned nonsense. Asserting only on
+// readProvisionedLanguages would leave the coupling to checkProvisioned untested.
+test('a garbage provisioned-languages payload cannot halt a build', async () => {
+  const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+  const garbage = async () => readProvisionedLanguages(
+    'https://contoso.crm.dynamics.com',
+    async () => ({ status: 200, data: { RetrieveProvisionedLanguages: [null, ''] } })
+  );
+  const lc = await resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1033, provisionedLanguages: garbage });
+  assert.strictEqual(lc, 1033, 'an unreadable probe must let the explicit LCID through, not reject it');
+
+  // Control: a REAL list that genuinely lacks the LCID must still halt. If this stopped throwing,
+  // the fix above would have disabled the check rather than hardened it.
+  const real = async () => [1031, 1036];
+  await assert.rejects(
+    () => resolveLanguageCode({ provision: {}, spec: {}, languageCode: 1033, provisionedLanguages: real }),
+    /1033 is not provisioned/,
+    'a genuine provisioned list must still be authoritative'
+  );
+});
+
+// AGENTS.md convention: test the reader ITSELF, not only an injected stub. A stub that ignores its
+// arguments would keep passing if the verb or the function name were mistyped -- and because the
+// check is fail-soft, that typo would degrade every build to "cannot verify, proceeding" in
+// silence, which is indistinguishable from an org that legitimately returns nothing. That is the
+// exact failure mode this guard exists to prevent, so it must not be reachable through the guard.
+test('readProvisionedLanguages calls the unbound function by name with GET', async () => {
+  const calls = [];
+  const out = await readProvisionedLanguages('https://contoso.crm.dynamics.com/', async (...args) => {
+    calls.push(args);
+    return { status: 200, data: { RetrieveProvisionedLanguages: [1033] } };
+  });
+  assert.deepStrictEqual(out, [1033]);
+  assert.strictEqual(calls.length, 1, 'exactly one round trip');
+  const [envUrl, method, apiPath] = calls[0];
+  assert.strictEqual(envUrl, 'https://contoso.crm.dynamics.com/', 'the caller-supplied env url is passed through untouched');
+  assert.strictEqual(method, 'GET', 'RetrieveProvisionedLanguages is a FUNCTION, not an action -- POST would 405');
+  assert.strictEqual(apiPath, 'RetrieveProvisionedLanguages',
+    'unbound function name, no entity-set prefix and no $-query -- a typo here fails open and silently disables the guard');
+});
+
+// The wiring, not just the function. `deps.provisionedLanguages` crosses three seams before it
+// reaches the check -- build-model-app deps -> runSdkBuild opts -> provisionDataModel -> resolve --
+// and a break at any one of them silently restores the old broken behaviour with every unit test
+// above still green. This is the same reason the `deps.warn` wiring test exists.
+test('an unprovisioned --language-code halts the real buildModelApp path (wiring, not just the unit)', async () => {
+  const { sdk } = mockSdk();
+  sdk.queryRecords = async (set) => {
+    if (set === 'organization') return [{ languagecode: 1033 }];
+    if (set === 'solution') return [];
+    return [{ publisherid: 'pub-1' }];
+  };
+  let probed = 0;
+  const r = await buildModelApp(
+    desk,
+    { apply: true, env: 'https://x', languageCode: 1036 },
+    { sdk, warn: () => undefined, provisionedLanguages: async () => { probed += 1; return [1033]; } }
+  ).then((x) => x, (e) => e);
+
+  assert.strictEqual(probed, 1, 'deps.provisionedLanguages must actually reach the data-model phase');
+  const message = (r && r.message) || (r && r.error) || JSON.stringify(r);
+  assert.match(String(message), /1036 is not provisioned/,
+    `the halt must surface from the real build path; got: ${JSON.stringify(r)}`);
+});
+
+// Same wiring, other entry point: provision-entities.js is the genpage data-model path and builds
+// its own deps object, so it can regress independently of build-model-app.js.
+test('an unprovisioned languageCode halts the real provisionEntities path too', async () => {
+  const { provisionEntities } = require(path.join(__dirname, '..', 'provision-entities.js'));
+  const input = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_a', displayName: 'A', pluralName: 'As', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }],
+    relationships: [],
+    languageCode: 1036,
+  };
+  const provision = {
+    queryRecords: async (set) => (set === 'organization' ? [{ languagecode: 1033 }] : [{ solutionid: 's', publisherid: 'p' }]),
+    createPublisher: async () => ({ id: 'p' }),
+    createSolution: async () => ({ id: 's' }),
+  };
+  let probed = 0;
+  const r = await provisionEntities(input, { apply: true }, {
+    sdk: mockSdk().sdk, provision, warn: () => undefined,
+    provisionedLanguages: async () => { probed += 1; return [1033]; },
+  }).then((x) => x, (e) => e);
+
+  assert.strictEqual(probed, 1, 'deps.provisionedLanguages must reach the genpage data-model path');
+  const message = (r && r.message) || (r && r.error) || JSON.stringify(r);
+  assert.match(String(message), /1036 is not provisioned/,
+    `the halt must surface from provisionEntities; got: ${JSON.stringify(r)}`);
+});
+
+// `readOrgLanguageCode` is the #455 counterpart to `readProvisionedLanguages`: it answers "what is
+// this organization's base language" at TRANSPORT level, because `MakerSdkOptions.languageCode` is a
+// construction-time option and the SDK that would normally read it does not exist yet.
+//
+// Its dangerous failure mode is the same one, and it is worth stating: `dataverseRequest` resolves
+// { status, data } for EVERY HTTP response rather than throwing, so without a status gate an error
+// envelope parses as "no rows" and silently becomes the 1033 fallback — the exact wrong answer in
+// the non-English org this whole line of work exists for.
+test('readOrgLanguageCode returns null (not a fallback) for a non-2xx response', async () => {
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  // Live-verified 200 shape:
+  //   { status: 200, data: { '@odata.context': '...', value: [ { languagecode: 1033, organizationid: '…' } ] } }
+  const responses = {
+    ok: { status: 200, data: { value: [{ '@odata.etag': 'W/"1"', languagecode: 1031, organizationid: 'x' }] } },
+    forbidden: { status: 403, data: { error: { message: 'no access' } } },
+    unauthorized: { status: 401, data: null },
+    serverError: { status: 500, data: 'Internal Server Error' },
+    empty: { status: 200, data: { value: [] } },
+    noValue: { status: 200, data: {} },
+    // A 4xx whose body happens to be well-shaped: decided by STATUS alone, like the sibling reader.
+    forbiddenButShaped: { status: 403, data: { value: [{ languagecode: 1031 }] } },
+  };
+  const call = (k) => readOrgLanguageCode('https://contoso.crm.dynamics.com', async () => responses[k]);
+
+  assert.strictEqual(await call('ok'), 1031, 'the base language is read from value[0].languagecode');
+  for (const bad of ['forbidden', 'unauthorized', 'serverError', 'empty', 'noValue']) {
+    assert.strictEqual(await call(bad), null, `"${bad}" must read as unknown, never as a language`);
+  }
+  assert.strictEqual(await call('forbiddenButShaped'), null,
+    'a non-2xx is rejected on STATUS even when the body carries a usable row');
+  assert.strictEqual(
+    await readOrgLanguageCode('https://contoso.crm.dynamics.com', async () => { throw new Error('ENOTFOUND'); }),
+    null, 'a throwing transport is unknown too — never a build failure'
+  );
+});
+
+test('readOrgLanguageCode rejects values that are not real LCIDs', async () => {
+  // An LCID is a 16-bit value. A malformed or out-of-range number reaching the SDK constructor would
+  // stamp every FormXML label with a language Dataverse cannot serve, so garbage must read as
+  // "unknown" and fall back, not be passed through.
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  const at = (languagecode) => readOrgLanguageCode('https://x', async () => ({ status: 200, data: { value: [{ languagecode }] } }));
+  for (const bad of [0, -1, 65536, 1e9, null, undefined, 'de-DE', '', NaN, 1033.5, {}, []]) {
+    assert.strictEqual(await at(bad), null, `languagecode=${JSON.stringify(bad)} must be rejected`);
+  }
+  // Numeric strings are accepted — Dataverse has returned both shapes for Number-typed columns.
+  assert.strictEqual(await at('1036'), 1036, 'a numeric string is a valid LCID');
+  assert.strictEqual(await at(65535), 65535, 'the 16-bit boundary is valid');
+});
+
+test('readOrgLanguageCode queries the PLURAL entity set', async () => {
+  // The singular `organization` 404s on the Web API — a live-verified trap that already cost this
+  // project once. A stub that ignores its arguments would never catch the regression, so assert the
+  // request itself.
+  const { readOrgLanguageCode } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
+  const calls = [];
+  await readOrgLanguageCode('https://contoso.crm.dynamics.com', async (...args) => {
+    calls.push(args);
+    return { status: 200, data: { value: [{ languagecode: 1033 }] } };
+  });
+  assert.strictEqual(calls.length, 1, 'exactly one round trip');
+  const [envUrl, method, apiPath] = calls[0];
+  assert.strictEqual(envUrl, 'https://contoso.crm.dynamics.com');
+  assert.strictEqual(method, 'GET');
+  assert.match(apiPath, /^organizations\?/, 'PLURAL entity set — the singular form 404s');
+  assert.match(apiPath, /\$select=languagecode/, 'projects only the column it needs');
+  assert.match(apiPath, /\$top=1/, 'one row is enough; there is exactly one organization row');
+});
+
+// The BLOCKER this file exists to prevent: `buildModelApp` builds a FRESH literal for `runBuild`
+// rather than spreading `opts`, so a field added to `opts` in `main()` is silently dropped unless it
+// is forwarded by hand. `preResolvedLanguageCode` was, in exactly that way, and nothing caught it —
+// the only other test touching it calls `provisionDataModel` directly, bypassing this seam entirely.
+//
+// Why the drop matters rather than merely wasting a round trip: without the pre-resolved value the
+// data-model phase re-resolves, and `resolveLanguageCode` falls back to 1033 when the org read
+// fails. On a transient failure (429, socket timeout, token refresh mid-flight) the SDK is already
+// baked at the resolved LCID while the columns land at 1033 — a split-language app, which is the
+// precise failure this threading exists to prevent.
+test('buildModelApp forwards preResolvedLanguageCode to the build (the literal drops what it does not name)', async () => {
+  const seen = [];
+  const r = await buildModelApp(
+    desk,
+    // Deliberately CONTRADICTORY: if the pre-resolved value is forwarded it wins outright. If it is
+    // dropped, the spec/flag value or the org read decides — and the assertion below names which.
+    { apply: true, env: 'https://x', languageCode: 1031, preResolvedLanguageCode: 3082 },
+    {
+      sdk: (() => {
+        const { sdk } = mockSdk();
+        sdk.queryRecords = async (set) => {
+          if (set === 'organization') return [{ languagecode: 1036 }];
+          if (set === 'solution') return [];
+          return [{ publisherid: 'pub-1' }];
+        };
+        const origColumn = sdk.createColumn;
+        sdk.createColumn = async (l, o) => { seen.push(o); return origColumn ? origColumn(l, o) : { logicalName: 'x', metadataId: 'c' }; };
+        return sdk;
+      })(),
+      warn: () => undefined,
+    }
+  );
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  const withLang = seen.filter((o) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0, 'the build created label-bearing columns');
+  for (const o of withLang) {
+    assert.strictEqual(o.languageCode, 3082,
+      'the PRE-RESOLVED language must reach the data-model phase — 1031 means the flag won, 1036 means the org read won, undefined means the literal dropped it');
+  }
+});
+
+// The stale-warning regression. `--language-code` used to be consumed only by `data-model`, so the
+// warning said so. Since #455 the SDK also stamps forms, dashboards and sitemap titles, and a
+// warning that tells a user their flag was ignored — while the build is faithfully applying it — is
+// worse than no warning, because it stops them investigating a real problem.
+test('--language-code only warns "no effect" for phases that genuinely create no labels', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const m = /const LANGUAGE_CONSUMING_PHASES = \[([^\]]+)\]/.exec(src);
+  assert.ok(m, 'the phase list is declared as a named constant, not inlined into the condition');
+  const listed = m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
+  for (const phase of ['data-model', 'forms', 'dashboards', 'app-shell']) {
+    assert.ok(listed.includes(phase),
+      `'${phase}' stamps an authoring language and must not be reported as unaffected by --language-code`);
+  }
+  // Phases that create no labels must NOT be listed, or the warning never fires when it should.
+  for (const phase of ['publish', 'sample-data', 'pages']) {
+    assert.ok(!listed.includes(phase), `'${phase}' creates no labels and must not suppress the warning`);
+  }
 });

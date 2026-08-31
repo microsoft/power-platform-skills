@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount } = require('../download-model-app.js');
+const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -810,4 +810,64 @@ test('a FOREIGN-prefix nav web resource is left as a bare reference, not re-decl
   } };
   const { webResources } = await iconWebResources(sdk, [], [], 'crba3', true, ['isv_page.html']);
   assert.strictEqual(webResources.length, 0, 'a foreign-prefix nav resource must not be re-declared');
+});
+
+// #456: download does NOT read languageCode from Dataverse, and that is deliberate — an LCID copied
+// out of the source org would be re-applied verbatim when the spec is rebuilt elsewhere, which is how
+// a spec starts failing in an org that lacks that language (#447). But dropping a value the AUTHOR
+// wrote is its own bug, and a silent one: the next build resolves the org default, so new columns get
+// one language while the pinned ones keep another. Mixed-language app, no error.
+test('a hand-pinned languageCode survives a download (#456)', () => {
+  const spec = { app: { name: 'A' }, entities: [] };
+  const prior = JSON.stringify({ app: { name: 'A' }, languageCode: 1031 });
+  const deps = { existsSync: () => true, readFileSync: () => prior };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, 1031, 'the author-pinned LCID is restored');
+});
+
+test('the preserved value is CANONICAL, not the author\'s raw formatting', () => {
+  // A downloaded spec is a generated artifact. `"1031"` and `" 1031 "` both validate, but writing
+  // the string form back out makes the file's diff noisy and its type inconsistent with every other
+  // numeric field the download emits.
+  for (const raw of ['1031', ' 1031 ', '01031']) {
+    const spec = { app: { name: 'A' } };
+    preserveAuthoredLanguageCode(spec, 'app-spec.json', {
+      existsSync: () => true,
+      readFileSync: () => JSON.stringify({ languageCode: raw }),
+    });
+    assert.strictEqual(spec.languageCode, 1031, `${JSON.stringify(raw)} must normalize to the number 1031`);
+    assert.strictEqual(typeof spec.languageCode, 'number');
+  }
+});
+
+test('preserving never invents a languageCode where the author had none', () => {
+  const spec = { app: { name: 'A' }, entities: [] };
+  const deps = { existsSync: () => true, readFileSync: () => JSON.stringify({ app: { name: 'A' } }) };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, undefined, 'no previous value means the field stays absent');
+
+  // A first-ever download has no previous spec at all.
+  const fresh = { app: { name: 'A' }, entities: [] };
+  preserveAuthoredLanguageCode(fresh, 'app-spec.json', { existsSync: () => false, readFileSync: () => { throw new Error('nope'); } });
+  assert.strictEqual(fresh.languageCode, undefined);
+});
+
+test('a downloaded languageCode is never overwritten by the previous file', () => {
+  // Defensive: if a future download ever DOES emit one, the live value wins over the stale file.
+  const spec = { app: { name: 'A' }, languageCode: 1036 };
+  const deps = { existsSync: () => true, readFileSync: () => JSON.stringify({ languageCode: 1031 }) };
+  preserveAuthoredLanguageCode(spec, 'app-spec.json', deps);
+  assert.strictEqual(spec.languageCode, 1036);
+});
+
+test('a corrupt or invalid previous spec is ignored rather than failing the download', () => {
+  for (const prior of ['{ not json', JSON.stringify({ languageCode: 'de-DE' }), JSON.stringify({ languageCode: true }), JSON.stringify({ languageCode: 0 }), JSON.stringify({ languageCode: 99999 })]) {
+    const spec = { app: { name: 'A' } };
+    preserveAuthoredLanguageCode(spec, 'app-spec.json', { existsSync: () => true, readFileSync: () => prior });
+    assert.strictEqual(spec.languageCode, undefined, 'must not carry forward ' + prior.slice(0, 30));
+  }
+  // A read that throws must not escape either.
+  const spec = { app: { name: 'A' } };
+  assert.doesNotThrow(() => preserveAuthoredLanguageCode(spec, 'x', { existsSync: () => true, readFileSync: () => { throw new Error('EACCES'); } }));
+  assert.strictEqual(spec.languageCode, undefined);
 });

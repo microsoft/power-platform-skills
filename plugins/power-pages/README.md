@@ -539,6 +539,7 @@ This Dataverse relationship check is intended for local validation only and shou
 This plugin sends usage telemetry by default to help Microsoft improve it.
 Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
 When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
+When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
 Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**

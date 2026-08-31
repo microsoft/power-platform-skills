@@ -17,7 +17,7 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode } = require('./lib/app-spec.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -26,7 +26,12 @@ const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7:
 // dashboards[] entries. Each tile is reconstructed with ID PASSTHROUGH — it carries the deployed
 // view/chart ids (+ target entity) directly, so a rebuild recreates the dashboard against the
 // EXISTING views/charts without needing views[]/charts[] declared (which would else duplicate them).
-async function readDashboards(sdk, app) {
+// `warn` is optional and injected so the CLI can report WHY a dashboard could not be reconstructed.
+// Without it this function swallowed every per-dashboard failure (`catch { continue }`) and returned
+// a short list, so the subarea silently dropped and download failed downstream with "could not be
+// round-tripped" and no cause. That is a diagnosis dead-end: live, the real reason was an SDK
+// deserialization bug several layers down, and nothing surfaced it.
+async function readDashboards(sdk, app, warn) {
   const strip = (g) => String(g || '').replace(/[{}]/g, '') || undefined;
   const ids = new Map(); // dashboardId -> subarea title (fallback name)
   for (const a of (app.siteMap && app.siteMap.areas) || []) {
@@ -39,7 +44,12 @@ async function readDashboards(sdk, app) {
   const out = [];
   for (const [id, title] of ids) {
     let art;
-    try { art = await sdk.fetchArtifact('dashboard', id); } catch { continue; }
+    // Keep going on a single unreadable dashboard — one bad artifact must not sink the whole
+    // download — but SAY SO. A dropped subarea with no stated cause is what made this untraceable.
+    try { art = await sdk.fetchArtifact('dashboard', id); } catch (e) {
+      if (typeof warn === 'function') warn(`dashboard '${title || id}' (${id}) could not be read: ${e && e.message}`);
+      continue;
+    }
     let name = title || id;
     try { const rows = await sdk.queryRecords('systemform', { select: ['name'], filter: `formid eq ${id}`, top: 1 }); if (rows && rows[0] && rows[0].name) name = rows[0].name; } catch { /* keep fallback */ }
     const tiles = [];
@@ -52,7 +62,13 @@ async function readDashboards(sdk, app) {
       else if (c.type === 'iframe' && p.Url) tiles.push({ type: 'iframe', name: c.name, url: p.Url });
       else if (c.type === 'webresource' && p.WebResourceName) tiles.push({ type: 'webresource', name: c.name, webResource: p.WebResourceName });
     }
+    // A dashboard that read cleanly but yielded no usable tile is ALSO a silent drop — the subarea
+    // disappears with nothing said. Distinguish it from the unreadable case above.
     if (tiles.length) out.push({ id, name, tiles });
+    else if (typeof warn === 'function') {
+      warn(`dashboard '${name}' (${id}) read OK but produced no recognizable tiles `
+        + `(${(art.components || []).length} component(s)); its sitemap subarea will be dropped.`);
+    }
   }
   return out;
 }
@@ -730,8 +746,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // Dashboards (declared as DashBoard sitemap subareas) — reconstructed with id-passthrough tiles.
   let dashboards = [];
   let dashboardReconstructionError = null;
+  // Per-dashboard failures are collected rather than swallowed. They are the usual cause of a
+  // "subarea could not be round-tripped" error further down, and without them that error names the
+  // subarea but not the reason, which makes it undiagnosable without a debugger.
+  const dashboardWarnings = [];
   try {
-    dashboards = await readDashboards(sdk, app);
+    dashboards = await readDashboards(sdk, app, (m) => {
+      dashboardWarnings.push(m);
+      process.stderr.write(`WARNING: ${m}\n`);
+    });
   } catch (e) {
     dashboardReconstructionError = e.message;
     process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
@@ -753,7 +776,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   const spec = await hydrateSpec(read);
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
 }
 
 async function main() {
@@ -789,32 +812,87 @@ async function main() {
   const result = await runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
   if (!result.ok) { emitResult(false, result); return; }
 
-  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError } = result;
+  const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings } = result;
   if (droppedSubareas > 0 || dashboardReconstructionError) {
     const droppedList = (droppedSubareaDetails || [])
       .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
       .join(', ');
     const dashboardMessage = dashboardReconstructionError ? ` Dashboard reconstruction failed: ${dashboardReconstructionError}.` : '';
-    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage} A rebuild from this spec will DROP them from the app nav.`;
+    // Per-dashboard reasons, when there are any. Naming the subarea without saying WHY it dropped
+    // sends the reader looking at their sitemap when the cause is an unreadable artifact.
+    const causeMessage = (dashboardWarnings && dashboardWarnings.length)
+      ? ` Cause: ${dashboardWarnings.join('; ')}.`
+      : '';
+    const message = `${droppedSubareas} sitemap subarea(s) could not be round-tripped${droppedList ? `: ${droppedList}` : ''}.${dashboardMessage}${causeMessage} A rebuild from this spec will DROP them from the app nav.`;
     if (!allowLossyDownload) {
       process.stderr.write(`ERROR: ${message}\nPass --allow-lossy-download to write the partial spec anyway.\n`);
-      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError });
+      emitResult(false, { ok: false, error: message, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, ...(dashboardWarnings && dashboardWarnings.length ? { dashboardWarnings } : {}) });
       return;
     }
     process.stderr.write(`WARNING: ${message}\n`);
   }
-  const validation = validateAppSpec(spec, { profile: 'plan' });
+  // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
+  // rules become warnings, because refusing to write a description of an app that already exists
+  // leaves the author with no artifact at all (see the pageInput producer rule).
+  const validation = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
   if (!validation.ok) {
     emitResult(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
     return;
   }
+  for (const w of validation.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
+  // A defaulted `directEntry` must not be silent. hydrateSpec injects a conservative `emptyState` for
+  // pages that predate the field (otherwise this download would have hard-failed above and written no
+  // spec at all), but the author has to know a behaviour was chosen for them so they can change it.
+  const defaulted = spec.directEntryDefaulted || [];
+  if (defaulted.length) {
+    process.stderr.write(
+      `WARNING: ${defaulted.length} page(s) declare pageInput but predate directEntry — defaulted to `
+      + `{ "behavior": "emptyState" }: ${defaulted.join(', ')}.\n`
+      + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
+    );
+  }
   const specPath = path.join(outDir, 'app-spec.json');
+  preserveAuthoredLanguageCode(spec, specPath);
   fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
-  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas });
+  emitResult(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}) });
+}
+
+// Carry an AUTHOR-PINNED `languageCode` across a download, and only from the spec already on disk.
+//
+// Download deliberately does not read `languageCode` from Dataverse. An LCID copied out of the source
+// org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly how a
+// spec starts failing in an org that has not provisioned that language (#447) — leaving it absent lets
+// every target org resolve its own base language, which is the right default.
+//
+// But silently dropping a value the author WROTE is its own bug, and a quiet one: the next build
+// resolves the org default, so newly created columns get one language while the ones from the pinned
+// build keep another. A mixed-language app, no error anywhere. So the value is restored from the
+// previous spec at this path — the author's own file — and never synthesized from the environment.
+//
+// Best-effort by design: a missing, unreadable or malformed previous spec just means there is nothing
+// to preserve. Failing the download over it would be worse than the wart this fixes. Only a value that
+// would itself pass validation is restored — carrying a broken one forward would fail the next build
+// for a reason the operator did not cause on this run.
+// Exported for tests.
+function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
+  const readFileSync = deps.readFileSync || fs.readFileSync;
+  const existsSync = deps.existsSync || fs.existsSync;
+  if (!spec || spec.languageCode !== undefined) return spec;
+  try {
+    if (!existsSync(specPath)) return spec;
+    const prior = JSON.parse(readFileSync(specPath, 'utf8'));
+    // Assign the NORMALIZED value, not the raw one. `"1031"` and `" 1031 "` both validate, but a
+    // downloaded spec is a generated artifact and should be canonical — writing the author's
+    // whitespace or string form back out makes the file's diff noisy and its type inconsistent with
+    // every other numeric field the download emits.
+    const lcid = prior ? normalizeLanguageCode(prior.languageCode) : null;
+    if (lcid !== null) spec.languageCode = lcid;
+  } catch { /* no previous spec, or not parseable — nothing to preserve */ }
+  return spec;
 }
 
 if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload };
+module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

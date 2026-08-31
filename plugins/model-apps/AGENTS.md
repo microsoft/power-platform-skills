@@ -44,7 +44,7 @@ able to tell what moved from the docs alone):
 |-----|---------------|--------------|
 | `AGENTS.md` (this file — `CLAUDE.md` symlinks to it) | Per-component behavioral specs, the canonical file tree, conventions, build/test | You add/rename a script, change a component's behavior, or change how to build/test |
 | [`docs/architecture.md`](docs/architecture.md) | Wiring / flow **diagrams** for both skills (`/genpage` + `/app-builder`) | You change the orchestration, phase pipeline, or how the pieces connect |
-| [`docs/app-builder-roadmap.md`](docs/app-builder-roadmap.md) | `/app-builder` **roadmap / TODO** (Complete + Pending by phase) | You ship or reprioritize an app-builder capability |
+| [`docs/app-builder-capabilities.md`](docs/app-builder-capabilities.md) | `/app-builder` **capabilities** — what ships today, with the evidence for each | You ship an app-builder capability |
 | [`docs/app-builder-design.md`](docs/app-builder-design.md) | `/app-builder` **design record** — Part I staged-flow architecture (**cited from code by section number — never renumber**), Part II the `--changed-only` contract | You change the staged flow or the partial-apply contract |
 | [`CHANGELOG.md`](CHANGELOG.md) | Keep-a-Changelog — concise bullets (detail lives in PRs/docs) | Any user-visible change |
 | [`references/app-spec-schema.md`](references/app-spec-schema.md) | The App Spec contract | You change the App Spec shape or validation |
@@ -118,7 +118,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   MEMBERSHIP (the app's sitemap `GenPageId` set, read fail-closed via `fetchSitemap` in
   `scripts/lib/sitemap-pages.js` — drives placement, download enumeration, and verify; a read failure
   HALTs). All page matching is by id. Every `pages[]` entry must be sitemap-placed (validation rejects
-  headless pages). The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
+  headless pages) — because the sitemap is download's ONLY membership oracle, so a page reached only
+  by `navigatesTo` is invisible to download and gets re-created as a duplicate on the next build.
+  The corollary is that a detail page is reachable from the nav with **no input**, so a page
+  declaring `pageInput` must also declare **`directEntry`** (`selector` | `emptyState`) saying what
+  that renders; `page-plan` passes it to the generator and the page manifest carries it through
+  download. Every `pageInput.data` key must also be produced by an incoming `navigatesTo[].data`
+  edge. See `references/app-spec-schema.md` → *the input contract*.
+  The build halts on safety violations (`pages-removed`, `pages-shared-across-apps`,
   identity conflicts, read failures). The cross-app shared-page scan (`fetchAppsForPages`) enumerates every app via the vendored SDK's
   `@odata.nextLink` pagination (`queryRecords({ paginate:true })`), so it verifies EVERY app in the
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
@@ -132,6 +139,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
+  (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
+  app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
+  this looked unavailable for a long time. Best-effort: the feature rolls out by tenant, so a failure
+  warns and records `created.newLook: false` rather than failing an otherwise-good build or reporting
+  a silent success.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -142,17 +155,34 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   ([#447](https://github.com/microsoft/power-platform-skills/issues/447)) — and confusingly only on
   *some* column types, because (observed 2026-08) Dataverse tolerates an unprovisioned LCID on
   `EntityMetadata` and `PicklistAttributeMetadata` but rejects it on `DateTime`/`Memo`. Every fallback
-  to 1033 warns, as does an explicitly supplied LCID that had to be discarded. Note
+  to 1033 warns, as does an explicitly supplied LCID that had to be discarded.
+  An **explicitly supplied** LCID is additionally checked against `RetrieveProvisionedLanguages`
+  (`readProvisionedLanguages`, `scripts/lib/dataverse-auth.js`, injected as `deps.provisionedLanguages`)
+  and halts the data-model phase before any write if the org does not have it — because of the
+  split behaviour above, the alternative is a table created with silently-wrong labels followed by a
+  failure on the first `DateTime`/`Memo` column. Only *explicit* overrides are probed; the org's base
+  language is provisioned by definition. The probe is best-effort — an unreachable or non-2xx
+  `RetrieveProvisionedLanguages` resolves to `null` ("unknown") and the build proceeds unchanged, so
+  the diagnostic can never itself break a build. Note
   `updateTable(logical, { quickCreateEnabled })` deliberately passes no language: it only builds a
   Label when a `displayName`/`pluralName`/`description` is supplied, and otherwise round-trips
   Dataverse's own labels under `MSCRM.MergeLabels`.
-  **Scope — this does NOT extend to the `forms`, `dashboards` or `app-shell` phases.** Those go
-  through the vendored SDK's artifact serializers, which hardcode `1033` into FormXML
+  **Scope — this now extends to the `forms`, `dashboards` and `app-shell` phases too.** Those go
+  through the vendored SDK's artifact serializers, which used to hardcode `1033` into FormXML
   (`<label languagecode="1033">`), SiteMap XML (`<Title LCID="1033">`) and dashboard XML with **no
-  caller override**, so the plugin cannot pass a language even though it has one. That is an SDK-side
-  gap tracked in [#455](https://github.com/microsoft/power-platform-skills/issues/455). It is not
-  known to fail a build — the #447 reporter's full build completed once the data-model phase was
-  fixed — but in a non-1033 org those labels are stored tagged with a language the org lacks.
+  caller override** ([#455](https://github.com/microsoft/power-platform-skills/issues/455)). The SDK
+  now takes the authoring LCID as a **construction-time** option (`MakerSdkOptions.languageCode`),
+  which is why `main()` resolves the language over the transport hatch (`resolveAuthoringLanguage`,
+  `scripts/lib/entity-provision.js`) **before** calling `makeSdk`, and passes the identical value on
+  as `opts.preResolvedLanguageCode` so the data-model phase cannot resolve a different one. Both SDK
+  instances get the same LCID deliberately: `pushArtifact` refuses a push whose stored artifact
+  language disagrees with the SDK performing it (`ARTIFACT_LANGUAGE_MISMATCH`, for registrations
+  marked `languageSensitive` — App, Form, Dashboard). Passing nothing preserves the SDK's own 1033
+  default exactly, so the option is opt-in rather than a silent re-labelling.
+  Note the SDK deliberately does **not** language-parameterize BusinessRule: its mapper's language
+  parameter is the *environment base* language, a different concept.
+  Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
+  would keep passing against a bundle that ignored the option.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
   **`--changed-only`** (Preview, off by default) is a fail-closed SAFE partial apply: after a FRESH
@@ -249,8 +279,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
   `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
   the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. **ADO 6603388 (download) is still open**, and a live attempt to construct
-  the hidden component it describes did not succeed: pinning `task` via `AddAppComponents` with the
+  or edited in the maker. **Download does not recover an entity component that has no sitemap subarea**
+  (ADO 6603388), and a live attempt to construct the hidden component it describes did not succeed:
+  pinning `task` via `AddAppComponents` with the
   now-correct reference shape returned 204 but wrote no row, before or after publish. So the
   download-side fix cannot currently be verified end to end — do not implement it speculatively.
   The component read is best-effort: a failure degrades
@@ -410,7 +441,7 @@ feature-flags.json             ← Default-OFF feature flags (currently connecto
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
-  app-builder-roadmap.md       ← /app-builder roadmap / TODO (Complete + Pending by phase)
+  app-builder-capabilities.md       ← /app-builder capabilities (what ships today, with evidence)
   app-builder-design.md        ← /app-builder design record (Part I staged flow · Part II --changed-only)
 agents/                        ← Agent definitions (invoked by skills via Task tool)
   genpage-planner.md           ← Requirements, discovery, plan doc, user approval (create flow)
@@ -816,8 +847,19 @@ edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding w
 changes.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Three test files lock them — run all against every
-rebuilt bundle:
+skill relies on behaviors that must survive. Four test files lock them — run all against every
+rebuilt bundle.
+
+**Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
+writes `scripts/vendor/PROVENANCE.json` next to the bundle: the upstream SHA and subject, whether
+that package had uncommitted changes, and the bundle's own sha256. Two things make this
+load-bearing rather than bookkeeping. First, the bundler consumes the SDK's **gitignored `lib/`**,
+a build output that can be arbitrarily older than `src/` — a bundle shipped in this repo was once
+built from a stale `lib/` several commits behind its nominal source, and nothing could reveal it.
+The bundler now **refuses** (exit 3) when `lib/index.js` predates the newest `.ts` under `src/`.
+Second, "built from master" is not provenance, because master moves; the SHA is what lets a
+reviewer reproduce the artifact. Re-running the build on the same inputs must reproduce the same
+sha256 — check it.
 
 `scripts/tests/sdk-surface-contract.test.js` — the **method-presence** guard. Asserts every SDK
 method the engines call (`SKILL_SDK_SURFACE`, kept in sync with the `provision.*` / `sdk.*` call
@@ -856,6 +898,18 @@ public `createMakerSdk` factory — the `MakerSdk`/`AppAdapter` classes are no l
   explicit **`matchOn`** key (it NEVER falls back to the primary display name — `buildSeedGroup`
   supplies `matchOn` from a single-column alternate key or the primary name, validated non-empty).
 
+`scripts/tests/sdk-async-surface.test.js` — the **sync-vs-async** guard, and the one to read first
+after a re-vendor. The SDK's generic surface is asynchronous (`addElement`, `findElements`,
+`getArtifact`, `moveElement`, `queryTree`, `removeElement`, `updateElement` all return Promises; a
+read may revalidate against the server before serving its cached copy). Forgetting an `await` does
+**not** throw: a Promise is truthy, so the engine's `|| {}` fallbacks stay dormant and the pure
+helpers silently receive a Promise — `hasSubgrid` → `false` (duplicate sub-grid), `formFieldLogicals`
+→ `[]` (every field looks missing), `findFieldCellPointer` → `null` (a removal never happens). Wrong
+artifacts, 2xx statuses, green build. The test therefore does two things: a **source scan** that
+fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
+`sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
+list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.
@@ -865,11 +919,17 @@ az account set --subscription <sub-id>
 node scripts/check-auth.js --env <envUrl>       # az token + WhoAmI preflight (pac optional; --require-pac for genpage)
 node scripts/build-model-app.js   --env <envUrl> --spec @<dir>/app-spec.json [--sample-data --publish] --apply --verify
 node scripts/verify-model-app.js  --env <envUrl> --spec @<dir>/app-spec.json
-node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply
+node scripts/teardown-model-app.js --env <envUrl> --spec @<dir>/app-spec.json --apply --allow-destructive
 ```
 
 AI features are **admin-gated** — preflight readiness with `node scripts/ai-preflight.js --env <envUrl>`.
-Prefer a scratch env; always tear down probes (`teardown-model-app.js --apply`) to leave 0 leftovers.
+Prefer a scratch env; always tear down probes so nothing app-owned is left behind. Teardown needs
+`--allow-destructive` as well as `--apply` — with `--apply` alone it refuses and exits — and it
+deliberately leaves **one** thing behind: the **publisher**. A publisher can own other solutions in
+the environment, so deleting it is not this app's decision to make — the same fail-safe reasoning
+that keeps an `external` web resource. Expect a clean environment afterwards *except* for
+`<prefix>publisher`; if a probe must restore the environment exactly, remove that row yourself after
+confirming it owns no other solution.
 
 **After modifying the plugin also:** run `claude --debug` to confirm the plugin loads, exercise the
 skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser checks

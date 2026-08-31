@@ -4,7 +4,8 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { commandDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { validateAppSpec } = require('../lib/app-spec.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -236,36 +237,36 @@ function mockSdk(opts = {}) {
       store[`${t}:${id}`] = art;
       return clone(art);
     },
-    getArtifact: (t, id) => {
+    getArtifact: async (t, id) => { await Promise.resolve();
       calls.push({ name: 'getArtifact', args: [t, id] });
       return store[`${t}:${id}`] || { id };
     },
     // Generic mutation surface (mirrors the SDK). The mock does NOT mint layout ids (tests don't
     // assert on them); it just maintains a coherent in-memory tree so getArtifact/firstSectionRowsPointer
     // and reconcile see the effects of adds/removes.
-    addElement: (t, id, ptr, el) => {
+    addElement: async (t, id, ptr, el) => { await Promise.resolve();
       calls.push({ name: 'addElement', args: [t, id, ptr, el] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       const arr = jpGet(art, ptr);
       if (Array.isArray(arr)) arr.push(clone(el));
       return clone(art);
     },
-    updateElement: (t, id, ptr, patch) => {
+    updateElement: async (t, id, ptr, patch) => { await Promise.resolve();
       calls.push({ name: 'updateElement', args: [t, id, ptr, patch] });
       const art = store[`${t}:${id}`] || (store[`${t}:${id}`] = { id });
       jpSet(art, ptr, clone(patch));
       return clone(art);
     },
-    removeElement: (t, id, ptr) => {
+    removeElement: async (t, id, ptr) => { await Promise.resolve();
       calls.push({ name: 'removeElement', args: [t, id, ptr] });
       const art = store[`${t}:${id}`];
       if (art) jpRemove(art, ptr);
       return clone(art || { id });
     },
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
-    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, success: true }; },
+    pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
-    publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); },
+    publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); return { type: t, id, shipped: true, publish: { kind: 'verified' } }; },
     setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
@@ -966,7 +967,13 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   const chart = tileComps.find((t) => t.type === 'chart');
   assert.strictEqual(chart.parameters.TargetEntityType, 'new_ticket', 'entity derived from the view');
   assert.ok(chart.parameters.ViewId, 'view id resolved');
-  assert.ok(chart.parameters.ChartId, 'chart visualization id resolved');
+  // `VisualizationId`, NOT `ChartId`. This assertion previously named the wrong parameter, so the
+  // suite agreed with a bug that failed the whole dashboards phase on a real environment with a
+  // 400: "The element 'parameters' has invalid child element 'ChartId'". A mock cannot validate
+  // FormXML against the platform schema, so the wire NAME has to be pinned explicitly here.
+  assert.ok(chart.parameters.VisualizationId, 'chart visualization id resolved');
+  assert.strictEqual(chart.parameters.ChartId, undefined,
+    'the rejected `ChartId` spelling is not emitted (it is not a legal <parameters> child)');
   const list = tileComps.find((t) => t.type === 'list');
   assert.strictEqual(list.name, 'Recent');
   assert.ok(list.parameters.ViewId);
@@ -1378,6 +1385,46 @@ test('idempotency: existing view/chart/form/app are reused, not re-created (no d
 });
 
 // --- Gap 1/2: update-in-place (reconcile) for forms + views; stock-form reuse -----------------
+
+// REBUILD IDEMPOTENCE — the highest-value regression net for the reconcile path, and the one the
+// suite was missing. Every other reconcile test starts from an EMPTY deployed form, so "re-add
+// everything" and "add only what's missing" produce identical call logs and no test can tell them
+// apart. Running the build twice against the SAME mock store makes the second pass observe the
+// first pass's artifacts, so a reconcile that has stopped reading the deployed form correctly
+// shows up as duplicate work.
+//
+// Concretely, this is the test that fails when a `provision.getArtifact(...)` in reconcileForm or
+// addSubgrids loses its `await`: the un-awaited Promise makes `formFieldLogicals` return `[]` and
+// `hasSubgrid` return false, so the second build re-adds every field and splices a second
+// sub-grid — on a real org, a visibly corrupted form behind a 2xx and a green build.
+test('REBUILD idempotency: a second build over the same deployed form re-adds no field and no duplicate sub-grid', async () => {
+  const spec = makeSpec();
+  // artifactsExist makes both passes reconcile the SAME 'form-existing' row; the deployed form
+  // starts empty, so pass 1 populates it and pass 2 must find its own work already done.
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const phases = ['solution', 'data-model', 'views', 'charts', 'forms'];
+
+  await runSdkBuild(spec, { sdk, apply: true, phases });
+  const firstPass = find(calls, 'addElement');
+  assert.ok(firstPass.length > 0, 'pass 1 populated the deployed form (otherwise pass 2 proves nothing)');
+
+  calls.length = 0; // same array the mock pushes into — measure ONLY the second pass
+  await runSdkBuild(spec, { sdk, apply: true, phases });
+
+  const readded = find(calls, 'addElement')
+    .flatMap((c) => (c.args[3] && c.args[3].cells) || [])
+    .filter((cell) => cell && cell.control && cell.control.fieldName)
+    .map((cell) => cell.control.fieldName);
+  assert.deepStrictEqual(readded, [],
+    `pass 2 re-added field(s) already on the deployed form: ${JSON.stringify(readded)} — the `
+    + 'reconcile is not reading the deployed form (check that every getArtifact is awaited)');
+
+  // A sub-grid is spliced as a whole SECTION, not a field cell, so it needs its own assertion.
+  const sections = find(calls, 'addElement').filter((c) => /\/sections$/.test(String(c.args[2])));
+  assert.deepStrictEqual(sections.map((c) => c.args[2]), [],
+    'pass 2 spliced another sub-grid section — hasSubgrid did not see the one pass 1 added');
+});
+
 test('form update-in-place: an existing form is reconciled (addField per spec field), not recreated', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
@@ -1770,8 +1817,8 @@ test('security phase: a spec with no personas makes no security calls', async ()
 
 test('resolvePhases honors only/skip/from/to', () => {
   assert.deepStrictEqual(resolvePhases({ only: ['views', 'charts'] }), ['views', 'charts']);
-  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security']);
-  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
+  assert.deepStrictEqual(resolvePhases({ skip: ['data-model', 'sample-data', 'publish'] }), ['solution', 'web-resources', 'views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security']);
+  assert.deepStrictEqual(resolvePhases({ from: 'views' }), ['views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
   assert.deepStrictEqual(resolvePhases({ to: 'data-model' }), ['solution', 'data-model']);
 });
 
@@ -2536,4 +2583,271 @@ test('pages: a single-app env passes the shared-page check (reads no other sitem
     assert.strictEqual(uploads.length, 1);
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('a by-value publish failure reaches the warn channel through the whole build', async () => {
+  // The unit tests pin reportPartialPush; this pins that the ENGINE is wired to it. Before the fix a
+  // build in which every publish failed reported ok:true with zero warnings and zero error events —
+  // proven by probe — because all nine call sites discarded the result. A wiring break would restore
+  // exactly that, and no unit test can see it.
+  const { sdk, calls } = mockSdk();
+  sdk.publishArtifact = async (type, id) => {
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    return { type, id, shipped: false, publish: { kind: 'failed', error: new Error('PublishXml 503') } };
+  };
+  const warnings = [];
+  const spec = makeSpec();
+  const result = await runSdkBuild(spec, { sdk, apply: true, publish: true, warn: (m) => warnings.push(m) });
+
+  assert.ok(result.ok, 'a failed publish does not fail the build — the writes committed');
+  assert.ok(calls.some((c) => c.name === 'publishArtifact'), 'the publish phase actually ran');
+  assert.ok(
+    warnings.some((w) => /publish .* FAILED/.test(w) && /PublishXml 503/.test(w)),
+    'the failure must surface with its cause; got: ' + JSON.stringify(warnings)
+  );
+});
+
+test('app.newLook writes the NewLookAlwaysOn app setting, scoped to the app and solution', async () => {
+  const { sdk, calls } = mockSdk();
+  const saved = [];
+  sdk.saveSettingValue = async (name, value, opts) => { saved.push({ name, value, opts }); };
+  const spec = makeSpec();
+  spec.app.newLook = true;
+
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  assert.strictEqual(saved.length, 1, 'exactly one setting write: ' + JSON.stringify(saved));
+  assert.strictEqual(saved[0].name, 'NewLookAlwaysOn');
+  assert.strictEqual(saved[0].value, 'true', 'the value is a STRING — Dataverse setting values are strings');
+  assert.ok(saved[0].opts.appUniqueName, 'scoped to the app, not the org');
+  assert.ok(saved[0].opts.solutionUniqueName, 'attributed to the solution so it travels on export/import');
+  assert.strictEqual(r.created.newLook, true);
+  void calls;
+});
+
+test('the new look is OPT-IN — absent or false writes nothing', async () => {
+  for (const value of [undefined, false]) {
+    const { sdk } = mockSdk();
+    const saved = [];
+    sdk.saveSettingValue = async (n, v, o) => { saved.push({ n, v, o }); };
+    const spec = makeSpec();
+    if (value !== undefined) spec.app.newLook = value;
+    const r = await runSdkBuild(spec, { sdk, apply: true });
+    assert.ok(r.ok);
+    assert.deepStrictEqual(saved, [], `newLook=${value} must write no setting`);
+  }
+});
+
+test('a failed new-look write does not fail the build, but is never reported as success', async () => {
+  // The definition is a platform feature that rolls out by tenant; a tenant without it must still get
+  // a working app on the classic shell rather than a failed build. But a silent success would be
+  // worse than the failure — the caller must be able to tell the difference.
+  const { sdk } = mockSdk();
+  sdk.saveSettingValue = async () => { throw new Error('setting definition not found'); };
+  const spec = makeSpec();
+  spec.app.newLook = true;
+  const warnings = [];
+  const r = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+
+  assert.ok(r.ok, 'the build still succeeds — the app is fully functional');
+  assert.strictEqual(r.created.newLook, false, 'and the result says plainly that it was NOT applied');
+  assert.ok(
+    warnings.some((w) => /new look/i.test(w) && /setting definition not found/.test(w)),
+    'the cause is surfaced: ' + JSON.stringify(warnings)
+  );
+});
+
+// The Wave 2 header/navigation refresh. Written through the SDK's dedicated
+// `setHeaderAndNavigationRefresh` rather than a raw setting write, because the encoding is a trap:
+// it is a `datatype = 0` (Number) TRI-STATE where ON is '2', not '1', and writing '1' is ACCEPTED by
+// the API and then silently fails to enable the feature. Delegating means the plugin cannot get that
+// wrong, and these tests pin the delegation rather than re-encoding the value here.
+test('app.headerNavigationRefresh delegates to the SDK API with the created app id', async () => {
+  const { sdk } = mockSdk();
+  const calls = [];
+  sdk.setHeaderAndNavigationRefresh = async (appId, enabled) => { calls.push({ appId, enabled }); return 'created'; };
+  const spec = makeSpec();
+  spec.app.headerNavigationRefresh = true;
+
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok, JSON.stringify(r.errors || []));
+  assert.strictEqual(calls.length, 1, 'exactly one call: ' + JSON.stringify(calls));
+  assert.strictEqual(calls[0].enabled, true);
+  assert.strictEqual(calls[0].appId, r.created.app, 'the APP MODULE id, not the unique name — the setting row is keyed by parentappmoduleid');
+  assert.strictEqual(r.created.headerNavigationRefresh, true);
+  assert.strictEqual(r.created.headerNavigationRefreshOutcome, 'created', 'the outcome is recorded verbatim so a caller can tell a fresh enable from a no-op re-run');
+});
+
+test('the header/navigation refresh is a DIFFERENT setting from the new look', async () => {
+  // Both are per-app settings and both can be on, but they are separate settingdefinition rows and
+  // enabling one must not enable the other. Conflating them would silently under-deliver whichever
+  // one the author actually asked for.
+  const { sdk } = mockSdk();
+  const saved = [];
+  const hdr = [];
+  sdk.saveSettingValue = async (name, value, opts) => { saved.push({ name, value, opts }); };
+  sdk.setHeaderAndNavigationRefresh = async (appId, enabled) => { hdr.push({ appId, enabled }); return 'created'; };
+
+  // newLook alone must not touch header/nav
+  const a = makeSpec(); a.app.newLook = true;
+  const ra = await runSdkBuild(a, { sdk, apply: true });
+  assert.ok(ra.ok);
+  assert.strictEqual(saved.length, 1, 'newLook wrote its own setting');
+  assert.deepStrictEqual(hdr, [], 'newLook must NOT enable the header/navigation refresh');
+  assert.strictEqual(ra.created.headerNavigationRefresh, undefined);
+
+  // header/nav alone must not touch newLook
+  saved.length = 0; hdr.length = 0;
+  const b = makeSpec(); b.app.headerNavigationRefresh = true;
+  const rb = await runSdkBuild(b, { sdk, apply: true });
+  assert.ok(rb.ok);
+  assert.strictEqual(hdr.length, 1, 'header/nav was written');
+  assert.deepStrictEqual(saved, [], 'the header/navigation refresh must NOT enable the new look');
+  assert.strictEqual(rb.created.newLook, undefined);
+
+  // both together: two independent writes
+  saved.length = 0; hdr.length = 0;
+  const c = makeSpec(); c.app.newLook = true; c.app.headerNavigationRefresh = true;
+  const rc = await runSdkBuild(c, { sdk, apply: true });
+  assert.ok(rc.ok);
+  assert.strictEqual(saved.length, 1, 'both set: new look written');
+  assert.strictEqual(hdr.length, 1, 'both set: header/nav written');
+  assert.strictEqual(rc.created.newLook, true);
+  assert.strictEqual(rc.created.headerNavigationRefresh, true);
+});
+
+test('the header/navigation refresh honours BOTH values — false actively disables', async () => {
+  // NOT symmetry for its own sake. Verified against the real vendored bundle (offline, by capturing
+  // the writes a push issues): the SDK defaults the app artifact's
+  // `headerAndNavigationRefresh` to TRUE and pushing a new app writes '2' (ON) unprompted, so the
+  // platform default is ON. Treating `false` as "do nothing" would silently leave the feature ON for
+  // an author who explicitly asked for it off — the exact silent-disagreement class this build keeps
+  // having to fix. So `false` must be an ACTIVE write of the OFF value.
+  for (const value of [true, false]) {
+    const { sdk } = mockSdk();
+    const calls = [];
+    sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'updated'; };
+    const spec = makeSpec();
+    spec.app.headerNavigationRefresh = value;
+    const r = await runSdkBuild(spec, { sdk, apply: true });
+    assert.ok(r.ok);
+    assert.strictEqual(calls.length, 1, `headerNavigationRefresh=${value} must issue exactly one write`);
+    assert.strictEqual(calls[0].e, value, `the requested value ${value} must be passed through, not coerced`);
+    assert.strictEqual(r.created.headerNavigationRefresh, value);
+  }
+});
+
+test('the header/navigation refresh is only touched when the author states a preference', async () => {
+  // Absent means "no opinion" — leave the platform default alone rather than fighting it.
+  const { sdk } = mockSdk();
+  const calls = [];
+  sdk.setHeaderAndNavigationRefresh = async (a, e) => { calls.push({ a, e }); return 'created'; };
+  const spec = makeSpec();
+  const r = await runSdkBuild(spec, { sdk, apply: true });
+  assert.ok(r.ok);
+  assert.deepStrictEqual(calls, [], 'an absent headerNavigationRefresh must make no call');
+  assert.strictEqual(r.created.headerNavigationRefresh, undefined);
+});
+
+test('a failed header/navigation write does not fail the build, but is never reported as success', async () => {
+  // Public preview, rolls out by tenant. The SDK throws a PLAIN Error (not an SdkError subclass)
+  // when the environment lacks the setting definition, so the catch here is deliberately broad.
+  const { sdk } = mockSdk();
+  sdk.setHeaderAndNavigationRefresh = async () => { throw new Error("App setting 'HeaderAndNavigationRefresh' is not available in this environment"); };
+  const spec = makeSpec();
+  spec.app.headerNavigationRefresh = true;
+  const warnings = [];
+
+  const r = await runSdkBuild(spec, { sdk, apply: true, warn: (m) => warnings.push(m) });
+  assert.ok(r.ok, 'a rolling-out preview setting must not fail an otherwise-good build');
+  // 'unknown', NOT false. On failure the row keeps whatever the platform defaulted it to — which for
+  // a new app is ON — so reporting `false` would be as wrong as reporting success.
+  assert.strictEqual(r.created.headerNavigationRefresh, 'unknown',
+    'a failed write reports the truth (unknown), not the value that was asked for and not its opposite');
+  assert.ok(
+    warnings.some((w) => /header and navigation refresh/i.test(w) && /not available in this environment/.test(w)),
+    'the real cause reaches the caller; got: ' + JSON.stringify(warnings)
+  );
+});
+
+test('app.headerNavigationRefresh must be a boolean', () => {
+  // A string "false" is truthy in JS and would silently turn the feature ON for an author who meant
+  // to disable it — the same trap the newLook validation exists to close.
+  for (const bad of ['true', 'false', 1, 0, {}, []]) {
+    const spec = makeSpec();
+    spec.app.headerNavigationRefresh = bad;
+    const v = validateAppSpec(spec);
+    assert.ok(
+      (v.errors || []).some((e) => /app.headerNavigationRefresh must be a boolean/.test(e)),
+      `headerNavigationRefresh=${JSON.stringify(bad)} must be rejected`
+    );
+  }
+  for (const good of [true, false, undefined]) {
+    const spec = makeSpec();
+    if (good !== undefined) spec.app.headerNavigationRefresh = good;
+    const v = validateAppSpec(spec);
+    assert.ok(!(v.errors || []).some((e) => /headerNavigationRefresh/.test(e)), `${good} must be accepted`);
+  }
+});
+
+// --- command buttons must be HANDED the record (live-measured) ----------------------------------
+//
+// `onclickeventjavascriptparameters` null means the function is invoked with NO arguments, so the
+// near-universal handler shape `function doThing(primaryControl) { primaryControl.getAttribute(…) }`
+// throws on its first property access and the button silently does nothing. Reported by a user as
+// "nothing happens when I press Escalate"; the build, the deployed rows and `--verify` all looked
+// perfect, because the failure is client-side only.
+//
+// The codes come from the platform's own maker-authored commands on a live org:
+//   form (location 0)    [{"type":5}]               PrimaryControl
+//   grid (location 1)    [{"type":12},{"type":24}]  SelectedControl + SelectedControlSelectedItemIds
+test('a JS command defaults to receiving the primary control', () => {
+  const spec = {
+    webResources: [{ name: 'x.js', type: 'js', content: '//' }],
+    commands: [{ entity: 'new_t', label: 'Go', library: 'x.js', function: 'Ns.go' }],
+  };
+  const def = commandDef('new_t', spec.commands, { 'x.js': 'wr-1' });
+  const control = def.commandBars[0].groups[0].controls[0];
+  assert.strictEqual(control.action.parameters, '[{"type":5,"value":null}]',
+    'without this the handler is called with no arguments and the button does nothing');
+});
+
+test('flyout CHILDREN also receive the primary control', () => {
+  // The children are the actual buttons a user clicks; missing parameters there is the same bug.
+  const cmds = [{
+    entity: 'new_t', label: 'Set status', type: 'FlyoutAnchor',
+    children: [{ label: 'Closed', library: 'x.js', function: 'Ns.close' }],
+  }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  const child = def.commandBars[0].groups[0].controls[0].children[0];
+  assert.strictEqual(child.action.parameters, '[{"type":5,"value":null}]');
+});
+
+test('a grid command gets the grid shape, not the form one', () => {
+  const cmds = [{ entity: 'new_t', label: 'Bulk', location: 'HomeTab', library: 'x.js', function: 'Ns.bulk' }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  assert.strictEqual(def.commandBars[0].groups[0].controls[0].action.parameters,
+    '[{"type":12,"value":null},{"type":24,"value":null}]');
+});
+
+test('an explicit parameters value always wins, including empty', () => {
+  // An author with a genuinely argument-less function must be able to say so.
+  const cmds = [
+    { entity: 'new_t', label: 'A', library: 'x.js', function: 'Ns.a', parameters: '[{"type":99,"value":1}]' },
+    { entity: 'new_t', label: 'B', library: 'x.js', function: 'Ns.b', parameters: '' },
+  ];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  const [a, b] = def.commandBars[0].groups[0].controls;
+  assert.strictEqual(a.action.parameters, '[{"type":99,"value":1}]');
+  assert.strictEqual(b.action.parameters, '');
+});
+
+test('a flyout ANCHOR has no action at all', () => {
+  // The anchor only opens the menu; giving it parameters would imply a handler it does not have.
+  const cmds = [{
+    entity: 'new_t', label: 'Menu', type: 'FlyoutAnchor',
+    children: [{ label: 'One', library: 'x.js', function: 'Ns.one' }],
+  }];
+  const def = commandDef('new_t', cmds, { 'x.js': 'wr-1' });
+  assert.strictEqual(def.commandBars[0].groups[0].controls[0].action, undefined);
 });

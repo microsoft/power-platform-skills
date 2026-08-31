@@ -37,6 +37,8 @@ Read:
 
 Determine:
 
+- Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
+- Every changed action's precondition, source-of-truth transition, and visible postcondition
 - Screens to modify and exact changes
 - Screens to create
 - Existing palette, layout strategy, variables, and data bindings to preserve
@@ -60,6 +62,11 @@ Present:
 
 ### App Changes
 [Exact App.pa.yaml changes, or "None"]
+
+### Functional Changes
+| Capability | Existing behavior | Required transition | Visible success |
+|------------|-------------------|---------------------|-----------------|
+| [Changed behavior] | [Current reachable path or gap] | [Source, stable ID, and exact postcondition] | [Bound receipt plus downstream observer] |
 
 ### Approach
 [How the edit preserves and extends the current app]
