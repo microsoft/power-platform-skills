@@ -4,6 +4,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createDataverseRequestExecutor } = require('./dataverse-request');
+const {
+  appendPlanningTelemetry,
+  createPlanningTelemetryCollector,
+} = require('./lib/dataverse-planning-telemetry');
+const {
+  DEFAULT_TTL_MS,
+  readInventoryCache,
+  writeInventoryCache,
+} = require('./dataverse-inventory-cache');
+const {
+  readArtifact: readPlanningTimingArtifact,
+  updatePlanningTiming,
+} = require('./planning-timings');
 
 const ENTITY_SELECT = [
   'LogicalName',
@@ -47,6 +60,39 @@ const ATTRIBUTE_SELECT = [
   'AttributeOf',
   'IsLogical',
 ].join(',');
+
+const BASE_METADATA_COLLECTIONS = [
+  {
+    property: 'Attributes',
+    result: 'attributes',
+    select: ATTRIBUTE_SELECT,
+    label: 'attributes',
+  },
+  {
+    property: 'ManyToOneRelationships',
+    result: 'manyToOneRelationships',
+    select: 'SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,IsManaged,CascadeConfiguration',
+    label: 'many-to-one relationships',
+  },
+  {
+    property: 'OneToManyRelationships',
+    result: 'oneToManyRelationships',
+    select: 'SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,IsManaged,CascadeConfiguration',
+    label: 'one-to-many relationships',
+  },
+  {
+    property: 'ManyToManyRelationships',
+    result: 'manyToManyRelationships',
+    select: 'SchemaName,Entity1LogicalName,Entity1IntersectAttribute,Entity2LogicalName,Entity2IntersectAttribute,IntersectEntityName,IsManaged',
+    label: 'many-to-many relationships',
+  },
+  {
+    property: 'Keys',
+    result: 'keys',
+    select: 'LogicalName,SchemaName,KeyAttributes,EntityKeyIndexStatus,IsManaged',
+    label: 'alternate keys',
+  },
+];
 
 const CHOICE_TYPE_BY_ATTRIBUTE = {
   Boolean: 'BooleanAttributeMetadata',
@@ -111,9 +157,33 @@ const GENERIC_CONCEPT_TOKENS = new Set([
   'workflows',
 ]);
 
+const LOW_INFORMATION_CONCEPT_TOKENS = new Set([
+  'current',
+  'date',
+  'document',
+  'expected',
+  'field',
+  'item',
+  'number',
+  'result',
+]);
+
+const CONCEPT_KINDS = new Set([
+  'action',
+  'attribute',
+  'constraint',
+  'entity',
+  'role',
+  'status',
+]);
+
 const MAX_TABLES_PER_CONCEPT = 3;
 const MAX_ADVISORY_DETAIL_TABLES = 40;
 const MAX_EXACT_NAME_TABLES = 50;
+const MAX_STRONG_COLLISION_DETAILS = 10;
+const MAX_READ_CONCURRENCY = 8;
+const AMBIGUOUS_SCORE_GAP = 25;
+const WEAK_MATCH_SCORE = 750;
 
 function parseArgs(argv) {
   const args = {};
@@ -138,6 +208,101 @@ function parseList(value) {
     .filter(Boolean))];
 }
 
+function parseReadConcurrency(value) {
+  if (value === undefined || value === null || value === '') return 1;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_READ_CONCURRENCY) {
+    throw new Error(`read concurrency must be an integer from 1 to ${MAX_READ_CONCURRENCY}`);
+  }
+  return parsed;
+}
+
+function mapWithConcurrency(items, initialConcurrency, worker, {
+  currentConcurrency = () => initialConcurrency,
+} = {}) {
+  if (!Array.isArray(items)) return Promise.reject(new Error('items must be an array'));
+  parseReadConcurrency(initialConcurrency);
+  if (typeof worker !== 'function') return Promise.reject(new Error('worker must be a function'));
+  const results = new Array(items.length);
+  if (items.length === 0) return Promise.resolve(results);
+  return new Promise((resolve, reject) => {
+    let active = 0;
+    let nextIndex = 0;
+    let firstError = null;
+
+    function dispatch() {
+      const cap = Math.max(1, Math.min(
+        initialConcurrency,
+        parseReadConcurrency(currentConcurrency()),
+      ));
+      while (!firstError && active < cap && nextIndex < items.length) {
+        const index = nextIndex++;
+        active += 1;
+        Promise.resolve(worker(items[index], index))
+          .then((result) => {
+            results[index] = result;
+          })
+          .catch((error) => {
+            firstError = firstError || error;
+          })
+          .finally(() => {
+            active -= 1;
+            if (active === 0 && (firstError || nextIndex >= items.length)) {
+              if (firstError) reject(firstError);
+              else resolve(results);
+              return;
+            }
+            dispatch();
+          });
+      }
+    }
+
+    dispatch();
+  });
+}
+
+function adaptiveReadRequest(request, initialConcurrency) {
+  let concurrency = parseReadConcurrency(initialConcurrency);
+  return {
+    currentConcurrency: () => concurrency,
+    request: async (...args) => {
+      const response = await request(...args);
+      if (response?.rateLimited) concurrency = Math.max(1, Math.floor(concurrency / 2));
+      return response;
+    },
+  };
+}
+
+function normalizeStructuredConcept(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Structured Dataverse concepts must be objects');
+  }
+  const phrase = String(value.phrase || '').trim();
+  const kind = String(value.kind || '').trim().toLowerCase();
+  if (!phrase) throw new Error('Structured Dataverse concept phrase is required');
+  if (!CONCEPT_KINDS.has(kind)) {
+    throw new Error(`Structured Dataverse concept kind is invalid: ${kind || '<missing>'}`);
+  }
+  return {
+    phrase,
+    kind,
+    discoverTable: value.discoverTable === undefined
+      ? kind === 'entity'
+      : Boolean(value.discoverTable),
+    evidence: value.evidence == null ? null : String(value.evidence),
+  };
+}
+
+function parseConcepts(args, fileSystem = fs) {
+  if (args['concepts-file'] && args.concepts) {
+    throw new Error('--concepts and --concepts-file are mutually exclusive');
+  }
+  if (!args['concepts-file']) return parseList(args.concepts);
+  const parsed = JSON.parse(fileSystem.readFileSync(path.resolve(args['concepts-file']), 'utf8'));
+  if (!Array.isArray(parsed)) throw new Error('--concepts-file must contain a JSON array');
+  return parsed.map(normalizeStructuredConcept);
+}
+
 function atomicWriteFile(file, content, fileSystem = fs) {
   fileSystem.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.tmp-${process.pid}-${Date.now()}`;
@@ -151,6 +316,23 @@ function atomicWriteFile(file, content, fileSystem = fs) {
 
 function atomicWriteJson(file, value, fileSystem = fs) {
   atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`, fileSystem);
+}
+
+function appendSnapshotPlanningTimings(file, snapshot, fileSystem = fs) {
+  const output = path.resolve(file);
+  const artifact = readPlanningTimingArtifact(output, fileSystem);
+  const measuredStages = snapshot.expansion
+    ? [['metadataExpansion', snapshot.timings.totalDurationMs]]
+    : [
+      ['metadataInventory', snapshot.timings.inventoryRetrievalMs],
+      ['metadataCandidateSelection', snapshot.timings.candidateSelectionMs],
+      ['metadataDetailLoading', snapshot.timings.detailLoadingMs],
+    ];
+  for (const [stage, durationMs] of measuredStages) {
+    updatePlanningTiming(artifact, { stage, action: 'record', durationMs });
+  }
+  atomicWriteJson(output, artifact, fileSystem);
+  return artifact;
 }
 
 function normalizeUrl(value) {
@@ -184,6 +366,63 @@ async function requestCollection(request, apiPath, label, { optional = false } =
     next = response.data?.['@odata.nextLink'] || null;
   }
   return values;
+}
+
+async function requestCombinedBaseMetadata(request, root, logicalName) {
+  const expand = BASE_METADATA_COLLECTIONS.map(
+    (collection) => `${collection.property}($select=${collection.select})`,
+  ).join(',');
+  const response = await request('GET', `${root}?$select=LogicalName&$expand=${expand}`);
+  if (response.status < 200 || response.status >= 300) {
+    const detail = response.error || JSON.stringify(response.data || {}) || 'unknown error';
+    const error = new Error(`${logicalName} combined base metadata failed (${response.status}): ${detail}`);
+    error.status = response.status;
+    error.metadataError = detail;
+    throw error;
+  }
+  const result = {};
+  for (const collection of BASE_METADATA_COLLECTIONS) {
+    const initial = response.data?.[collection.property];
+    if (!Array.isArray(initial)) {
+      throw new Error(
+        `${logicalName} combined base metadata omitted ${collection.property}`,
+      );
+    }
+    const values = [...initial];
+    let next = response.data?.[`${collection.property}@odata.nextLink`] || null;
+    while (next) {
+      const page = await request('GET', normalizeNextLink(next));
+      if (page.status < 200 || page.status >= 300) {
+        const detail = page.error || JSON.stringify(page.data || {}) || 'unknown error';
+        const error = new Error(
+          `${logicalName} ${collection.label} continuation failed (${page.status}): ${detail}`,
+        );
+        error.status = page.status;
+        error.metadataError = detail;
+        throw error;
+      }
+      if (!Array.isArray(page.data?.value)) {
+        throw new Error(`${logicalName} ${collection.label} continuation omitted value`);
+      }
+      values.push(...page.data.value);
+      next = page.data['@odata.nextLink'] || null;
+    }
+    result[collection.result] = values;
+  }
+  return result;
+}
+
+async function requestBaseMetadata(request, root, logicalName, combinedBaseRead = false) {
+  if (combinedBaseRead) return requestCombinedBaseMetadata(request, root, logicalName);
+  const result = {};
+  for (const collection of BASE_METADATA_COLLECTIONS) {
+    result[collection.result] = await requestCollection(
+      request,
+      `${root}/${collection.property}?$select=${collection.select}`,
+      `${logicalName} ${collection.label}`,
+    );
+  }
+  return result;
 }
 
 function logicalNameOf(entity) {
@@ -324,16 +563,34 @@ function isVersionedName(logicalName) {
 }
 
 function conceptDescriptor(value) {
-  const raw = String(value || '').trim().toLowerCase();
+  const structured = value && typeof value === 'object' && !Array.isArray(value)
+    ? normalizeStructuredConcept(value)
+    : null;
+  const raw = String(structured?.phrase ?? value ?? '').trim().toLowerCase();
   const aliases = CONCEPT_ALIASES[raw] || [];
   const tokens = normalizedTokens(raw);
   const aliasTokens = aliases.flatMap(normalizedTokens);
+  const kind = structured?.kind || 'legacy';
+  const discoverTable = structured?.discoverTable ?? true;
   return {
     raw,
+    kind,
+    discoverTable,
+    evidence: structured?.evidence || null,
+    typed: Boolean(structured),
     compactValues: [...new Set([compact(raw), ...aliases.map(compact)].filter((item) => item.length >= 3))],
     matchTokens: [...new Set([...tokens, ...aliasTokens])]
-      .filter((token) => token.length >= 3 && !GENERIC_CONCEPT_TOKENS.has(token)),
+      .filter((token) => token.length >= 3
+        && !GENERIC_CONCEPT_TOKENS.has(token)
+        && !(structured && LOW_INFORMATION_CONCEPT_TOKENS.has(token))),
   };
+}
+
+function matchClassFromReasons(reasons) {
+  for (const kind of ['exact', 'suffix', 'contains', 'token', 'partial-token']) {
+    if (reasons.some((reason) => reason.startsWith(`${kind}:`))) return kind;
+  }
+  return 'none';
 }
 
 function scoreEntityForConcept(entity, descriptor) {
@@ -366,13 +623,14 @@ function scoreEntityForConcept(entity, descriptor) {
     }
   }
 
-  if (score === 0) return { score: 0, reasons: [] };
+  if (score === 0) return { score: 0, reasons: [], matchClass: 'none' };
   if (isVersionedName(entity.LogicalName)) {
     score -= 300;
     reasons.push('version-penalty');
   }
   score -= Math.min(String(entity.LogicalName || '').length, 100) / 100;
-  return { score, reasons: [...new Set(reasons)] };
+  const uniqueReasons = [...new Set(reasons)];
+  return { score, reasons: uniqueReasons, matchClass: matchClassFromReasons(uniqueReasons) };
 }
 
 function compareCandidates(left, right, preferredFamily = null) {
@@ -391,7 +649,7 @@ function compareCandidates(left, right, preferredFamily = null) {
 function rankCandidatesByConcept(entities, concepts) {
   const preliminary = concepts.map((concept) => {
     const descriptor = conceptDescriptor(concept);
-    const candidates = entities
+    const candidates = descriptor.discoverTable ? entities
       .map((entity) => {
         const scored = scoreEntityForConcept(entity, descriptor);
         return {
@@ -401,9 +659,10 @@ function rankCandidatesByConcept(entities, concepts) {
           versioned: isVersionedName(entity.LogicalName),
           score: scored.score,
           reasons: scored.reasons,
+          matchClass: scored.matchClass,
         };
       })
-      .filter((candidate) => candidate.score > 0);
+      .filter((candidate) => candidate.score > 0) : [];
     return { concept, descriptor, candidates };
   });
 
@@ -446,9 +705,13 @@ function rankCandidatesByConcept(entities, concepts) {
         versioned: candidate.versioned,
         score: Number(candidate.score.toFixed(2)),
         reasons: candidate.reasons,
+        matchClass: candidate.matchClass,
       }));
     return {
-      concept: entry.concept,
+      concept: entry.descriptor.raw,
+      conceptKind: entry.descriptor.kind,
+      discoverTable: entry.descriptor.discoverTable,
+      skippedReason: entry.descriptor.discoverTable ? null : `concept-kind:${entry.descriptor.kind}`,
       normalizedTokens: entry.descriptor.matchTokens,
       preferredPublisherFamily: preferredFamily,
       candidates,
@@ -456,7 +719,7 @@ function rankCandidatesByConcept(entities, concepts) {
   });
 }
 
-function selectDetailedCandidates(entities, tableNames, concepts) {
+function selectLegacyDetailedCandidates(entities, tableNames, concepts) {
   const explicitNames = new Set(tableNames.map((value) => value.toLowerCase()));
   const rankings = rankCandidatesByConcept(entities, concepts);
   const selectedReasons = new Map();
@@ -588,6 +851,203 @@ function selectDetailedCandidates(entities, tableNames, concepts) {
   };
 }
 
+function typedCandidateIsAmbiguous(ranking) {
+  const [primary, alternative] = ranking.candidates;
+  if (!primary || !alternative) return false;
+  const scoreGap = primary.score - alternative.score;
+  return scoreGap <= AMBIGUOUS_SCORE_GAP
+    || primary.score < WEAK_MATCH_SCORE
+    || (primary.versioned && !alternative.versioned && scoreGap <= 300)
+    || (
+      primary.publisherFamily !== alternative.publisherFamily
+      && primary.matchClass === alternative.matchClass
+      && scoreGap <= AMBIGUOUS_SCORE_GAP
+    );
+}
+
+function selectStrongProposedCollisions(
+  entities,
+  proposedTableNames,
+  rankings,
+  selectedReasons,
+) {
+  const entitiesByName = new Map(entities.map((entity) => [
+    logicalNameOf(entity).toLowerCase(),
+    entity,
+  ]));
+  const candidates = [];
+  for (const logicalName of uniqueLogicalNames(proposedTableNames)) {
+    if (selectedReasons.has(logicalName)) continue;
+    const entity = entitiesByName.get(logicalName.toLowerCase());
+    if (!entity || !managedValue(entity.IsCustomizable) || isVersionedName(logicalName)) continue;
+    const displayTokens = normalizedTokens(labelText(entity.DisplayName))
+      .filter((token) => token.length >= 3 && !GENERIC_CONCEPT_TOKENS.has(token));
+    const displayCompact = displayTokens.join('');
+    const matchingRanking = rankings.find((ranking) => {
+      if (!ranking.discoverTable || ranking.conceptKind !== 'entity') return false;
+      const ranked = ranking.candidates.find(
+        (candidate) => candidate.logicalName.toLowerCase() === logicalName.toLowerCase(),
+      );
+      const rankOneExact = ranked?.rank === 1
+        && ['exact', 'suffix'].includes(ranked.matchClass);
+      const phraseCoverage = displayTokens.length >= 2
+        && displayCompact.length >= 8
+        && compact(ranking.concept).includes(displayCompact);
+      return rankOneExact || phraseCoverage;
+    });
+    if (matchingRanking) candidates.push({ entity, concept: matchingRanking.concept });
+  }
+  const selected = candidates
+    .sort((left, right) => logicalNameOf(left.entity).localeCompare(logicalNameOf(right.entity)))
+    .slice(0, MAX_STRONG_COLLISION_DETAILS);
+  for (const item of selected) {
+    selectedReasons.set(
+      logicalNameOf(item.entity),
+      new Set(['proposed-collision:strong-concept-phrase', `concept:${item.concept}`]),
+    );
+  }
+  return selected;
+}
+
+function selectTypedDetailedCandidates(
+  entities,
+  tableNames,
+  concepts,
+  { proposedTableNames = [], progressiveDetail = false } = {},
+) {
+  const explicitNames = new Set(tableNames.map((value) => value.toLowerCase()));
+  const rankings = rankCandidatesByConcept(entities, concepts);
+  const selectedReasons = new Map();
+  const primaryNames = new Set();
+  const ambiguityNames = new Set();
+  let exactCoveredConcepts = 0;
+  let unresolvedConcepts = 0;
+
+  function addReason(logicalName, reason) {
+    const current = selectedReasons.get(logicalName) || new Set();
+    current.add(reason);
+    selectedReasons.set(logicalName, current);
+  }
+
+  for (const entity of entities) {
+    if (!explicitNames.has(logicalNameOf(entity).toLowerCase())) continue;
+    addReason(logicalNameOf(entity), 'explicit-table');
+  }
+
+  for (const ranking of rankings) {
+    if (!ranking.discoverTable || ranking.conceptKind !== 'entity'
+      || ranking.candidates.length === 0) continue;
+    const exactCoverage = ranking.candidates.find((candidate) => (
+      explicitNames.has(candidate.logicalName.toLowerCase())
+      && (candidate.rank === 1 || ['exact', 'suffix'].includes(candidate.matchClass))
+    ));
+    if (exactCoverage) {
+      addReason(exactCoverage.logicalName, `concept:${ranking.concept}:exact-covered`);
+      exactCoveredConcepts += 1;
+      continue;
+    }
+    unresolvedConcepts += 1;
+    const primary = ranking.candidates.find(
+      (candidate) => !explicitNames.has(candidate.logicalName.toLowerCase()),
+    );
+    if (!primary) continue;
+    addReason(primary.logicalName, `concept:${ranking.concept}:primary`);
+    primaryNames.add(primary.logicalName);
+    if (typedCandidateIsAmbiguous(ranking)) {
+      const alternative = ranking.candidates.find((candidate) => (
+        candidate.logicalName !== primary.logicalName
+        && !explicitNames.has(candidate.logicalName.toLowerCase())
+      ));
+      if (alternative) {
+        addReason(alternative.logicalName, `concept:${ranking.concept}:ambiguous-alternative`);
+        ambiguityNames.add(alternative.logicalName);
+      }
+    }
+  }
+
+  const strongCollisions = selectStrongProposedCollisions(
+    entities,
+    proposedTableNames,
+    rankings,
+    selectedReasons,
+  );
+  const entityByName = new Map(entities.map((entity) => [logicalNameOf(entity), entity]));
+  const selectedEntities = [...selectedReasons.keys()]
+    .sort((left, right) => left.localeCompare(right))
+    .map((logicalName) => entityByName.get(logicalName))
+    .filter(Boolean);
+  const selectedNames = new Set(selectedEntities.map(logicalNameOf));
+  const consideredNames = new Set(rankings
+    .filter((ranking) => ranking.discoverTable && ranking.conceptKind === 'entity')
+    .flatMap((ranking) => ranking.candidates.slice(0, MAX_TABLES_PER_CONCEPT))
+    .map((candidate) => candidate.logicalName));
+  const candidateRanking = rankings.map((ranking) => ({
+    ...ranking,
+    candidates: ranking.candidates.map((candidate) => ({
+      ...candidate,
+      detailed: false,
+      detailStatus: selectedNames.has(candidate.logicalName) ? 'pending' : 'inventory-only',
+      detailFailure: null,
+      selectionEvidence: [...(selectedReasons.get(candidate.logicalName) || [])],
+    })),
+  }));
+  const requiredCandidates = selectedEntities.filter((entity) => (
+    selectedReasons.get(logicalNameOf(entity)).has('explicit-table')
+  )).length;
+  const advisoryCandidates = selectedEntities.length - requiredCandidates;
+  const candidateByName = new Map();
+  for (const candidate of rankings.flatMap((ranking) => ranking.candidates)) {
+    const current = candidateByName.get(candidate.logicalName);
+    if (!current || candidate.score > current.score) {
+      candidateByName.set(candidate.logicalName, candidate);
+    }
+  }
+  const detailLevels = new Map(selectedEntities.map((entity) => {
+    const logicalName = logicalNameOf(entity);
+    const reasons = selectedReasons.get(logicalName);
+    const candidate = candidateByName.get(logicalName);
+    const full = !progressiveDetail
+      || reasons.has('explicit-table')
+      || reasons.has('proposed-collision:strong-concept-phrase')
+      || (
+        candidate?.score >= WEAK_MATCH_SCORE
+        && ['exact', 'suffix', 'contains'].includes(candidate.matchClass)
+      );
+    return [logicalName, full ? 'full' : 'core'];
+  }));
+  return {
+    candidateRanking,
+    selectedEntities,
+    selectedEvidence: selectedEntities.map((entity) => ({
+      logicalName: logicalNameOf(entity),
+      reasons: [...selectedReasons.get(logicalNameOf(entity))].sort(),
+      detailLevel: detailLevels.get(logicalNameOf(entity)),
+    })),
+    detailLevels,
+    detailSelectionSummary: {
+      requiredCandidates,
+      advisoryCandidates,
+      exactCoveredConcepts,
+      unresolvedConcepts,
+      advisoryLimit: Math.max(MAX_ADVISORY_DETAIL_TABLES, advisoryCandidates),
+      primaryCandidates: primaryNames.size,
+      ambiguityCandidates: [...ambiguityNames]
+        .filter((logicalName) => !primaryNames.has(logicalName)).length,
+      strongCollisionCandidates: strongCollisions.length,
+      deferredCandidates: [...consideredNames]
+        .filter((logicalName) => !selectedNames.has(logicalName)).length,
+      coreCandidates: [...detailLevels.values()].filter((value) => value === 'core').length,
+      fullCandidates: [...detailLevels.values()].filter((value) => value === 'full').length,
+    },
+  };
+}
+
+function selectDetailedCandidates(entities, tableNames, concepts, options = {}) {
+  return concepts.some((concept) => concept && typeof concept === 'object')
+    ? selectTypedDetailedCandidates(entities, tableNames, concepts, options)
+    : selectLegacyDetailedCandidates(entities, tableNames, concepts);
+}
+
 function normalizeDetailLoadFailure(entity, reasons, error) {
   const status = Number(error?.status);
   return {
@@ -600,7 +1060,10 @@ function normalizeDetailLoadFailure(entity, reasons, error) {
 }
 
 function applyDetailLoadOutcomes(candidateRanking, selectedEvidence, tables, failures) {
-  const loadedNames = new Set(tables.map((table) => table.logicalName.toLowerCase()));
+  const loadedByName = new Map(tables.map((table) => [
+    table.logicalName.toLowerCase(),
+    table.detailLevel || 'full',
+  ]));
   const failureByName = new Map(
     failures.map((failure) => [failure.logicalName.toLowerCase(), failure]),
   );
@@ -610,18 +1073,20 @@ function applyDetailLoadOutcomes(candidateRanking, selectedEvidence, tables, fai
       candidates: ranking.candidates.map((candidate) => {
         const key = candidate.logicalName.toLowerCase();
         const failure = failureByName.get(key) || null;
-        const detailed = loadedNames.has(key);
+        const detailLevel = loadedByName.get(key) || null;
+        const detailed = Boolean(detailLevel);
         return {
           ...candidate,
           detailed,
           detailStatus: detailed
-            ? 'loaded'
+            ? detailLevel === 'core' ? 'loaded-core' : 'loaded'
             : failure
               ? 'unavailable'
               : candidate.selectionEvidence?.length
                 ? 'pending'
                 : 'inventory-only',
           detailFailure: failure,
+          detailLevel,
         };
       }),
     })),
@@ -632,8 +1097,11 @@ function applyDetailLoadOutcomes(candidateRanking, selectedEvidence, tables, fai
         ...item,
         required: item.reasons.includes('explicit-table')
           || item.reasons.includes('explicit-expansion'),
-        detailStatus: loadedNames.has(key) ? 'loaded' : failure ? 'unavailable' : 'pending',
+        detailStatus: loadedByName.has(key)
+          ? loadedByName.get(key) === 'core' ? 'loaded-core' : 'loaded'
+          : failure ? 'unavailable' : 'pending',
         detailFailure: failure,
+        detailLevel: loadedByName.get(key) || null,
       };
     }),
   };
@@ -713,54 +1181,46 @@ function relationshipCount(table) {
     + (table.manyToManyRelationships?.length || 0);
 }
 
-async function loadDetailedEntity(request, entity) {
+async function loadDetailedEntity(request, entity, {
+  detailLevel = 'full',
+  combinedBaseRead = false,
+} = {}) {
+  if (!['core', 'full'].includes(detailLevel)) {
+    throw new Error(`Unsupported detail level: ${detailLevel}`);
+  }
+  const fullDetail = detailLevel === 'full';
   const logicalName = entity.LogicalName;
   const root = `EntityDefinitions(LogicalName='${odataString(logicalName)}')`;
-  const attributes = await requestCollection(
-    request,
-    `${root}/Attributes?$select=${ATTRIBUTE_SELECT}`,
-    `${logicalName} attributes`,
-  );
-  const manyToOneRelationships = await requestCollection(
-    request,
-    `${root}/ManyToOneRelationships?$select=SchemaName,ReferencingAttribute,ReferencedEntity,ReferencedAttribute,IsManaged,CascadeConfiguration`,
-    `${logicalName} many-to-one relationships`,
-  );
-  const oneToManyRelationships = await requestCollection(
-    request,
-    `${root}/OneToManyRelationships?$select=SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedAttribute,IsManaged,CascadeConfiguration`,
-    `${logicalName} one-to-many relationships`,
-  );
-  const manyToManyRelationships = await requestCollection(
-    request,
-    `${root}/ManyToManyRelationships?$select=SchemaName,Entity1LogicalName,Entity1IntersectAttribute,Entity2LogicalName,Entity2IntersectAttribute,IntersectEntityName,IsManaged`,
-    `${logicalName} many-to-many relationships`,
-  );
-  const keys = await requestCollection(
-    request,
-    `${root}/Keys?$select=LogicalName,SchemaName,KeyAttributes,EntityKeyIndexStatus,IsManaged`,
-    `${logicalName} alternate keys`,
-  );
+  const {
+    attributes,
+    manyToOneRelationships,
+    oneToManyRelationships,
+    manyToManyRelationships,
+    keys,
+  } = await requestBaseMetadata(request, root, logicalName, combinedBaseRead);
 
   const choices = new Map();
   const choiceTypes = [...new Set(attributes
     .map(choiceMetadataType)
     .filter(Boolean))];
-  for (const type of choiceTypes) {
-    const metadata = await requestCollection(
-      request,
-      `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName&$expand=OptionSet,GlobalOptionSet`,
-      `${logicalName} ${type}`,
-    );
-    for (const item of metadata) {
-      choices.set(item.LogicalName, {
-        options: normalizeChoiceOptions(item),
-      });
+  if (fullDetail) {
+    for (const type of choiceTypes) {
+      const metadata = await requestCollection(
+        request,
+        `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName&$expand=OptionSet,GlobalOptionSet`,
+        `${logicalName} ${type}`,
+      );
+      for (const item of metadata) {
+        choices.set(item.LogicalName, {
+          options: normalizeChoiceOptions(item),
+        });
+      }
     }
   }
 
   const lookups = new Map();
-  if (attributes.some((attribute) => attribute.AttributeType === 'Lookup')) {
+  const hasLookups = attributes.some((attribute) => attribute.AttributeType === 'Lookup');
+  if (fullDetail && hasLookups) {
     const lookupMetadata = await requestCollection(
       request,
       `${root}/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets`,
@@ -771,28 +1231,31 @@ async function loadDetailedEntity(request, entity) {
 
   const ordinaryConstraints = new Map();
   const ordinaryTypes = [...new Set(attributes.map(ordinaryMetadataType).filter(Boolean))];
-  for (const type of ordinaryTypes) {
-    const fields = ORDINARY_METADATA_FIELDS_BY_TYPE[type];
-    const metadata = await requestCollection(
-      request,
-      `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName,${fields.join(',')}`,
-      `${logicalName} ${type} ordinary metadata`,
-    );
-    for (const item of metadata) {
-      const constraints = {};
-      for (const field of fields) {
-        if (hasOwn(item, field)) {
-          constraints[lowerCamel(field)] = normalizeTypedConstraint(item[field]);
+  if (fullDetail) {
+    for (const type of ordinaryTypes) {
+      const fields = ORDINARY_METADATA_FIELDS_BY_TYPE[type];
+      const metadata = await requestCollection(
+        request,
+        `${root}/Attributes/Microsoft.Dynamics.CRM.${type}?$select=LogicalName,${fields.join(',')}`,
+        `${logicalName} ${type} ordinary metadata`,
+      );
+      for (const item of metadata) {
+        const constraints = {};
+        for (const field of fields) {
+          if (hasOwn(item, field)) {
+            constraints[lowerCamel(field)] = normalizeTypedConstraint(item[field]);
+          }
         }
+        ordinaryConstraints.set(item.LogicalName, constraints);
       }
-      ordinaryConstraints.set(item.LogicalName, constraints);
     }
   }
 
   const computedMetadata = new Map();
-  for (const attribute of attributes.filter(
+  const computedAttributes = attributes.filter(
     (item) => [1, 2, 3].includes(normalizeIntegerMetadata(item.SourceType)),
-  )) {
+  );
+  for (const attribute of fullDetail ? computedAttributes : []) {
     if (!attribute.MetadataId) {
       computedMetadata.set(attribute.LogicalName, {
         sourceType: normalizeIntegerMetadata(attribute.SourceType),
@@ -879,6 +1342,13 @@ async function loadDetailedEntity(request, entity) {
     }
   }
 
+  const missingDetailClasses = detailLevel === 'full' ? [] : [
+    ...(choiceTypes.length ? ['choice-options'] : []),
+    ...(hasLookups ? ['lookup-targets'] : []),
+    ...(ordinaryTypes.length ? ['typed-constraints'] : []),
+    ...(computedAttributes.length ? ['computed-metadata'] : []),
+  ];
+  const effectiveDetailLevel = missingDetailClasses.length === 0 ? 'full' : detailLevel;
   const table = {
     logicalName,
     schemaName: entity.SchemaName,
@@ -908,6 +1378,8 @@ async function loadDetailedEntity(request, entity) {
       entity.CanBeRelatedEntityInRelationship,
     ),
     canBeInManyToMany: managedValue(entity.CanBeInManyToMany),
+    detailLevel: effectiveDetailLevel,
+    missingDetailClasses: effectiveDetailLevel === 'full' ? [] : missingDetailClasses,
     columns: attributes.map((attribute) => {
       const computed = computedMetadata.get(attribute.LogicalName) || null;
       return {
@@ -1070,6 +1542,26 @@ function validateSnapshot(snapshot, expected = {}) {
   }
   if (!Array.isArray(snapshot?.inventory)) errors.push('inventory must be an array');
   if (!Array.isArray(snapshot?.tables)) errors.push('tables must be an array');
+  if (Array.isArray(snapshot?.tables)) {
+    for (const [index, table] of snapshot.tables.entries()) {
+      const detailLevel = table?.detailLevel || 'full';
+      const missingDetailClasses = table?.missingDetailClasses || [];
+      if (!['core', 'full'].includes(detailLevel)) {
+        errors.push(`tables[${index}].detailLevel must be core or full`);
+      }
+      if (!Array.isArray(missingDetailClasses)
+        || missingDetailClasses.some((value) => typeof value !== 'string' || !value)) {
+        errors.push(`tables[${index}].missingDetailClasses must be a string array`);
+      } else if (detailLevel === 'core' && missingDetailClasses.length === 0) {
+        errors.push(`tables[${index}] core detail must identify missing metadata classes`);
+      } else if (detailLevel === 'full' && missingDetailClasses.length > 0) {
+        errors.push(`tables[${index}] full detail cannot list missing metadata classes`);
+      }
+      if (snapshot.purpose === 'execution-reconciliation' && detailLevel !== 'full') {
+        errors.push(`tables[${index}] execution reconciliation requires full detail`);
+      }
+    }
+  }
   if (!Array.isArray(snapshot?.candidateRanking)) errors.push('candidateRanking must be an array');
   if (!isObject(snapshot?.inventoryFacts)) {
     errors.push('inventoryFacts must be an object');
@@ -1286,6 +1778,12 @@ async function createSnapshot({
   tableNames = [],
   proposedTableNames = [],
   concepts = [],
+  progressiveDetail = false,
+  combinedBaseRead = false,
+  readConcurrency = 1,
+  inventory = null,
+  inventorySource = null,
+  inventoryCacheAgeMs = null,
   request,
   nowMs = () => Date.now(),
   nowIso = () => new Date().toISOString(),
@@ -1295,16 +1793,18 @@ async function createSnapshot({
   if (typeof request !== 'function') throw new Error('request is required');
 
   const totalStartedAt = nowMs();
-  const customizableEntities = await requestCollection(
-    request,
-    [
-      'EntityDefinitions?',
-      `$select=${ENTITY_SELECT}`,
-      '&$filter=IsCustomizable/Value eq true',
-      '&LabelLanguages=1033',
-    ].join(''),
-    'Customizable-table inventory',
-  );
+  const customizableEntities = Array.isArray(inventory)
+    ? inventory.map((item) => (item.logicalName ? inventoryEntityToRaw(item) : item))
+    : await requestCollection(
+      request,
+      [
+        'EntityDefinitions?',
+        `$select=${ENTITY_SELECT}`,
+        '&$filter=IsCustomizable/Value eq true',
+        '&LabelLanguages=1033',
+      ].join(''),
+      'Customizable-table inventory',
+    );
   const requiredNames = uniqueLogicalNames(tableNames);
   const proposedNames = uniqueLogicalNames(proposedTableNames);
   // Required exact-name discovery and proposed-name collision checks share one
@@ -1346,7 +1846,10 @@ async function createSnapshot({
     elapsedMs: inventoryCompletedAt - totalStartedAt,
   });
 
-  const selection = selectDetailedCandidates(entities, requiredNames, concepts);
+  const selection = selectDetailedCandidates(entities, requiredNames, concepts, {
+    proposedTableNames: proposedNames,
+    progressiveDetail,
+  });
   const selectionCompletedAt = nowMs();
   onProgress({
     milestoneId: 'candidates-selected',
@@ -1369,18 +1872,33 @@ async function createSnapshot({
     selection.selectedEvidence.map((item) => [item.logicalName.toLowerCase(), item]),
   );
   const requiredNameSet = new Set(requiredNames.map((name) => name.toLowerCase()));
-  for (const entity of selection.selectedEntities) {
-    try {
-      tables.push(await loadDetailedEntity(request, entity));
-    } catch (error) {
-      if (requiredNameSet.has(entity.LogicalName.toLowerCase())) throw error;
-      const evidence = selectedEvidenceByName.get(entity.LogicalName.toLowerCase());
-      detailLoadFailures.push(normalizeDetailLoadFailure(
-        entity,
-        evidence?.reasons || [],
-        error,
-      ));
-    }
+  const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
+  const outcomes = await mapWithConcurrency(
+    selection.selectedEntities,
+    parseReadConcurrency(readConcurrency),
+    async (entity) => {
+      try {
+        return {
+          table: await loadDetailedEntity(adaptiveRead.request, entity, {
+            detailLevel: selection.detailLevels?.get(entity.LogicalName) || 'full',
+            combinedBaseRead,
+          }),
+          failure: null,
+        };
+      } catch (error) {
+        if (requiredNameSet.has(entity.LogicalName.toLowerCase())) throw error;
+        const evidence = selectedEvidenceByName.get(entity.LogicalName.toLowerCase());
+        return {
+          table: null,
+          failure: normalizeDetailLoadFailure(entity, evidence?.reasons || [], error),
+        };
+      }
+    },
+    { currentConcurrency: adaptiveRead.currentConcurrency },
+  );
+  for (const outcome of outcomes) {
+    if (outcome.table) tables.push(outcome.table);
+    if (outcome.failure) detailLoadFailures.push(outcome.failure);
   }
   const detailCompletedAt = nowMs();
   onProgress({
@@ -1434,6 +1952,12 @@ async function createSnapshot({
       loadedCandidates: tables.length,
       failedCandidates: detailLoadFailures.length,
       ...selection.detailSelectionSummary,
+      ...(combinedBaseRead ? { baseReadMode: 'combined' } : {}),
+      ...(parseReadConcurrency(readConcurrency) !== 1
+        || adaptiveRead.currentConcurrency() !== 1 ? {
+          readConcurrency: parseReadConcurrency(readConcurrency),
+          finalReadConcurrency: adaptiveRead.currentConcurrency(),
+        } : {}),
     },
     proposedNameChecks,
     missingProposedTables: proposedNameChecks.missing,
@@ -1450,6 +1974,10 @@ async function createSnapshot({
       detailLoadingMs: detailCompletedAt - selectionCompletedAt,
       totalDurationMs: totalCompletedAt - totalStartedAt,
     },
+    ...(inventorySource ? {
+      inventorySource,
+      inventoryCacheAgeMs: inventorySource === 'cache' ? inventoryCacheAgeMs : null,
+    } : {}),
   };
 }
 
@@ -1458,6 +1986,8 @@ async function createReconciliationSnapshot({
   tenantId,
   tableNames = [],
   proposedTableNames = [],
+  combinedBaseRead = false,
+  readConcurrency = 1,
   request,
   nowMs = () => Date.now(),
   nowIso = () => new Date().toISOString(),
@@ -1501,10 +2031,13 @@ async function createReconciliationSnapshot({
     elapsedMs: inventoryCompletedAt - totalStartedAt,
   });
 
-  const tables = [];
-  for (const entity of entitiesToLoad) {
-    tables.push(await loadDetailedEntity(request, entity));
-  }
+  const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
+  const tables = await mapWithConcurrency(
+    entitiesToLoad,
+    parseReadConcurrency(readConcurrency),
+    (entity) => loadDetailedEntity(adaptiveRead.request, entity, { combinedBaseRead }),
+    { currentConcurrency: adaptiveRead.currentConcurrency },
+  );
   const detailCompletedAt = nowMs();
   onProgress({
     milestoneId: 'reconciliation-details-loaded',
@@ -1561,6 +2094,12 @@ async function createReconciliationSnapshot({
       exactCoveredConcepts: 0,
       unresolvedConcepts: 0,
       advisoryLimit: 0,
+      ...(combinedBaseRead ? { baseReadMode: 'combined' } : {}),
+      ...(parseReadConcurrency(readConcurrency) !== 1
+        || adaptiveRead.currentConcurrency() !== 1 ? {
+          readConcurrency: parseReadConcurrency(readConcurrency),
+          finalReadConcurrency: adaptiveRead.currentConcurrency(),
+        } : {}),
     },
     proposedNameChecks,
     missingProposedTables: proposedNameChecks.missing,
@@ -1599,10 +2138,14 @@ function inventoryEntityToRaw(entity) {
     PrimaryIdAttribute: entity.primaryIdAttribute,
     PrimaryNameAttribute: entity.primaryNameAttribute,
     OwnershipType: entity.ownershipType,
-    HasActivities: entity.hasActivities,
-    HasNotes: entity.hasNotes,
-    IsAvailableOffline: entity.isAvailableOffline,
-    ChangeTrackingEnabled: entity.changeTrackingEnabled,
+    ...(entity.hasActivities == null ? {} : { HasActivities: entity.hasActivities }),
+    ...(entity.hasNotes == null ? {} : { HasNotes: entity.hasNotes }),
+    ...(entity.isAvailableOffline == null
+      ? {}
+      : { IsAvailableOffline: entity.isAvailableOffline }),
+    ...(entity.changeTrackingEnabled == null
+      ? {}
+      : { ChangeTrackingEnabled: entity.changeTrackingEnabled }),
     IsCustomEntity: entity.customEntity,
     IsManaged: entity.managed,
     IsCustomizable: { Value: entity.customizable },
@@ -1617,10 +2160,16 @@ function inventoryEntityToRaw(entity) {
   };
 }
 
+function cacheablePlanningInventory(snapshot) {
+  return (snapshot.inventory || []).filter((entity) => entity.customizable === true);
+}
+
 async function expandSnapshot({
   snapshot,
   tableNames = [],
   proposedTableNames = [],
+  combinedBaseRead = false,
+  readConcurrency = 1,
   request,
   nowMs = () => Date.now(),
   nowIso = () => new Date().toISOString(),
@@ -1647,11 +2196,14 @@ async function expandSnapshot({
   const inventoryByName = new Map(
     rawInventory.map((entity) => [logicalNameOf(entity).toLowerCase(), entity]),
   );
-  const existingDetailed = new Map(
+  const existingTables = new Map(
     snapshot.tables.map((table) => [table.logicalName.toLowerCase(), table]),
   );
   const entitiesToLoad = requestedNames
-    .filter((logicalName) => !existingDetailed.has(logicalName.toLowerCase()))
+    .filter((logicalName) => {
+      const existing = existingTables.get(logicalName.toLowerCase());
+      return !existing || existing.detailLevel === 'core';
+    })
     .map((logicalName) => inventoryByName.get(logicalName.toLowerCase()))
     .filter(Boolean)
     .map((entity) => (entity.logicalName ? inventoryEntityToRaw(entity) : entity));
@@ -1688,8 +2240,13 @@ async function expandSnapshot({
     elapsedMs: selectionCompletedAt - totalStartedAt,
   });
 
-  const loadedTables = [];
-  for (const entity of entitiesToLoad) loadedTables.push(await loadDetailedEntity(request, entity));
+  const adaptiveRead = adaptiveReadRequest(request, readConcurrency);
+  const loadedTables = await mapWithConcurrency(
+    entitiesToLoad,
+    parseReadConcurrency(readConcurrency),
+    (entity) => loadDetailedEntity(adaptiveRead.request, entity, { combinedBaseRead }),
+    { currentConcurrency: adaptiveRead.currentConcurrency },
+  );
   const detailCompletedAt = nowMs();
   onProgress({
     milestoneId: 'expansion-loaded',
@@ -1701,10 +2258,16 @@ async function expandSnapshot({
   });
   const totalCompletedAt = nowMs();
 
-  const detailedNames = new Set([
-    ...snapshot.tables.map((table) => table.logicalName),
-    ...loadedTables.map((table) => table.logicalName),
-  ].map((logicalName) => logicalName.toLowerCase()));
+  const mergedTableMap = new Map(snapshot.tables.map((table) => [
+    table.logicalName.toLowerCase(),
+    table,
+  ]));
+  for (const table of loadedTables) mergedTableMap.set(table.logicalName.toLowerCase(), table);
+  const mergedTables = [...mergedTableMap.values()]
+    .sort((left, right) => left.logicalName.localeCompare(right.logicalName));
+  const detailedNames = new Set(mergedTables
+    .filter((table) => (table.detailLevel || 'full') === 'full')
+    .map((table) => table.logicalName.toLowerCase()));
   const expandedEvidence = new Map((snapshot.selectedCandidateEvidence || []).map((item) => [
     item.logicalName.toLowerCase(),
     { logicalName: item.logicalName, reasons: new Set(item.reasons) },
@@ -1729,7 +2292,8 @@ async function expandSnapshot({
     rawInventory.map((entity) => [logicalNameOf(entity).toLowerCase(), logicalNameOf(entity)]),
   );
   const allDetailedNames = new Map(
-    [...snapshot.tables, ...loadedTables]
+    mergedTables
+      .filter((table) => (table.detailLevel || 'full') === 'full')
       .map((table) => [table.logicalName.toLowerCase(), table.logicalName]),
   );
   const remainingDetailLoadFailures = (snapshot.detailLoadFailures || []).filter(
@@ -1744,7 +2308,7 @@ async function expandSnapshot({
   const detailOutcomes = applyDetailLoadOutcomes(
     snapshot.candidateRanking,
     expandedSelectedEvidence,
-    [...snapshot.tables, ...loadedTables],
+    mergedTables,
     remainingDetailLoadFailures,
   );
 
@@ -1789,14 +2353,11 @@ async function expandSnapshot({
       }),
     })),
     selectedCandidateEvidence: detailOutcomes.selectedCandidateEvidence,
-    tables: [...snapshot.tables, ...loadedTables]
-      .sort((left, right) => left.logicalName.localeCompare(right.logicalName)),
+    tables: mergedTables,
     detailLoadFailures: remainingDetailLoadFailures,
     detailLoadSummary: {
-      attemptedCandidates: snapshot.tables.length
-        + loadedTables.length
-        + remainingDetailLoadFailures.length,
-      loadedCandidates: snapshot.tables.length + loadedTables.length,
+      attemptedCandidates: mergedTables.length + remainingDetailLoadFailures.length,
+      loadedCandidates: mergedTables.length,
       failedCandidates: remainingDetailLoadFailures.length,
       requiredCandidates: allExactNames.length,
       advisoryCandidates: snapshot.detailLoadSummary?.advisoryCandidates || 0,
@@ -1804,6 +2365,12 @@ async function expandSnapshot({
       unresolvedConcepts: snapshot.detailLoadSummary?.unresolvedConcepts || 0,
       advisoryLimit: snapshot.detailLoadSummary?.advisoryLimit
         || MAX_ADVISORY_DETAIL_TABLES,
+      ...(combinedBaseRead ? { baseReadMode: 'combined' } : {}),
+      ...(parseReadConcurrency(readConcurrency) !== 1
+        || adaptiveRead.currentConcurrency() !== 1 ? {
+          readConcurrency: parseReadConcurrency(readConcurrency),
+          finalReadConcurrency: adaptiveRead.currentConcurrency(),
+        } : {}),
     },
     proposedNameChecks,
     missingProposedTables: proposedNameChecks.missing,
@@ -1827,7 +2394,12 @@ async function expandSnapshot({
       inventoryReused: true,
       requestedTables: requestedNames,
       loadedTables: loadedRequestedTables,
-      newlyLoadedTables: loadedTables.map((table) => table.logicalName),
+      newlyLoadedTables: loadedTables
+        .filter((table) => !existingTables.has(table.logicalName.toLowerCase()))
+        .map((table) => table.logicalName),
+      upgradedTables: loadedTables
+        .filter((table) => existingTables.get(table.logicalName.toLowerCase())?.detailLevel === 'core')
+        .map((table) => table.logicalName),
       unavailableTables: unavailableRequestedTables,
       attemptedDetailedCandidates: entitiesToLoad.length,
       loadedDetailedCandidates: loadedTables.length,
@@ -1836,11 +2408,16 @@ async function expandSnapshot({
   };
 }
 
-function createCliRequest(args, createExecutor = createDataverseRequestExecutor) {
+function createCliRequest(
+  args,
+  createExecutor = createDataverseRequestExecutor,
+  executorOptions = {},
+) {
   return createExecutor({
     environmentUrl: args['env-url'],
     tenantId: args['tenant-id'],
     solution: args.solution || null,
+    ...executorOptions,
   });
 }
 
@@ -1850,21 +2427,50 @@ async function main() {
     process.stderr.write(
       'Usage: node create-dataverse-snapshot.js --env-url <url> --tenant-id <id> --output <json> '
       + '[--tables <logical-name,...>] [--proposed-tables <logical-name,...>] '
-      + '[--concepts <domain-term,...>] [--solution <unique-name>] '
-      + '[--base-snapshot <existing-json>] [--reconcile-exact]\n',
+      + '[--concepts <domain-term,...> | --concepts-file <json>] [--solution <unique-name>] '
+      + '[--base-snapshot <existing-json>] [--reconcile-exact] [--progressive-detail] '
+      + '[--combined-base-read] '
+      + '[--read-concurrency <1-8>] [--inventory-cache <json>] '
+      + '[--inventory-cache-ttl-ms <number>] [--telemetry-output <json>] '
+      + '[--planning-timings-output <json>]\n',
     );
     process.exit(1);
   }
   const progress = (event) => {
     process.stderr.write(`DATAVERSE_SNAPSHOT_PROGRESS ${JSON.stringify(event)}\n`);
   };
-  const request = createCliRequest(args);
+  const telemetry = args['telemetry-output']
+    ? createPlanningTelemetryCollector()
+    : null;
+  const request = createCliRequest(args, createDataverseRequestExecutor, {
+    onTelemetry: telemetry ? (event) => telemetry.record(event) : null,
+  });
   const baseSnapshot = args['base-snapshot']
     ? JSON.parse(fs.readFileSync(path.resolve(args['base-snapshot']), 'utf8'))
     : null;
   if (baseSnapshot && args['reconcile-exact']) {
     throw new Error('--base-snapshot and --reconcile-exact are mutually exclusive');
   }
+  const readConcurrency = parseReadConcurrency(args['read-concurrency']);
+  const inventoryCachePath = args['inventory-cache']
+    ? path.resolve(args['inventory-cache'])
+    : null;
+  const inventoryCacheTtlMs = args['inventory-cache-ttl-ms'] === undefined
+    ? DEFAULT_TTL_MS
+    : Number(args['inventory-cache-ttl-ms']);
+  if (!Number.isFinite(inventoryCacheTtlMs) || inventoryCacheTtlMs <= 0) {
+    throw new Error('--inventory-cache-ttl-ms must be a positive number');
+  }
+  const cacheContext = {
+    environmentUrl: args['env-url'],
+    tenantId: args['tenant-id'],
+    solution: args.solution || 'Default',
+    apiVersion: '9.2',
+    inventorySchemaVersion: 3,
+  };
+  const cacheRead = inventoryCachePath && !baseSnapshot && !args['reconcile-exact']
+    ? readInventoryCache(inventoryCachePath, cacheContext, { ttlMs: inventoryCacheTtlMs })
+    : { hit: false, reason: 'not-applicable', inventory: null };
   if (baseSnapshot) {
     const validation = validateSnapshot(baseSnapshot, {
       environmentUrl: args['env-url'],
@@ -1880,6 +2486,8 @@ async function main() {
       tenantId: args['tenant-id'],
       tableNames: parseList(args.tables),
       proposedTableNames: parseList(args['proposed-tables']),
+      combinedBaseRead: Boolean(args['combined-base-read']),
+      readConcurrency,
       request,
       onProgress: progress,
     })
@@ -1888,6 +2496,8 @@ async function main() {
       snapshot: baseSnapshot,
       tableNames: parseList(args.tables),
       proposedTableNames: parseList(args['proposed-tables']),
+      combinedBaseRead: Boolean(args['combined-base-read']),
+      readConcurrency,
       request,
       onProgress: progress,
     })
@@ -1896,12 +2506,40 @@ async function main() {
       tenantId: args['tenant-id'],
       tableNames: parseList(args.tables),
       proposedTableNames: parseList(args['proposed-tables']),
-      concepts: parseList(args.concepts),
+      concepts: parseConcepts(args),
+      progressiveDetail: Boolean(args['progressive-detail']),
+      combinedBaseRead: Boolean(args['combined-base-read']),
+      readConcurrency,
+      inventory: cacheRead.inventory,
+      inventorySource: inventoryCachePath ? cacheRead.hit ? 'cache' : 'live' : null,
+      inventoryCacheAgeMs: cacheRead.ageMs ?? null,
       request,
       onProgress: progress,
     });
   const output = path.resolve(args.output);
   atomicWriteJson(output, snapshot);
+  if (args['planning-timings-output']) {
+    appendSnapshotPlanningTimings(args['planning-timings-output'], snapshot);
+  }
+  if (inventoryCachePath && !baseSnapshot && !args['reconcile-exact'] && !cacheRead.hit) {
+    writeInventoryCache(
+      inventoryCachePath,
+      cacheContext,
+      cacheablePlanningInventory(snapshot),
+    );
+  }
+  const telemetryOutput = args['telemetry-output']
+    ? path.resolve(args['telemetry-output'])
+    : null;
+  if (telemetry && telemetryOutput) {
+    appendPlanningTelemetry(telemetryOutput, telemetry.run({
+      id: `${snapshot.purpose}-${snapshot.generatedAt}`,
+      purpose: snapshot.purpose,
+      environmentUrl: snapshot.environmentUrl,
+      snapshotGeneratedAt: snapshot.generatedAt,
+      snapshotTimings: snapshot.timings,
+    }));
+  }
   console.log(JSON.stringify({
     status: 'DONE',
     output,
@@ -1917,12 +2555,29 @@ async function main() {
       exactCoveredConcepts: snapshot.detailLoadSummary?.exactCoveredConcepts || 0,
       advisoryLimit: snapshot.detailLoadSummary?.advisoryLimit
         || MAX_ADVISORY_DETAIL_TABLES,
+      primary: snapshot.detailLoadSummary?.primaryCandidates || 0,
+      ambiguity: snapshot.detailLoadSummary?.ambiguityCandidates || 0,
+      strongCollisions: snapshot.detailLoadSummary?.strongCollisionCandidates || 0,
+      deferred: snapshot.detailLoadSummary?.deferredCandidates || 0,
+      core: snapshot.detailLoadSummary?.coreCandidates || 0,
+      full: snapshot.detailLoadSummary?.fullCandidates || 0,
     },
     proposedCollisions: snapshot.proposedNameChecks.collisions.length,
     proposedMissing: snapshot.proposedNameChecks.missing.length,
     exactNameResolution: snapshot.exactNameResolution,
     expansion: snapshot.expansion || null,
     timings: snapshot.timings,
+    readConcurrency: snapshot.detailLoadSummary?.readConcurrency || 1,
+    finalReadConcurrency: snapshot.detailLoadSummary?.finalReadConcurrency || 1,
+    baseReadMode: snapshot.detailLoadSummary?.baseReadMode || 'separate',
+    inventorySource: snapshot.inventorySource || 'live',
+    inventoryCache: inventoryCachePath ? {
+      path: inventoryCachePath,
+      hit: cacheRead.hit,
+      reason: cacheRead.reason,
+      ageMs: cacheRead.ageMs ?? null,
+    } : null,
+    telemetryOutput,
   }, null, 2));
 }
 
@@ -1935,9 +2590,12 @@ if (require.main === module) {
 
 module.exports = {
   analyzeProposedNames,
+  appendSnapshotPlanningTimings,
+  adaptiveReadRequest,
   atomicWriteFile,
   atomicWriteJson,
   canonicalAttributeType,
+  cacheablePlanningInventory,
   compact,
   choiceMetadataType,
   conceptDescriptor,
@@ -1949,19 +2607,25 @@ module.exports = {
   isVersionedName,
   labelText,
   loadDetailedEntity,
+  requestBaseMetadata,
+  requestCombinedBaseMetadata,
   normalizeNextLink,
   normalizeIntegerMetadata,
   normalizedTokens,
   odataString,
   parseArgs,
+  parseConcepts,
   parseList,
+  parseReadConcurrency,
   publisherPrefix,
   rankCandidatesByConcept,
   relationshipCount,
   resolveExactNameEntities,
   requestCollection,
+  mapWithConcurrency,
   selectDetailedCandidates,
   selectDetailedEntities,
+  selectStrongProposedCollisions,
   singularizeToken,
   validateSnapshot,
 };

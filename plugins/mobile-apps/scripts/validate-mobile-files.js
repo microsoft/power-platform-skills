@@ -15,9 +15,10 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> --file <path> [--file <path> ...] [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
+    '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
     'Approved JavaScript dependencies must use exact semver versions from the reviewed app plan.',
   ].join('\n');
 }
@@ -34,7 +35,13 @@ function parseApprovedJsDependency(value) {
 }
 
 function parseArgs(argv) {
-  const parsed = { approvedJsDependencies: [], errors: [], projectRoot: null, targets: [] };
+  const parsed = {
+    allSource: false,
+    approvedJsDependencies: [],
+    errors: [],
+    projectRoot: null,
+    targets: [],
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -44,6 +51,8 @@ function parseArgs(argv) {
     } else if (arg === '--file') {
       parsed.targets.push(argv[index + 1]);
       index += 1;
+    } else if (arg === '--all-source') {
+      parsed.allSource = true;
     } else if (arg === '--approved-js-dependency') {
       const approvedDependency = parseApprovedJsDependency(argv[index + 1]);
       if (approvedDependency) {
@@ -65,6 +74,34 @@ function parseArgs(argv) {
 function isWithinRoot(filePath, projectRoot) {
   const relative = path.relative(projectRoot, filePath);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+}
+
+function collectSourceTargets(projectRoot) {
+  const targets = [];
+
+  function visit(relativeDirectory) {
+    const absoluteDirectory = path.join(projectRoot, relativeDirectory);
+    if (!fs.existsSync(absoluteDirectory)) return;
+    for (const entry of fs.readdirSync(absoluteDirectory, { withFileTypes: true })) {
+      const relativePath = path.join(relativeDirectory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (relativePath === path.join('src', 'generated')) continue;
+        visit(relativePath);
+      } else if (entry.isFile() && /\.(?:ts|tsx)$/.test(entry.name)) {
+        targets.push(relativePath);
+      }
+    }
+  }
+
+  visit('app');
+  visit('src');
+  for (const entry of fs.readdirSync(projectRoot, { withFileTypes: true })) {
+    if (entry.isFile() && /\.(?:ts|tsx)$/.test(entry.name)) {
+      targets.push(entry.name);
+    }
+  }
+  return targets.sort();
 }
 
 function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies) {
@@ -94,7 +131,14 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
 }
 
 function main(argv) {
-  const { approvedJsDependencies, errors, help, projectRoot: projectRootArg, targets } = parseArgs(argv);
+  const {
+    allSource,
+    approvedJsDependencies,
+    errors,
+    help,
+    projectRoot: projectRootArg,
+    targets,
+  } = parseArgs(argv);
   if (help) {
     process.stdout.write(`${usage()}\n`);
     return 0;
@@ -103,7 +147,7 @@ function main(argv) {
     process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
     return 1;
   }
-  if (!projectRootArg || targets.length === 0 || targets.some((target) => !target)) {
+  if (!projectRootArg || (!allSource && targets.length === 0) || targets.some((target) => !target)) {
     process.stderr.write(`${usage()}\n`);
     return 1;
   }
@@ -114,11 +158,14 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
+  const validationTargets = allSource
+    ? [...targets, ...collectSourceTargets(projectRoot)]
+    : targets;
 
   const files = new Set();
   let blocked = false;
 
-  for (const target of targets) {
+  for (const target of validationTargets) {
     const requestedTargetPath = path.resolve(projectRoot, target);
     if (!isWithinRoot(requestedTargetPath, projectRoot)) {
       process.stderr.write(`BLOCKED: validation target is outside the mobile project root: ${requestedTargetPath}\n`);
@@ -187,6 +234,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  collectSourceTargets,
   isWithinRoot,
   main,
   parseArgs,
