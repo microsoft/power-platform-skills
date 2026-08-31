@@ -122,6 +122,28 @@ function buildSkillStarted(envelopeName, input) {
   );
 }
 
+function buildSkillConfigured(envelopeName, input) {
+  return buildEvent(
+    envelopeName,
+    "skill_configured",
+    pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
+    "Info"
+  );
+}
+
+function buildLocalizationPackageValidation(envelopeName, input) {
+  const severity =
+    input && input.eventInfo && input.eventInfo.validationStatus === "supported"
+      ? "Info"
+      : "Error";
+  return buildEvent(
+    envelopeName,
+    "localization_package_validation",
+    pick(input, [...COMMON_FIELDS, ...SKILL_FIELDS]),
+    severity
+  );
+}
+
 function buildSkillCompleted(envelopeName, input) {
   const severity = input && input.outcome === "failure" ? "Error" : "Info";
   return buildEvent(
@@ -134,6 +156,8 @@ function buildSkillCompleted(envelopeName, input) {
 
 module.exports = {
   buildSkillStarted,
+  buildSkillConfigured,
+  buildLocalizationPackageValidation,
   buildSkillCompleted,
   FIELD_TYPES,
   pick,

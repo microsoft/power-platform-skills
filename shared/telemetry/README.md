@@ -10,7 +10,12 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-`skill_started` usage telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
+Usage telemetry over the 1DS Common Schema 4.0 envelope. All
+adopters emit `skill_started`; plugins may also emit allowlisted configuration,
+validation, and completion events. A detached dispatcher child resolves the
+destination iKey + collector URL (env override → plugin `resolver.js` → static
+key in `ikey.json`), then POSTs the event; the process that emitted it returns
+before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -105,9 +110,32 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
   `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
+Power Pages additionally emits:
+
+- `skill_configured` for approved `create-site` and `add-localization`
+  configuration. Create-site records framework, canonical content locale,
+  fixed purpose/audience categories, and whether the choice came from the
+  initial request or a prompt. Localization records framework, operation,
+  invocation source, existing-setup flag, mode, canonical default/added/resulting
+  locales, package name/version/selection/verification, and `agent` versus
+  `blank` translation population.
+- `localization_package_validation` for each package-validation attempt. It
+  records intended canonical locales, package/mode selection, validation
+  status, prerelease/unverified flags, and stable failure codes. Raw npm errors,
+  exception messages, and evidence URLs are never included.
+- `skill_completed` only for Power Pages `add-localization`. It records outcome,
+  duration, a stable error class on failure, validation outcome, readiness
+  status, configured/unavailable locale counts, and translation method.
+
+Locale telemetry strips private-use (`-x-*`) and extension sequences before
+emission. Private-use-only identifiers are dropped.
+
 ## What is NEVER sent
 
-File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, site descriptions, page/route/component
+names, free-text requirements, Dataverse URLs, stack traces, `err.message` text,
+raw npm errors, evidence URLs, skill arguments, tool inputs, prompt text,
+usernames, hostnames, or private-use locale subtags.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
@@ -136,7 +164,7 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 shared/telemetry/
 ├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
+│  ├─ events.js              # FIELD_TYPES allowlist + event builders
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started

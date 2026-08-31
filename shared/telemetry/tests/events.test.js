@@ -4,6 +4,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   buildSkillStarted,
+  buildSkillConfigured,
+  buildLocalizationPackageValidation,
   buildSkillCompleted,
 } = require("../lib/events");
 
@@ -30,6 +32,42 @@ test("buildSkillStarted returns top-level fields with envelope name", () => {
   assert.equal(ev.data.osName, "Windows");
   assert.equal(ev.data.osVersion, "10.0.26200");
   assert.equal(ev.data.nodeVersion, "v22");
+});
+
+test("buildSkillConfigured carries approved configuration in eventInfo", () => {
+  const eventInfo = {
+    configurationType: "create-site",
+    framework: "react",
+    siteContentLocale: "fr-FR",
+  };
+  const ev = buildSkillConfigured(ENVELOPE, {
+    ...common,
+    skillName: "create-site",
+    eventInfo,
+  });
+  assert.equal(ev.data.eventName, "skill_configured");
+  assert.equal(ev.data.severity, "Info");
+  assert.deepEqual(ev.data.eventInfo, eventInfo);
+});
+
+test("localization package validation uses Error severity unless supported", () => {
+  const supported = buildLocalizationPackageValidation(ENVELOPE, {
+    ...common,
+    skillName: "add-localization",
+    eventInfo: { validationStatus: "supported" },
+  });
+  const rejected = buildLocalizationPackageValidation(ENVELOPE, {
+    ...common,
+    skillName: "add-localization",
+    eventInfo: {
+      validationStatus: "unsupported",
+      failureCodes: ["mode-unsupported"],
+    },
+  });
+  assert.equal(supported.data.eventName, "localization_package_validation");
+  assert.equal(supported.data.severity, "Info");
+  assert.equal(rejected.data.severity, "Error");
+  assert.deepEqual(rejected.data.eventInfo.failureCodes, ["mode-unsupported"]);
 });
 
 test("buildSkillCompleted with success outcome → severity Info", () => {
