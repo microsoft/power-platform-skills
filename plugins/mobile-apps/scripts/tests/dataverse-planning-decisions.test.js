@@ -19,7 +19,7 @@ function table(logicalName, detailLevel = 'full') {
   };
 }
 
-function snapshot(tables) {
+function snapshot(tables, proposedChecks = []) {
   return {
     version: 3,
     purpose: 'foreground-planning',
@@ -34,7 +34,12 @@ function snapshot(tables) {
     tables,
     detailLoadFailures: [],
     detailLoadSummary: { attemptedCandidates: tables.length, loadedCandidates: tables.length, failedCandidates: 0 },
-    proposedNameChecks: { checked: [], collisions: [], missing: [] },
+    proposedNameChecks: {
+      checked: proposedChecks,
+      collisions: proposedChecks.filter((item) => item.status === 'collision'),
+      missing: proposedChecks.filter((item) => item.status === 'missing')
+        .map((item) => item.logicalName),
+    },
     exactNameResolution: { requestedTables: [], loadedTables: [], unavailableTables: [] },
     timings: { inventoryRetrievalMs: 1, candidateSelectionMs: 1, detailLoadingMs: 1, totalDurationMs: 3 },
   };
@@ -88,14 +93,65 @@ test('reuse, extend, and adapt decisions request full metadata for core tables',
   );
   assert.equal(result.valid, false);
   assert.deepEqual(result.contextNames, ['new_adapt', 'new_reuse']);
+  assert.deepEqual(result.proposedContextNames, ['new_adaptv2']);
 });
 
-test('create and defer decisions do not require existing full table detail', () => {
+test('create decisions require a checked missing proposed name', () => {
   const result = validatePlanningDecisions(
     contract({ new_create: 'create', new_defer: 'defer' }),
     snapshot([]),
   );
-  assert.deepEqual(result, { valid: true, errors: [], contextNames: [] });
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.contextNames, []);
+  assert.deepEqual(result.proposedContextNames, ['new_create']);
+});
+
+test('checked missing Create and Adapt names satisfy the collision gate', () => {
+  const result = validatePlanningDecisions(
+    contract({ new_create: 'create', new_adapt: 'adapt' }),
+    snapshot([table('new_adapt')], [
+      { logicalName: 'new_create', status: 'missing', existing: null },
+      { logicalName: 'new_adaptv2', status: 'missing', existing: null },
+    ]),
+  );
+  assert.deepEqual(result, {
+    valid: true,
+    errors: [],
+    contextNames: [],
+    proposedContextNames: [],
+  });
+});
+
+test('a proposed-name collision makes the approved decision invalid', () => {
+  const result = validatePlanningDecisions(
+    contract({ new_create: 'create' }),
+    snapshot([], [
+      { logicalName: 'new_create', status: 'collision', existing: {} },
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join('; '), /new_create is not available \(collision\)/);
+});
+
+test('create many-to-many relationships require a checked missing intersect name', () => {
+  const source = contract({ new_left: 'create', new_right: 'create' });
+  source.tables[0].relationships.push({
+    kind: 'many-to-many',
+    schemaName: 'new_Left_Right',
+    plannedDecision: 'create',
+    entity1: 'new_left',
+    entity2: 'new_right',
+    intersectTable: 'new_left_right',
+  });
+  const result = validatePlanningDecisions(
+    source,
+    snapshot([], [
+      { logicalName: 'new_left', status: 'missing', existing: null },
+      { logicalName: 'new_right', status: 'missing', existing: null },
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.proposedContextNames, ['new_left_right']);
 });
 
 test('full evidence satisfies existing-table decisions', () => {
@@ -103,5 +159,10 @@ test('full evidence satisfies existing-table decisions', () => {
     contract({ new_reuse: 'reuse', new_extend: 'extend' }),
     snapshot([table('new_reuse'), table('new_extend')]),
   );
-  assert.deepEqual(result, { valid: true, errors: [], contextNames: [] });
+  assert.deepEqual(result, {
+    valid: true,
+    errors: [],
+    contextNames: [],
+    proposedContextNames: [],
+  });
 });

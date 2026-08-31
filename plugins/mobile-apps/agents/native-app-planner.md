@@ -150,10 +150,12 @@ After spawning, proceed immediately to Step 3 without waiting. Then, before writ
 - `DONE` → in `required` mode, verify both `_dm_section.md` and the normalized
   `.tmp/dataverse-schema-contract.json` exist, then run
   `validate-dataverse-planning-decisions.js --contract <contract> --snapshot <snapshot>`.
-  Exit `3` is returned verbatim as
-  `NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-logical-names>`; exit `2`
-  is `BLOCKED`; only exit `0` permits embedding and Gate 1. A missing sidecar is
-  `BLOCKED`, not a Markdown-parsing fallback.
+  Exit `3` must preserve the validator's exact stderr first line:
+  `NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-logical-names>` or
+  `NEEDS_CONTEXT: proposed-dataverse-names:<sorted-logical-names>`. Do not
+  rewrite one signal as the other. Exit `2` is `BLOCKED`; only exit `0` permits
+  embedding and Gate 1. A missing sidecar is `BLOCKED`, not a
+  Markdown-parsing fallback.
 - `DONE_WITH_CONCERNS: <list>` → apply the same sidecar and decision-evidence checks, embed section,
   and propagate concerns.
 - `NEEDS_CONTEXT: detailed-dataverse-metadata:<logical names>` → return that

@@ -135,7 +135,7 @@ test('planning timing summary keeps outer wall, model, and approval durations se
   });
 });
 
-test('snapshot timings record initial stages and bounded expansion separately', () => {
+test('snapshot timings partition initial and expansion network and local stages', () => {
   const writes = new Map();
   const fileSystem = {
     existsSync: (file) => writes.has(file),
@@ -172,8 +172,15 @@ test('snapshot timings record initial stages and bounded expansion separately', 
     },
   }, fileSystem);
   const expanded = JSON.parse(writes.get(file));
-  assert.equal(expanded.stages.metadataExpansion.durationMs, 10);
-  assert.equal(expanded.stages.metadataInventory.history.length, 1);
+  assert.equal(expanded.stages.metadataInventory.durationMs, 2);
+  assert.equal(expanded.stages.metadataInventory.history.length, 2);
+  assert.equal(expanded.stages.metadataCandidateSelection.durationMs, 0);
+  assert.equal(expanded.stages.metadataCandidateSelection.history.length, 2);
+  assert.equal(expanded.stages.metadataDetailLoading.durationMs, 8);
+  assert.equal(expanded.stages.metadataDetailLoading.history.length, 2);
+  assert.equal(expanded.stages.metadataExpansion, undefined);
+  assert.equal(summarizePlanningTimings(expanded).dataverseMetadataNetworkMs, 70);
+  assert.equal(summarizePlanningTimings(expanded).localDeterministicProcessingMs, 3);
 });
 
 test('planning timing rejects unknown stages and completion without start', () => {

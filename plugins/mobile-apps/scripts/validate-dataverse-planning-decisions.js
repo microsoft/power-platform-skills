@@ -15,6 +15,7 @@ function normalize(value) {
 function validatePlanningDecisions(contract, snapshot) {
   const errors = [];
   const contextNames = new Set();
+  const proposedContextNames = new Set();
   const contractValidation = validateContract(contract);
   if (!contractValidation.valid) {
     errors.push(...contractValidation.errors.map((error) => `contract: ${error}`));
@@ -23,22 +24,70 @@ function validatePlanningDecisions(contract, snapshot) {
   if (!snapshotValidation.valid) {
     errors.push(...snapshotValidation.errors.map((error) => `snapshot: ${error}`));
   }
-  if (errors.length > 0) return { valid: false, errors, contextNames: [] };
+  if (errors.length > 0) {
+    return {
+      valid: false,
+      errors,
+      contextNames: [],
+      proposedContextNames: [],
+    };
+  }
 
   const detailed = new Map(snapshot.tables.map((table) => [normalize(table.logicalName), table]));
+  const proposedChecks = new Map(
+    (snapshot.proposedNameChecks?.checked || []).map(
+      (check) => [normalize(check.logicalName), normalize(check.status)],
+    ),
+  );
   for (const table of contract.tables || []) {
-    if (!FULL_DETAIL_DECISIONS.has(normalize(table.plannedDecision))) continue;
-    const evidence = detailed.get(normalize(table.logicalName));
-    if (!evidence || (evidence.detailLevel || 'full') !== 'full') {
-      contextNames.add(table.logicalName);
+    const decision = normalize(table.plannedDecision);
+    if (FULL_DETAIL_DECISIONS.has(decision)) {
+      const evidence = detailed.get(normalize(table.logicalName));
+      if (!evidence || (evidence.detailLevel || 'full') !== 'full') {
+        contextNames.add(table.logicalName);
+      }
+    }
+    if (decision === 'create' || decision === 'adapt') {
+      const effectiveName = decision === 'adapt' ? table.adaptedLogicalName : table.logicalName;
+      const status = proposedChecks.get(normalize(effectiveName));
+      if (!status) {
+        proposedContextNames.add(effectiveName);
+      } else if (status !== 'missing') {
+        errors.push(`proposed table name ${effectiveName} is not available (${status})`);
+      }
+    }
+    for (const relationship of table.relationships || []) {
+      const relationshipDecision = normalize(relationship.plannedDecision);
+      if (relationship.kind !== 'many-to-many'
+        || !['create', 'adapt'].includes(relationshipDecision)) continue;
+      const effectiveIntersect = relationshipDecision === 'adapt'
+        ? relationship.adaptedIntersectTable
+        : relationship.intersectTable;
+      const status = proposedChecks.get(normalize(effectiveIntersect));
+      if (!status) {
+        proposedContextNames.add(effectiveIntersect);
+      } else if (status !== 'missing') {
+        errors.push(
+          `proposed intersect table name ${effectiveIntersect} is not available (${status})`,
+        );
+      }
     }
   }
   return {
-    valid: contextNames.size === 0,
-    errors: contextNames.size === 0
-      ? []
-      : ['reuse, extend, and adapt decisions require full Dataverse detail evidence'],
+    valid: contextNames.size === 0 && proposedContextNames.size === 0 && errors.length === 0,
+    errors: [
+      ...(contextNames.size === 0
+        ? []
+        : ['reuse, extend, and adapt decisions require full Dataverse detail evidence']),
+      ...(proposedContextNames.size === 0
+        ? []
+        : ['create and adapt decisions require proposed-name collision evidence']),
+      ...errors,
+    ],
     contextNames: [...contextNames].sort((left, right) => left.localeCompare(right)),
+    proposedContextNames: [...proposedContextNames]
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right)),
   };
 }
 
@@ -69,6 +118,12 @@ function main(argv = process.argv) {
     if (result.contextNames.length > 0) {
       process.stderr.write(
         `NEEDS_CONTEXT: detailed-dataverse-metadata:${result.contextNames.join(',')}\n`,
+      );
+      return 3;
+    }
+    if (result.proposedContextNames.length > 0) {
+      process.stderr.write(
+        `NEEDS_CONTEXT: proposed-dataverse-names:${result.proposedContextNames.join(',')}\n`,
       );
       return 3;
     }

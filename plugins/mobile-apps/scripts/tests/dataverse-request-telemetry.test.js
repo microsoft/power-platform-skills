@@ -122,6 +122,127 @@ test('concurrent 401 responses share one token refresh', async () => {
   assert.equal(events.reduce((total, event) => total + event.tokenRefreshCount, 0), 1);
 });
 
+test('a slow request cannot restore a token replaced by a concurrent refresh', async () => {
+  let tokenCalls = 0;
+  let releaseSlow;
+  let markSlowStarted;
+  const slowStarted = new Promise((resolve) => {
+    markSlowStarted = resolve;
+  });
+  const slowRelease = new Promise((resolve) => {
+    releaseSlow = resolve;
+  });
+  const seen = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      return tokenCalls === 1 ? 'old' : 'new';
+    },
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      seen.push([apiPath, token]);
+      if (apiPath === 'slow') {
+        markSlowStarted();
+        await slowRelease;
+        return { statusCode: 200, body: '{"value":[]}', headers: {} };
+      }
+      if (apiPath === 'refresh' && token === 'old') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const slow = request('GET', 'slow');
+  await slowStarted;
+  await request('GET', 'refresh');
+  releaseSlow();
+  await slow;
+  await request('GET', 'third');
+
+  assert.equal(tokenCalls, 2);
+  assert.deepEqual(seen.at(-1), ['third', 'new']);
+});
+
+test('an older refresh retry cannot replace a newer refreshed token', async () => {
+  let tokenCalls = 0;
+  let releaseFirstRetry;
+  let markFirstRetryStarted;
+  const firstRetryStarted = new Promise((resolve) => {
+    markFirstRetryStarted = resolve;
+  });
+  const firstRetryRelease = new Promise((resolve) => {
+    releaseFirstRetry = resolve;
+  });
+  const seen = [];
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => ['t0', 't1', 't2'][tokenCalls++],
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      seen.push([apiPath, token]);
+      if (apiPath === 'first' && token === 't0') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      if (apiPath === 'first' && token === 't1') {
+        markFirstRetryStarted();
+        await firstRetryRelease;
+        return { statusCode: 200, body: '{"value":[]}', headers: {} };
+      }
+      if (apiPath === 'second' && token === 't1') {
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  const first = request('GET', 'first');
+  await firstRetryStarted;
+  await request('GET', 'second');
+  releaseFirstRetry();
+  await first;
+  await request('GET', 'third');
+
+  assert.equal(tokenCalls, 3);
+  assert.deepEqual(seen.at(-1), ['third', 't2']);
+});
+
+test('staggered stale 401 responses reuse the token already refreshed by a peer', async () => {
+  let tokenCalls = 0;
+  let markRefreshed;
+  const refreshed = new Promise((resolve) => {
+    markRefreshed = resolve;
+  });
+  const attempts = new Map();
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => {
+      tokenCalls += 1;
+      if (tokenCalls === 2) markRefreshed();
+      return tokenCalls === 1 ? 'old' : 'new';
+    },
+    sendRequest: async (_envUrl, _method, apiPath, _body, token) => {
+      const attempt = (attempts.get(apiPath) || 0) + 1;
+      attempts.set(apiPath, attempt);
+      if (token === 'old') {
+        if (apiPath !== 'request-0') await refreshed;
+        return { statusCode: 401, body: '', headers: {} };
+      }
+      return { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+  });
+
+  await Promise.all(Array.from(
+    { length: 5 },
+    (_, index) => request('GET', `request-${index}`),
+  ));
+
+  assert.equal(tokenCalls, 2);
+  assert.equal(request.getAuthStats().tokenRefreshCount, 1);
+});
+
 test('telemetry callback failure does not change request success', async () => {
   const request = createDataverseRequestExecutor({
     environmentUrl: 'https://example.crm.dynamics.com',

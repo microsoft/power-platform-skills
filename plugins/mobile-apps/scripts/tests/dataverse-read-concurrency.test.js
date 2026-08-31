@@ -9,6 +9,7 @@ const {
   mapWithConcurrency,
   parseReadConcurrency,
 } = require('../create-dataverse-snapshot');
+const { createDataverseRequestExecutor } = require('../dataverse-request');
 
 function label(value) {
   return { UserLocalizedLabel: { Label: value } };
@@ -81,6 +82,33 @@ test('adaptive reads halve the cap after rate limiting', async () => {
   assert.equal(adaptive.currentConcurrency(), 1);
   await adaptive.request('GET', 'three');
   assert.equal(adaptive.currentConcurrency(), 1);
+});
+
+test('adaptive reads reduce the cap before a throttled retry sleeps', async () => {
+  let requestCount = 0;
+  let releaseSleep;
+  const sleeping = new Promise((resolve) => {
+    releaseSleep = resolve;
+  });
+  const request = createDataverseRequestExecutor({
+    environmentUrl: 'https://example.crm.dynamics.com',
+    tenantId: 'tenant-1',
+    getToken: async () => 'token',
+    sendRequest: async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? { statusCode: 429, body: '', headers: { 'retry-after': '1' } }
+        : { statusCode: 200, body: '{"value":[]}', headers: {} };
+    },
+    sleep: () => sleeping,
+  });
+  const adaptive = adaptiveReadRequest(request, 4);
+  const pending = adaptive.request('GET', 'EntityDefinitions');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(adaptive.currentConcurrency(), 2);
+  releaseSleep();
+  await pending;
+  assert.equal(adaptive.currentConcurrency(), 2);
 });
 
 test('read concurrency rejects invalid values and defaults to one', () => {

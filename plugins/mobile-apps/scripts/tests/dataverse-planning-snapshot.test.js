@@ -836,7 +836,10 @@ test('exact-name expansion discovers and details a managed dependency absent fro
   assert.deepEqual(expanded.expansion.requestedTables, ['contact']);
   assert.deepEqual(expanded.expansion.loadedTables, ['contact']);
   assert.deepEqual(expanded.expansion.newlyLoadedTables, ['contact']);
+  assert.deepEqual(expanded.expansion.reloadedTables, []);
   assert.deepEqual(expanded.expansion.unavailableTables, []);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 1);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 1);
   assert.equal(expanded.inventory.find((item) => item.logicalName === 'contact').managed, true);
   assert.equal(expanded.inventory.find((item) => item.logicalName === 'contact').customizable, false);
   assert.equal(expanded.tables.find((item) => item.logicalName === 'contact').facts.columnCount, 0);
@@ -869,6 +872,136 @@ test('proposed-name expansion checks collisions without loading details', async 
     loadedTables: [],
     unavailableTables: [],
   });
+});
+
+test('cached proposed-name expansion removes a stale deleted collision', async () => {
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_deleted', 'Deleted'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: [],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_deleted', 'Deleted'))],
+    tables: [staleTable],
+    detailLoadFailures: [{
+      logicalName: 'new_deleted',
+      selectionReasons: ['concept:deleted'],
+      status: 400,
+      error: 'stale cached failure',
+      required: false,
+    }],
+  });
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    proposedTableNames: ['new_deleted'],
+    request: async (_method, apiPath) => {
+      assert.match(apiPath, /LogicalName eq 'new_deleted'/);
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.deepEqual(expanded.proposedNameChecks.missing, ['new_deleted']);
+  assert.equal(expanded.inventory.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.equal(expanded.tables.some((item) => item.logicalName === 'new_deleted'), false);
+  assert.deepEqual(expanded.detailLoadFailures, []);
+  assert.equal(expanded.detailLoadSummary.failedCandidates, 0);
+  assert.equal(expanded.detailLoadSummary.advisoryCandidates, 0);
+  assert.equal(expanded.inventoryFacts.customizableTables, 0);
+  assert.equal(expanded.inventoryFacts.proposedCollisionTables, 0);
+});
+
+test('cached detailed-name expansion reloads an existing full table live', async () => {
+  let detailReads = 0;
+  const staleTable = await loadDetailedEntity(
+    async () => ({ status: 200, data: { value: [] } }),
+    entity('new_item', 'Old item'),
+  );
+  const base = validSnapshotBase({
+    inventorySource: 'cache',
+    inputs: {
+      concepts: ['items'],
+      explicitTableNames: [],
+      proposedTableNames: [],
+    },
+    inventory: [normalizeInventoryForTest(entity('new_item', 'Old item'))],
+    candidateRanking: rankCandidatesByConcept(
+      [entity('new_item', 'Old item')],
+      ['items'],
+    ),
+    tables: [staleTable],
+  });
+  const refreshed = entity('new_item', 'Current item');
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    tableNames: ['new_item'],
+    request: async (_method, apiPath) => {
+      if (apiPath.startsWith('EntityDefinitions?')) {
+        return { status: 200, data: { value: [refreshed] } };
+      }
+      detailReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+
+  assert.ok(detailReads > 0);
+  assert.equal(
+    expanded.inventory.find((item) => item.logicalName === 'new_item').displayName,
+    'Current item',
+  );
+  assert.equal(
+    expanded.candidateRanking[0].candidates[0].displayName,
+    'Current item',
+  );
+  assert.deepEqual(expanded.exactNameResolution.loadedTables, ['new_item']);
+  assert.deepEqual(expanded.expansion.newlyLoadedTables, []);
+  assert.deepEqual(expanded.expansion.upgradedTables, []);
+  assert.deepEqual(expanded.expansion.reloadedTables, ['new_item']);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 0);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
+
+  let repeatedReads = 0;
+  const repeated = await expandSnapshot({
+    snapshot: expanded,
+    tableNames: ['new_item'],
+    request: async () => {
+      repeatedReads += 1;
+      return { status: 200, data: { value: [] } };
+    },
+  });
+  assert.equal(repeatedReads, 0);
+  assert.deepEqual(repeated.expansion.reloadedTables, []);
+});
+
+test('old snapshots do not fabricate bounded exact discovery names', async () => {
+  const base = validSnapshotBase({
+    inventory: [normalizeInventoryForTest(entity('account', 'Account'))],
+    inventoryFacts: {
+      customizableTables: 1,
+      exactNameTables: 1,
+      requiredExactNameTables: 1,
+      proposedCollisionTables: 0,
+      totalTables: 1,
+    },
+    exactNameResolution: {
+      requestedTables: ['account'],
+      loadedTables: ['account'],
+      unavailableTables: [],
+    },
+  });
+  const expanded = await expandSnapshot({
+    snapshot: base,
+    request: async () => {
+      throw new Error('no metadata request expected');
+    },
+  });
+  assert.deepEqual(expanded.exactNameDiscoveryTables, []);
+  assert.equal(expanded.inventoryFacts.exactNameTables, 0);
+  assert.equal(expanded.inventoryFacts.requiredExactNameTables, 0);
 });
 
 test('exact-name expansion fails closed when required detail metadata is unreadable', async () => {
@@ -1082,7 +1215,9 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(planner, /Dataverse planning forwarding is verbatim/);
   assert.match(planner, /Do not duplicate raw evidence/);
   assert.match(planner, /validate-dataverse-planning-decisions\.js/);
-  assert.match(planner, /only exit `0` permits embedding and Gate 1/);
+  assert.match(planner, /only exit `0` permits\s+embedding and Gate 1/);
+  assert.match(planner, /preserve the validator's exact stderr first line/);
+  assert.match(planner, /Do not\s+rewrite one signal as the other/);
   assert.match(planner, /Timing ownership/);
   assert.match(planner, /modelArchitect/);
   assert.match(planner, /screenPlanner/);
@@ -1104,6 +1239,8 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
   assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
   assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
+  assert.match(createSkill, /preserve and branch on the exact stderr first line/);
+  assert.match(createSkill, /collision-only expansion allowance/);
   assert.match(createSkill, /connector-only.*skip every command/s);
   assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
   assert.doesNotMatch(createSkill, /legacy-unverified/);

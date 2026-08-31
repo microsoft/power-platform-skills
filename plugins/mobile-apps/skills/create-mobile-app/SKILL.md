@@ -951,11 +951,14 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js
 ```
 
 The same validation MUST run before Gate 1 is shown in the planner and inline
-paths. Exit `3` is the canonical
-`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` signal and consumes
-the one bounded detail-expansion allowance before architect re-dispatch. Exit
-`2` is `BLOCKED`. Do not approve Reuse, Extend, or Adapt from `core` or missing
-detail, and do not fall back to parsing the Markdown ER diagram when a sidecar
+paths. On exit `3`, preserve and branch on the exact stderr first line:
+`NEEDS_CONTEXT: detailed-dataverse-metadata:<sorted-names>` consumes the
+bounded detail-expansion allowance, while
+`NEEDS_CONTEXT: proposed-dataverse-names:<sorted-names>` consumes the separate
+collision-only expansion allowance. Never rewrite one signal as the other.
+Exit `2` is `BLOCKED`. Do not approve Reuse, Extend, or Adapt from `core` or
+missing detail, or Create/Adapt names without checked-missing collision
+evidence. Do not fall back to parsing the Markdown ER diagram when a sidecar
 is missing or malformed.
 
 ### Step 4 — Auth & environment selection
