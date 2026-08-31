@@ -1381,6 +1381,21 @@ async function runSdkBuild(spec, opts = {}) {
       merged.push({ name: n, width: col.width || 100, order: merged.length });
     }
     await provision.updateElement('view', viewId, '/columns', merged);
+    // Reconcile the maker-facing description too (#496). Without this, a view's description reached
+    // Dataverse only on CREATE — and the most-read view on a table is the platform's auto-generated
+    // "Active <Plural>", which already exists, so the build reconciles onto it and the authored
+    // description was never written.
+    //
+    // Two guards, both load-bearing:
+    //   * only when the spec EXPLICITLY sets one (`viewDef` emits `description: v.description || ''`,
+    //     so an unset description is `''` — writing that would blank text a maker typed in the UI);
+    //   * only when it DIFFERS, so an ordinary rebuild issues no extra write.
+    // This rides the push below rather than a separate PATCH: the push rewrites `description` from
+    // the artifact, so a standalone PATCH would be immediately overwritten by the stale fetched value.
+    const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
+    if (wantDescription && wantDescription !== String(current.description || '')) {
+      await provision.updateElement('view', viewId, '/description', wantDescription);
+    }
     requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
     reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
@@ -1511,6 +1526,37 @@ async function runSdkBuild(spec, opts = {}) {
       const def = chartDef(spec, c);
       const existingId = await provision.findArtifact('chart', { name: def.name, entity: def.entityLogicalName });
       if (existingId) {
+        // The chart DEFINITION is still not reconciled — but its description is (#496), because a
+        // description is the one thing an AI agent inspecting this app later reads, and it reached
+        // Dataverse only on create.
+        //
+        // Written with a direct column PATCH rather than fetch -> updateElement -> pushArtifact,
+        // which is what views use. The difference is deliberate: `reconcileView` already pushes an
+        // existing view (for columns), so that round trip is proven in production, whereas the chart
+        // phase has NEVER pushed an existing chart. A push regenerates `datadescription` and
+        // `presentationdescription` from the deserialized model, so it would newly expose every
+        // maker-customized chart to a serialize round trip — the same class of risk as #478. A
+        // single-column PATCH cannot disturb the chart definition at all.
+        //
+        // Same two guards as views: only when the spec EXPLICITLY sets a description (chartDef emits
+        // `|| ''`, and writing that would blank a maker's text), and only when it DIFFERS.
+        const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
+        if (wantDescription && typeof provision.queryRecords === 'function' && typeof provision.updateRecord === 'function') {
+          try {
+            const rows = await provision.queryRecords('savedqueryvisualization', {
+              select: ['savedqueryvisualizationid', 'description'],
+              filter: `savedqueryvisualizationid eq ${existingId}`,
+              top: 1,
+            });
+            const currentDescription = String(((rows || [])[0] || {}).description || '');
+            if (currentDescription !== wantDescription) {
+              await provision.updateRecord('savedqueryvisualization', existingId, { description: wantDescription });
+            }
+          } catch {
+            // Best-effort: a description is an inspection aid, and failing a build over one would be
+            // a worse outcome than the stale text it leaves behind.
+          }
+        }
         runner.skip('charts', `chart "${def.name}" (exists — chart edits aren't applied on rebuild; recreate to change)`);
         return existingId;
       }

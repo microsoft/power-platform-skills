@@ -32,6 +32,13 @@ is controllable per capability, and on/off is read with the platform's real sema
   file upload (`formFillFiles`), instead of one flag that only ever governed the toolbar.
 
 ### Fixed
+- **Descriptions now converge on existing views and charts.** A description reached Dataverse only at
+  create, so the most-read view on a table — the platform's auto-generated *"Active &lt;Plural&gt;"*,
+  which already exists when the build reconciles onto it — never received the authored text. Both are
+  now reconciled, and only when the spec explicitly sets a description that differs from the deployed
+  one, so a rebuild issues no extra write and an omitted description never blanks a maker's text. A
+  chart is updated with a single-column write rather than an artifact push, because pushing an
+  existing chart would newly subject every maker-customized chart to a serialize round trip.
 - **Forms can now control individual fields.** A form field takes `readOnly` (locked but visible),
   `hidden` (placed but not shown) and `after` (move it directly below another field), via a
   form-level `fieldOptions` map or inline on an explicit layout's `fields[]` entry. Previously a

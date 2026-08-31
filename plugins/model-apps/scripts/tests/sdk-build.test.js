@@ -97,6 +97,12 @@ function mockSdk(opts = {}) {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
       if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      // The chart description reconcile (#496) reads the deployed value before deciding to write, so
+      // it must only PATCH when the spec's description actually differs.
+      if (e === 'savedqueryvisualization') {
+        const m = /savedqueryvisualizationid eq ([^\s]+)/.exec(filter);
+        return [{ savedqueryvisualizationid: m ? m[1] : 'chart-existing', description: opts.existingChartDescription }];
+      }
       if (e === 'webresource') {
         if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : [];
         return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
@@ -194,7 +200,7 @@ function mockSdk(opts = {}) {
       // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
       if (!store[`${t}:${id}`]) {
         if (t === 'form') store[`${t}:${id}`] = seedForm(id, opts.existingFormFields || []);
-        else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice() };
+        else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), ...(opts.existingViewDescription !== undefined ? { description: opts.existingViewDescription } : {}) };
         else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
         else store[`${t}:${id}`] = { id };
       }
@@ -1688,6 +1694,87 @@ test('form reconcile: a second build over an anchored 2-column form issues NO mo
   ];
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   assert.strictEqual(find(calls, 'moveElement').length, 0, 'a converged 2-column form was shuffled anyway');
+});
+
+// ---------------------------------------------------------------------------
+// #496 — an EXISTING view/chart never got its description reconciled.
+//
+// The reported case is the platform's auto-generated "Active <Plural>" view: it already exists when
+// the views phase runs, so the build reconciles onto it and the authored description was only ever
+// written on CREATE. Charts are the same class, via a different mechanic (see the test comments).
+// ---------------------------------------------------------------------------
+
+test('view reconcile: an authored description is written to an EXISTING view', async () => {
+  const spec = makeSpec();
+  spec.views = [{ entity: 'new_ticket', name: 'Active Tickets', description: 'Open work, newest first.', columns: ['new_subject'] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingViewColumns: [{ name: 'new_subject', width: 100, order: 0 }] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  const patch = find(calls, 'updateElement').find((c) => c.args[0] === 'view' && c.args[2] === '/description');
+  assert.ok(patch, `no description write; updateElement pointers: ${find(calls, 'updateElement').map((c) => c.args[2]).join(', ')}`);
+  assert.strictEqual(patch.args[3], 'Open work, newest first.');
+  // It must ride the artifact push: the push rewrites `description` from the artifact, so a separate
+  // record PATCH would be overwritten by the stale fetched value.
+  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'view'), 'the view must still be pushed');
+});
+
+test('view reconcile: an UNSET description never blanks the deployed one', async () => {
+  const spec = makeSpec();
+  // viewDef emits `description: v.description || ''`, so an unset description is '' — writing that
+  // would wipe text a maker typed in the UI. The deployed view MUST carry a description here, or the
+  // guard is untested: with both sides empty the write is skipped either way.
+  spec.views = [{ entity: 'new_ticket', name: 'Active Tickets', columns: ['new_subject'] }];
+  const { sdk, calls } = mockSdk({
+    artifactsExist: true,
+    existingViewColumns: [{ name: 'new_subject', width: 100, order: 0 }],
+    existingViewDescription: 'Text a maker typed in the UI.',
+  });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  assert.strictEqual(find(calls, 'updateElement').filter((c) => c.args[2] === '/description').length, 0,
+    'an unset description must not be written at all');
+  const view = await sdk.getArtifact('view', 'view-existing');
+  assert.strictEqual(view.description, 'Text a maker typed in the UI.', 'the deployed description was blanked');
+});
+
+test('view reconcile: a description that already matches is not rewritten', async () => {
+  const spec = makeSpec();
+  spec.views = [{ entity: 'new_ticket', name: 'Active Tickets', description: 'Already correct.', columns: ['new_subject'] }];
+  const { sdk, calls } = mockSdk({
+    artifactsExist: true,
+    existingViewColumns: [{ name: 'new_subject', width: 100, order: 0 }],
+    existingViewDescription: 'Already correct.',
+  });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  assert.strictEqual(find(calls, 'updateElement').filter((c) => c.args[2] === '/description').length, 0,
+    'an ordinary rebuild must issue no extra write');
+});
+
+test('chart reconcile: an authored description is PATCHed on an existing chart, without pushing the chart', async () => {
+  const spec = makeSpec();
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'Ticket mix by priority.' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingChartDescription: 'stale text' });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
+  const upd = find(calls, 'updateRecord').find((c) => c.args[0] === 'savedqueryvisualization');
+  assert.ok(upd, `no chart description PATCH; updateRecord targets: ${find(calls, 'updateRecord').map((c) => c.args[0]).join(', ')}`);
+  assert.deepStrictEqual(upd.args[2], { description: 'Ticket mix by priority.' });
+  // Pushing an existing chart would regenerate datadescription/presentationdescription from the
+  // deserialized model — a serialize round trip this phase has never subjected maker charts to.
+  assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'chart'), 'an existing chart must NOT be pushed');
+});
+
+test('chart reconcile: an unset or already-matching description issues no write', async () => {
+  const unset = makeSpec();
+  unset.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  let h = mockSdk({ artifactsExist: true, existingChartDescription: 'maker text' });
+  await runSdkBuild(unset, { sdk: h.sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
+  assert.strictEqual(find(h.calls, 'updateRecord').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
+    'an unset description must not blank the deployed one');
+
+  const same = makeSpec();
+  same.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'maker text' }];
+  h = mockSdk({ artifactsExist: true, existingChartDescription: 'maker text' });
+  await runSdkBuild(same, { sdk: h.sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
+  assert.strictEqual(find(h.calls, 'updateRecord').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
+    'a matching description must not be rewritten');
 });
 
 test('form reconcile: an explicit layout with prune:false keeps fields it does not list', async () => {
