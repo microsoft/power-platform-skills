@@ -228,7 +228,7 @@ async function verifySpec(spec, read, opts = {}) {
       // Name the most likely cause instead of the bare fact. The SDK writes rules ONLY through the
       // bound `CreateProcessWithWfomJson` member and no longer compiles a workflow-XAML fallback, so
       // an environment that does not declare that member cannot host business rules at all — and
-      // that is the COMMON case (18 of 20 measured). The build already skips them with a warning, so
+      // that is the COMMON case: measured across 142 reachable environments, only 14 declare it. The build already skips them with a warning, so
       // without this hint the operator reads "not deployed" as a build failure and goes looking for
       // one that is not there.
       //

@@ -1,4 +1,6 @@
 'use strict';
+// Also guards https://github.com/microsoft/power-platform-skills/issues/494 — download did not read
+// artifact descriptions back, so a downloaded spec silently lost every description on rebuild.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

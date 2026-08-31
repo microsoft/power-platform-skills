@@ -1,4 +1,7 @@
 'use strict';
+// Guards https://github.com/microsoft/power-platform-skills/issues/495 — the SDK could author
+// neither a Boolean default, nor a whole-number Duration format, nor per-column IsValidFor* flags,
+// so a maker had to finish every column by hand after a build. (AB#6648523, AB#6648522, AB#6651276)
 // `entities[].columns[]` — three column capabilities the vendored SDK gained in the same bundle
 // refresh (provenance commit 15bd1b16), one App Spec field each:
 //   AB#6648523 — defaultValue        (Boolean columns: the SDK used to hardcode DefaultValue:false)

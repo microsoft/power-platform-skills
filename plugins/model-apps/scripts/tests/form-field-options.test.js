@@ -1,4 +1,9 @@
 'use strict';
+// Guards four reported defects:
+//   AB#6648516 — no per-field read-only/locked control on forms
+//   AB#6651241 — no per-field hidden/visibility control on forms
+//   AB#6651439 — no targeted form-control reordering (explicit layout pruned unlisted fields)
+//   AB#6651696 — auto form layout added Big Integer columns that cannot render
 // Per-field form control options: read-only, hidden, targeted repositioning, plus the auto-layout
 // exclusion of column types the Unified Interface cannot render.
 //

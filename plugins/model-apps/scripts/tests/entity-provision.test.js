@@ -1,4 +1,6 @@
 'use strict';
+// Also guards AB#6648517 — RequiredLevel (Business Required) could not be set on an EXISTING
+// column, so an explicit `required` change never converged on rebuild.
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');

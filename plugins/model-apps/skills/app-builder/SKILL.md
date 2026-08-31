@@ -566,7 +566,7 @@ child view id. Each step emits `[n/total]`.
     upstream because it covered 4 of the 7 action types and a single clause, so it silently narrowed
     a rule into something that did not say what the author wrote. Environments that do not declare
     the member therefore **cannot host business rules at all** — and that is the common case, not an
-    edge case (18 of 20 measured environments). The build **skips** the rules, warns once naming the
+    edge case — measured across 142 reachable environments, only 14 declare the member. The build **skips** the rules, warns once naming the
     member, and builds everything else normally, so an app is never left half-created. If rules are
     essential, verify the environment first.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status

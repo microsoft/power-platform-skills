@@ -7,132 +7,72 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 ## [Unreleased] — 2.5.1
 
-Takes the vendored SDK up again: business-rule presence operators now work, the AI form-fill family
-is controllable per capability, and on/off is read with the platform's real semantics rather than a
-"non-zero means on" guess.
+SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
+an environment that supports them**.
 
-### Changed — business rules may not be available on your environment
+### Changed
 
-The SDK now writes a business rule **only** through the bound `CreateProcessWithWfomJson` member —
-the same one the modern business-rule designer uses. The client-side workflow-XAML compiler it used
-to fall back on has been **removed upstream**, because it covered 4 of the 7 action types and a
-single clause, so it silently narrowed a rule into something the platform accepted but that did not
-say what you wrote.
-
-The consequence is visible: **an environment that does not declare that member can no longer host
-business rules at all**, and that is the common case rather than an edge case (18 of 20 measured).
-Rules that used to deploy through the fallback will now be **skipped**. The build says so once,
-names the member, and **builds everything else normally** — you get a working app without the rules,
-never a half-created one.
-
-Nothing else about `businessRules[]` changed for environments that do support it.
-
-**What this means for `--verify` and `--changed-only`.** A skipped rule is reported as *not
-applicable on this environment* rather than *missing* — named explicitly, so a green verify never
-reads as "everything the spec asked for is deployed". It does not fail the build, withhold
-`.last-applied.json`, or invalidate the `--changed-only` snapshot. That matters more than it sounds:
-`verify.ok` gates the exit code, the deployed baseline and the changed-only snapshot at once, and a
-spec with implemented pages makes verify mandatory — so treating an unreachable capability as a
-failure would have forced a full build on every subsequent run, forever, while the build itself
-reported success. A rule that is missing for any *other* reason still fails verify, and a verify run
-standalone (which has no build result to consult) checks every declared rule.
+- **Business rules are environment-gated.** The SDK writes a rule only through the bound
+  `CreateProcessWithWfomJson` member — the client-side workflow-XAML fallback was removed upstream
+  because it silently narrowed a rule into something you did not write. An environment that does not
+  declare that member **cannot host business rules at all** — measured across 142 environments,
+  only 14 declare it and 13 of those actually work. Such rules are **skipped** with a warning naming the member; everything else builds
+  normally. `--verify` reports them as *not applicable on this environment*, so they do not fail the
+  build or invalidate the `--changed-only` snapshot.
 
 ### Added
-- **Per-form security roles** (`forms[].securityRoles`). Offer a form to named `personas[]`, or to
-  `everyone`, with optional `fallbackForm` and `order`. This was previously documented as impossible
-  through any API — the documentation was right that `systemform` has no role relationship (it
-  reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }`) and wrong that this made it
-  unscriptable: the roles live inside `formxml` as `<DisplayConditions>`, and the SDK now writes them
-  there. Note the direction — a form with **no** assignment is offered to **every** role, so this
-  restricts a form rather than granting it, and the restriction takes effect after a publish.
-  (AB#6648526)
-- **Boolean `defaultValue`, whole-number `integerFormat`, and per-column write permissions**
-  (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — the way to make a column read-only).
-  All three were values the SDK hardcoded or never sent, so a maker had to finish the column by hand
-  after every build. Applied on create **and** reconciled on rebuild.
-  ([#495](https://github.com/microsoft/power-platform-skills/issues/495), AB#6648523, AB#6648522,
-  AB#6651276)
-- **Twelve more business-rule operators** — `IsGreaterThan`, `IsGreaterThanEqualTo`, `IsLessThan`,
-  `IsLessThanEqualTo`, `Contains`, `DoesNotContain`, `BeginsWith`, `DoesNotBeginWith`, `EndsWith`,
-  `DoesNotEndWith`, `On`, `NotOn` — and **multi-condition rules**, which are ANDed. Neither was ever
-  a platform limit; both were shaped by the XAML compiler that has now been deleted. Mind the
-  spelling: it is `IsGreaterThan`, not `GreaterThan`, because the SDK resolves an operator it does
-  not recognise to **Equals** rather than rejecting it. The spec rejects anything outside the SDK's
-  own table and suggests the right spelling.
-- **A `description` on every artifact that accepts one.** Tables, columns, views, charts, forms,
-  dashboards, business rules, the solution and global choices now take an optional `description`,
-  written to Dataverse **at create time** rather than backfilled. A name says what a thing is called;
-  a description says what it is *for* — and it is the grounding an agent has when it later inspects
-  an app it did not build. Descriptions stay optional (a spec authored before this still builds), are
-  validated as a non-empty string within the 2000-character Dataverse ceiling, and are **omitted when
-  absent, so a rebuild never blanks a description someone typed in the maker**. `commands[]` and
-  `Customer` columns accept one but the SDK's create surface cannot write it, so you get a **warning**
-  instead of silent loss; `personas[]` takes none at all, because a security role's description
-  carries the SDK's own ownership marker, which it requires an exact match on before it will touch
-  the role.
+
+- **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
+  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
+  undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
+- **Boolean `defaultValue`, whole-number `integerFormat`, and per-column `isValidForCreate` /
+  `isValidForUpdate` / `isValidForRead`** — the last of these is how you make a column read-only.
+  Applied on create and reconciled on rebuild. ([#495], AB#6648523, AB#6648522, AB#6651276)
+- **Twelve more business-rule operators** and **multi-condition rules** (ANDed). Spelling matters:
+  `IsGreaterThan`, not `GreaterThan` — the SDK resolves an unknown operator to `Equals`, so the spec
+  rejects anything outside its table and suggests the right spelling.
+- **A `description` on every artifact that accepts one** — tables, columns, views, charts, forms,
+  dashboards, business rules, the solution and global choices. Written at create time; omitted when
+  absent, so a rebuild never blanks text typed in the maker. `commands[]` and `Customer` columns warn
+  instead of losing it silently; `personas[]` takes none (the SDK stores its ownership marker there).
+- **Per-field form control** — `readOnly`, `hidden` and `after` (reposition), via a form-level
+  `fieldOptions` map or inline on an explicit layout. `prune: false` edits a subset of a form without
+  re-declaring every field. Only the enabled state is written, so a rebuild never clears a designer edit.
+- **The AI form-fill family is controllable per capability** — assist toolbar (`formFill`), edit-form
+  predictions, smart paste and file upload, instead of one flag that only governed the toolbar.
 
 ### Fixed
-- **Dashboards survive a download again.** The SDK could not deserialize a dashboard it had itself
-  serialized — its grammar walk descended into text nodes, and the bundled XML parser returns `null`
-  for a text node's children — so `download-model-app.js` recovered no tiles, dropped the dashboard's
-  sitemap subarea, and failed the whole download unless `--allow-lossy-download` was passed. Fixed
-  upstream; measured across the re-vendor as 0/4 → 4/4 round-trips, and now pinned by a regression
-  test that feeds a serialized dashboard straight back in.
-  ([#478](https://github.com/microsoft/power-platform-skills/issues/478))
-- **Presence operators for business rules.** `ContainsData` / `DoesNotContainData` were gated because
-  the SDK's client-side workflow-XAML compiler emitted an empty parameter array where the platform
-  requires a null one, and every attempt answered `HTTP 500 — Error generating UiData`. That compiler
-  has since been removed entirely (see *Changed*, above): rules are written as the workflow object
-  model through the bound member, where the presence operators need no special handling. All sixteen
-  operators now deploy.
-- **The AI form-fill family is controllable per capability** — the assist toolbar
-  (`formFill`), edit-form predictions (`formFillSuggestions`), smart paste (`formFillSmartPaste`) and
-  file upload (`formFillFiles`), instead of one flag that only ever governed the toolbar.
-- **Descriptions now converge on existing views and charts.** A description reached Dataverse only at
-  create, so the most-read view on a table — the platform's auto-generated *"Active &lt;Plural&gt;"*,
-  which already exists when the build reconciles onto it — never received the authored text. Both are
-  now reconciled, and only when the spec explicitly sets a description that differs from the deployed
-  one, so a rebuild issues no extra write and an omitted description never blanks a maker's text. A
-  chart is updated with a single-column write rather than an artifact push, because pushing an
-  existing chart would newly subject every maker-customized chart to a serialize round trip.
-- **Forms can now control individual fields.** A form field takes `readOnly` (locked but visible),
-  `hidden` (placed but not shown) and `after` (move it directly below another field), via a
-  form-level `fieldOptions` map or inline on an explicit layout's `fields[]` entry. Previously a
-  field was a bare logical name with no control attributes, so "visible but read-only", "present but
-  hidden", and "move this one control" all needed a manual maker or FormXML step. Only the *enabled*
-  state is ever written, so a rebuild never clears a lock or hide applied in the designer.
-- **Reordering one control no longer means re-declaring the whole form.** An explicit layout still
-  prunes fields it does not list by default, but `prune: false` opts out — and `after` repositions a
-  control on an already-deployed form without touching anything else.
-- **Big Integer columns are no longer placed on auto-generated forms.** Big Integer has no Unified
-  Interface control, so the field rendered "Error loading control" on every record of any table that
-  had one. The column is still created and still reachable through the API; it is simply left off the
-  form. An explicit layout that names one is honoured but warned about.
-- **Downloaded specs now preserve deployed descriptions where possible.** Tables, columns, dashboards
-  and solutions round-trip descriptions, while currently non-reconstructed artifacts are listed in a
-  read-only description inventory for inspection. Missing Dataverse descriptions are omitted rather
-  than emitted as blank strings, so downloaded specs still validate and never blank maker-authored
-  text on rebuild.
-- **Existing columns now honor explicit `required` changes on rebuild.** If a spec sets
-  `required: true` or `"recommended"` on a column that already exists, the data-model phase reads
-  the live RequiredLevel and updates it only when it differs; omitted `required` values leave the
-  live column unchanged.
-- **Active business rules no longer leave undeletable workflow copies after teardown.** Teardown now
-  removes the activated `workflow` copy before the table is dropped, so active rules cannot strand
-  rows that later fail with MetadataCache errors.
-- **AI on/off was read wrongly.** The form-fill family uses `0 = platform default`, `1 = disabled`,
-  `2 = enabled`, so treating any non-zero value as "on" reported a deliberately **disabled** feature
-  as enabled — and reported `0` as off when it actually means "defer to flighting". Readiness is now
-  codec-aware and says "unknown" where the platform says "default".
-- **Multi-condition business rules now work.** They used to be rejected at the spec gate, because the
-  client-side XAML compiler read only `clauses[0]`. That compiler is gone; the workflow object model
-  folds N conditions with the platform's own `LogicalAnd`, so a rule may state several conditions.
-- **A malformed `businessRules` no longer crashes validation** with a raw `TypeError` instead of
-  naming the field.
-- **Duplicate-cleanup warnings no longer assert a cause they cannot know** — a permission or
-  throttling failure was reported as a wedged platform row, sending readers to fix the wrong thing.
-- **Column visualizations no longer survive teardown on a table the spec keeps** (`existing: true`),
-  which left a renderer applied to somebody else's table.
+
+- **Dashboards survive a download again** — the SDK could not deserialize a dashboard it had
+  serialized, so no tiles were recovered and the download failed without `--allow-lossy-download`.
+  0/4 → 4/4 round-trips. ([#478])
+- **Descriptions converge on existing views and charts** — previously written only at create, so the
+  platform's auto-created *"Active &lt;Plural&gt;"* view never got one. ([#496])
+- **Downloaded specs preserve deployed descriptions** where the artifact is reconstructed, and list
+  the rest in a read-only inventory. ([#494])
+- **Teardown removes the activated copy of a business rule**, which previously stranded an
+  undeletable row. ([#493])
+- **Existing columns honour an explicit `required` change on rebuild**; an omitted `required` still
+  leaves the live column alone.
+- **Big Integer columns are no longer placed on auto-generated forms** — Big Integer has no Unified
+  Interface control, so the field rendered *"Error loading control"* on every record.
+- **AI on/off is read with the platform's semantics** — `0` = platform default, `1` = disabled,
+  `2` = enabled. Treating any non-zero value as "on" reported a deliberately disabled feature as
+  enabled.
+- **Presence operators** (`ContainsData` / `DoesNotContainData`) deploy; the compiler bug behind the
+  `HTTP 500 — Error generating UiData` failures is gone with the compiler. ([#481])
+- **The async-surface guard is AST-based** — a regex could not decide the remaining cases. ([#475])
+- **A malformed `businessRules` is a validation error**, not a raw `TypeError`.
+- **Duplicate-cleanup warnings report the real failure** instead of asserting a wedged platform row.
+- **Column visualizations are cleared on teardown for a table the spec keeps** (`existing: true`).
+
+[#475]: https://github.com/microsoft/power-platform-skills/issues/475
+[#478]: https://github.com/microsoft/power-platform-skills/issues/478
+[#481]: https://github.com/microsoft/power-platform-skills/issues/481
+[#493]: https://github.com/microsoft/power-platform-skills/issues/493
+[#494]: https://github.com/microsoft/power-platform-skills/issues/494
+[#495]: https://github.com/microsoft/power-platform-skills/issues/495
+[#496]: https://github.com/microsoft/power-platform-skills/issues/496
 
 ## [2.5.0]
 

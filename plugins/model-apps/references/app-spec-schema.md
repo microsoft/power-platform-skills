@@ -678,7 +678,8 @@ custom control), but the spec validator emits a warning.
 - **Environment gate — read this first.** The SDK writes a rule through the bound
   `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
   **no fallback**. An environment that does not declare that member cannot host business rules at
-  all, and that is the common case rather than an edge case (18 of 20 measured). The build then
+  all, and that is the common case rather than an edge case: measured across 142 reachable
+  environments, 14 declare the member and 13 of those deploy a real rule. The build then
   **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
   so you get a working app without the rules, not a half-built one. `--verify` will report those
   rules as not deployed, which is the truth.

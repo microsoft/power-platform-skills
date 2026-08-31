@@ -1764,9 +1764,13 @@ async function runSdkBuild(spec, opts = {}) {
   // that did not say what the author wrote.
   //
   // The consequence is environment-visible and is handled below: an environment that does not declare
-  // the member cannot host business rules AT ALL. MEASURED on a live org — `$metadata` (16.5 MB) does
-  // not mention the member and every POST answers 404 — and the SDK's own message reports 18 of 20
-  // measured environments in the same state. See the `businessRuleApiUnavailable` handling.
+  // the member cannot host business rules AT ALL.
+  //
+  // MEASURED by fanning out across 142 reachable environments (2026-08-31): 14 declare the member,
+  // 128 do not, and 13 of the 14 deploy a real two-clause rule. So the gate is the COMMON case, not
+  // an edge case. Note also that declaring the member is NOT the same as it working — one environment
+  // answers a real push with a server-side `MissingMethodException`, which is a platform defect there
+  // rather than anything about the rule. See the `businessRuleApiUnavailable` handling.
   if (has('business-rules')) {
     // Warn ONCE per build, not once per rule: on an environment without the member every rule skips,
     // and N copies of the same paragraph buries the rest of the build output.
