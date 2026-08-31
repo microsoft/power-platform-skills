@@ -141,13 +141,14 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `biometrics`, `local-authentication` | `expo-local-authentication` | `src/native/biometrics.ts` | Use only when the current template package contains `expo-local-authentication` |
 | `clipboard` | `expo-clipboard` | `src/native/clipboard.ts` | Use only when the current template package contains `expo-clipboard` |
 | `mail-composer`, `email-draft` | `expo-mail-composer` | `src/native/mailComposer.ts` | Opens native mail compose when the package is present; connectors still own server-side email sends |
-| `media-library` | `expo-media-library` | `src/native/mediaLibrary.ts` | Use for device media-library access only when package is present |
 | `audio` | `expo-audio` | `src/native/audio.ts` | Use for audio recording/playback only when package is present |
 | `video` | `expo-video` | `src/native/video.ts` | Use for video playback only when package is present |
 | `sensors` | `expo-sensors` | `src/native/sensors.ts` | Use only for sensor APIs exposed by the installed package |
 | `screen-orientation` | `expo-screen-orientation` | `src/native/screenOrientation.ts` | Use only when package is present; do not edit native config |
 | `device-info` | `expo-device` / `expo-application` / `expo-cellular` | `src/native/deviceInfo.ts` | Read-only device/app/cellular metadata wrappers |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-level component usage | Use directly in form screens per screen-builder rules; no `/add-native` wrapper required |
+
+For custom workflows outside Dataverse File/Image form fields, use the `image-picker` capability via `/add-native image-picker` for user-selected photos and videos, or the `document-picker` capability via `/add-native document-picker` for documents and other files. These wrappers use scoped system-picker flows. Dataverse File/Image form fields remain the exception: use host `<FilePicker>` / `<ImagePicker>` controls as described above, not `/add-native` wrappers or raw Expo module imports.
 
 ### PDF / pen routing rules
 
