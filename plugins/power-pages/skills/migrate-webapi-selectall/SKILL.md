@@ -56,6 +56,7 @@ Support both:
    build them only from the bundled HTML template.
 9. Preserve unrelated YAML structure and values.
 10. Verify with a fresh discovery pass, not remembered inventory.
+11. Leave only the HTML report in the migration output directory.
 
 Read [references/column-analysis.md](references/column-analysis.md) before
 analyzing calls. Read
@@ -212,6 +213,9 @@ After the initial snapshot:
 Treat `table-schema.json` and all numbered snapshots as one schema package.
 Never requery a logical table already present in that package, and never
 launch concurrent schema queries.
+
+Identifier lists and schema snapshots are working files. Keep them until
+verification finishes, then delete them in Phase 7.
 
 ### 3.2 Analyze every call and consumer
 
@@ -371,6 +375,16 @@ as evidence to investigate and never restore `*`. Do not add a column under
 the prior approval. Return to Phase 3, update the exact plan and report, repeat
 the Phase 4 approval, independently verify in Phase 6, and obtain a new
 Phase 7 deployment approval.
+
+Delete every working file created during the migration, keeping only
+`docs/webapi-selectall-migration/migration-report.html`:
+
+- `table-identifiers.txt` and `table-identifiers-pass-<N>.txt`;
+- `table-schema.json` and `table-schema.pass-<N>.json`.
+
+Delete only files this migration created, and confirm the directory holds the
+report alone. Skip cleanup while returning to an earlier phase, and delete the
+regenerated files once that pass finishes.
 
 Record usage by following
 `${PLUGIN_ROOT}/references/skill-tracking-reference.md` with

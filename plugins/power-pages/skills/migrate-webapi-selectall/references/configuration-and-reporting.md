@@ -110,7 +110,8 @@ The wildcard migration is complete only when:
 - every proposed field has source or contract evidence and schema validation;
 - every normal table GET has an explicit `$select`;
 - a fresh independent pass finds zero wildcard field settings;
-- the report includes every wildcard and already-explicit setting.
+- the report includes every wildcard and already-explicit setting;
+- only `migration-report.html` remains in the migration output directory.
 
 If explicit settings still have unresolved missing or overbroad fields, set
 `REPORT_STATUS` to `Partial` rather than claiming full Web API hardening.

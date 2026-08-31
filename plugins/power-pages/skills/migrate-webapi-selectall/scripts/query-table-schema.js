@@ -371,8 +371,14 @@ function writeAtomicJson(projectRoot, filePath, value) {
   const output = resolveOutputPath(projectRoot, filePath);
   fs.mkdirSync(path.dirname(output), { recursive: true });
   const temporary = `${output}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  fs.renameSync(temporary, output);
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fs.renameSync(temporary, output);
+  } catch (error) {
+    // Never strand a partial .tmp file in the caller's output directory.
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 async function main() {

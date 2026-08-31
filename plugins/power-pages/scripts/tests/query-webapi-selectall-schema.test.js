@@ -299,3 +299,21 @@ test('limits SPA review to authoritative editable source', () => {
     /Do not exclude an authored traditional\s+web\s+file/
   );
 });
+
+test('keeps only the report after the migration completes', () => {
+  const skill = fs.readFileSync(path.join(SKILL_ROOT, 'SKILL.md'), 'utf8');
+  const reporting = fs.readFileSync(
+    path.join(SKILL_ROOT, 'references', 'configuration-and-reporting.md'),
+    'utf8'
+  );
+
+  assert.match(skill, /Leave only the HTML report in the migration output/);
+  assert.match(skill, /Delete every working file created during the migration/);
+  assert.match(skill, /table-identifiers-pass-<N>\.txt/);
+  assert.match(skill, /table-schema\.pass-<N>\.json/);
+  assert.match(skill, /Delete only files this migration created/);
+  assert.match(
+    reporting,
+    /only `migration-report\.html` remains in the migration output/
+  );
+});
