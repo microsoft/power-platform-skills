@@ -138,6 +138,10 @@
         "data": {
           "orderId": "string"
         }
+      },
+      "directEntry": {
+        "behavior": "selector",
+        "note": "Opened from the nav with no orderId, show an order picker and then render the chosen order."
       }
     }
   ],

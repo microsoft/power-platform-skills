@@ -33,12 +33,14 @@ const {
   FORM_TYPE_CODE,
   FORM_GUID_RE,
   canonicalPersonaName,
+  BUSINESS_RULE_VALUELESS_OPERATORS,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 const {
   makeRunner,
   requireSuccessfulPush,
+  reportPartialPush,
   makeEntitySetResolver,
   provisionSolution,
   provisionDataModel,
@@ -93,13 +95,26 @@ const TILE_CLASS_ID = {
   iframe: 'FD2A7985-3187-444E-908D-6624B21F69C0',
   webresource: '9FDF5F91-88B1-47F4-AD53-C11EFC01A01D',
 };
-const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20 };
+// Solution component types. `workflow` is 29 — a business rule is a workflow row (category 2), so it
+// is added to the solution under that type, not under a bespoke one.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/solutioncomponent
+const COMPONENT_TYPE = { view: 26, chart: 59, form: 60, dashboard: 60, webResource: 61, sitemap: 62, app: 80, role: 20, workflow: 29 };
 
 // Web-resource kinds (App Spec `type`) -> SDK createWebResource `type` token. The SDK maps
 // the token to the Dataverse webresourcetype code (js=3, html=1, css=2, …).
 const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'gif', 'xsl', 'ico', 'svg', 'resx']);
 // Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
+
+// The per-app setting name that turns on the modern ("new look") shell. Verified live against a real
+// organization: `settingdefinition` uniquename `NewLookAlwaysOn`, datatype 2 (boolean), default
+// "false". See the app-shell phase for why this one rather than the other new-look definitions.
+const NEW_LOOK_SETTING = 'NewLookAlwaysOn';
+// The Wave 2 header/navigation refresh (public preview) — a DIFFERENT `settingdefinition` from
+// NEW_LOOK_SETTING above. Named here only for the warning message; the value encoding (a Number
+// tri-state where ON is '2', not '1') lives in the SDK's setHeaderAndNavigationRefresh, which is
+// why the plugin does not write this row by hand.
+const HEADER_NAV_SETTING = 'HeaderAndNavigationRefresh';
 
 // Map a dashboard tile (App Spec) to the SDK's AddDashboardTileOptions. chart/list tiles resolve
 // the underlying view (savedqueryid) — and the chart its visualization id — from what the build
@@ -126,13 +141,22 @@ function dashboardTileOpts(spec, tile, result) {
 // addElement('dashboard', id, '/components', …). The adapter mints the cell/control ids and lays the
 // grid out from `position`; the caller supplies the classId (chart/list share the grid control id —
 // ChartGridMode disambiguates), the `<parameters>` map, and the placement. Tiles stack vertically
-// (one per row in the first section). Param keys match the Dataverse control XML (a chart tile keys
-// its visualization as `ChartId`, see DashboardAdapter / dashboard.workflow.test.ts).
+// (one per row in the first section). Param keys match the Dataverse control XML; note that a chart
+// tile keys its visualization as `VisualizationId`, NOT `ChartId` — see the comment on that line,
+// and `lcid-real-bundle.test.js`, which pushes this exact payload through the real bundle.
 function dashboardComponent(t, index) {
   const parameters = {};
   if (t.type === 'chart') {
+    // `VisualizationId`, NOT `ChartId`. The platform validates dashboard FormXML against a schema
+    // that enumerates the legal children of `<parameters>`, and `ChartId` is not one of them:
+    //   The element 'parameters' has invalid child element 'ChartId'. List of possible elements
+    //   expected: 'ViewId, IsUserView, ... VisualizationId, ...'
+    // A chart tile therefore failed the whole dashboards phase with a 400. Caught by a live build;
+    // the mock-based test had asserted the wrong name, so the suite agreed with the bug.
+    // `download-model-app.js` already reads `VisualizationId`, so this also makes a dashboard
+    // round-trip through download -> rebuild instead of losing its chart binding.
     parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
-    parameters.ChartId = t.visualizationId; parameters.ChartGridMode = 'Chart';
+    parameters.VisualizationId = t.visualizationId; parameters.ChartGridMode = 'Chart';
   } else if (t.type === 'list') {
     parameters.TargetEntityType = t.targetEntity; parameters.ViewId = t.viewId;
     parameters.IsUserView = 'false'; parameters.ChartGridMode = 'Grid'; parameters.RecordsPerPage = '10';
@@ -151,14 +175,41 @@ function dashboardComponent(t, index) {
 // Command-bar locations (CommandBarJson.location). MainTab = the entity's form/grid command bar.
 const COMMAND_LOCATIONS = new Set(['MainTab', 'HomeTab', 'ContextualTab']);
 
-// Build one command control: a button, or a flyout/split-button carrying nested `children`. Each
+// What a JS command must be handed so its function can do anything.
+//
+// `onclickeventjavascriptparameters` is a JSON array of `{type,value}` CrmParameter descriptors. When
+// it is null the function is invoked with NO arguments — so the near-universal handler shape
+// `function doThing(primaryControl) { primaryControl.getAttribute(...) }` throws on its first
+// property access and the button silently does nothing. The error surfaces only in the browser
+// console, which is exactly how this shipped unnoticed: the build, the server-side state and
+// `--verify` all look perfect.
+//
+// LIVE-MEASURED from the platform's own maker-authored commands on a real org (the numeric codes are
+// not documented in the SDK, which passes the string through verbatim):
+//   location 0 (form)   -> [{"type":5}]              e.g. AppCommon.KnowledgeArticle…markInternalOpenDialog
+//                                                         …discard, …translateArticle — all type 5
+//   location 1 (grid)   -> [{"type":12},{"type":24}] e.g. AppCommon.KnowledgeArticle.GridCommandActions.markInternal
+//   location 2 (subgrid)-> [{"type":12}]             e.g. …relateCategoryFromSubGridStandard
+// So 5 = PrimaryControl, 12 = SelectedControl, 24 = SelectedControlSelectedItemIds.
+//
+// MainTab is the form command bar (live-verified: our MainTab buttons deploy with `location` 0).
+// HomeTab/ContextualTab are mapped to the grid/subgrid shapes by the same correspondence; those two
+// are inferred from the classic ribbon meanings rather than live-verified, so an author who needs
+// something else can still override with an explicit `parameters` string.
+const COMMAND_DEFAULT_PARAMETERS = {
+  MainTab: '[{"type":5,"value":null}]',
+  ContextualTab: '[{"type":12,"value":null}]',
+  HomeTab: '[{"type":12,"value":null},{"type":24,"value":null}]',
+};
+
+
 // control gets a GUID `id` with `command` set to the same id (the appactionid). A button with a
 // `library` + `function` gets a functional JS on-click action bound to the created web resource;
 // `hidden`/`disabled` set static visibility. A flyout/split container (type FlyoutAnchor|SplitButton)
 // carries `children` instead of an action — the SDK's CommandAdapter synthesizes the required
 // intervening Group between a flyout and its buttons (Dataverse forbids a button parented directly
 // to a flyout). Throws if a referenced web resource wasn't created.
-function buildCommandControl(c, webResources) {
+function buildCommandControl(c, webResources, location = 'MainTab') {
   const id = randomUUID();
   const type = c.type || 'Button';
   const control = { id, type, label: c.label, command: id };
@@ -167,12 +218,18 @@ function buildCommandControl(c, webResources) {
     const wrId = webResources[c.library];
     if (!wrId) throw new Error(`command "${c.label}" references web resource '${c.library}' which wasn't created — declare it in webResources[] and don't skip the web-resources phase`);
     control.action = { type: 'javascript', webResourceId: wrId, functionName: c.function };
-    if (c.parameters !== undefined) control.action.parameters = c.parameters;
+    // Default the parameters when the author did not say. A JS command with none is handed nothing
+    // and cannot act on the record — see COMMAND_DEFAULT_PARAMETERS. An explicit value (including
+    // an empty string, for a genuinely argument-less function) always wins.
+    control.action.parameters = c.parameters !== undefined
+      ? c.parameters
+      : (COMMAND_DEFAULT_PARAMETERS[location] || COMMAND_DEFAULT_PARAMETERS.MainTab);
   }
   if (c.hidden) control.hidden = true;
   if (c.disabled) control.disabled = true;
   if ((type === 'FlyoutAnchor' || type === 'SplitButton') && Array.isArray(c.children)) {
-    control.children = c.children.map((ch) => buildCommandControl(ch, webResources));
+    // Children live on the same command bar as their anchor, so they inherit its location.
+    control.children = c.children.map((ch) => buildCommandControl(ch, webResources, location));
   }
   return control;
 }
@@ -189,7 +246,7 @@ function commandDef(entityLogical, cmds, webResources) {
   for (const c of cmds) {
     const location = c.location || 'MainTab';
     if (!byLocation.has(location)) byLocation.set(location, []);
-    byLocation.get(location).push(buildCommandControl(c, webResources));
+    byLocation.get(location).push(buildCommandControl(c, webResources, location));
   }
   const commandBars = [...byLocation.entries()].map(([location, controls]) => ({
     location,
@@ -290,6 +347,7 @@ function planFor(spec, opts) {
     if ((f.events || []).length) items.push({ phase: 'forms', label: `wire ${f.events.length} event handler(s) on ${f.entity}` });
     if ((f.quickViews || []).length) items.push({ phase: 'forms', label: `place ${f.quickViews.length} quick-view(s) on ${f.entity}` });
   }
+  if (has('business-rules')) for (const r of spec.businessRules || []) items.push({ phase: 'business-rules', label: `business rule "${r.name}" on ${r.entity}` });
   if (has('commands')) for (const [entity, cmds] of Object.entries(commandsByEntity(spec))) items.push({ phase: 'commands', label: `command bar for ${entity} (${cmds.length} button(s))` });
   if (has('dashboards')) for (const d of spec.dashboards || []) items.push({ phase: 'dashboards', label: `dashboard "${d.name}" (${(d.tiles || []).length} tile(s))` });
   if (has('app-shell')) items.push({ phase: 'app-shell', label: `app module "${spec.app.name}" + sitemap` });
@@ -736,6 +794,74 @@ function appDef(spec, result, opts = {}) {
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
 
+// Map one App Spec business rule to the SDK's BusinessRuleArtifact shape.
+//
+// The SDK's condition model is NOT the obvious one, and getting it wrong is SILENT: `updateElement`
+// merges unknown keys onto the node, the compiler ignores them, and the push succeeds with XAML that
+// references none of the author's columns — a rule that deploys, activates, and never fires. So the
+// mapping is explicit and the App Spec shape is validated before we get here.
+//
+//   conditions[] -> rootCondition.clauses[]   (ANDed; `logic: 'AND'`)
+//   actions[]    -> rootCondition.trueBranch[]
+//
+// `valueType` is always `'Value'`: the compiler rejects `Field` and `Lookup`, so exposing that axis
+// would offer authors a choice they cannot use. The App Spec's `dataType` is the SDK's
+// A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
+//
+// LIVE-MEASURED. Activating a business rule makes Dataverse create a SECOND `workflows` row:
+//   type=1, parentworkflowid=(none)  -> the definition the author wrote
+//   type=2, parentworkflowid=<def>   -> the platform's activated copy of it
+// That pair is normal for every activated process, and the vendored SDK's own orphan probe filters
+// `category eq 2 and type eq 1` for exactly this reason.
+//
+// Omitting `type` is not cosmetic: it made the build try to deactivate and delete the activated copy
+// (which the platform refuses, 405), emit a false "the SDK created a duplicate" warning, and would
+// have made `--verify` fail EVERY active business rule as "duplicated".
+//
+// category 2 = Business Rule; type 1 = definition, 2 = activated copy.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/workflow
+function businessRuleFilter(name, entityLogical) {
+  return `category eq 2 and type eq 1 and name eq '${odataLit(name)}' and primaryentity eq '${odataLit(String(entityLogical).toLowerCase())}'`;
+}
+
+// `valueWorkflowType` — how the platform interprets the literal — renamed because `valueType` already
+// means something else here.
+function businessRuleDef(rule) {
+  const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
+  const clauseId = ids('c');
+  const actionId = ids('a');
+  const valueless = (op) => BUSINESS_RULE_VALUELESS_OPERATORS.has(op);
+  return {
+    name: rule.name,
+    entityLogicalName: String(rule.entity).toLowerCase(),
+    scope: rule.scope || 'Entity',
+    // Draft unless the author asks for Active. A rule is inert until activated, so defaulting to
+    // Active is what makes `businessRules[]` do something on the first build.
+    status: rule.status || 'Active',
+    rootCondition: {
+      id: 'r1',
+      displayName: rule.name,
+      logic: 'AND',
+      clauses: (rule.conditions || []).map((c) => ({
+        id: clauseId(),
+        field: String(c.field).toLowerCase(),
+        operator: c.operator,
+        valueType: 'Value',
+        ...(valueless(c.operator) ? {} : { value: String(c.value), valueWorkflowType: c.dataType || 'String' }),
+      })),
+      trueBranch: (rule.actions || []).map((a) => {
+        const node = { id: actionId(), type: a.type, displayName: a.label || `${a.type} ${a.field}`, field: String(a.field).toLowerCase() };
+        if (a.type === 'SetVisibility') node.visible = a.visible;
+        else if (a.type === 'LockUnlock') node.lock = a.lock;
+        else if (a.type === 'SetBusinessRequired') node.required = a.required;
+        else if (a.type === 'SetFieldValue') { node.value = String(a.value); node.valueType = 'Value'; node.valueWorkflowType = a.dataType || 'String'; }
+        return node;
+      }),
+      falseBranch: [],
+    },
+  };
+}
+
 // Map one App Spec persona to the vendored SDK's PersonaRoleSpec (cds-maker-sdk createPersonaRole).
 // Pure: spec shape -> SDK shape. Two normalizations:
 //   1. `entity` is lower-cased to a Dataverse logical name (the SDK resolves prv* ids from metadata
@@ -879,7 +1005,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -896,7 +1022,7 @@ async function runSdkBuild(spec, opts = {}) {
   //    entity (fresh -> createTable result, existing -> findTables hit).
   let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -954,19 +1080,29 @@ async function runSdkBuild(spec, opts = {}) {
   // --- Form authoring via the SDK's generic surface (addElement/updateElement/removeElement) -------
   // The new SDK removed the per-artifact form mutators; a form is built as canonical intent
   // (./artifact-intent.js) and applied through the generic surface.
+  //
+  // EVERY read/mutate call below is awaited because the SDK's generic surface is ASYNC as of the
+  // upstream "300s cache staleness with async revalidating reads" change: getArtifact, addElement,
+  // updateElement, removeElement, moveElement, findElements and queryTree all return Promises now
+  // (a read may re-fetch from the server before serving a cached copy). Dropping an `await` here
+  // does NOT throw — a Promise is truthy, so the `|| {}` fallbacks stay dormant and the pure
+  // helpers below silently see a Promise instead of an artifact (hasSubgrid -> false -> duplicate
+  // sub-grid; findFieldCellPointer -> null -> the field is never pruned). That silence is why
+  // scripts/tests/sdk-async-surface.test.js scans this file for bare calls.
 
   // Create a NEW form body: create a MINIMAL form (the adapter seeds one default tab), append each
   // compiled tab (addElement recursively mints cell/section/tab ids — updateElement does NOT, so a
   // coarse whole-tab insert is the adapter-blessed path), then drop the seed tab at index 0. Every
   // intermediate state keeps >=1 tab, so the structural validator never rejects an empty form.
-  const createFormShell = (def) => {
+  const createFormShell = async (def) => {
     const art = provision.createArtifact('form', { name: def.name, entityLogicalName: def.entityLogicalName, formType: def.formType, status: def.status });
     const tabs = def.tabs || [];
-    for (const tab of tabs) provision.addElement('form', art.id, '/tabs', tab);
+    // Sequential (not Promise.all): tab ORDER is the on-form order, and addElement appends.
+    for (const tab of tabs) await provision.addElement('form', art.id, '/tabs', tab);
     // Drop the adapter's seed tab (my tabs were appended after it) — but ONLY if I actually added at
     // least one tab, so a degenerate spec with an empty `tabs: []` still leaves the valid seed tab
     // rather than a tab-less form the designer can't open.
-    if (tabs.length > 0) provision.removeElement('form', art.id, '/tabs/0');
+    if (tabs.length > 0) await provision.removeElement('form', art.id, '/tabs/0');
     return art.id;
   };
 
@@ -987,12 +1123,12 @@ async function runSdkBuild(spec, opts = {}) {
   // A sub-grid used to be spliced as a single cell into the first field section's rows, which rendered
   // it half-width inside a 2-column section; giving it a dedicated section makes the related list span
   // the form. `sg.label` is already resolved to the child's display name by the forms phase.
-  const addSubgrids = (formId, subs) => {
+  const addSubgrids = async (formId, subs) => {
     for (const sg of subs || []) {
-      if (hasSubgrid(provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
-      const sectionsPtr = firstColumnSectionsPointer(provision.getArtifact('form', formId) || {});
+      if (hasSubgrid(await provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
+      const sectionsPtr = firstColumnSectionsPointer(await provision.getArtifact('form', formId) || {});
       if (!sectionsPtr) continue;
-      provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
+      await provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
     }
   };
 
@@ -1009,15 +1145,15 @@ async function runSdkBuild(spec, opts = {}) {
   // region doesn't exist -> add it whole. Rebuild: MERGE (append only handlers not already present,
   // keyed by event+function+library) so a re-run never duplicates a handler or appends a second
   // <events> root. The adapter mints each handlerUniqueId at serialize (we omit it).
-  const wireFormEvents = (formId, events) => {
+  const wireFormEvents = async (formId, events) => {
     const wanted = (events || []).filter((ev) => FORM_EVENTS.has(ev.event) && ev.library && ev.function);
     if (!wanted.length) return false;
-    const form = provision.getArtifact('form', formId) || {};
+    const form = await provision.getArtifact('form', formId) || {};
     const bagC = (form.bag && form.bag.c) || [];
     const regionIdx = bagC.findIndex((e) => e && e.node && e.node.n === 'events');
     if (regionIdx < 0) {
       const nextI = bagC.reduce((m, e) => Math.max(m, e.i), -1) + 1;
-      provision.addElement('form', formId, '/bag/c', { i: nextI, node: formEventsRegionIntent(wanted) });
+      await provision.addElement('form', formId, '/bag/c', { i: nextI, node: formEventsRegionIntent(wanted) });
       return true;
     }
     // Existing region: append only handlers not already wired.
@@ -1031,7 +1167,7 @@ async function runSdkBuild(spec, opts = {}) {
     let added = false;
     for (const ev of wanted) {
       if (existing.has(`${ev.event}|${ev.function}|${ev.library}`)) continue;
-      provision.addElement('form', formId, `/bag/c/${regionIdx}/node/c`, formEventsRegionIntent([ev]).c[0]);
+      await provision.addElement('form', formId, `/bag/c/${regionIdx}/node/c`, formEventsRegionIntent([ev]).c[0]);
       added = true;
     }
     return added;
@@ -1051,15 +1187,15 @@ async function runSdkBuild(spec, opts = {}) {
       if (fn) wantCellByLogical[String(fn).toLowerCase()] = c;
     }
     const want = formFieldLogicals(def);
-    const have = new Set(formFieldLogicals(provision.getArtifact('form', formId) || {}));
+    const have = new Set(formFieldLogicals(await provision.getArtifact('form', formId) || {}));
     for (const logical of want) {
       if (have.has(logical)) continue; // idempotent: already on the form
-      const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', formId) || {});
+      const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', formId) || {});
       if (!rowsPtr) break;
-      provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
+      await provision.addElement('form', formId, rowsPtr, { cells: [wantCellByLogical[logical]] });
       have.add(logical);
     }
-    addSubgrids(formId, def.__subgrids);
+    await addSubgrids(formId, def.__subgrids);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.
@@ -1068,14 +1204,14 @@ async function runSdkBuild(spec, opts = {}) {
     if (def.__explicitLayout) {
       const wantSet = new Set(want);
       const primary = def.__primaryField ? String(def.__primaryField).toLowerCase() : null;
-      for (const logical of formFieldLogicals(provision.getArtifact('form', formId) || {})) {
+      for (const logical of formFieldLogicals(await provision.getArtifact('form', formId) || {})) {
         if (wantSet.has(logical) || logical === primary) continue;
-        const ptr = findFieldCellPointer(provision.getArtifact('form', formId) || {}, logical);
-        if (ptr) provision.removeElement('form', formId, ptr);
+        const ptr = findFieldCellPointer(await provision.getArtifact('form', formId) || {}, logical);
+        if (ptr) await provision.removeElement('form', formId, ptr);
       }
     }
-    requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`);
-    await provision.publishArtifact('form', formId);
+    requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
+    reportPartialPush(await provision.publishArtifact('form', formId), `form ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
     return formId;
   };
@@ -1085,7 +1221,7 @@ async function runSdkBuild(spec, opts = {}) {
   // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
   const reconcileView = async (viewId, def) => {
     await provision.fetchArtifact('view', viewId);
-    const current = provision.getArtifact('view', viewId) || {};
+    const current = await provision.getArtifact('view', viewId) || {};
     const have = new Set((current.columns || []).map((c) => String(c.name).toLowerCase()));
     const merged = (current.columns || []).slice();
     for (const col of def.columns || []) {
@@ -1094,9 +1230,9 @@ async function runSdkBuild(spec, opts = {}) {
       have.add(n);
       merged.push({ name: n, width: col.width || 100, order: merged.length });
     }
-    provision.updateElement('view', viewId, '/columns', merged);
-    requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`);
-    await provision.publishArtifact('view', viewId);
+    await provision.updateElement('view', viewId, '/columns', merged);
+    requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
+    reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
     return viewId;
   };
@@ -1179,12 +1315,12 @@ async function runSdkBuild(spec, opts = {}) {
     // types (view/chart/command/dashboard/app) still serialize unchanged from a full createArtifact.
     let id;
     if (type === 'form') {
-      id = createFormShell(def);
-      addSubgrids(id, def.__subgrids);
+      id = await createFormShell(def);
+      await addSubgrids(id, def.__subgrids);
     } else {
       id = provision.createArtifact(type, def).id;
     }
-    const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`);
+    const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
     return pushed.id;
   });
@@ -1230,7 +1366,7 @@ async function runSdkBuild(spec, opts = {}) {
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {
         const art = provision.createArtifact('chart', def);
-        const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         return pushed.id;
       });
@@ -1294,9 +1430,9 @@ async function runSdkBuild(spec, opts = {}) {
           await provision.fetchArtifact('form', id);
           // Merge into the root-bag <events> region (idempotent — a rebuild only pushes if a NEW
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
-          if (wireFormEvents(id, wantedEvents)) {
-            requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`);
-            await provision.publishArtifact('form', id);
+          if (await wireFormEvents(id, wantedEvents)) {
+            requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
+            reportPartialPush(await provision.publishArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
           }
         });
       }
@@ -1328,15 +1464,15 @@ async function runSdkBuild(spec, opts = {}) {
           const qvFormId = formIdByEntityName[`${String(qv.targetEntity).toLowerCase()}|${qv.form}`];
           if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();
-          if (hasQuickView(provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
-          const rowsPtr = firstSectionRowsPointer(provision.getArtifact('form', hostId) || {});
+          if (hasQuickView(await provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
+          const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', hostId) || {});
           if (!rowsPtr) continue;
-          provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
+          await provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
           changed = true;
         }
         if (changed) {
-          requireSuccessfulPush(await provision.pushArtifact('form', hostId), `form ${f.name || f.entity} quick-views`);
-          await provision.publishArtifact('form', hostId);
+          requireSuccessfulPush(await provision.pushArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
         }
       });
     }
@@ -1347,6 +1483,138 @@ async function runSdkBuild(spec, opts = {}) {
   //     Pushed via the workspace-owning `provision` client (the appaction lands in the Default
   //     solution — it's not a standard solution-component type — but is entity-scoped so it shows
   //     on the entity's command bar in the app regardless).
+  // 6b-pre. Business rules. Additive discover-reconcile like charts/commands: a rule is identified by
+  // (entity, name), and re-pushing on every rebuild would stack duplicate rules on the table. The SDK
+  // routes to the supported bound member first and falls back to a classic `workflows` row carrying
+  // compiled WWF XAML when that member faults — see sdk-uptake-contract.test.js for the exact routing.
+  if (has('business-rules')) {
+    for (const rule of spec.businessRules || []) {
+      const entityLogical = String(rule.entity).toLowerCase();
+      const existing = await provision.queryRecords('workflow', {
+        select: ['workflowid', 'statecode', 'createdon'],
+        // Definition rows only — see businessRuleFilter. Scoped to the entity as well as the name so
+        // a same-named rule on a DIFFERENT table is not mistaken for this one.
+        filter: businessRuleFilter(rule.name, entityLogical),
+        // `top: 50` and ORDERED, not `top: 1`. Two reasons, both measured:
+        //  * A previous build (before the SDK's double-write fix) could have left duplicates. With
+        //    `top: 1` this branch reused one and skipped the cleanup entirely, so both rules kept
+        //    firing forever — the sweep below only ever ran after a fresh create.
+        //  * `top: 1` with no ordering returns an ARBITRARY row, so the one adopted as "the" rule
+        //    could be the faulted orphan rather than the good one. Oldest-first makes the survivor
+        //    deterministic and prefers the row that was committed first.
+        orderBy: 'createdon asc',
+        top: 50,
+      });
+      const existingId = existing && existing[0] && existing[0].workflowid;
+      if (existingId) {
+        // Legacy duplicates: everything beyond the first row is residue from a build that predates
+        // the SDK fix. Remove it here as well as on the create path, so a rebuild repairs an org
+        // instead of preserving the problem. Best-effort — these rows frequently refuse both
+        // deactivate (400 0x80060015) and delete (405 0x80040227), and a failure to clean one must
+        // not fail the build; `--verify` reports the surviving duplicates.
+        const legacyDupes = (existing || []).slice(1);
+        for (const extra of legacyDupes) {
+          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
+          let removed = false;
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          if (typeof opts.warn === 'function') {
+            opts.warn(removed
+              ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
+              : `business rule "${rule.name}": a duplicate left by an earlier build (${extra.workflowid}) could not be removed — it is wedged by the platform fault that created it. Delete it in Maker so only one copy of the rule runs. See issue #482.`);
+          }
+        }
+        // Reuse — but a rule that EXISTS is not necessarily a rule that RUNS. A deployed rule left in
+        // Draft (statecode 0) is inert, and "exists, so skip" would report success over an app whose
+        // logic silently does nothing. Live-hit: a rule deactivated out-of-band stayed Draft across a
+        // rebuild. So reconcile the one thing that is cheap and safe to converge — its state.
+        const wantActive = (rule.status || 'Active') === 'Active';
+        const isActive = existing[0].statecode === 1;
+        if (wantActive !== isActive) {
+          // Converge in BOTH directions. Activating a Draft rule was handled from the start; the
+          // reverse was not, so a spec changed to `status: "Draft"` left the deployed rule ACTIVE and
+          // still firing — a rebuild that silently ignores the one property it claims to reconcile.
+          //
+          // Best-effort, NOT a build halt. A rule can be wedged in a state where the platform refuses
+          // both activation and deletion ("Invalid operation - You cannot activate or deactivate this
+          // business rule") — live-observed on a row the SDK's bound member left behind after faulting
+          // during UiData generation (#482). Failing the phase there would make one broken pre-existing
+          // rule block the whole app from building, which is worse than an inert rule. The warning
+          // says so, and `--verify` reports the rule's real state (see the business-rule block in
+          // verify-spec.js).
+          const target = wantActive ? { statecode: 1, statuscode: 2 } : { statecode: 0, statuscode: 1 };
+          const verb = wantActive ? 'activated' : 'deactivated';
+          try {
+            await provision.updateRecord('workflow', existingId, target);
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (existed in the wrong state — ${verb})`);
+          } catch (e) {
+            if (typeof opts.warn === 'function') {
+              opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but could not be ${verb} (${e && e.message}). It is ${isActive ? 'still running' : 'inert'}. Delete it and rebuild to recreate it cleanly.`);
+            }
+            runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists but could not be ${verb})`);
+          }
+        } else {
+          runner.skip('business-rules', `business rule "${rule.name}" on ${rule.entity} (exists — reuse; rule edits aren't applied on rebuild, recreate to change)`);
+        }
+        result.created.businessRules[`${entityLogical}|${rule.name}`] = existingId;
+        continue;
+      }
+      await runner.run('business-rules', `business rule "${rule.name}" on ${rule.entity}`, async () => {
+        const def = businessRuleDef(rule);
+        const art = provision.createArtifact('businessRule', def);
+        // The condition tree is a nested object, so it goes on through the generic element surface
+        // rather than the create payload — mirroring how the SDK's own workflow test authors one.
+        await provision.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
+        result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
+        await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+
+        // DE-DUPLICATE — belt-and-braces now that the SDK fixes this at source.
+        //
+        // The SDK tries the supported bound member first and falls back to a classic `workflows` row
+        // on a qualifying 400. That fallback USED to assume the 400 meant "nothing was written";
+        // live measurement showed the platform commits the row and THEN faults generating its
+        // UiData, so the fallback wrote a SECOND copy and both fired. Observed as two rows ~5s apart
+        // in one run, one server-assigned and one carrying the client-generated id.
+        //
+        // Fixed upstream and vendored here: on the qualifying 400 the SDK now probes for the
+        // committed row and DELETES it before writing its own, failing closed if the probe is
+        // indeterminate. Live-verified against the org that originally reproduced the bug —
+        // one authored rule now yields exactly one row.
+        // https://github.com/microsoft/power-platform-skills/issues/482
+        //
+        // This sweep is KEPT because it covers what the SDK fix cannot: duplicates left on the org
+        // by an EARLIER build (those rows are already committed and often refuse both deactivate and
+        // delete), and any future path that reintroduces a second write. With the fix in place it
+        // finds nothing on a clean org, so it costs one query.
+        //
+        // Scope is deliberately tight: only rules matching THIS rule's exact name and entity, and
+        // only ones that are not the id the push returned. That cannot touch a rule this build did
+        // not just author.
+        const dupes = await provision.queryRecords('workflow', {
+          select: ['workflowid', 'statecode'],
+          filter: businessRuleFilter(rule.name, entityLogical),
+          top: 50,
+        });
+        const extras = (dupes || []).filter((w) => String(w.workflowid).toLowerCase() !== String(pushed.id).toLowerCase());
+        for (const extra of extras) {
+          // Deactivate and delete are attempted INDEPENDENTLY. The orphan is often wedged — the
+          // platform answers "Invalid operation - You cannot activate or deactivate this business
+          // rule" for a row whose UiData generation faulted — and an earlier version wrapped both in
+          // one try, so a failed deactivate meant the delete was never even attempted. Deactivation
+          // is also asynchronous, so a row that refuses it now may become deletable shortly after.
+          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
+          let removed = false;
+          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch { /* reported below */ }
+          if (typeof opts.warn === 'function') {
+            opts.warn(removed
+              ? `business rule "${rule.name}": removed a duplicate the SDK's fallback created (${extra.workflowid})`
+              : `business rule "${rule.name}": the SDK's fallback created a duplicate (${extra.workflowid}) that could not be removed automatically — it is wedged by the same platform fault. Delete it in Maker (or after its deactivation completes) so only one copy of the rule runs. See issue #482.`);
+          }
+        }
+      });
+    }
+  }
+
   if (has('commands')) {
     for (const [entityLogical, cmds] of Object.entries(commandsByEntity(spec))) {
       // Additive discover-reconcile (design §14): one command artifact per entity (identity = entity).
@@ -1365,7 +1633,7 @@ async function runSdkBuild(spec, opts = {}) {
       await runner.run('commands', `command bar for ${entityLogical} (${cmds.length} button(s))`, async () => {
         const def = commandDef(entityLogical, cmds, result.created.webResources);
         const art = provision.createArtifact('command', def);
-        const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`);
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('command', art.id), `command ${entityLogical}`, opts.warn);
         result.created.commands[entityLogical] = pushed.id;
       });
     }
@@ -1392,8 +1660,13 @@ async function runSdkBuild(spec, opts = {}) {
       }
       await runner.run('dashboards', `dashboard "${dash.name}" (${(dash.tiles || []).length} tile(s))`, async () => {
         const art = provision.createArtifact('dashboard', { name: dash.name });
-        (dash.tiles || []).forEach((tile, ti) => provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tile, result), ti)));
-        const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`);
+        // for..of, not forEach: addElement is async, and a forEach callback would fire the adds
+        // without awaiting them — the push below could then race an unfinished tile insert.
+        const tiles = dash.tiles || [];
+        for (let ti = 0; ti < tiles.length; ti++) {
+          await provision.addElement('dashboard', art.id, '/components', dashboardComponent(dashboardTileOpts(spec, tiles[ti], result), ti));
+        }
+        const pushed = requireSuccessfulPush(await provision.pushArtifact('dashboard', art.id), `dashboard ${dash.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.dashboard, solutionUniqueName: sol.uniqueName });
         result.created.dashboards[dash.name] = pushed.id;
       });
@@ -1435,7 +1708,7 @@ async function runSdkBuild(spec, opts = {}) {
         // (charts-phase addSolutionComponent) and shows on its table's chart pane. Preview limitation:
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
         // explicit app component (rebuild the app fresh, or add the chart via a dashboard/sitemap, if
-        // it must be an explicit component). See docs/app-builder-roadmap.md.
+        // it must be an explicit component). See docs/app-builder-capabilities.md.
         // Imp6 (removal-gate safety) + C2 (page-backed deferral): write the existing app's sitemap here
         // ONLY when the pages phase will NOT run (so there is no removal gate to bypass) AND the spec has
         // no page subareas (a page-backed sitemap is always resolved in the finalizer). When has('pages')
@@ -1455,9 +1728,9 @@ async function runSdkBuild(spec, opts = {}) {
           const liveSm = await fetchSitemap(provision, appUniqueName(spec));
           if (!liveSm.ok) throw new BuildHalt(`cannot verify the existing app's live generative pages before rewriting its sitemap (${liveSm.reason}) — refusing to proceed (would risk orphaning pages)`, { phase: 'app-shell', code: 'pages-sitemap-read-failed', recoverable: true });
           if (liveSm.ids.length && opts.allowDestructive !== true) throw new BuildHalt(`refusing to rewrite a page-less sitemap over an existing app that still has ${liveSm.ids.length} live generative page(s) (would orphan them: ${liveSm.ids.join(', ')}). Include the pages phase to reconcile them, or re-run with --allow-destructive to detach.`, { phase: 'app-shell', code: 'pages-removed', recoverable: false });
-          provision.updateElement('app', existingId, '/siteMap', def.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`);
-          await provision.publishArtifact('app', existingId);
+          await provision.updateElement('app', existingId, '/siteMap', def.siteMap);
+          requireSuccessfulPush(await provision.pushArtifact('app', existingId), `app ${def.name}`, opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
         }
         await ensureSitemapInSolution(provision, sol, def.uniqueName);
         return existingId;
@@ -1465,7 +1738,7 @@ async function runSdkBuild(spec, opts = {}) {
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
       const art = provision.createArtifact('app', def);
-      const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`);
+      const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
       // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
@@ -1713,9 +1986,9 @@ async function runSdkBuild(spec, opts = {}) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
           const full = appDef(spec, result.created);
-          provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
-          requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize');
-          await provision.publishArtifact('app', result.created.app);
+          await provision.updateElement('app', result.created.app, '/siteMap', full.siteMap);
+          requireSuccessfulPush(await provision.pushArtifact('app', result.created.app), 'app sitemap finalize', opts.warn);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           return result.created.app;
         });
       }
@@ -1726,12 +1999,96 @@ async function runSdkBuild(spec, opts = {}) {
     }
   }
 
+  // 7b-ii. Modern ("new look") shell — opt-in via `app.newLook`.
+  //
+  // This is a per-app SETTING, not an appmodule column: `navigationtype` (the only nav-ish column the
+  // SDK writes) is Single/Multi *session* and unrelated. Of the several new-look definitions Dataverse
+  // ships, `NewLookAlwaysOn` is the one worth writing — its own description says it "enables the new
+  // look and hides the user switch", and that when it is on the user-facing "New look for model driven
+  // apps" preference "will have no effect". The alternatives (`NewLookOptOut`,
+  // `NewLookModernExperienceOct2023`) both DEFAULT to true and are per-user toggles, so writing them
+  // would give a result the app author cannot actually depend on.
+  //
+  // Runs in the app-shell phase, right after the app exists, and is scoped to the app + solution so it
+  // travels on export/import. Best-effort by design: a tenant where the definition is absent (it is a
+  // platform feature that rolls out) must not fail an otherwise-good build, so a failure is reported
+  // and the build continues — the app is fully functional, just on the classic shell.
+  if (has('app-shell') && spec.app && spec.app.newLook === true && result.created.app) {
+    // Deliberately NOT inside runner.run: that helper turns any throw into a BuildHalt, and failing
+    // an otherwise-good app build because a rolling-out preview setting is unavailable in this tenant
+    // is the wrong trade. But a silent ✓ would be worse — reporting success for something that did not
+    // happen is the exact failure mode this build has had to fix elsewhere. So: warn, record the real
+    // outcome, and let the caller see `newLook: false` rather than infer it.
+    try {
+      await provision.saveSettingValue(NEW_LOOK_SETTING, 'true', {
+        appUniqueName: appUniqueName(spec),
+        solutionUniqueName: spec.solution && spec.solution.uniqueName,
+      });
+      result.created.newLook = true;
+    } catch (err) {
+      result.created.newLook = false;
+      const detail = (err && err.message) || String(err);
+      if (typeof opts.warn === 'function') {
+        opts.warn(`could not enable the new look (${NEW_LOOK_SETTING}): ${detail} — the app is fully built and functional, but stays on the classic shell. This setting is a platform feature that rolls out by tenant.`);
+      }
+    }
+  }
+
+  // 7b-iii. Wave 2 header + navigation refresh — stated via `app.headerNavigationRefresh`.
+  // Deliberately not called "opt-in": the platform default is ON (see below), so this field exists
+  // as much to turn the feature OFF as on. Absent means "no opinion" and touches nothing.
+  //
+  // DISTINCT from `newLook` above, and both can be set independently. `NewLookAlwaysOn` is the
+  // new-look shell toggle; `HeaderAndNavigationRefresh` is the Wave 2 header/navigation redesign
+  // (public preview). They are separate `settingdefinition` rows and enabling one does not enable
+  // the other.
+  //
+  // Written through the SDK's dedicated `setHeaderAndNavigationRefresh` rather than a raw setting
+  // write, because the encoding is a trap: this is a `datatype = 0` (Number) TRI-STATE where ON is
+  // '2', not '1'. The SDK's own note records that of the nine Number settings with rows in a live
+  // org, eight use '1' for on and only this one uses '2' — and that writing '1' is ACCEPTED by the
+  // API and then silently fails to enable the feature. Hand-rolling this is how you ship a green
+  // build with the feature off.
+  //
+  // Same best-effort contract as the new look: this is a rolling-out preview, so a tenant without
+  // the definition gets a warning and the real outcome, never a silent success and never a failed
+  // build. The SDK throws a plain Error (not an SdkError subclass) when the definition is absent, so
+  // this catches broadly on purpose.
+  //
+  // BOTH values are honoured, and that is not symmetry for its own sake. Verified against the real
+  // vendored bundle (offline, by capturing the writes a push issues): the SDK
+  // defaults the app artifact's `headerAndNavigationRefresh` to TRUE, and pushing a new app writes
+  // the setting to '2' (ON) unprompted. So the platform default is ON, not off — and treating
+  // `false` as "do nothing" would silently leave it ON for an author who explicitly asked for it to
+  // be off. `false` therefore has to be an active write of the OFF value, not a skip.
+  if (has('app-shell') && spec.app && typeof spec.app.headerNavigationRefresh === 'boolean' && result.created.app) {
+    const wanted = spec.app.headerNavigationRefresh;
+    try {
+      const outcome = await provision.setHeaderAndNavigationRefresh(result.created.app, wanted);
+      // AppSettingWriteOutcome is 'created' | 'updated' | 'unchanged' — all three mean the row now
+      // holds the requested value, so all three are success. Recorded verbatim so a caller can tell
+      // a fresh write from a no-op re-run.
+      result.created.headerNavigationRefresh = wanted;
+      result.created.headerNavigationRefreshOutcome = outcome;
+    } catch (err) {
+      // Report what actually happened, NOT what was asked for. On failure the row keeps whatever it
+      // had — which for a newly created app is the SDK's ON default, so reporting `false` here would
+      // be as wrong as reporting success.
+      result.created.headerNavigationRefresh = 'unknown';
+      const detail = (err && err.message) || String(err);
+      if (typeof opts.warn === 'function') {
+        opts.warn(`could not ${wanted ? 'enable' : 'disable'} the header and navigation refresh (${HEADER_NAV_SETTING}): ${detail} — the app is fully built and functional, but the header and navigation setting is whatever the platform defaulted it to. This setting is a public-preview feature that rolls out by tenant.`);
+      }
+    }
+  }
+
   // 7c. AI features (opt-in via spec.ai). Enable app-level agents (gated on admin settings) +
   //     configure per-table row summaries. All AI writes are best-effort-gated: setAppAiFeatures
   //     skips features whose admin gate is off; it never throws.
   // Features the SDK did not put in `applied`, deferred for a post-publish re-proof (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
+
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
@@ -1871,8 +2228,8 @@ async function runSdkBuild(spec, opts = {}) {
       const perEntity = []; // [type, id] — first artifact found per entity
       for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
       for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
-      await runner.mapLimit(perEntity, concurrency, ([type, id]) => provision.publishArtifact(type, id));
-      if (result.created.app) await provision.publishArtifact('app', result.created.app);
+      await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
+      if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
     });
   }
 
@@ -1901,7 +2258,7 @@ async function runSdkBuild(spec, opts = {}) {
       if (Object.keys(retryFlags).length) {
         try {
           await provision.fetchArtifact('app', result.created.app);
-          await provision.publishArtifact('app', result.created.app);
+          reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
           const retry = await provision.setAppAiFeatures(appUnique, retryFlags, {
             solutionUniqueName: spec.solution && spec.solution.uniqueName,
             appModuleId: result.created.app,
@@ -1959,4 +2316,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };
+module.exports = { runSdkBuild, planFor, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause };

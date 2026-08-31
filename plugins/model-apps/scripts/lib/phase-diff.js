@@ -8,7 +8,7 @@
 // --apply: running ONLY the changed phases safely requires each phase to self-hydrate its cross-phase
 // dependencies (e.g. the pages phase currently HALTS unless app-shell ran in the same invocation —
 // sdk-build.js "pages-requires-app"), which needs a per-phase audit + live validation. That execution
-// step is tracked in docs/app-builder-roadmap.md; this module is its correct, testable foundation.
+// step is tracked in docs/app-builder-capabilities.md; this module is its correct, testable foundation.
 //
 // Comparison is a stable-stringify deep-equal (key-order-independent), so re-ordering keys in the spec
 // file does NOT report a false change. Any real value change in a phase's slice marks it changed. When

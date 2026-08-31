@@ -9,6 +9,7 @@
 
 const { parseArgs, emitResult } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
+const { AI_APP_SETTING, resolveAppModuleId, effectiveSettingValue, settingIsOn } = require('./lib/ai-app-settings.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -16,8 +17,15 @@ const path = require('node:path');
 // Human-readable label + admin-action hint for each feature key returned by getAiReadiness.
 const FEATURE_META = {
   formFill: {
-    label: 'Form fill',
-    action: (f) => `Enable "Form fill" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features.`,
+    // Deliberately NOT "Form fill". `FormFillBarUXEnabled` governs only the form fill assist
+    // TOOLBAR — one capability of AI form fill assistance. The SDK's own type docs name three
+    // siblings this flag does not touch: `FormFillFileUploadEnabled` (file upload),
+    // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form
+    // predictions). Labelling it "Form fill" overclaims in both directions — it reports a feature
+    // as unavailable when a user may well have smart paste working, and it implies enabling it
+    // turns the whole family on.
+    label: 'Form fill assist toolbar',
+    action: (f) => `Enable "Form fill assist toolbar" (setting: ${f.setting}) in Power Platform Admin Center → Environments → Settings → Product → Features. Note this is the toolbar only — smart paste (FormPredictSmartPasteEnabled), file upload (FormFillFileUploadEnabled) and edit-form predictions (FormPredictEnabled) are separate settings this does not enable.`,
   },
   nlSearch: {
     label: 'Natural language search',
@@ -39,18 +47,38 @@ const FEATURE_META = {
 
 /**
  * Pure: given the getAiReadiness result, produce a structured preflight report.
+ *
+ * `effective` (optional) maps a feature key to `{ value, scope, on }` for that feature's PER-APP
+ * setting, as resolved by `effectiveSettingValue`. It exists because the readiness gate and the
+ * feature's actual setting are different rows: a gate can read false while the feature is switched
+ * on at environment scope and therefore running in every app. Without this, the report tells an
+ * operator to go and enable something that is already on.
+ *
+ * A feature that is IN EFFECT gets no admin action, because there is nothing for an admin to do.
+ *
  * @param {{ formFill, nlSearch, nlChart, summaries, m365 }} readiness
- * @returns {{ features: Array<{feature, enabled, setting}>, adminActions: string[] }}
+ * @param {Record<string, {value?: string, scope?: string, on?: boolean, error?: string}>} [effective]
+ * @returns {{ features: Array<{feature, enabled, setting, inEffect?, effectiveValue?, effectiveScope?}>, adminActions: string[] }}
  */
-function runPreflight(readiness) {
+function runPreflight(readiness, effective = {}) {
   const features = [];
   const adminActions = [];
 
   for (const [key, meta] of Object.entries(FEATURE_META)) {
     const f = readiness[key];
     if (!f) continue;
-    features.push({ feature: key, enabled: f.enabled, setting: f.setting });
-    if (!f.enabled) {
+    const eff = effective[key] || {};
+    // Only a POSITIVE reading counts. `eff.error` (could not look, or the setting is not
+    // provisioned here) must never be read as "in effect" — that would suppress a real admin action.
+    const inEffect = eff.on === true;
+    features.push({
+      feature: key,
+      enabled: f.enabled,
+      setting: f.setting,
+      ...(eff.value !== undefined ? { effectiveValue: eff.value, effectiveScope: eff.scope } : {}),
+      ...(inEffect ? { inEffect: true } : {}),
+    });
+    if (!f.enabled && !inEffect) {
       adminActions.push(meta.action(f));
     }
   }
@@ -83,12 +111,43 @@ async function main() {
     sdk.initWorkspace();
     const readinessOpts = app ? { appUniqueName: app } : {};
     const readiness = await sdk.getAiReadiness(readinessOpts);
-    report = runPreflight(readiness);
+
+    // Resolve each feature's ACTUAL setting alongside the gate. The gate only decides whether a
+    // build would write an app-scope override; the feature can already be switched on at
+    // environment scope (or on by default), in which case reporting it as disabled — and telling an
+    // admin to go enable it — is simply wrong. Best-effort: any lookup failure leaves the feature
+    // reported from the gate alone, which is the previous behaviour.
+    const read = { queryRecords: (entity, opts) => sdk.queryRecords(entity, opts) };
+    // If `--app` was supplied but the app cannot be resolved, the app-scope layer is UNKNOWN, not
+    // absent. Falling through to the environment value would be actively harmful: an app that
+    // overrides a feature to "0" while the environment holds "2" would be reported as in effect,
+    // and the admin action for a genuinely disabled feature would be suppressed. So a failed
+    // resolution makes every effective value indeterminate instead.
+    const appLookup = app ? await resolveAppModuleId(read, app) : { appModuleId: null };
+    const appModuleId = appLookup.appModuleId || null;
+    const effective = {};
+    for (const key of Object.keys(FEATURE_META)) {
+      const setting = AI_APP_SETTING[key];
+      if (!setting) continue; // `summaries` is not a per-app on/off setting
+      if (appLookup.error) { effective[key] = { error: `app scope unknown: ${appLookup.error}` }; continue; }
+      const res = await effectiveSettingValue(read, appModuleId, setting);
+      effective[key] = res.error ? { error: res.error } : { value: res.value, scope: res.scope, on: settingIsOn(res.value) };
+    }
+    if (appLookup.error) {
+      process.stderr.write(`\nWarning: could not resolve app '${app}' (${appLookup.error}); reporting readiness gates only.\n`);
+    }
+    report = runPreflight(readiness, effective);
 
     process.stderr.write('\nAI Feature Readiness\n');
     process.stderr.write('====================\n');
     for (const f of report.features) {
-      process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${FEATURE_META[f.feature]?.label || f.feature} (${f.setting})\n`);
+      const label = FEATURE_META[f.feature]?.label || f.feature;
+      if (f.inEffect && !f.enabled) {
+        // The distinction that matters: running, but not because of anything this app declares.
+        process.stderr.write(`  ✓ ${label} (${f.setting}) — in effect via the ${f.effectiveScope} setting (value "${f.effectiveValue}"), though the readiness gate reads off\n`);
+      } else {
+        process.stderr.write(`  ${f.enabled ? '✓' : '✗'} ${label} (${f.setting})\n`);
+      }
     }
     if (report.adminActions.length) {
       process.stderr.write('\nAdmin actions required:\n');
@@ -96,7 +155,7 @@ async function main() {
         process.stderr.write(`  • ${a}\n`);
       }
     } else {
-      process.stderr.write('\nAll AI features are enabled.\n');
+      process.stderr.write('\nAll AI features are available (enabled, or already in effect).\n');
     }
   } finally {
     // emitResult() calls process.exit(), so clean up the throwaway workspace BEFORE emitting.

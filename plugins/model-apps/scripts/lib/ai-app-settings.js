@@ -24,6 +24,12 @@ const { odataLit } = require('./odata.js');
 // Keep in sync with the vendored SDK; `sdk-surface-contract.test.js` guards the method surface and
 // `verify-spec.test.js` pins these names.
 const AI_APP_SETTING = {
+  // `FormFillBarUXEnabled` is the form fill assist TOOLBAR only — one capability of AI form fill
+  // assistance, per the SDK's own type docs. Three siblings are NOT covered by this flag and are not
+  // exposed by the App Spec: `FormFillFileUploadEnabled` (file upload),
+  // `FormPredictSmartPasteEnabled` (smart paste) and `FormPredictEnabled` (edit-form predictions).
+  // Do not silently repoint this key at a sibling — exposing those is a feature (new keys plus live
+  // verification), not a rename.
   formFill: 'FormFillBarUXEnabled',
   nlSearch: 'NLGridSearchSetting',
   nlChart: 'NLChartDataVisualizationSetting',
@@ -156,6 +162,71 @@ async function proveAppOverride(read, appModuleId, setting, opts = {}) {
 }
 
 /**
+ * Resolve the EFFECTIVE value of a per-app AI setting: the most specific scope that holds a value
+ * wins — app-scope override, then the ENVIRONMENT-scope value, then the definition's default.
+ *
+ * This exists because the org READINESS GATE and the feature's actual setting are different rows,
+ * and reading only the gate is actively misleading. Live-measured on a real environment:
+ *   gate `EnableNLGridSearch`          = "false"   ← what the readiness report shows
+ *   setting `NLGridSearchSetting`      = "2" at ENVIRONMENT scope  ← the feature is ON for every app
+ * Reporting that feature as simply "disabled" sends an operator to the admin centre to switch on
+ * something already in effect. The gate governs only whether the BUILD will write an app-scope
+ * override; it does not decide whether the feature runs.
+ *
+ * `appModuleId` may be null (no app in scope) — the app layer is then skipped and the answer is the
+ * environment/default value, which is exactly what a not-yet-created app would inherit.
+ *
+ * Returns `{ value, scope }` where scope is 'app' | 'environment' | 'default', or `{ error }` when
+ * the lookup could not be RUN. Never conflates "could not look" with "not set".
+ */
+async function effectiveSettingValue(read, appModuleId, setting) {
+  let def;
+  try {
+    const defs = await read.queryRecords('settingdefinition', { select: ['settingdefinitionid', 'defaultvalue'], filter: `uniquename eq '${odataLit(setting)}'`, top: 1 });
+    def = defs && defs[0];
+  } catch (e) {
+    return { error: `the setting definition could not be read: ${e && e.message}` };
+  }
+  if (!def || !def.settingdefinitionid) {
+    // Not provisioned in this environment at all — distinct from "set to off".
+    return { error: `no setting definition named '${setting}' exists in this environment`, unsupported: true };
+  }
+
+  if (appModuleId) {
+    try {
+      const rows = await read.queryRecords('appsetting', { select: ['value'], filter: `_parentappmoduleid_value eq ${odataGuid(appModuleId)} and _settingdefinitionid_value eq ${odataGuid(def.settingdefinitionid)}`, top: 1 });
+      if (rows && rows.length) return { value: rows[0].value, scope: 'app' };
+    } catch (e) {
+      return { error: `the app-scope override row could not be read: ${e && e.message}` };
+    }
+  }
+
+  try {
+    const rows = await read.queryRecords('organizationsetting', { select: ['value'], filter: `_settingdefinitionid_value eq ${odataGuid(def.settingdefinitionid)}`, top: 1 });
+    if (rows && rows.length) return { value: rows[0].value, scope: 'environment' };
+  } catch (e) {
+    return { error: `the environment-scope value could not be read: ${e && e.message}` };
+  }
+
+  return { value: def.defaultvalue, scope: 'default' };
+}
+
+/**
+ * Is a setting value "on"? Values are stored as STRINGS ("0"/"1"/"2"/"true"/"false"), so plain JS
+ * truthiness is wrong twice over — it calls the string "0" true, and it calls "false" true. A
+ * non-zero number or the literal `true` means on; anything unparseable returns undefined so a
+ * caller can say "indeterminate" rather than guess.
+ */
+function settingIsOn(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const s = String(value).trim().toLowerCase();
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  const n = Number(s);
+  return Number.isNaN(n) ? undefined : n !== 0;
+}
+
+/**
  * Normalize a GUID for use as an UNQUOTED OData lookup comparand. Dataverse returns bare GUIDs, but
  * a caller-supplied id can arrive `{braced}` (the form `normalizeGuid` also accepts); interpolating
  * that raw produces `_x_value eq {0000…}`, a malformed filter that 400s and — because the proof
@@ -176,5 +247,7 @@ module.exports = {
   sameSettingValue,
   resolveAppModuleId,
   proveAppOverride,
+  effectiveSettingValue,
+  settingIsOn,
   odataGuid,
 };

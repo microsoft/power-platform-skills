@@ -52,10 +52,33 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
 
 - **Data model** — tables (give each custom table a **meaningful Fluent-style SVG table icon by default**; propose what the glyph will **depict** in words — never a Fluent token name — and record it as `iconDescription` before drawing the SVG — see [`references/authoring-flow.md`](../../references/authoring-flow.md) → *Table icons*), columns (all types), relationships (1:N / N:N + junctions), sample data
 - **Record UI** — forms (sub-grids, quick-create / quick-view), views (with enriched default columns), charts
-- **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS)
+- **Custom grid rendering** (preview) — `entities[].columns[].visualization`: render a column as a
+  `RadialDial`, `LineChart`, `HeatMap` or `StarRating` in **every** grid and view that shows it,
+  instead of plain text. Reach for it when a column is a *magnitude a user scans* (a score, a
+  utilization %, a rating, a priority) rather than a value they read exactly — it makes a list
+  scannable at a glance for one line of spec. It is per-*column*, so set it once on the column, not
+  on each view. **Preview:** on an environment where it is not provisioned the build skips it and
+  everything else still deploys, so it is always safe to include.
+- **Actions** — modern command-bar buttons (incl. flyout / split menus), web resources (form JS / HTML / CSS).
+  Two rules when writing that JS, both learned from buttons that deployed perfectly and then did
+  nothing: a command handler is handed the record (`function doThing(primaryControl)`) — the build
+  supplies the parameter, so write that signature; and **never hardcode Choice values** like
+  `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
+  (see `references/app-spec-schema.md` → webResources). Note also that command and web-resource
+  **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
+  script means deleting it first.
+- **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
+  set-value, driven by a condition on the record. **Reach for a business rule before form JS** when
+  the requirement is field-level and declarative — it is visible in the maker, survives solution
+  export, and needs no web resource. Use form JS when the logic needs a real API call, cross-record
+  work, or anything beyond the four supported actions.
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
-- **App shell** — the app module + sitemap, with per-subarea icons
+- **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
+  `app.newLook: true` unless the user asks for the classic one; it is opt-in and best-effort, so a
+  tenant without the setting still gets a working app. `app.headerNavigationRefresh` controls the
+  **Wave 2 header/navigation refresh** — a *separate, independent* setting whose platform default is
+  **ON**, so set it to `false` only when the user explicitly wants the classic header.
 - **Security & access** — one **security role per persona**, sized from that persona's jobs-to-be-done
   (the entity access each job needs, unioned into the role), so the app **opens for non-admins**.
 - **AI-first features** (admin-gated) — form-fill assist, natural-language grid/view search, NL chart
@@ -92,6 +115,13 @@ Rules:
 - **Every page in `pages[]` must be sitemap-placed** — validation rejects any page absent from the
   sitemap. A "detail" page that receives a caller-supplied id is a normal sitemap page; it reads its
   input via `pageInput?.data?.<field>`. Navigation-only (headless) pages are not supported.
+- **A page that declares `pageInput` MUST declare `directEntry`.** Because every page is
+  sitemap-placed, a detail page is also reachable straight from the app navigation with **no input**
+  — a state a user reaches by clicking. Say what happens then: `{ "behavior": "selector" }` shows a
+  picker and then the record, `{ "behavior": "emptyState" }` explains and renders nothing broken.
+  Prefer `selector` when the table is browsable; it is the more useful landing. Every key in
+  `pageInput.data` must also be produced by some page's `navigatesTo[].data`, or the generated page
+  reads a key nothing ever sets.
 - **Three-authority page identity** (build + download + verify all follow this): (1) **IDENTITY** —
   the durable `<app>_pagemanifest` (`key → pageId`); a downloaded spec's own `pages[].pageId`
   outranks it for that rebuild. (2) **EXISTENCE** — env-wide `pac model genpage list` (crash-safe;
@@ -288,12 +318,22 @@ their phase ranges are not dependency-closed and are rejected on `--apply`.
 Data-model labels are
 stamped with the organization's own base language, read once per build. Pass it only to author
 labels in a different **provisioned** language, or if the build warns that it could not determine
-the base language and fell back to 1033. If a build fails with *"The language code N is not a valid
-language for this organization"*, that is this setting — re-run with `--language-code <an LCID the
-org actually has>`, listing them with
+the base language and fell back to 1033.
+
+If you pass an LCID the organization has **not** provisioned, the build now stops in the data-model
+phase, before any label is written, and lists the ones it does have. That check exists because
+Dataverse handles this **inconsistently**: table and choice labels are accepted (HTTP 204) and
+silently stored under the organization's base language, while `DateTime` and `Memo` columns are
+rejected with *"The language code N is not a valid language for this organization"*. Without the
+check a build therefore creates the table with the wrong labels and then dies partway through the
+columns, phases away from the flag that caused it — which reads like an environment fault. List the
+provisioned set with
 `node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET RetrieveProvisionedLanguages`.
-The App Spec field `languageCode` pins the same value across runs. Note this covers the data-model
-phase only; form and sitemap labels still carry 1033 (SDK limitation, issue #455).
+The check is best-effort: if that read fails the build proceeds unchanged.
+
+The App Spec field `languageCode` pins the same value across runs. It now covers the **whole** build:
+data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
+1033 take the authoring language as an option ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
 
 Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
 concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
@@ -465,6 +505,8 @@ solution (idempotent) → data model — **discover** existing tables/columns/re
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
+→ **business rules** (`businessRules[]`; compiled to classic workflow XAML and activated) →
+**command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
 the SDK rewrites the sitemap once to add the `GenPage` subareas) → **AI features** (opt-in) →
@@ -498,7 +540,7 @@ child view id. Each step emits `[n/total]`.
   apply a structural edit, `teardown --apply` then rebuild fresh.** `--verify` catches this: it
   checks **content** (a view's column set, relationship + command existence), so an unapplied edit
   surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
-  `docs/app-builder-roadmap.md`.
+  `docs/app-builder-capabilities.md`.
 - Not in scope (later): business rules, **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
@@ -513,7 +555,8 @@ child view id. Each step emits `[n/total]`.
   `pac model genpage upload` and surfaced as `GenPage` sitemap subareas; full **create + edit**
   round-trip via `download-model-app.js`); **modern command-bar buttons** (`commands[]`) incl.
   **flyout / split-button menus**; **rich view filters** (`eq-userid`/`this-week`/`in`/`not-in`);
-  web resources + form JS event handlers; sample data with **multi-parent `$parents`** +
-  **`statusReason`**. See [`docs/app-builder-roadmap.md`](../../docs/app-builder-roadmap.md) and
+  **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /
+  heat map / star rating, preview); web resources + form JS event handlers; sample data with
+  **multi-parent `$parents`** + **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
   [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
   doc; you should not need to read the SDK, lint, or engine to write a spec.

@@ -68,27 +68,67 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **Omit it** and the build generates a simple default SVG icon **inside the solution** — either
   way the app never depends on an arbitrary external/managed icon (which would fail to import into
   a new environment). The app's **sitemap** is also added to the solution automatically.
+- **`app.newLook`** *(optional, default off)* — opt into the **modern ("new look") shell** for this app.
+  Writes the per-app `NewLookAlwaysOn` setting, which Dataverse describes as enabling the new look and
+  **hiding the user switch** — so the result is deterministic rather than a per-user preference. It is
+  a *setting*, not an appmodule column: `navigationtype` is Single/Multi **session** and unrelated, and
+  the other new-look definitions (`NewLookOptOut`, `NewLookModernExperienceOct2023`) both default to
+  true and are user-facing toggles, so writing them would not give the author a dependable result.
+  Scoped to the app **and** the solution, so it travels on export/import.
+  **Best-effort:** this is a platform feature that rolls out by tenant. If the setting cannot be
+  written the build still succeeds — the app is fully functional on the classic shell — but it warns
+  and reports `created.newLook: false`, so a failure is never mistaken for success.
+- **`app.headerNavigationRefresh`** *(optional)* — control the **Wave 2 header and
+  navigation refresh** (public preview) for this app.
+  **The platform default is ON, not off.** Verified against the real vendored bundle (offline, by
+  capturing the writes a push issues): the SDK defaults the app artifact's
+  `headerAndNavigationRefresh` to `true` and pushing a **new** app writes the setting to its ON value
+  unprompted. So set this to `false` if you want the classic header and navigation — omitting it
+  leaves whatever the platform chose, which for a new app is on.
+  Both values are honoured: `true` writes ON, `false` actively writes OFF. Treating `false` as "do
+  nothing" would silently leave the feature on for an author who asked for it off.
+  This is a **different setting from `app.newLook`** and the two are independent: `newLook` writes
+  `NewLookAlwaysOn` (the new-look shell), while this writes `HeaderAndNavigationRefresh` (the header
+  and navigation redesign). Enabling one does **not** enable the other.
+  Written through the SDK's dedicated API rather than a raw setting write, because the encoding is a
+  trap: it is a Number **tri-state where ON is `'2'`, not `'1'`**, and writing `'1'` is *accepted by
+  the API and then silently fails to enable the feature*. Delegating means the plugin cannot get it
+  wrong.
+  **Best-effort**, like `newLook`: a tenant without the setting definition still gets a fully working
+  app, with a warning and `created.headerNavigationRefresh: "unknown"` — never a silent success, and
+  never a claim about a value that was not written. On success
+  `created.headerNavigationRefreshOutcome` records `created` / `updated` / `unchanged`.
 - **`app.uniqueName`** *(optional, download-emitted)* — the app module's **real, immutable** Dataverse
   uniquename (e.g. `crba3_supportdesk`). A **downloaded** spec carries it so a rebuild resolves the
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
 - **`languageCode`** *(optional)* — the [LCID](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/)
-  stamped on the Dataverse labels the **data-model phase** creates (table, column, choice, status
-  reason, relationship and alternate-key display names). It does **not** reach form, dashboard or
-  sitemap labels — those go through SDK serializers that hardcode 1033 with no caller override
-  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+  stamped on the Dataverse labels the build creates: data-model labels (table, column, choice, status
+  reason, relationship and alternate-key display names) **and** form, dashboard and sitemap labels.
+  The serializers used to hardcode 1033 with no caller override
+  ([#455](https://github.com/microsoft/power-platform-skills/issues/455)); they now take the
+  authoring language, so a non-English build no longer produces translated columns next to English
+  form labels.
   **Normally omit it**: the build reads the organization's base language
   (`organization.languagecode`) and uses that, which is always a language the org has provisioned.
   Set it only to deliberately author labels in a *different* provisioned language than the org
   default; `--language-code <lcid>` overrides it for a single run.
+  If the organization has **not** provisioned the LCID you pin, the build stops at the start of the
+  data-model phase and lists the ones it does have — Dataverse would otherwise accept the table and
+  Choice labels (silently storing them under the org's base language) and then reject the first
+  `DateTime` or `Memo` column, leaving a half-built data model. The check is best-effort: if
+  `RetrieveProvisionedLanguages` cannot be read, the build proceeds unchanged.
   Must be a positive integer LCID up to 65535 — `1031`, not `"de-DE"` and not `true`. An invalid
   value is rejected by validation, and a caller that bypasses validation gets a warning naming the
   discarded value rather than a silent fall-through.
-  **Not emitted by `download-model-app.js`**, and that is deliberate: an LCID copied out of the
-  source org would be re-applied verbatim when the spec is rebuilt somewhere else, which is exactly
-  how a spec starts failing in an org that lacks that language. Leaving it absent lets every target
-  org resolve its own base language. If you pinned one by hand, re-add it after a download.
+  **Emitted by `download-model-app.js` only if you pinned it yourself.** It is deliberately never
+  read from Dataverse: an LCID copied out of the source org would be re-applied verbatim when the
+  spec is rebuilt somewhere else, which is exactly how a spec starts failing in an org that lacks
+  that language. Leaving it absent lets every target org resolve its own base language. But a value
+  **you** wrote is carried across a download from the previous `app-spec.json` at that path, so a
+  pin is not silently lost — losing it would leave newly created columns in the org default while
+  the existing ones keep the pinned language, with no error anywhere.
 
 ## entities[]
 ```jsonc
@@ -139,7 +179,9 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
   "columns": [
     { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"] },
-    { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" }
+    { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" },
+    { "schemaName": "new_score",    "displayName": "Score", "type": "Integer",
+      "visualization": "RadialDial" }         // optional — CUSTOM GRID RENDERING (preview), below
   ]
 }
 ```
@@ -155,6 +197,34 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+
+### `visualization` — custom grid rendering (optional, PREVIEW)
+
+Renders the column's value as a small graphic instead of plain text, in **every grid and view that
+shows the column** — it is per-*column* metadata, not per-view, so you set it once here rather than
+on each `views[]` entry.
+
+| Value | Renders as | Best for |
+|---|---|---|
+| `RadialDial` | circular gauge filled to a percentage | a number over a known range (0–100) |
+| `LineChart` | sparkline across several points | a **text** column of comma-separated numbers |
+| `HeatMap` | horizontal bar coloured by value | a single number, or a choice value |
+| `StarRating` | row of stars filled to the value | a whole number (0–5 by default) |
+| `None` | plain text | explicitly **clearing** a renderer |
+
+- **Type-only.** The renderers use built-in defaults (dial 0–100, stars 0–5); there are no tuning
+  parameters. Column-type compatibility is **not** validated — the pairings above are guidance, and
+  the platform does not enforce a clean "numeric only" rule (`LineChart` is documented for a text
+  column). A nonsensical pairing deploys and simply renders nothing useful.
+- **Omitting is not the same as `None`.** An omitted column is left exactly as deployed; use
+  `"None"` to actively clear a renderer set by an earlier build or by a maker in the portal.
+- **Rebuild-safe.** The value is re-asserted on every build, including for columns that already
+  exist, and converges to a single configuration row.
+- **PREVIEW — not provisioned everywhere.** Where the platform has not enabled it, the build
+  **skips** the visualization step (the column and everything else still deploy) and `verify`
+  reports no divergence. Live-measured: the backing `controlconfigurations` table was present on
+  only 1 of 18 test environments. If a renderer does not appear, check the environment first — the
+  same spec succeeds unchanged on a provisioned org.
 
 ### entity sub-sections (optional)
 ```jsonc
@@ -196,6 +266,7 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   recommended pattern for "Technician ↔ Work Order with a Role".
 
 ## webResources[] (optional — client-side logic)
+
 ```jsonc
 [ { "name": "new_ticket.js", "displayName": "Ticket Scripts", "type": "js",
     "content": "var Ticket={onLoad:function(ctx){},onPriority:function(ctx){}};" } ]
@@ -205,6 +276,21 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
   app folder at build time), or `contentBase64` (for binary types).
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
+- **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
+  resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
+  and the old script keeps running. Delete the web resource (or tear down) and rebuild to change it —
+  note it cannot be deleted while a command or form handler still references it.
+- **Never hardcode Choice (option-set) values in the script.** Values like `100000003` are assigned
+  per publisher, so a literal that is correct in one environment silently selects nothing in another —
+  and a `setValue` with an unknown value fails quietly. Resolve by label instead:
+  ```js
+  function setChoiceByLabel(formCtx, attr, label) {
+    var a = formCtx.getAttribute(attr);
+    var hit = (a.getOptions() || []).filter(function (o) { return o.text === label; })[0];
+    if (hit) { a.setValue(hit.value); }
+    return !!hit;
+  }
+  ```
 - **`external`** *(optional, download-emitted)* — set `true` on an entry that **download** re-declared
   because a sitemap nav icon referenced a custom image web resource **by path** (see appShell icons
   below). The build **creates it if missing, reuses it if present** (idempotent, no overwrite), so the
@@ -302,7 +388,11 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **`events[]`** wire client-side JS: `event` is `onload`/`onsave`/`onchange` (`onchange` needs an
   `attribute`), `library` references a declared `webResources[]` name (lint-enforced), `function` is
   the JS function. Optional `enabled` (default true), `passExecutionContext` (default true),
-  `parameters`. The build fetches the pushed form, injects the handlers, then publishes it.
+  `parameters` (a comma-separated argument list). All three are **honoured** — an authored
+  `"enabled": false` really does deploy a disabled handler. `enabled` and `passExecutionContext` must
+  be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
+  is truthy in JS and would silently enable a handler you meant to disable.
+  The build fetches the pushed form, injects the handlers, then publishes it.
 
 ## commands[] (optional — modern command-bar buttons)
 ```jsonc
@@ -316,8 +406,24 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   { "label": "Reject",  "library": "new_order.js", "function": "Order.reject" } ] }
 ```
 - A button's on-click calls `function` in the declared `library` web resource (both lint-enforced) —
-  this is what makes it **functional** (not a structural-only button). `parameters` (optional) passes a
-  raw arg string.
+  this is what makes it **functional** (not a structural-only button).
+- **Your function is handed the record automatically.** The build passes the standard command
+  parameters for the button's location, so the usual handler shape works as written:
+  ```js
+  function escalate(primaryControl) {
+    primaryControl.getAttribute('new_priority').setValue(100000003);
+    primaryControl.data.save();
+  }
+  ```
+  Defaults by location — `MainTab` → `PrimaryControl`; `ContextualTab` → `SelectedControl`;
+  `HomeTab` → `SelectedControl` + `SelectedControlSelectedItemIds`. Override with `parameters`
+  (a raw JSON string, e.g. `'[{"type":5,"value":null}]'`); pass `""` for a function that genuinely
+  takes no arguments. **Without a parameter the function is invoked with no arguments**, so
+  `primaryControl` is `undefined` and the button appears to do nothing — the error is visible only
+  in the browser console, and the build, the deployed rows and `--verify` all still look correct.
+- **Button edits are not applied on rebuild.** The command phase is discover-then-skip: it creates a
+  bar only when none exists. To change a deployed button, delete the entity's commands (or tear down)
+  and rebuild.
 - **`location`** is `MainTab` (default — the entity form/grid command bar), `HomeTab`, or `ContextualTab`.
 - **`hidden`** / **`disabled`** set *static* visibility/enablement. **Conditional (rule-based)
   visibility is not supported** — it's Power Fx-only on modern commands and needs a component library
@@ -327,6 +433,42 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   the menu items live under it. Top-level buttons emit as **loose controls**; a *titled* group is not
   supported (it needs a parent command-bar row the SDK doesn't synthesize from scratch). The command
   lands in the Default solution but is entity-scoped, so it shows on the entity's command bar.
+
+## businessRules[] (optional — declarative form logic, no code)
+
+```jsonc
+{ "entity": "new_ticket", "name": "Hide notes on closed tickets",
+  "scope": "Entity",          // only Entity today
+  "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
+  "conditions": [             // ALL must hold (ANDed)
+    { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
+  ],  "actions": [
+    { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
+    { "type": "LockUnlock",          "field": "new_owner",  "lock": true },
+    { "type": "SetBusinessRequired", "field": "new_reason", "required": true },
+    { "type": "SetFieldValue",       "field": "new_owner",  "value": "unassigned" }
+  ] }
+```
+
+- **Operators**: `Equals` · `DoesNotEqual`, and both must carry a `value`.
+  `ContainsData` / `DoesNotContainData` are **rejected**: the SDK compiles them to XAML the platform
+  answers with `HTTP 500 — Error generating UiData`, live-measured on every column type and in both
+  directions, while the two comparison operators succeed in the same run. Tracked as
+  [#481](https://github.com/microsoft/power-platform-skills/issues/481); to test presence, compare
+  the field to the value you care about instead.
+- **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
+  (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
+  string `"false"` is truthy and would invert the intent, so it is rejected.
+- **`dataType`** (optional, default `String`) is how the platform should read the literal:
+  `String` · `Picklist` · `Boolean` · `Integer` · `Decimal` · `Money` · `DateTime` · `Memo`. For a
+  Choice column use `Picklist` and give the option's **integer value**, not its label.
+- Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
+  lookup a relationship creates). A rule naming a column that does not exist is accepted by the
+  platform and then simply **never fires**, so this is validated up front.
+- Why this slice and not more: the vendored SDK compiles rules to classic workflow XAML, and these
+  four actions plus four operators are what that compiler supports. Anything else throws mid-build.
+- **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
+  edits are **not** re-applied. Recreate the rule to change it.
 
 ## dashboards[] (optional — chart/list/iframe/web-resource tiles)
 ```jsonc
@@ -349,13 +491,34 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     "dataSources": ["new_order", "new_customer"],
     "source": { "kind": "intent" },                // design-time; generate-pages fills the .tsx
     "navigatesTo": [{ "targetKey": "detail", "data": { "orderId": "string" } }],
-    "pageInput": { "data": { "orderId": "string" } } } ]
+    "pageInput": { "data": { "orderId": "string" } },
+    "directEntry": { "behavior": "selector" } } ]
 // after generate-pages: "source": { "kind": "tsx", "codeFile": "overview.tsx" }
 ```
 - **Genpage-first policy** is unchanged. A page's implementation state is an explicit discriminated
   `source`: `{ "kind": "intent" }` (declared but not yet coded) or `{ "kind": "tsx", "codeFile": "…" }`
   (the `.tsx` the build uploads). A **legacy** top-level `"codeFile"` (no `schemaVersion`) is still
   accepted and treated as an implemented tsx page.
+- **`pageInput` + `directEntry` — the input contract.** These two rules used to conflict with no way
+  for an author to satisfy both, so this spells out the resolution:
+  - Every page **must** be a sitemap subarea (see the membership invariant below). The sitemap is the
+    download's only membership oracle, so a page reached *only* by `navigatesTo` is invisible to
+    download and gets re-created as a **duplicate** on the next build.
+  - A detail page therefore lives in the app navigation, which means a user can open it **with no
+    input at all** — the `orderId` its `pageInput` declares simply is not there.
+  - So a page that declares `pageInput` must also declare **`directEntry`**, which is what that state
+    renders: `{ "behavior": "selector" }` (show a picker, then the record) or
+    `{ "behavior": "emptyState" }` (explain, and render nothing broken). An optional `note` is passed
+    to the generator verbatim. Without this the generated page read `undefined` context on a path a
+    user reaches by clicking the nav entry.
+  - Every key in `pageInput.data` must be **produced by an incoming `navigatesTo[].data`** edge. An
+    input nothing supplies is either a typo or a page that can only ever be entered directly; both
+    generate a page reading a key no caller ever sets.
+
+  The alternative — allowing navigation-only pages — was rejected: it would need the sitemap to stop
+  being the membership oracle, and the duplicate-page bug it prevents is worse than the extra nav
+  entry. `directEntry` also survives download (it is carried in the page manifest), because a spec
+  that lost it would fail its own validation on the next build.
 - Validation is **profile-scoped**: `design`/`plan` accept intent pages; a `deploy` build (the default)
   requires every page implemented.
 - **`key`** (schemaVersion 2, required, unique) is the page's **single stable identity** — used by

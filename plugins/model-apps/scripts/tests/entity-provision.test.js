@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { makeRunner, requireSuccessfulPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
+const { makeRunner, requireSuccessfulPush, reportPartialPush, provisionDataModel, provisionSampleData, provisionSolution, buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function mockSdk(existing = {}) {
   const calls = [];
@@ -439,6 +439,37 @@ test('requireSuccessfulPush halts (BuildHalt) on a 412 version-conflict result',
   );
 });
 
+// The SDK renamed `PushResult.success` to `saved` deliberately — its own type comment says the
+// rename exists to "force every existing call site to be looked at once". This guard is such a call
+// site, and it is the ONLY thing standing between a 412 and a silently dropped Maker edit.
+//
+// The danger is that the rename is invisible at runtime: a `success === false` check against a
+// bundle that returns `saved` reads `undefined === false` -> false, so the guard just stops firing.
+// Nothing fails, nothing logs, and a concurrent edit is overwritten. These pin BOTH spellings so the
+// guard cannot be silently disarmed by a re-vendor in either direction.
+test('requireSuccessfulPush halts on the RENAMED PushResult shape (saved:false), not just success:false', () => {
+  const conflict = { type: 'form', id: 'f9', saved: false, shipped: false, error: new Error('Version conflict (412)') };
+  assert.throws(
+    () => requireSuccessfulPush(conflict, 'form f9'),
+    (err) => err.name === 'BuildHalt' && err.code === 'version-conflict' && /Version conflict \(412\)/.test(err.message),
+    'a saved:false result MUST halt — otherwise a 412 silently drops the edit'
+  );
+});
+
+test('requireSuccessfulPush accepts a saved:true result and does not confuse saved with shipped', () => {
+  // `shipped:false` is normal — it means the change is committed but the runtime still serves the
+  // previously published copy. That is NOT a push failure and must not halt the build; the publish
+  // phase is what makes it live.
+  const saved = { type: 'view', id: 'v1', saved: true, shipped: false, publish: { kind: 'notRequested' } };
+  assert.strictEqual(requireSuccessfulPush(saved, 'view v1'), saved);
+});
+
+test('requireSuccessfulPush halts on a result that carries an error but neither flag', () => {
+  // Fail closed: an unrecognised shape that still reports an error must not be treated as success.
+  const odd = { type: 'chart', id: 'c1', error: new Error('boom') };
+  assert.throws(() => requireSuccessfulPush(odd, 'chart c1'), (err) => err.name === 'BuildHalt');
+});
+
 // #447 regression net. The bug this fixes was a SINGLE label-emitting call that forgot to pass a
 // language, and it stayed invisible until a user in a German org filed a bug — CI runs offline mocks
 // and nobody's CI runs against a non-1033 org. So pinning only the two call sites that happened to be
@@ -518,4 +549,137 @@ test('EVERY label-emitting SDK call carries the resolved language code (#447)', 
     missing.map((c) => c.name), [],
     'these label-emitting calls did not carry the resolved LCID: ' + JSON.stringify(missing.map((c) => c.name))
   );
+});
+
+// The SDK moved publishArtifact from THROWING to reporting by value, exactly as it did for
+// pushArtifact. Nothing in the engine read the result, so every publish failure vanished into a
+// build that reported ok:true -- and because those failures no longer throw, the transient-retry
+// path (429 / 503 / customization-lock, which is the everyday PublishXml failure in a real tenant)
+// became unreachable for them. These pin the reporting so it cannot silently regress again.
+test('a FAILED publish is reported, not swallowed', () => {
+  const warnings = [];
+  const result = { type: 'form', id: 'f1', shipped: false, publish: { kind: 'failed', error: new Error('PublishXml 503') } };
+  reportPartialPush(result, 'form Contact Main', (m) => warnings.push(m));
+  assert.strictEqual(warnings.length, 1, 'a failed publish must produce exactly one warning');
+  assert.match(warnings[0], /publish form Contact Main FAILED/);
+  assert.match(warnings[0], /PublishXml 503/, 'the underlying cause is named');
+  assert.match(warnings[0], /SAVED but/, 'it must say the write survived — this is not a lost edit');
+});
+
+test('an UNVERIFIABLE publish is reported as unproven rather than as success', () => {
+  const warnings = [];
+  reportPartialPush({ type: 'app', id: 'a1', shipped: false, publish: { kind: 'unverifiable', reason: 'projection not readable' } }, 'app Contoso', (m) => warnings.push(m));
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /could not be CONFIRMED/);
+  assert.match(warnings[0], /projection not readable/);
+});
+
+test('a verified publish and a not-requested publish are both silent', () => {
+  const warnings = [];
+  reportPartialPush({ type: 'view', id: 'v1', shipped: true, publish: { kind: 'verified' } }, 'view V', (m) => warnings.push(m));
+  reportPartialPush({ type: 'view', id: 'v2', shipped: false, publish: { kind: 'notRequested' } }, 'view V2', (m) => warnings.push(m));
+  assert.deepStrictEqual(warnings, [], 'success and no-publish-requested must not warn');
+});
+
+// PushResult.warnings exists specifically so a partial success is not read as a clean one. The SDK's
+// own comment on the app path says a failed system-admin role assignment "must not fail app creation,
+// but it is reported so a create that produced an UNOPENABLE app is not read as a clean success".
+test('a push that COMMITTED but carries warnings surfaces them (an unopenable app is not a clean success)', () => {
+  const warnings = [];
+  const result = {
+    type: 'app', id: 'a2', saved: true, shipped: false, publish: { kind: 'notRequested' },
+    warnings: ['one or more components were not pinned', 'system administrator role could not be assigned'],
+  };
+  assert.strictEqual(requireSuccessfulPush(result, 'app Contoso', (m) => warnings.push(m)), result, 'it still passes — the write committed');
+  assert.strictEqual(warnings.length, 2, 'both warnings surface: ' + JSON.stringify(warnings));
+  assert.ok(warnings.every((w) => /^app Contoso: /.test(w)), 'each names the artifact');
+});
+
+test('a saved push whose publish failed is reported even though the push itself passes', () => {
+  // App CREATE publishes inside the SDK, so this arrives as saved:true + publish:failed with no
+  // top-level error — the shape the push guard alone would wave straight through.
+  const warnings = [];
+  const result = { type: 'app', id: 'a3', saved: true, shipped: false, publish: { kind: 'failed', error: new Error('saved, but publishing failed') } };
+  requireSuccessfulPush(result, 'app Contoso', (m) => warnings.push(m));
+  assert.ok(warnings.some((w) => /publish app Contoso FAILED/.test(w)), JSON.stringify(warnings));
+});
+
+test('requireSuccessfulPush distinguishes an already-exists collision from a version conflict', () => {
+  // Both are by-value failures, but the remedies are opposite: re-download for a concurrent edit,
+  // adopt-the-existing-row for a replayed create. Reporting one as the other sends the operator
+  // to re-download when nothing changed under them.
+  const err = new Error('a record already exists at that id');
+  err.code = 'ARTIFACT_ALREADY_EXISTS';
+  assert.throws(
+    () => requireSuccessfulPush({ type: 'view', id: 'v9', saved: false, error: err }, 'view V9'),
+    (e) => e.name === 'BuildHalt' && e.code === 'already-exists' && /adopt it/.test(e.message) && !/re-download the app/.test(e.message)
+  );
+});
+
+// #455 wiring: the CLI resolves the authoring LCID BEFORE constructing the SDK (because
+// MakerSdkOptions.languageCode is a construction-time option) and then hands the SAME value to the
+// data-model phase. Two things must hold, and neither is covered by testing resolveLanguageCode
+// alone: the pre-resolved value must be USED, and it must NOT be re-resolved.
+//
+// Re-resolution is not merely wasteful — the data-model phase would repeat the org read and the
+// provisioned-languages probe, and any disagreement would label columns in one language while the
+// SDK stamps FormXML and sitemap titles in another.
+test('a pre-resolved authoring language is used verbatim by the data-model phase', async () => {
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_t', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'cr_name' }, columns: [{ schemaName: 'cr_note', displayName: 'Note', type: 'text' }] }],
+    relationships: [],
+  };
+  const seen = [];
+  let orgReads = 0;
+  let probes = 0;
+  const sdk = {
+    createTable: async (o) => { seen.push(['createTable', o]); return { logicalName: 'cr_t', metadataId: 't' }; },
+    createColumn: async (l, o) => { seen.push(['createColumn', o]); return { logicalName: (o.schemaName || '').toLowerCase(), metadataId: 'c' }; },
+  };
+  const provision = {
+    queryRecords: async (set) => { if (set === 'organization') { orgReads += 1; return [{ languagecode: 1033 }]; } return []; },
+    findTables: async () => [], findColumns: async () => [], fetchEntityMetadata: async () => ({}),
+  };
+  const runner = makeRunner({ emit: () => {}, total: 10 });
+
+  await provisionDataModel({
+    sdk, provision, runner, spec, apply: true,
+    preResolvedLanguageCode: 3082,
+    // Deliberately CONTRADICTORY inputs: if the pre-resolved value is honoured, neither of these is
+    // consulted. If it is ignored, the explicit 1031 would win and the probe would fire.
+    languageCode: 1031,
+    provisionedLanguages: async () => { probes += 1; return [1031, 1033]; },
+  });
+
+  const withLang = seen.filter(([, o]) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0, 'at least one label-bearing write happened');
+  for (const [what, o] of withLang) {
+    assert.strictEqual(o.languageCode, 3082, `${what} must use the pre-resolved LCID, not re-resolve one`);
+  }
+  assert.strictEqual(orgReads, 0, 'the org language must NOT be read again once it is already resolved');
+  assert.strictEqual(probes, 0, 'the provisioned-languages probe must NOT fire again');
+});
+
+test('without a pre-resolved language the data-model phase still resolves one itself', async () => {
+  // The self-resolving path is not dead code: provision-entities.js and every existing unit test
+  // reach provisionDataModel without a pre-resolved value, so removing it would break them.
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'cr' },
+    entities: [{ schemaName: 'cr_t', displayName: 'T', pluralName: 'Ts', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }],
+    relationships: [],
+  };
+  const seen = [];
+  const sdk = {
+    createTable: async (o) => { seen.push(o); return { logicalName: 'cr_t', metadataId: 't' }; },
+    createColumn: async (l, o) => { seen.push(o); return { logicalName: 'x', metadataId: 'c' }; },
+  };
+  const provision = {
+    queryRecords: async (set) => (set === 'organization' ? [{ languagecode: 1031 }] : []),
+    findTables: async () => [], findColumns: async () => [], fetchEntityMetadata: async () => ({}),
+  };
+  await provisionDataModel({ sdk, provision, runner: makeRunner({ emit: () => {}, total: 10 }), spec, apply: true });
+  const withLang = seen.filter((o) => o && o.languageCode !== undefined);
+  assert.ok(withLang.length > 0 && withLang.every((o) => o.languageCode === 1031),
+    'the org base language is still resolved when nothing was pre-resolved');
 });

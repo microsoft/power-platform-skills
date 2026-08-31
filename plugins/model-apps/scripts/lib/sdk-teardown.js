@@ -45,7 +45,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, businessRuleFilter } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -307,6 +307,36 @@ const KIND_HANDLERS = {
     del: (sdk, item) => sdk.deleteSecurityRole(item.id),
     tolerateNotFound: true, // a role already deleted (e.g. by a prior teardown) is "gone"
   },
+  businessRules: {
+    // A business rule is a `workflows` row (category 2), not something the SDK models as a deletable
+    // artifact kind — so resolve and delete it over queryRecords/deleteRecord like the row it is.
+    //
+    // Scoped by (category, name, primaryentity) so a same-named rule on another table is never
+    // touched. An ACTIVE rule cannot be deleted, so it is deactivated first; that is a separate
+    // round trip and the platform runs it asynchronously (a WorkflowSetState job), which is why a
+    // solution uninstall immediately afterwards can transiently 429 — see the teardown notes.
+    async resolve(sdk, target) {
+      const rows = await sdk.queryRecords('workflow', {
+        select: ['workflowid', 'statecode'],
+        // DEFINITION rows only (see businessRuleFilter in sdk-build.js). Activating a rule makes the
+        // platform create a second `type 2` activated copy whose parent is the definition; the
+        // platform refuses to delete that copy directly (405) and removes it with its parent. An
+        // unfiltered query therefore produced a guaranteed per-rule teardown failure.
+        filter: businessRuleFilter(target.name, target.entity),
+        top: 50,
+      });
+      return (rows || []).map((r) => ({ id: r.workflowid, name: target.name, statecode: r.statecode }));
+    },
+    async del(sdk, item) {
+      // Deactivate before delete. Dataverse refuses to delete an activated process, and the error it
+      // returns names neither the rule nor the reason clearly.
+      if (item.statecode === 1) {
+        try { await sdk.updateRecord('workflow', item.id, { statecode: 0, statuscode: 1 }); } catch { /* fall through: the delete below reports the real failure */ }
+      }
+      return sdk.deleteRecord('workflow', item.id);
+    },
+    tolerateNotFound: true,
+  },
   commands: {
     // The vendored SDK models a table's command bar as ONE artifact per entity (identity = entity):
     // resolveArtifact('command', { entity }) returns that single per-entity artifact and
@@ -324,9 +354,66 @@ const KIND_HANDLERS = {
         return { items: [], skipReason: "command bar on an existing/external table is not deleted — the SDK deletes the whole bar and cannot scope to this spec's buttons (per-button delete unsupported); remove it manually if intended" };
       }
       const items = await sdk.resolveArtifact('command', { entity: target.entity });
-      return (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity }));
+      const bar = (items || []).map((x) => ({ id: x.id, entity: x.entity || target.entity, kind: 'bar' }));
+
+      // The bar delete does NOT remove the individual `appaction` rows. LIVE-MEASURED: after a
+      // teardown that deleted the table itself, five appaction rows for that entity survived, and
+      // the three leaf buttons still referenced the form-JS web resource — which then could not be
+      // deleted ("referenced by 3 other components", componenttype 10344 = modern command). So the
+      // stranded rows are what blocked the web resource, not a platform dependency leak.
+      //
+      // Safe only because this branch already requires `ownsTable`: the table is one this spec
+      // creates, so no foreign app can own buttons on it. Scoped to `contextvalue` (the entity the
+      // command is bound to) for the same reason.
+      //
+      // CHILDREN FIRST: see the depth computation below — a flyout hierarchy is three levels deep,
+      // so ordering has to be by real ancestor depth, not by "has a parent".
+      let rows = [];
+      try {
+        rows = await sdk.queryRecords('appaction', {
+          select: ['appactionid', '_parentappactionid_value'],
+          filter: `contextvalue eq '${odataLit(target.entity)}'`,
+          top: 200,
+        });
+      } catch {
+        // Best-effort: if the rows cannot be listed, the bar delete below still runs and the web
+        // resource simply reports its dependency, which is the pre-existing behaviour.
+        rows = [];
+      }
+      // DEEPEST FIRST, by real ancestor depth. A flyout is three levels — anchor (no parent), an
+      // intervening group (parent = anchor), then the buttons (parent = group) — so
+      // `_parentappactionid_value` is set on BOTH the group and the leaves. Sorting merely by "has a
+      // parent" puts them in the same bucket in arbitrary order, which can delete the group while its
+      // buttons still hang off it; Dataverse rejects deleting a parent that still has children.
+      // (Observed while resetting a command bar by hand: a leaf came back 404 because its group had
+      // already gone — the platform happened to cascade, which is luck, not ordering.)
+      //
+      // So walk the parent pointers to a true depth and delete the deepest rows first.
+      const byId = new Map((rows || []).map((r) => [r.appactionid, r]));
+      const depthOf = (r) => {
+        let d = 0;
+        let cur = r;
+        // Bounded by the row count so a cyclic/self-referential pointer cannot spin forever.
+        for (let i = 0; i < byId.size + 1 && cur && cur._parentappactionid_value; i += 1) {
+          cur = byId.get(cur._parentappactionid_value);
+          d += 1;
+        }
+        return d;
+      };
+      const leaves = (rows || [])
+        .slice()
+        .sort((a, b) => depthOf(b) - depthOf(a))
+        .map((r) => ({ id: r.appactionid, entity: target.entity, kind: 'row' }));
+      // Rows BEFORE the bar: the individual rows are the ones holding the web-resource dependency,
+      // and deleting them first makes the outcome deterministic instead of depending on whatever the
+      // bar delete happens to cascade.
+      return [...leaves, ...bar];
     },
-    del: (sdk, item) => sdk.deleteRemoteArtifact('command', item.entity),
+    del: (sdk, item) => (item.kind === 'row'
+      ? sdk.deleteRecord('appaction', item.id)
+      : sdk.deleteRemoteArtifact('command', item.entity)),
+    // A row the bar delete already removed reads as gone, not as a failure.
+    tolerateNotFound: true,
   },
   form: {
     async resolve(sdk, target) {
@@ -493,6 +580,13 @@ function planTeardown(spec) {
   const specCreatedTables = new Set((spec.entities || []).filter((e) => e.existing !== true).map((e) => String(e.schemaName).toLowerCase()));
   for (const entity of Object.keys(commandsByEntity(spec))) {
     steps.push({ kind: 'commands', phase: 'commands', label: `command bar for ${entity}`, target: { entity, ownsTable: specCreatedTables.has(String(entity).toLowerCase()) } });
+  }
+  // Business rules BEFORE forms and tables: a rule is a workflow row bound to the entity, and an
+  // ACTIVE one blocks changes to what it references. It is also its own artifact rather than
+  // something a table delete cascades away.
+  for (const r of spec.businessRules || []) {
+    const entity = String(r.entity).toLowerCase();
+    steps.push({ kind: 'businessRules', phase: 'business-rules', label: `business rule "${r.name}" (${entity})`, target: { entity, name: r.name } });
   }
   // Delete forms so a QuickView form referenced by another form's `quickViews[]` is removed AFTER its
   // HOST form. The host embeds a quick-view CONTROL that references the QV form, so deleting the QV

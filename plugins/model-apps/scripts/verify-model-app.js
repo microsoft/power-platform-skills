@@ -73,6 +73,10 @@ function readerFor(sdk, appUnique, opts) {
   const base = {
     findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
     findColumns: async (logical) => sdk.findColumns(logical),
+    // Grid data visualization (preview) for one column. Passed straight through — including the raw
+    // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
+    // interprets (it must stay distinguishable from the legitimate 'None' answer).
+    columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
     // entityRelationships(childLogical): the relationship SCHEMA NAMES defined on a child entity, for the
     // content-verify relationship-existence check. Best-effort — a metadata read failure yields [] so the

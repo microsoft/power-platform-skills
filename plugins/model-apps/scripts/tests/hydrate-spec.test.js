@@ -255,3 +255,124 @@ test('validateAppSpec rejects a javascript: subarea url outright (#430 guard int
   assert.strictEqual(v.ok, false);
   assert.ok((v.errors || []).some((e) => /http\(s\) URL or a \$webresource/.test(e)), JSON.stringify(v.errors));
 });
+
+// UPGRADE PATH. An app deployed BEFORE `directEntry` existed has a page manifest carrying
+// `pageInput` and no `directEntry`. App Spec validation now requires the pair, and
+// `download-model-app.js` validates BEFORE it writes anything — so without a default here, the
+// download hard-fails and writes NO spec file at all. The author is left with nothing to edit and no
+// way back into the download → edit → rebuild loop.
+//
+// That is the same shape as #430 ("no spec file was written at all ... over a single unrelated nav
+// entry"), which this release fixes — so reintroducing it through the rule that closed a DIFFERENT
+// hole would be a straight regression for every app that already uses pageInput.
+function legacyPageInputRead() {
+  return {
+    app: async () => ({
+      name: 'A', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+        { type: 'GenPage', genPageId: '11111111-1111-1111-1111-111111111111', title: 'Overview' },
+        { type: 'GenPage', genPageId: '22222222-2222-2222-2222-222222222222', title: 'Detail' },
+      ] }] }] },
+    }),
+    // Note: no `directEntry` on either page — this manifest predates the field.
+    pages: async () => [
+      { pageId: '11111111-1111-1111-1111-111111111111', name: 'Overview', key: 'overview', navigatesTo: [{ targetKey: 'detail', data: { orderId: 'string' } }], dataSources: [], codeFile: 'overview.tsx' },
+      { pageId: '22222222-2222-2222-2222-222222222222', name: 'Detail', key: 'detail', pageInput: { data: { orderId: 'string' } }, dataSources: [], codeFile: 'detail.tsx' },
+    ],
+    entities: async () => [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }],
+    webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+}
+
+test('a downloaded app that predates directEntry still produces a VALID spec (upgrade path)', async () => {
+  const spec = await hydrateSpec(legacyPageInputRead());
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, true,
+    'download validates before writing, so an invalid spec here means no file is written at all: '
+    + JSON.stringify(v.errors));
+
+  const detail = spec.pages.find((p) => p.key === 'detail');
+  assert.deepStrictEqual(Object.keys(detail.pageInput.data), ['orderId'], 'the input survives');
+  // `emptyState`, not `selector`: the already-deployed .tsx has no picker, so promising one would be
+  // a claim about code that does not exist.
+  assert.strictEqual(detail.directEntry.behavior, 'emptyState');
+  assert.match(detail.directEntry.note, /predates directEntry/i,
+    'the injected value says where it came from, so the author can review rather than discover it');
+});
+
+// The case the test above DODGES, and the one that matters more: a legacy page whose input has NO
+// producing `navigatesTo` edge at all -- it was supplied externally, or by the page's own .tsx.
+// Injecting `directEntry` does not help there, because the ORPHANED-INPUT rule fires instead and is
+// equally fatal, so download would still write no file. Reviewed and caught precisely because the
+// first test supplied a matching edge and never exercised this path.
+function legacyOrphanInputRead() {
+  const read = legacyPageInputRead();
+  return {
+    ...read,
+    // Same two pages, but Overview no longer navigates with `orderId`.
+    pages: async () => (await read.pages()).map((p) => (p.key === 'overview' ? { ...p, navigatesTo: [{ targetKey: 'detail' }] } : p)),
+  };
+}
+
+test('a legacy page whose pageInput has NO producer still downloads (authoring rule, not a deploy rule)', async () => {
+  const spec = await hydrateSpec(legacyOrphanInputRead());
+
+  // As an AUTHORED spec this is still an error -- the rule keeps its teeth for anything hand-written.
+  const authored = validateAppSpec(spec, { profile: 'plan' });
+  assert.strictEqual(authored.ok, false, 'authoring still rejects an input nothing produces');
+  assert.ok((authored.errors || []).some((e) => /no page navigates to it with that data/.test(e)),
+    JSON.stringify(authored.errors));
+
+  // As a RECONSTRUCTION of an app that already exists, it must be writable -- with the finding
+  // surfaced, not swallowed.
+  const reconstructed = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(reconstructed.ok, true,
+    'download must still emit a spec: ' + JSON.stringify(reconstructed.errors));
+  assert.ok((reconstructed.warnings || []).some((w) => /no page navigates to it with that data/.test(w)),
+    'the finding is reported as a warning, not dropped: ' + JSON.stringify(reconstructed.warnings));
+});
+
+test('reconstructed mode relaxes ONLY the producer rule, not real structural errors', async () => {
+  // A blanket "reconstructed means anything goes" would be worse than the bug it fixes.
+  const spec = await hydrateSpec(legacyOrphanInputRead());
+  spec.appShell.areas[0].groups[0].subAreas.push({ title: 'Bad', url: 'javascript:alert(1)' });
+  const v = validateAppSpec(spec, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v.ok, false, 'a javascript: url is still fatal under reconstruction');
+
+  const spec2 = await hydrateSpec(legacyOrphanInputRead());
+  spec2.pages.find((p) => p.key === 'detail').directEntry = { behavior: 'shrug' };
+  const v2 = validateAppSpec(spec2, { profile: 'plan', reconstructed: true });
+  assert.strictEqual(v2.ok, false, 'an illegal directEntry.behavior is still fatal under reconstruction');
+});
+
+test('the defaulted directEntry is reported, not silent', async () => {
+  const spec = await hydrateSpec(legacyPageInputRead());
+  // Non-enumerable, like the other download diagnostics: app-spec.json stays the user-facing
+  // contract and must not gain transient upgrade metadata.
+  assert.deepStrictEqual(spec.directEntryDefaulted, ['detail']);
+  assert.strictEqual(Object.keys(spec).includes('directEntryDefaulted'), false,
+    'diagnostics must not leak into the written spec');
+});
+
+test('directEntry is defaulted ONLY where it is missing and actually required', async () => {
+  // An author-supplied value is never overwritten.
+  const read = legacyPageInputRead();
+  const base = await read.pages();
+  read.pages = async () => base.map((p) => (p.key === 'detail' ? { ...p, directEntry: { behavior: 'selector' } } : p));
+  const kept = await hydrateSpec(read);
+  assert.strictEqual(kept.pages.find((p) => p.key === 'detail').directEntry.behavior, 'selector');
+  assert.deepStrictEqual(kept.directEntryDefaulted, [], 'nothing was defaulted, so nothing is reported');
+
+  // A page with NO pageInput does not need directEntry and must not acquire one — the spec stays
+  // minimal, and an unnecessary field would imply a decision the author never made.
+  const spec = await hydrateSpec(legacyPageInputRead());
+  assert.strictEqual(spec.pages.find((p) => p.key === 'overview').directEntry, undefined);
+
+  // An EMPTY pageInput.data declares no keys, so validation does not require directEntry either.
+  const emptyInput = legacyPageInputRead();
+  const pages = await emptyInput.pages();
+  emptyInput.pages = async () => pages.map((p) => (p.key === 'detail' ? { ...p, pageInput: { data: {} } } : p));
+  const spec2 = await hydrateSpec(emptyInput);
+  assert.strictEqual(spec2.pages.find((p) => p.key === 'detail').directEntry, undefined,
+    'the default tracks the validation condition exactly, not the mere presence of pageInput');
+});
