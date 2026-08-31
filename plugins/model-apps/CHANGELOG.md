@@ -78,14 +78,14 @@ reported success.
   test that feeds a serialized dashboard straight back in.
   ([#478](https://github.com/microsoft/power-platform-skills/issues/478))
 - **Presence operators for business rules.** `ContainsData` / `DoesNotContainData` were gated because
-  they compiled to XAML the platform answered with `HTTP 500 — Error generating UiData`. The compiler
-  emitted an empty parameter array where a null one is required; fixed upstream and re-verified live,
-  so all four operators now deploy.
+  the SDK's client-side workflow-XAML compiler emitted an empty parameter array where the platform
+  requires a null one, and every attempt answered `HTTP 500 — Error generating UiData`. That compiler
+  has since been removed entirely (see *Changed*, above): rules are written as the workflow object
+  model through the bound member, where the presence operators need no special handling. All sixteen
+  operators now deploy.
 - **The AI form-fill family is controllable per capability** — the assist toolbar
   (`formFill`), edit-form predictions (`formFillSuggestions`), smart paste (`formFillSmartPaste`) and
   file upload (`formFillFiles`), instead of one flag that only ever governed the toolbar.
-
-### Fixed
 - **Descriptions now converge on existing views and charts.** A description reached Dataverse only at
   create, so the most-read view on a table — the platform's auto-generated *"Active &lt;Plural&gt;"*,
   which already exists when the build reconciles onto it — never received the authored text. Both are
@@ -122,8 +122,9 @@ reported success.
   `2 = enabled`, so treating any non-zero value as "on" reported a deliberately **disabled** feature
   as enabled — and reported `0` as off when it actually means "defer to flighting". Readiness is now
   codec-aware and says "unknown" where the platform says "default".
-- **Multi-condition business rules are rejected at the spec gate.** The compiler supports exactly one
-  clause, so such a spec used to validate and then fail part-way through the build.
+- **Multi-condition business rules now work.** They used to be rejected at the spec gate, because the
+  client-side XAML compiler read only `clauses[0]`. That compiler is gone; the workflow object model
+  folds N conditions with the platform's own `LogicalAnd`, so a rule may state several conditions.
 - **A malformed `businessRules` no longer crashes validation** with a raw `TypeError` instead of
   naming the field.
 - **Duplicate-cleanup warnings no longer assert a cause they cannot know** — a permission or

@@ -15,15 +15,23 @@
 //                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
 //                      sitemap reference is already gone and the only dependency the platform can
 //                      still report is a GENUINE other consumer; such a page is SKIPPED, not deleted.
-//   1b. roles        — persona security roles. Deleted right after the app (BEFORE the data model): a
-//                      role holding a soon-to-be-deleted table's privileges could otherwise block that
-//                      table's delete. SEC-1: only roles the SDK itself authored (marked on the role
-//                      description) are deleted — never a hand-built or managed same-name role.
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
 //                      entity's bar in one call), so this passes the entity logical name, not an id.
 //   4. forms         — systemform rows per entity (forms reference views/web-resources; deleted before tables)
+//   4b. roles        — persona security roles. Deleted AFTER the forms and BEFORE the data model, and
+//                      both halves of that are load-bearing:
+//                        * after forms, because `forms[].securityRoles` writes the role id into the
+//                          form's own `formxml` as a `<DisplayConditions>` entry, which the platform
+//                          treats as a real dependency. MEASURED: deleting the role first answered
+//                          `HTTP 400 … The Role(<id>) component cannot be deleted because it is
+//                          referenced by 1 other components`, and the identical delete returned 204
+//                          with zero reported dependencies once the forms were gone.
+//                        * before tables, because a role holding a soon-to-be-deleted table's
+//                          privileges could otherwise block that table's delete.
+//                      SEC-1: only roles the SDK itself authored (marked on the role description) are
+//                      deleted — never a hand-built or managed same-name role.
 //   5. charts        — savedqueryvisualization rows per entity (deleted before tables)
 //   6. views         — savedquery rows per entity (deleted before tables)
 //   7. relationships — OneToMany/ManyToMany relationships (deleted before tables)
@@ -74,12 +82,6 @@ function isNotFound(err) {
   // RelationshipDefinitions metadata id that no longer resolves — already cascaded away) does not
   // exist; treat it as already-gone. Only zero counts (">1 were found" is a genuine ambiguity error).
   return /not found|does not exist|could not find|but 0 were found/.test(msg);
-}
-
-function isMethodNotAllowed(err) {
-  if (!err) return false;
-  const status = err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status));
-  return status === 405;
 }
 
 // Detect a system/managed artifact that Dataverse refuses to delete (e.g. the auto-generated

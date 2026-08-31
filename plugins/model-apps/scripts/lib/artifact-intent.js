@@ -526,7 +526,13 @@ function compileFormIntent(spec, formSpec, opts) {
     description: formSpec.description,
     status: 'Active',
     tabs: tabs,
-    __explicitLayout: explicit,
+    // Whether an authored tabs layout was ACTUALLY used, which is NOT the same as `explicit` above.
+    // `explicit` is also true for `layout: 'explicit'` with no `tabs`, and in that case the compiler
+    // falls through to the AUTO branch — so reporting it as explicit would tell the engine's
+    // reconcile to prune fields against a layout nobody authored. The spec gate rejects that
+    // combination, but `compileFormIntent` is called directly too, so the flag states what actually
+    // happened rather than what was asked for.
+    __explicitLayout: Array.isArray(formSpec.tabs),
     // Ordering anchors: { <logical>: <anchorLogical> }. Consumed by the engine's reconcile, which
     // MOVES an existing control to sit immediately after its anchor. Kept off the cells because a
     // cell is pushed verbatim to the SDK and `after` is not part of its model (see `positions`).

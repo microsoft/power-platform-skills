@@ -1,14 +1,14 @@
 {
-  "commit": "15bd1b16cdcb8ba8e7cfb82408924e4f860926df",
-  "subject": "fix(cds-maker-sdk): sort the VERSION_CONFLICT_CODE import (CI Rush lint)",
+  "commit": "5dcb83986fb7b396b2c033089ab89a199665a830",
+  "subject": "loc(copilot-studio): add catalogues for 12 new locales (additions-only)",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-31T17:44:14.175Z",
-  "newestSrcAt": "2026-08-31T17:43:21.997Z",
+  "libBuiltAt": "2026-08-31T21:41:17.872Z",
+  "newestSrcAt": "2026-08-31T21:40:14.316Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-31T18:44:53.881Z",
+  "builtAt": "2026-08-31T21:41:40.924Z",
   "bundleSha256": "2d459dec4bad316c468a05ce9d21f13eef48984a483b0aaa29d3f627213db0f5",
   "bundleBytes": 682531
 }

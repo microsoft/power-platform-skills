@@ -1061,6 +1061,14 @@ function validateAppSpec(spec, opts = {}) {
     }
     validateFormFieldOptions(f, entityByLower, errors, warnings);
     validateFormSecurityRoles(f, spec, errors);
+    // `layout: 'explicit'` with no `tabs[]` is a spec that asks for one thing and builds another.
+    // `compileFormIntent` takes the explicit path only when `tabs` is an ARRAY, so this combination
+    // silently compiles an AUTO layout — while `prune` and the field-positioning rules read as
+    // explicit-layout behaviour to the author. Rejected rather than warned: the two layouts differ in
+    // whether a rebuild REMOVES deployed fields, so guessing wrong is destructive.
+    if (f && f.layout === 'explicit' && !Array.isArray(f.tabs)) {
+      errors.push(`form '${f.name || f.entity}': layout is 'explicit' but no tabs[] were authored — an explicit layout IS its tabs. Author tabs[], or drop layout: 'explicit' to use the auto layout.`);
+    }
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the

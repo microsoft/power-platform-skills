@@ -296,12 +296,25 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
       const sols = await sdk.queryRecords('solution', { select: ['solutionid'], filter: `uniquename eq '${esc}'`, top: 1 });
       const solId = sols && sols[0] && sols[0].solutionid;
       if (solId) {
-        // Solution component type 29 is Workflow; business rules are workflow rows with category 2.
+        // Solution component type 29 is Workflow — which is EVERY process kind, not just business
+        // rules: classic workflows, actions, business process flows and modern flows all land here.
         // See component type values: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+        //
+        // So the rows must be narrowed after the fetch. A business rule is `category 2`, and `type 1`
+        // is the DEFINITION — activating one makes Dataverse create a second `type 2` copy of it, so
+        // without the type filter every active rule would appear twice in the inventory.
+        //
+        // Filtered client-side rather than in the query because `rowsByIds` batches on the id column;
+        // both fields are requested in the select so the decision is made on real values, and a row
+        // that reports NEITHER field is dropped rather than assumed to be a rule — fail closed, since
+        // mislabelling somebody's classic workflow as a business rule is the failure mode here.
         const comps = await sdk.queryRecords('solutioncomponent', { select: ['objectid', 'componenttype'], filter: `_solutionid_value eq ${solId} and componenttype eq 29`, top: 1000 });
         const ids = (comps || []).map((r) => r && r.objectid).filter(Boolean);
-        inventory.businessRules.push(...await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description'], (r) =>
-          withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description)));
+        const processes = await rowsByIds(sdk, 'workflow', 'workflowid', ids, ['workflowid', 'name', 'primaryentity', 'description', 'category', 'type'], (r) => r);
+        for (const r of processes) {
+          if (Number(r && r.category) !== 2 || Number(r && r.type) !== 1) continue;
+          inventory.businessRules.push(withDescription({ id: r.workflowid, name: r.name, entity: r.primaryentity }, r.description));
+        }
       }
     }
   } catch { /* business-rule descriptions are an inspection aid, not a rebuild prerequisite */ }

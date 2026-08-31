@@ -827,18 +827,6 @@ function appDef(spec, result, opts = {}) {
     components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
 }
 
-// Map one App Spec business rule to the SDK's BusinessRuleArtifact shape.
-//
-// The SDK's condition model is NOT the obvious one, and getting it wrong is SILENT: `updateElement`
-// merges unknown keys onto the node, the compiler ignores them, and the push succeeds with XAML that
-// references none of the author's columns — a rule that deploys, activates, and never fires. So the
-// mapping is explicit and the App Spec shape is validated before we get here.
-//
-//   conditions[] -> rootCondition.clauses[]   (ANDed; `logic: 'AND'`)
-//   actions[]    -> rootCondition.trueBranch[]
-//
-// `valueType` is always `'Value'`: the compiler rejects `Field` and `Lookup`, so exposing that axis
-// would offer authors a choice they cannot use. The App Spec's `dataType` is the SDK's
 // A business-rule row filter that selects only the DEFINITION, never the platform's activated copy.
 //
 // LIVE-MEASURED. Activating a business rule makes Dataverse create a SECOND `workflows` row:
@@ -868,8 +856,23 @@ function formIdentityKey(f) {
   return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
 }
 
-// `valueWorkflowType` — how the platform interprets the literal — renamed because `valueType` already
-// means something else here.
+// Map one App Spec business rule to the SDK's BusinessRuleArtifact shape.
+//
+// The SDK's condition model is NOT the obvious one, and getting it wrong is SILENT: `updateElement`
+// merges unknown keys onto the node, the serializer ignores them, and the push succeeds with a
+// workflow object model that references none of the author's columns — a rule that deploys,
+// activates, and never fires. So the mapping is explicit and the App Spec shape is validated before
+// we get here.
+//
+//   conditions[] -> rootCondition.clauses[]   (ANDed; `logic: 'AND'`)
+//   actions[]    -> rootCondition.trueBranch[]
+//
+// `valueType` is always `'Value'`: the SDK's other axes (`Field`, `Lookup`, `Expression`, `Clear`)
+// need shapes the App Spec does not model, so exposing the name would offer authors a choice they
+// cannot use. The App Spec calls the type hint `dataType` rather than the SDK's `valueWorkflowType`,
+// because `valueType` already means that other thing here — and note it is currently DECORATIVE:
+// measured across every accepted token, on both the condition and the action path, the SDK types
+// every literal as String. See BUSINESS_RULE_DATA_TYPES in app-spec.js.
 function businessRuleDef(rule) {
   const ids = (prefix) => { let n = 0; return () => `${prefix}${++n}`; };
   const clauseId = ids('c');

@@ -516,7 +516,9 @@ solution (idempotent) → data model — **discover** existing tables/columns/re
 `createWebResource` for form JS/HTML/CSS) → **views** → **charts** → **forms** (primary + columns
 laid out, explicit `tabs` honored; sub-grids, quick-views, and form JS (`events[]`) applied as
 canonical control cells / the `/bag/c` events region via the SDK's generic `addElement` surface)
-→ **business rules** (`businessRules[]`; compiled to classic workflow XAML and activated) →
+→ **business rules** (`businessRules[]` — authored as the workflow object model through the bound
+`CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
+does not declare that member) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
@@ -554,8 +556,9 @@ child view id. Each step emits `[n/total]`.
   `docs/app-builder-capabilities.md`.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
-  multi-area sitemaps, **column-level (field) security**, **access teams / hierarchy security** (the
-  security surface today is role-per-persona plus per-form role assignment — a tracked SDK follow-up).
+  multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
+  (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
+  assignment, and both of those ship.
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound
     `CreateProcessWithWfomJson` member — the same one the modern business-rule designer uses — and

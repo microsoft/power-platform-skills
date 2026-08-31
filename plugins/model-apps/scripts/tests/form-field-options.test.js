@@ -453,3 +453,62 @@ test('validation does not THROW on a non-iterable fields (the BigInt scan re-ite
     assert.ok(res.errors.some((e) => /fields must be an array/.test(e)), `no finding for fields: ${JSON.stringify(bad)}`);
   }
 });
+
+// --- layout: 'explicit' with no tabs -------------------------------------------------------------
+//
+// PR review: `validateFormFieldOptions` treats `layout: 'explicit'` as an explicit layout even
+// without `tabs`, but `compileFormIntent` takes the explicit path only when `tabs` is an ARRAY. So
+// such a spec validated green and then compiled an AUTO layout, while `prune` and the field
+// positioning rules read to the author as explicit-layout behaviour.
+//
+// Rejected rather than warned: the two layouts differ in whether a rebuild REMOVES deployed fields,
+// so guessing wrong is destructive.
+
+const { validateAppSpec: validateSpec } = require('../lib/app-spec.js');
+const { compileFormIntent: compileIntent } = require('../lib/artifact-intent.js');
+
+function layoutSpec(form) {
+  return {
+    solution: { uniqueName: 'L', displayName: 'L', publisherPrefix: 'new' },
+    app: { name: 'L App', description: 'd' },
+    entities: [{
+      schemaName: 'new_ticket', displayName: 'Ticket', pluralName: 'Tickets',
+      primaryAttribute: { schemaName: 'new_subject', displayName: 'Subject' },
+      columns: [{ schemaName: 'new_notes', displayName: 'Notes', type: 'Memo' }],
+    }],
+    forms: [{ entity: 'new_ticket', name: 'F', ...form }],
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ entity: 'new_ticket', title: 'T' }] }] }] },
+  };
+}
+
+test("layout: 'explicit' with no tabs[] is a spec ERROR", () => {
+  const errs = validateSpec(layoutSpec({ layout: 'explicit' }), { profile: 'plan' }).errors || [];
+  assert.ok(errs.some((e) => /layout is 'explicit' but no tabs\[\] were authored/.test(e)),
+    `expected an explicit-without-tabs error, got ${JSON.stringify(errs)}`);
+});
+
+test("layout: 'explicit' WITH tabs[] is fine, and so is the auto layout", () => {
+  assert.deepStrictEqual(validateSpec(layoutSpec({
+    layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'D', columns: 1, fields: ['new_notes'] }] }],
+  }), { profile: 'plan' }).errors || [], []);
+  assert.deepStrictEqual(validateSpec(layoutSpec({ layout: 'auto' }), { profile: 'plan' }).errors || [], []);
+  assert.deepStrictEqual(validateSpec(layoutSpec({}), { profile: 'plan' }).errors || [], []);
+});
+
+test('__explicitLayout reports what was COMPILED, not what was requested', () => {
+  // The compiler falls through to the AUTO branch when `tabs` is not an array. Reporting that as an
+  // explicit layout would tell the engine's reconcile to PRUNE deployed fields against a layout
+  // nobody authored — a destructive action taken on the strength of a flag that was merely asked for.
+  const askedSpec = layoutSpec({ layout: 'explicit' });
+  const asked = compileIntent(askedSpec, askedSpec.forms[0]);
+  assert.strictEqual(asked.__explicitLayout, false,
+    'no tabs were authored, so no explicit layout was compiled');
+
+  const realSpec = layoutSpec({
+    layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'D', columns: 1, fields: ['new_notes'] }] }],
+  });
+  const real = compileIntent(realSpec, realSpec.forms[0]);
+  assert.strictEqual(real.__explicitLayout, true, 'an authored tabs layout IS explicit');
+});

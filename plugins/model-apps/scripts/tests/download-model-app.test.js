@@ -480,6 +480,9 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   const FORM_ID = '5111e0f2-0000-4000-8000-000000000004';
   const RULE_ID = '5111e0f2-0000-4000-8000-000000000005';
   const SOL_ID = '5111e0f2-0000-4000-8000-000000000006';
+  const FORM_ID_RESTRICTED = '5111e0f2-0000-4000-8000-000000000007';
+  const RULE_COPY_ID = '5111e0f2-0000-4000-8000-000000000008';
+  const CLASSIC_ID = '5111e0f2-0000-4000-8000-000000000009';
   const calls = [];
   const sdk = {
     // A real table logical name is the ONLY thing queryRecords can take: it resolves its argument
@@ -496,13 +499,32 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
       if (set === 'appmodule') return [{ appmoduleidunique: APP_UNIQ_VALUE }];
       if (set === 'appmodulecomponent' && /componenttype eq 26/.test(filter)) return [{ objectid: VIEW_ID }];
       if (set === 'appmodulecomponent' && /componenttype eq 59/.test(filter)) return [{ objectid: CHART_ID }];
-      if (set === 'appmodulecomponent' && /componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID }];
+      if (set === 'appmodulecomponent' && /componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID }, { objectid: FORM_ID_RESTRICTED }];
       if (set === 'savedquery') return [{ savedqueryid: VIEW_ID, name: 'Active Orders', returnedtypecode: 'new_order', description: 'Work queue.' }];
       if (set === 'savedqueryvisualization') return [{ savedqueryvisualizationid: CHART_ID, name: 'Orders by Status', primaryentitytypecode: 'new_order', description: null }];
-      if (set === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: 'Primary form.' }];
+      if (set === 'systemform') {
+        return [
+          { formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: 'Primary form.' },
+          // A form RESTRICTED to a security role. `formxml` is pulled purely to detect this, and the
+          // detection is what feeds the download's access-widening warning.
+          { formid: FORM_ID_RESTRICTED, name: 'Dispatcher', objecttypecode: 'new_order', description: 'Restricted.',
+            formxml: '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>' },
+        ];
+      }
       if (set === 'solution') return [{ solutionid: SOL_ID }];
       if (set === 'solutioncomponent') return [{ objectid: RULE_ID, componenttype: 29 }];
-      if (set === 'workflow') return [{ workflowid: RULE_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.' }];
+      if (set === 'workflow') {
+        return [
+          // A real business rule: category 2 (Business Rule), type 1 (the definition).
+          { workflowid: RULE_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.', category: 2, type: 1 },
+          // The platform's activated COPY of that same rule. Counting it would list every active
+          // rule twice.
+          { workflowid: RULE_COPY_ID, name: 'Lock Closed', primaryentity: 'new_order', description: 'Closed rows are read-only.', category: 2, type: 2 },
+          // A CLASSIC WORKFLOW. Solution component type 29 is every process kind, so without the
+          // category filter this would be mislabelled as a business rule in the inventory.
+          { workflowid: CLASSIC_ID, name: 'Nightly Recalc', primaryentity: 'new_order', description: 'A classic workflow.', category: 0, type: 1 },
+        ];
+      }
       return [];
     },
     dataverse: {
@@ -521,7 +543,25 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
   assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
   assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
   assert.deepStrictEqual(inv.forms[0], { id: FORM_ID, name: 'Main', entity: 'new_order', description: 'Primary form.' });
+  // The role-restriction flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads
+  // those into `app-spec.json`, and a diagnostic has no business in the user-facing spec.
+  assert.strictEqual('roleRestricted' in inv.forms[1], false,
+    'the flag belongs on the sibling key, not on each form entry');
+  // BEHAVIOURAL: only the restricted form is recorded, and it is recorded by (entity, name) so the
+  // warning can name it. A source regex could not catch dropping `formxml` from the $select —
+  // isRoleRestrictedFormXml(undefined) is false, so the list would be silently empty forever.
+  assert.deepStrictEqual(inv.roleRestrictedForms, [{ name: 'Dispatcher', entity: 'new_order' }],
+    'exactly the role-restricted form, and not the unrestricted one');
+  assert.ok(calls.some((c) => c.set === 'systemform' && c.opts.select.includes('formxml')),
+    'the form read must select formxml — without it the restriction can never be detected');
   assert.deepStrictEqual(inv.businessRules[0], { id: RULE_ID, name: 'Lock Closed', entity: 'new_order', description: 'Closed rows are read-only.' });
+  // Solution component type 29 is EVERY process kind, so the rows must be narrowed after the fetch.
+  // A classic workflow listed as a business rule is misleading to any tool that reads the inventory,
+  // and the activated type-2 copy would list every active rule twice.
+  assert.strictEqual(inv.businessRules.length, 1,
+    `only the type-1 category-2 definition may be listed; got ${JSON.stringify(inv.businessRules.map((r) => r.name))}`);
+  assert.ok(calls.some((c) => c.set === 'workflow' && c.opts.select.includes('category') && c.opts.select.includes('type')),
+    'category and type must be REQUESTED, or the filter decides on undefined');
   assert.deepStrictEqual(inv.globalChoices[0], { name: 'new_priority', description: 'Shared priority choices.' });
   assert.ok(calls.some((c) => c.set === 'savedquery' && c.opts.select.includes('description')), 'view read selects description');
   assert.ok(calls.some((c) => c.set === 'savedqueryvisualization' && c.opts.select.includes('description')), 'chart read selects description');
@@ -1220,33 +1260,114 @@ test('missing or malformed formxml is not a restriction', () => {
   }
 });
 
-test('readDescriptionInventory RECORDS which forms are role-restricted', () => {
-  // The predicate above is pure and well covered; this pins the WIRING. Deleting the
-  // `inventory.roleRestrictedForms.push(...)` call left every one of those assertions green while
-  // the warning it feeds went silent — and this is the one guard against a silent access WIDENING,
-  // so it is the last thing that should be undefended. (The same wiring already produced one
-  // `inventory is not defined` crash.)
-  const src = fs.readFileSync(path.join(__dirname, '..', 'download-model-app.js'), 'utf8');
-  assert.match(src, /inventory\.roleRestrictedForms\.push\(/,
-    'the inventory must record role-restricted forms');
-  assert.match(src, /isRoleRestrictedFormXml\(r\.formxml\)/,
-    'and it must decide that from the form xml it just read');
-  // The flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads those into
-  // app-spec.json, and a diagnostic has no business in the user-facing spec.
-  assert.doesNotMatch(src, /roleRestricted:\s*isRoleRestrictedFormXml/,
-    'the flag belongs on the sibling key, not on each form entry');
+test('runDownload WARNS on stderr about a role-restricted form, naming it', async () => {
+  // BEHAVIOURAL. The two source-regex guards this replaces both stayed green under two realistic
+  // edits — dropping `formxml` from the systemform $select, and collapsing the capturing
+  // descriptionInventory accessor — either of which silences the warning completely.
+  //
+  // This is the single guard against a silent access WIDENING: `forms[]` is not reconstructed by the
+  // download, so a restricted form rebuilt into another environment comes back visible to every role.
+  const APP_ID = '6222e0f2-0000-4000-8000-000000000001';
+  const APP_UNIQUE = 'new_rolewarn';
+  const FORM_OPEN = '6222e0f2-0000-4000-8000-000000000002';
+  const FORM_LOCKED = '6222e0f2-0000-4000-8000-000000000003';
+  const SM_ID = '6222e0f2-0000-4000-8000-000000000004';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-rolewarn-'));
+
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'Role Warn', uniquename: APP_UNIQUE, description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: APP_UNIQUE }];
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 60/.test(filter)) return [{ objectid: FORM_OPEN, componenttype: 60 }, { objectid: FORM_LOCKED, componenttype: 60 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+      if (logical === 'systemform') {
+        return [
+          { formid: FORM_OPEN, name: 'Everyone Form', objecttypecode: 'new_order', description: '',
+            formxml: '<form><tabs /><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>' },
+          { formid: FORM_LOCKED, name: 'Dispatcher Form', objecttypecode: 'new_order', description: '',
+            formxml: '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>' },
+        ];
+      }
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [{ logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true }],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+
+  // The warning goes to stderr (non-fatal), the pattern used elsewhere in this suite.
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  let res;
+  try {
+    res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+
+  assert.strictEqual(res.ok, true, `the download itself must succeed; got ${res.error || ''}`);
+  const text = written.join('');
+  assert.match(text, /form\(s\) are restricted to specific security roles/, 'the warning must fire');
+  assert.match(text, /new_order\.Dispatcher Form/, 'and must NAME the restricted form');
+  assert.doesNotMatch(text, /Everyone Form/,
+    'the <Everyone /> form is the unrestricted DEFAULT — warning on it would make the warning noise');
+  assert.match(text, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
 });
 
-test('runDownload WARNS about a role-restricted form, naming it', async () => {
-  // The behavioural half. `forms[]` is not reconstructed by download, so this warning is the only
-  // thing standing between "download, rebuild elsewhere" and a restricted form coming back visible
-  // to everyone.
-  const src = fs.readFileSync(path.join(__dirname, '..', 'download-model-app.js'), 'utf8');
-  const warn = src.split(/\r?\n/).find((l) => l.includes('form(s) are restricted to specific security roles'));
-  assert.ok(warn, 'the warning must exist');
-  assert.match(warn, /restricted\.map/, 'and must NAME the forms — a bare count is not actionable');
-  assert.match(warn, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
-  // It must be driven by the captured inventory, not recomputed or hardcoded.
-  assert.match(src, /const restricted = \(capturedInventory && capturedInventory\.roleRestrictedForms\) \|\| \[\]/,
-    'the warning must read the inventory the download actually captured');
+test('runDownload stays SILENT when no form is role-restricted', async () => {
+  // A warning that fires on every download is a warning nobody reads.
+  const APP_ID = '6333e0f2-0000-4000-8000-000000000001';
+  const SM_ID = '6333e0f2-0000-4000-8000-000000000002';
+  const FORM_ID = '6333e0f2-0000-4000-8000-000000000003';
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nowarn-'));
+  const sdk = {
+    fetchArtifact: async () => ({
+      id: APP_ID, name: 'No Warn', uniquename: 'new_nowarn', description: '',
+      siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'new_order' }] }] }] },
+    }),
+    queryRecords: async (logical, opts) => {
+      const filter = (opts && opts.filter) || '';
+      if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: APP_ID, uniquename: 'new_nowarn' }];
+      if (logical === 'appmodulecomponent') {
+        if (/componenttype eq 60/.test(filter)) return [{ objectid: FORM_ID, componenttype: 60 }];
+        if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
+        return [];
+      }
+      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>' }];
+      if (logical === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: '', formxml: '<form><tabs /></form>' }];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({
+      logicalName: logical, schemaName: 'new_order', displayName: 'Order', primaryNameAttribute: 'new_name',
+      attributes: [{ logicalName: 'new_name', displayName: 'Name', attributeType: 'String', isCustomAttribute: true }],
+      relationships: [],
+    }),
+    dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
+  };
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
+  const origWrite = process.stderr.write.bind(process.stderr);
+  const written = [];
+  process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
+  try {
+    await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn' });
+  } finally {
+    process.stderr.write = origWrite;
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+  assert.doesNotMatch(written.join(''), /restricted to specific security roles/);
 });
