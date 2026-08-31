@@ -19,14 +19,14 @@ Run the governed AppGen functional scenarios for one Power Apps Canvas App throu
 
 Run:
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File "${PLUGIN_ROOT}/skills/run-functional-eval/run-functional-eval.ps1" `
-  -PpevalRepoPath "<resolved power-platform-evals path>" `
-  -AppUrl "<published app URL>" `
-  -PromptId "<Q prompt ID>" `
-  -Concurrency 1 `
-  -SessionConcurrency 1 `
-  <optional: -BrowserUserDataDir "<power-platform-evals>/.auth/browser-use-profile-<safe-user>" -BrowserChannel "" -LoginHint "<full user UPN>"> `
+```bash
+pwsh -NoProfile -ExecutionPolicy Bypass -File "${PLUGIN_ROOT}/skills/eval-canvas-app/scripts/run-functional-eval.ps1" \
+  -PpevalRepoPath "<resolved power-platform-evals path>" \
+  -AppUrl "<published app URL>" \
+  -PromptId "<Q prompt ID>" \
+  -Concurrency 1 \
+  -SessionConcurrency 1 \
+  <optional: -BrowserUserDataDir "<power-platform-evals>/.auth/browser-use-profile-<safe-user>" -BrowserChannel "" -LoginHint "<full user UPN>"> \
   -PublishToKusto
 ```
 

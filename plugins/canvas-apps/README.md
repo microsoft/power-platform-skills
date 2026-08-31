@@ -93,10 +93,9 @@ The skill opens a stable Studio preview, runs the governed AppGen scenarios from
 `power-platform-evals` checkout, retains the Product report and canonical evidence, and
 publishes metrics when OneDS configuration is available.
 
-The packaged `/run-functional-eval` skill exposes the same runner without requiring
-publication. Set `POWER_PLATFORM_EVALS_REPO` or provide the checkout path explicitly.
-The evaluator also requires `FOUNDRY_EVAL_ENDPOINT` and an Azure CLI sign-in that can use
-that Foundry resource.
+The bundled runner uses the checkout identified by `POWER_PLATFORM_EVALS_REPO` or an
+explicitly provided path. The evaluator also requires `FOUNDRY_EVAL_ENDPOINT` and an Azure
+CLI sign-in that can use that Foundry resource.
 
 The connection depends on the open Power Apps Studio coauthoring session. If you close the browser tab or the Studio session expires, reopen the app and run `configure-canvas-mcp` again.
 

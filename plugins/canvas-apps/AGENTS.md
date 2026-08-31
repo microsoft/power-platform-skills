@@ -52,8 +52,8 @@ skills/
     SKILL.md                   ← Guides user to add a data source or connector in Studio, then verifies
   eval-canvas-app/
     SKILL.md                   ← Evaluates a Canvas App URL and publishes governed metrics
-  run-functional-eval/
-    SKILL.md                   ← Runs the packaged power-platform-evals workflow
+    scripts/
+      run-functional-eval.ps1 ← Runs the packaged power-platform-evals workflow
 ```
 
 ## Skills
@@ -64,7 +64,6 @@ skills/
 | `/configure-canvas-mcp` | Configure the Canvas Authoring MCP server for the current coauthoring session |
 | `/add-data-source` | Guide the user to add a data source, connection, or API connector in Studio, then verify it is available |
 | `/eval-canvas-app` | Evaluate a Canvas App URL with governed AppGen scenarios and publish the report metrics |
-| `/run-functional-eval` | Run the packaged functional evaluation and retain its evidence and Product report |
 
 ## Agents
 
