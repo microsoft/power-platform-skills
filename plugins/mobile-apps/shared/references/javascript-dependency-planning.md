@@ -63,10 +63,19 @@ A full month/week/agenda scheduling surface triggers candidate selection. Evalua
 
 ## Installation Contract
 
-Only `/create-mobile-app` or `/edit-app` installs approved rows, before screen builders run:
+Only `/create-mobile-app` or `/edit-app` installs approved rows, before screen
+builders run. First compare every approved package and exact version with
+`package.json` and `require.resolve`. Skip exact installed matches, then install
+all missing or mismatched approved rows in one project-local transaction.
+Snapshot `package.json` and the lockfile first so the whole approved batch can
+be restored without touching unrelated app files:
 
 ```bash
-npm install --save-exact <package>@<exact-version>
+cp package.json .tmp/package.before-js-dependencies.json
+if [ -f package-lock.json ]; then
+  cp package-lock.json .tmp/package-lock.before-js-dependencies.json
+fi
+npm install --save-exact <package>@<exact-version> [<package>@<exact-version> ...]
 ```
 
 Then verify:
@@ -87,7 +96,12 @@ Then verify:
 	The approval arguments are deterministic exceptions for package names that the baseline conservatively classifies as native-like. They do not classify package contents and cannot override packages known to require native runtime support.
 - `npx tsc --noEmit` passes after the consuming code is built
 
-If installed contents reveal native code/config or an incompatible runtime dependency, remove only the newly added package, report the block, and do not let builders import it. Pure-JavaScript additions do not need `/add-native`, `app.config.js`, CocoaPods, Gradle, a native rebuild, or a rewrap-base update.
+If installed contents reveal native code/config or an incompatible runtime
+dependency, restore the snapshotted manifest and lockfile, run
+`npm install --ignore-scripts` to restore `node_modules/`, report the block,
+and do not let builders import it. Pure-JavaScript additions do not need
+`/add-native`, `app.config.js`, CocoaPods, Gradle, a native rebuild, or a
+rewrap-base update.
 
 ## Builder Contract
 

@@ -12,19 +12,10 @@ This template is an Expo, React Native, and TypeScript starter for building a st
 
 **Building native mobile apps with Power Platform is in Private Preview; do not use this in production.**
 
-Start from the Power Platform mobile app template, then use the mobile-app
-skill to generate the app plan, data model, screens, native capabilities, and
-connector wiring.
+Install the mobile-app plugin, then run one skill command. The skill
+materializes the template, installs dependencies, and generates the app.
 
-1. Create a new app from the template and install dependencies:
-
-    ```sh
-    npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
-    cd my-mobile-app
-    npm install
-    ```
-
-2. Install the mobile-app plugin from the Power Platform Skills marketplace.
+1. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
     1. Open the Extensions pane.
     2. Enter `@agentPlugins mobile-app` in the search box.
@@ -45,20 +36,36 @@ connector wiring.
     claude plugin install mobile-app@power-platform-skills --scope user
     ```
 
-3. Open the template folder in VS Code and run the skill from Copilot Chat:
+2. Open the parent directory where you want the project created, then run the
+    skill from Copilot Chat or Copilot CLI:
 
     ```text
-    /create-mobile-app
+    /create-mobile-app build me a field inspection app
     ```
 
-    The template includes this host package and the required Expo / React Native
-    runtime dependencies. The skill updates the app in place as it designs and
-    generates the mobile experience.
+    The skill derives an app slug and creates `./<app-slug>`. To choose an
+    exact destination, pass:
+
+    ```text
+    /create-mobile-app --working-dir ./apps/my-mobile-app build me a field inspection app
+    ```
+
+    You can also run the skill from an existing fresh template folder; it
+    detects and adopts that directory instead of creating a nested project.
+    In both CLI and VS Code, every operation uses the resolved absolute project
+    path, so changing the open workspace is not required.
+
+    After the plan preview is approved, the skill materializes
+    `plugins/mobile-apps/template#main` and starts `npm install`. Dependency
+    installation continues in parallel with planning and is joined before
+    template mutation, `power-apps init`, or TypeScript validation. Any
+    approved pure-JavaScript packages selected during planning are installed
+    afterward only when their exact versions are not already present.
 
     When prompted to sign in, use credentials for the tenant where the Dataverse
     environment belongs.
 
-4. Create the Microsoft Entra app registration from Power Apps Wrap.
+3. Create the Microsoft Entra app registration from Power Apps Wrap.
 
     Open the app-registration page for the Power Platform environment selected
     during `/create-mobile-app`:
@@ -90,7 +97,7 @@ connector wiring.
     - `Connectivity.Connections.Write`
     - `Connectivity.Connections.UserConsent`
 
-5. Start mobile app:
+4. Start mobile app:
 
 	Run the below command in a new terminal from the app directory.
 
@@ -98,7 +105,7 @@ connector wiring.
     npm run dev
     ```
 
-6. Preview the app by scanning the QR code with the Power Apps Developer app
+5. Preview the app by scanning the QR code with the Power Apps Developer app
 
     - App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
     - Play store: (coming soon)
@@ -163,7 +170,7 @@ What happens:
 3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
 4. **4 approval gates** — data model → native capabilities → connectors → screens (with a visual `_plan_preview.html` of every screen before any code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
-6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+6. **Scaffold + build** — materializes or adopts the template, overlaps `npm install` with planning, joins the install, runs `npx power-apps init`, reconciles approved JavaScript dependencies, generates schemas, builds Dataverse tables, wires connectors, and spawns N parallel screen-builders for the TSX
 7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
@@ -245,7 +252,7 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — creates `./<app-slug>` or uses `--working-dir`, materializes/adopts the standalone template, overlaps `npm install` with planning, runs `npx power-apps init`, resolves the selected environment tenant, applies approved data/native/connector/JavaScript dependencies, builds screens, and starts the dev server |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |

@@ -14,26 +14,38 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Capture launch directory + resume check → 1. Prerequisites → 2. Gather requirements + resolve target → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 2d. Materialize/adopt template + start background `npm install` → 3. Plan (planner agent + 4 gates, parallel with install) → 4. Auth & environment → 5. Join install + prepare template → 5.9 seed recovery memory bank → 6. `npx power-apps init` → 6.5 verify dependencies → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 finalize memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Reconcile planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
-## Fresh-template working-directory mode
+## Automatic template working-directory mode
 
-This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+`/create-mobile-app` can run from a parent directory in either Copilot CLI or
+VS Code Agent mode. After the app name is approved, the skill resolves one
+absolute `<working_dir>` and uses it for every planner, script, file operation,
+and command:
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+- No `--working-dir` and the launch directory is not a template/app:
+  create `<launch_dir>/<app-slug>`.
+- `--working-dir <path>`: resolve that path from the launch directory and use
+  it as the exact destination.
+- Launch directory already contains a fresh template or resumable app: adopt
+  the launch directory instead of creating a nested app.
 
-Use these markers:
+The target is classified by
+`scripts/resolve-mobile-app-target.js`. It permits a missing/empty destination,
+a fresh template with or without installed dependencies, a planning-only
+partial run, or an app with `memory-bank.md`. It rejects symbolic links,
+filesystem/home roots, unrelated non-empty directories, and generated app
+state that has no memory bank. Never infer or replace its resolved path later.
 
-| State | Detection | Action |
-|---|---|---|
-| Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
-| Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
-
-This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
+Template materialization starts only after the Step 2c `proceed` decision.
+The skill clones
+`microsoft/power-platform-skills/plugins/mobile-apps/template#main`, verifies
+the template markers, then runs `npm install` in the background while planning
+continues. It never relies on shell directory persistence: every command uses
+`cd "<working_dir>" && ...`, and every delegated agent receives the same
+absolute path.
 
 ---
 
@@ -66,34 +78,48 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ---
 
-### Step 0 — Resume check + fresh-template gate
+### Step 0 — Capture launch directory + resume check
 
-If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing directory), check whether `<working_dir>/memory-bank.md` exists.
+Capture the invocation directory once:
+
+```bash
+LAUNCH_DIR="$(pwd -P)"
+```
+
+Set `REQUESTED_WORKING_DIR` to the raw `--working-dir` value when present,
+otherwise to an empty string. Resolve only a possible resume location here:
+
+```bash
+RESUME_WORKING_DIR=""
+if [ -n "$REQUESTED_WORKING_DIR" ]; then
+  CANDIDATE=$(node -e "const path=require('node:path'); console.log(path.resolve(process.argv[1], process.argv[2]))" "$LAUNCH_DIR" "$REQUESTED_WORKING_DIR")
+  [ -f "$CANDIDATE/memory-bank.md" ] && RESUME_WORKING_DIR="$CANDIDATE"
+elif [ -f "$LAUNCH_DIR/memory-bank.md" ]; then
+  RESUME_WORKING_DIR="$LAUNCH_DIR"
+fi
+```
+
+Do not create the candidate. When `$RESUME_WORKING_DIR` is non-empty, check
+its memory bank:
 
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
   > "Found existing project '<name>' at `<dir>`. Steps 1–<N> already completed (last update <date>). Resume from Step <N+1>?"
-  Wait for confirmation. If the user says yes, jump to that step. Skip the wizard (Step 2) and re-use the values stored in the bank.
-- **Bank absent** → fresh project. Continue to Step 1.
+  Wait for confirmation. If the user says yes, set
+  `WORKING_DIR="$RESUME_WORKING_DIR"`, `SCAFFOLD_ACTION=resume`,
+  `NPM_INSTALL_TERMINAL_ID=""`, and load the display name, slug, environment,
+  and other approved values from the bank before jumping to that step. Skip
+  the wizard (Step 2). If `node_modules/expo` or
+  `node_modules/.package-lock.json` is missing, run one foreground
+  `cd "$WORKING_DIR" && npm install` before resuming; a memory-bank resume must
+  not continue with a partial dependency tree.
+- **Bank absent** → fresh project. Continue to Step 1; the final target is
+  resolved after the app slug is known in Step 2.
 - **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
 
 The bank is the only resume mechanism. Do not infer resume state from `package.json` or `node_modules/` — those can lie.
 
-After the resume check, run the **fresh-template gate** from the section above. This is a create-only command:
-
-- If `memory-bank.md` exists and the user confirms resume, resume as documented above.
-- If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
-- If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
-
-**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
-
-After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
-```
-
-`app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
+Do not create directories, clone the template, or install packages in Step 0.
+Step 2c remains the last zero-side-effect abort gate.
 
 ### Step 1 — Prerequisites
 
@@ -124,11 +150,18 @@ git --version                                       # optional
 | Node < 22 | STOP — instruct `nvm install 22 && nvm use 22` |
 | `az` | STOP — instruct `az login` |
 
-Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbacks, vendor fallbacks, or registry rewrites. The user must run `npm install` in the fresh template folder before invoking `/create-mobile-app`.
+The skill owns the project-local `npm install` after Step 2c approval. It does
+not provision npm feed tokens, PAT fallbacks, vendor fallbacks, registry
+rewrites, or global packages. Required npm authentication must already be
+configured in the host environment.
 
 Capture target Power Platform environment for the remaining flow.
 
-**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx power-apps init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx power-apps init` because init needs `--environment-id`.
+**Source of truth for env selection: an approved resume app's generated
+`power.config.json` first, explicit environment ID second.** For a fresh
+auto-scaffold run there is no project file yet, so ask for an environment ID.
+A Dataverse URL is useful as a resolver fallback for existing apps, but it is
+not enough for `npx power-apps init` because init needs `--environment-id`.
 
 | Step | Source | When user is asked |
 |---|---|---|
@@ -140,12 +173,11 @@ Capture target Power Platform environment for the remaining flow.
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
-if [ -z "$TARGET_ENV" ] && [ -f power.config.json ]; then
-  TARGET_ENV=$(node -e "try { const id=require('./power.config.json').environmentId || ''; console.log(id); } catch { console.log(''); }")
+if [ -z "$TARGET_ENV" ] && [ -n "$RESUME_WORKING_DIR" ] && [ -f "$RESUME_WORKING_DIR/power.config.json" ]; then
+  TARGET_ENV=$(node -e "try { const id=require(process.argv[1]).environmentId || ''; console.log(id); } catch { console.log(''); }" "$RESUME_WORKING_DIR/power.config.json")
 fi
 test -n "$TARGET_ENV" || { echo "✗ Environment missing. Provide an environment ID."; exit 2; }
-ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$TARGET_ENV")
-printf '%s\n' "$ENV_JSON" > .resolved-environment.json
+ENV_JSON=$(cd "${CLAUDE_SKILL_DIR}/../../" && node scripts/resolve-environment.js "$TARGET_ENV")
 ACTIVE_ENV_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentId || '')" "$ENV_JSON")
 ACTIVE_ENV_NAME=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.displayName || j.environmentUrl || '')" "$ENV_JSON")
 ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$ENV_JSON")
@@ -158,7 +190,11 @@ echo "✓ Target tenant: ${ACTIVE_TENANT_ID:-unknown}"
 
 **Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `npx power-apps init` here; Step 6 owns initialization after the user confirms the target environment.
 
-Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`npx power-apps init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
+Keep `$ENV_JSON` in memory until Step 2d creates/adopts the approved project
+directory. Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and
+`$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6
+(`npx power-apps init`), and Step 7 (`auth.config.json` tenant/environment
+cache). If parsing fails, ask for an environment ID again.
 
 If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `npx power-apps init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
 
@@ -219,24 +255,71 @@ Then collect with `AskUserQuestion` (batch where possible):
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`.
+Stash the approved values as `$DISPLAY_NAME` and `$APP_SLUG`. These variables
+are reused for target resolution, collision checks, template identity, and
+`power-apps init`; do not re-derive them from the current directory name.
 
-**App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
+Resolve the project target now, without mutating it. Set
+`REQUESTED_WORKING_DIR` from `--working-dir` when present; otherwise leave it
+empty:
 
 ```bash
-npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
-  echo "COLLISION" || echo "OK"
+if [ -n "$REQUESTED_WORKING_DIR" ]; then
+  TARGET_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-mobile-app-target.js" \
+    --launch-dir "$LAUNCH_DIR" \
+    --slug "$APP_SLUG" \
+    --working-dir "$REQUESTED_WORKING_DIR")
+else
+  TARGET_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-mobile-app-target.js" \
+    --launch-dir "$LAUNCH_DIR" \
+    --slug "$APP_SLUG")
+fi
+WORKING_DIR=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.workingDir)" "$TARGET_JSON")
+SCAFFOLD_ACTION=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.action)" "$TARGET_JSON")
+DEPENDENCIES_INSTALLED=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.dependenciesInstalled ? 'yes' : 'no')" "$TARGET_JSON")
+PARTIAL_PLAN=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.partialPlan ? 'yes' : 'no')" "$TARGET_JSON")
+echo "✓ Project target: $WORKING_DIR ($SCAFFOLD_ACTION)"
+```
+
+If resolution returns `BLOCKED`, surface the exact reason and stop. If it
+discovers `action: resume` after the wizard (for example, the default slug
+already names an app under the launch directory), ask whether to resume that
+app. On approval, initialize the resume variables as defined in Step 0, load its
+memory bank, and jump to the recorded next step. On rejection, require a
+different `--working-dir`; changing only the app name does not override
+launch-directory adoption.
+Stash the absolute `$WORKING_DIR`, `$SCAFFOLD_ACTION`, and
+`$DEPENDENCIES_INSTALLED` for Steps 2c-5. If `$PARTIAL_PLAN = yes`, print that
+the prior planning draft will be used by Step 3's existing resume-from-draft
+path.
+
+**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`.
+
+**App-name collision pre-flight.** Once `<displayName>` and `$WORKING_DIR` are
+fixed, run this check only when the adopted project already has dependencies.
+`--no-install` is required so a fresh parent-directory invocation cannot
+download a CLI package before Step 2c:
+
+```bash
+if [ "$DEPENDENCIES_INSTALLED" = "yes" ]; then
+  cd "$WORKING_DIR"
+  npx --no-install power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null \
+    | grep -F "<displayName>" >/dev/null && echo "COLLISION" || echo "OK"
+else
+  echo "SKIPPED"
+fi
 ```
 
 If `COLLISION`, ask the user via `AskUserQuestion`:
 > "An app named `<displayName>` already exists in `<ACTIVE_ENV_NAME>`. Choose:
 >  1. Pick a different name (recommended)
 >  2. Delete the existing app in Maker portal — DESTRUCTIVE, asks confirmation outside this skill
->  3. Continue anyway (bg `npx power-apps init` will fail; you'll have to rename later — NOT recommended)"
+>  3. Continue anyway (Step 6 `npx power-apps init` will fail; you'll have to rename later — NOT recommended)"
 
 Re-prompt for name if (1). If (2), send the user to Maker portal to delete the existing app, then re-run the collision check. Only proceed once collision is resolved.
 
-If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
+If dependencies are not installed yet, or `list-codeapps` is unavailable in
+the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 
@@ -363,7 +446,7 @@ Set tentative defaults (used by Step 3b before `/design-system` runs):
 | Connectors | Step 2b inferred connector list | `len(inferred)` (already exact) | high |
 | Screens | Confirmed features in brief | `count(features) × [2, 3]` | low — depends on navigation choice |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
-| Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
+| Scaffold min | Fixed | `1-3` (template materialization + dependency install + preparation + init) | medium |
 | Build min | Screens, parallel cap of 5 | `ceil(screens / 5) × 0.6` | medium |
 | Extra prompts | `<industry_confidence>` + `<design_vibe_opt_in>` | `+1 if low-confidence industry; +1 if vibe-opt-in == yes` | high |
 
@@ -373,6 +456,10 @@ Print the block once, exactly in this format (substitute computed values; ranges
 ─── Plan preview (rough) ─────────────────────────────────
 Based on your confirmed brief, before any agent runs:
 
+Project:
+  Target        <absolute working_dir>
+  Scaffold      <materialize new template | adopt existing template>
+
 Scope (proxy estimates — actual numbers come from architects):
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
   Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
@@ -381,7 +468,7 @@ Scope (proxy estimates — actual numbers come from architects):
 
 Time (rough — agent time only, excludes your approval latency at gates):
   Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
-  Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
+  Scaffolding   ~1-3 min          ← template install overlaps planning; preparation + init join afterward
   Screen build  ~<low>-<high> min ← parallel, capped at 5 concurrent
 
 Token tier: Opus everywhere in v0 (model routing not yet shipped).
@@ -401,8 +488,8 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Continue to Step 3. Default. |
-| `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
+| `proceed` (or empty / Enter) | Continue to Step 2d. Default. |
+| `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. Recompute the slug/target when the app name or `--working-dir` changes, then return here for a fresh preview. **No working-dir mutations** occur before approval. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
@@ -426,16 +513,96 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 > percentages. If Gate 1 has not surfaced after 15 minutes, inspect the last
 > applicable milestone before interrupting."
 
-### Step 2d — Template-only mode
+### Step 2d — Materialize/adopt template + start dependency install
 
-No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
+This is the first mutating step. Print:
+
+> "→ [Step 2d/13] Preparing project directory at <working_dir>. Template setup starts now; dependency installation will continue in parallel with planning."
+
+Use the exact `$WORKING_DIR` returned by
+`resolve-mobile-app-target.js`. Never recompute it from the current shell
+directory.
+
+If `$SCAFFOLD_ACTION = materialize`, create only its parent directory, then
+materialize the public template:
+
+```bash
+mkdir -p "$(dirname "$WORKING_DIR")"
+npx --yes degit@2.8.4 \
+  microsoft/power-platform-skills/plugins/mobile-apps/template#main \
+  "$WORKING_DIR"
+```
+
+If the command fails, surface its exact output and STOP. Do not retry against a
+different ref, copy the plugin's bundled template as a silent fallback, or
+delete the destination. If `$SCAFFOLD_ACTION = adopt`, do not run `degit`.
+
+For both modes, verify the resolved directory and template markers before any
+planner starts:
+
+```bash
+cd "$WORKING_DIR"
+test "$(pwd -P)" = "$WORKING_DIR"
+test -f package.json
+test -f app.config.js
+test -f auth.config.json
+test -f tamagui.config.ts
+```
+
+If any check fails, STOP. Never redirect work to the launch directory or
+another similarly named folder.
+
+Before `npm install`, apply the approved app identity with targeted edits:
+
+| File | Find | Replace with |
+|---|---|---|
+| `app.config.js` | `const APP_NAME = process.env.APP_DISPLAY_NAME \|\| 'Power Apps Standalone App';` | `const APP_NAME = process.env.APP_DISPLAY_NAME \|\| '<displayName>';` |
+| `app.config.js` | `const APP_SLUG = process.env.APP_SLUG \|\| 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG \|\| '<slug>';` |
+| `package.json` | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
+
+Replace only those values and preserve the rest of each file. Applying the
+package name before installation keeps the generated lockfile identity aligned
+with `package.json`.
+
+Initialize the telemetry identity, environment cache, and planning directory
+now that the template exists:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "$WORKING_DIR"
+mkdir -p "$WORKING_DIR/.tmp"
+printf '%s\n' "$ENV_JSON" > "$WORKING_DIR/.resolved-environment.json"
+```
+
+`app-identity.js` mints `app.json`
+`expo.extra.telemetry.appInstanceId`. It is idempotent, contains no app name,
+path, or environment data, and remains stable across resumes.
+
+Launch this command for every fresh `materialize` or `adopt` action, even when
+an existing `node_modules/` appears populated. A no-argument `npm install`
+self-heals interrupted installs and is the completion authority; a single
+package marker is not. Use the Bash tool's background/async mode. Do not append
+shell `&`, and do not detach it—the orchestrator must retain its
+terminal/shell ID and final exit status:
+
+```bash
+cd "$WORKING_DIR" && npm install
+```
+
+Store the returned ID as `$NPM_INSTALL_TERMINAL_ID`, then continue immediately
+to Step 3 without polling. Planning may write only `native-app-plan.md`,
+`_screens_section.md`, and `.tmp/*`; `npm install` owns `node_modules/` and the
+lockfile during this overlap.
 
 ### Step 3 — Plan (planner agent + 4 approval gates)
 
-First, create the working and planning-artifact directories:
+The template markers and `.tmp/` directory already exist from Step 2d.
+Planning now runs while the retained `npm install` process continues. Do not
+read or mutate `node_modules/` or the lockfile, and do not mutate
+`package.json`. Planners may read `package.json` to inspect declared template
+dependencies and plan approved pure-JavaScript additions.
 
 ```bash
-mkdir -p <working_dir> <working_dir>/.tmp
+test -d "$WORKING_DIR/.tmp"
 ```
 
 ### Step 3.0 — Foreground Dataverse planning snapshot and evidence
@@ -558,7 +725,11 @@ Benchmark method and acceptance criteria:
 - `<working_dir>/_screens_section.md`
 - `<working_dir>/.tmp/*`
 
-All other paths in `<working_dir>/` (notably `app/`, `src/`, `package.json`, `power.config.json`, `tamagui.config.ts`, `tsconfig.json`, `node_modules/`, `memory-bank.md`) are owned by the foreground setup phases. Do not mutate them during planning.
+All other paths in `<working_dir>/` are read-only to planners. The foreground
+orchestrator owns `app/`, `src/`, configuration files, and `memory-bank.md`;
+the retained background install exclusively owns `node_modules/` and the
+lockfile until Step 5 joins it. Do not mutate any of those paths during
+planning.
 
 If the planner needs to record a `DONE_WITH_CONCERNS` from a sub-agent (data-model architect, screen-planner), add it to an in-memory queue `DEFERRED_CONCERNS[]` during Step 3. Do not write `memory-bank.md` yet. Step 6.7 must always flush `DEFERRED_CONCERNS[]` into `memory-bank.md` `## Concerns` immediately after the file is created.
 
@@ -868,17 +1039,31 @@ path.
 ### Step 4 — Auth & environment selection
 
 ```bash
+cd "$WORKING_DIR"
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 ```
 
 If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
 
-### Step 5 — Prepare existing template
+### Step 5 — Join dependency install + prepare template
 
-This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
+Before reading or changing template-owned package/configuration files, join
+the background install started in Step 2d.
 
 **Print before starting:**
-> "→ [Step 5/13] Preparing existing Expo standalone template in <working_dir> …"
+> "→ [Step 5/13] Finalizing dependencies and preparing the Expo template in <working_dir> …"
+
+If `$NPM_INSTALL_TERMINAL_ID` is non-empty, read/wait for that exact background
+process now. Do not launch another `npm install`, and do not infer success from
+the presence of a partially populated `node_modules/`.
+
+- Exit `0` → print `✓ Base dependency installation completed during planning.`
+- Non-zero/start failure → surface the complete retained output and STOP. Do
+  not change registries, provision credentials, delete `node_modules/`, or
+  silently retry.
+
+If no background install was needed, continue with the adopted installed
+template.
 
 Required checks:
 
@@ -889,17 +1074,40 @@ test -d node_modules/expo
 ```
 
 If any required template file is missing, STOP:
-> "This folder is not a fresh `expo-app-standalone` template. Materialize a fresh template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "The resolved project directory is not a complete `expo-app-standalone` template. No other directory will be used automatically."
 
 If `node_modules/expo` is missing, STOP:
-> "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
+> "The project-owned dependency installation completed without producing `node_modules/expo`. Review the retained npm output and authentication configuration."
 
-If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
-> "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
+Run the authoritative app-name collision check now that the project-local CLI
+is installed:
+
+```bash
+cd "$WORKING_DIR"
+APP_LIST=$(npx --no-install power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null || true)
+if [ -n "$APP_LIST" ] && printf '%s' "$APP_LIST" | grep -F "$DISPLAY_NAME" >/dev/null; then
+  echo "COLLISION"
+else
+  echo "OK_OR_UNAVAILABLE"
+fi
+```
+
+If `COLLISION`, STOP before template mutation or `init`. Ask the user to choose
+a different display name/target and rerun, or delete the existing app in Maker
+portal and retry this check. Do not continue to a known failing `init`. If the
+installed CLI does not support `list-codeapps`, continue—Step 6 remains the
+final authority.
+
+`native-app-plan.md`, `_screens_section.md`, and `.tmp/*` are expected because
+planning just completed. If mutation markers (`.datamodel-manifest.json` or
+`src/generated/services/*.ts`) or an unapproved pre-existing `memory-bank.md`
+appear and Step 0 did not enter the resume path, STOP:
+> "This folder contains generated app state and is not an approved resume target. Refusing to overwrite it."
 
 Then apply these **safe idempotent** prep steps:
 
-1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
+1. Verify the Step 2d app identity in `app.config.js` and `package.json`; do not
+   replace unrelated configuration.
 2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
 3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
 4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
@@ -911,9 +1119,9 @@ Do **not** preserve placeholder `power.config.json` from the template. Keeping i
 
 After preparation, continue to Step 6.
 
-**Fix 1 — App identity in `app.config.js` and `package.json`**
+**Fix 1 — Verify app identity in `app.config.js` and `package.json`**
 
-Substitute the hardcoded template values with wizard answers from Step 2:
+Step 2d applies these substitutions before the base install:
 
 | Find | Replace with |
 |---|---|
@@ -921,7 +1129,10 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 | `const APP_SLUG = process.env.APP_SLUG || 'powerapps-standalone-app';` | `const APP_SLUG = process.env.APP_SLUG || '<slug>';` |
 | `"name": "powerapps-standalone-app"` | `"name": "<slug>"` |
 
-Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
+Require the replacements to match the approved display name and slug. If they
+do not, repair only these three values before continuing. Bundle ID and scheme
+remain template defaults—they are fixed across all dev builds and patched by
+the wrap pipeline at release time.
 
 **Fix 2 — Delete `power.config.json`**
 
@@ -1100,11 +1311,31 @@ Key points:
 - **`baseUrl: "."`** is preserved if already set (the template ships it). The merge script defaults it to `"."` only if missing.
 - Metro auto-resolves `paths` defined in `tsconfig.json` for any project running `expo`-based bundling, so this single edit covers both the type checker AND the bundler. No `babel.config.js` plugin needed.
 
-`<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
+`<Gradient>` (used by `components/index.tsx`) requires
+`expo-linear-gradient`. **Assume the template ships it**—do not edit
+`package.json` to add it. If the joined installation does not resolve it, STOP
+and report a template dependency mismatch; do not work around it in this skill
+(same lockdown rule as `/add-native`).
 
-Do not run `npm install` inside Step 5 — in template-only mode dependencies must already be installed before the skill starts.
+The template does not read `power.config.json` during installation. Do not run
+`npm run generate-schemas` during initial scaffold.
 
-> **Install note (current template):** The template does not read `power.config.json` during `npm install`. The Step 6 → Step 6.5 ordering is kept for predictable checkpoints, but do not run `npm run generate-schemas` during initial scaffold.
+### Step 5.9 — Seed the recovery memory bank
+
+Create the memory bank before `power-apps init` so a partial CLI write or a
+later scaffold-gate failure remains resumable:
+
+```bash
+if [ ! -f "$WORKING_DIR/memory-bank.md" ]; then
+  cp "${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md" "$WORKING_DIR/memory-bank.md"
+fi
+```
+
+Fill the Project facts and Power Platform context from Steps 2 and 4, and set
+`Create workflow checkpoint` to `Step 5 complete`. Flush
+`DEFERRED_CONCERNS[]` and
+`.tmp/pending-memory-bank-appends.txt` into `## Concerns` now so an interrupted
+`init` or scaffold gate does not lose planner findings.
 
 ### Step 6 — Initialize
 
@@ -1116,17 +1347,28 @@ cd <working_dir>
 npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
 ```
 
-Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.
+On a resume, if `power.config.json` already has a non-empty `environmentId`,
+verify that its environment and app display name match the approved values. If
+both match, skip `init` and continue; if either differs, STOP rather than
+overwriting it.
+
+After a new invocation, verify `power.config.json` was created and
+`environmentId` matches Step 4, then update `Create workflow checkpoint` in
+`memory-bank.md` to `Step 6 complete`. If `npx power-apps init` fails, report
+the exact error and STOP—do not proceed.
 
 ### Step 6.5 — Verify dependencies
 
-This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
+This step verifies the installation owned by Step 2d/Step 5.
 
 ```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
+cd "<working_dir>"
+test -d node_modules/expo
+node -e "require.resolve('expo/package.json', { paths: [process.cwd()] })"
 ```
 
-If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
+If either check fails, STOP with the exact failure. Do not run a second
+unscoped install or ask the user to prepare another template manually.
 
 ### Step 6.5b — Ensure SafeAreaProvider wraps the root layout (always runs, idempotent)
 
@@ -1195,15 +1437,15 @@ npx tsc --noEmit
 
 This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capture the full error list once, batch-fix scaffold/template causes, and rerun this gate. Do not continue to Step 6.7 or any app-specific mutation until this gate is clean. If the only failure is a missing generated schema import, preserve the template `@ts-ignore` boundary rather than generating an empty schema artifact.
 
-### Step 6.7 — Seed the memory bank
+### Step 6.7 — Finalize the memory bank
 
-```bash
-cp "${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md" "<working_dir>/memory-bank.md"
-```
+The memory bank already exists from Step 5.9. Update
+`Create workflow checkpoint` to `Step 6.7 complete`. From here on, every step
+appends to the relevant section of `<working_dir>/memory-bank.md` immediately
+after success—not at the end.
 
-Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
-
-Immediately after creating `memory-bank.md`, flush any queued planner concerns from `DEFERRED_CONCERNS[]` into `## Concerns` (append-only). This flush is unconditional: if the queue is non-empty, write it now before continuing to Step 6.75.
+Flush any newly queued concerns into `## Concerns` (append-only), then clear
+the queue before continuing to Step 6.75.
 
 **Also persist the Visual Companion preference** so re-runs (`/edit-app`, `/preview-screens`, future `/design-system` runs) honor it without re-asking. Append to the Project facts section:
 
@@ -1597,11 +1839,39 @@ Run sequentially. Each writes a single file under `src/native/` and does not tou
 
 If the plan says "None — this app uses only standard React Native components and Power Platform connectors", skip only the native-capability invocation above and continue to Step 9a. Do NOT skip Step 9a or Step 9b; an app can need a pure-JavaScript library without any native capability, and Tamagui aliases/brand tokens are always required.
 
-### Step 9a — Install approved pure-JavaScript dependencies
+### Step 9a — Reconcile approved pure-JavaScript dependencies
 
 Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
-Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
+Gate 4b approval is consent for exactly the packages and versions in the
+table. For each approved row, check both:
+
+1. `package.json` records the exact approved version in `dependencies`.
+2. `require.resolve('<package>', { paths: ['<working_dir>'] })` succeeds.
+
+Collect every missing or version-mismatched approved package and install them
+in **one** project-local command:
+
+```bash
+cd "<working_dir>"
+cp package.json .tmp/package.before-js-dependencies.json
+if [ -f package-lock.json ]; then
+  cp package-lock.json .tmp/package-lock.before-js-dependencies.json
+fi
+npm install --save-exact <package-a>@<exact-version> <package-b>@<exact-version>
+```
+
+If every approved dependency is already present at the exact version, print
+`↷ Approved JavaScript dependencies already installed.` and do not run npm.
+After any installation, validate `package.json`, the lockfile, module
+resolution, and the changed-file dependency validator using all approved rows.
+Do not substitute another package/version, infer a package from a compiler
+error, or route a JS-only package through `/add-native`. If final inspection
+finds native code/config or incompatible runtime dependencies, restore the
+snapshotted manifest and lockfile, run `npm install --ignore-scripts` to return
+`node_modules/` to that exact dependency graph, and STOP with the failed
+criterion. Never leave a partially applied batch or roll back unrelated app
+files.
 
 ### Step 9b — Apply design system
 

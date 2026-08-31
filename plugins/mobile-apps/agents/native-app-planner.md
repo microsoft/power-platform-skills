@@ -727,10 +727,10 @@ Sections approved:
 
 Next steps for the orchestrator:
   1. Auth + environment selection
-  2. Use the user-prepared fresh template folder materialized from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` with `degit`
-  3. npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
+  2. Join the project-local npm install already running for the resolved template directory
+  3. Prepare the template and run npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
   4. Apply data model via /add-dataverse using the plan
-  5. Apply native capabilities via /add-native using the plan
+  5. Apply native capabilities and approved JavaScript dependencies using the plan
   6. Apply connectors via /add-connector per connector using the plan
   7. Spawn N screen-builder agents in parallel using the plan
 ```
