@@ -839,3 +839,41 @@ test('the skip key matches the shape the BUILD records', async () => {
   assert.strictEqual(ruleCheck(r), undefined,
     `the build recorded ${JSON.stringify(built.skipped.businessRules)}, which verify must recognise`);
 });
+
+test('a PHASE-LIMITED verify does not demand a rule whose phase never ran', async () => {
+  // The `--changed-only` FAST path applies `phases: ['pages']`. The business-rules loop is gated on
+  // `has('business-rules')`, so it never executes and `skipped.businessRules` comes back EMPTY —
+  // which made the skip list useless on exactly the runs that need it most.
+  //
+  // The consequence was not "verify is noisy". A fast apply is only chosen when every change is a
+  // page, which requires implemented .tsx pages, which makes verify MANDATORY. So on a gated
+  // environment every fast apply failed verify, refused to re-bless the snapshot, and exited
+  // non-zero — an alternating full / failing-fast cycle forever, with the log line blaming PAGES for
+  // a business-rule gate. The page upload itself had succeeded.
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['pages'] });
+  assert.strictEqual(ruleCheck(r), undefined, 'a phase that did not run must not be demanded');
+  assert.strictEqual(r.missing.some((m) => m.kind === 'business-rule'), false);
+  assert.deepStrictEqual(r.environmentSkipped, ['business-rule:new_ticket.Lock when closed'],
+    'still reported, so it is visible rather than silently dropped');
+});
+
+test('a FULL-phase verify still demands the rule', async () => {
+  // The over-correction to avoid: treating every phase list as permission to stop checking. A full
+  // build lists every phase, so nothing is relaxed there.
+  const { PHASES } = require('../lib/stages.js');
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: PHASES });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});
+
+test('verify with NO phases supplied checks everything — standalone must not be relaxed', async () => {
+  const r = await verifySpec(ruleSpec(), baseReader([]));
+  assert.strictEqual(ruleCheck(r).present, false);
+});
+
+test('a phase list that INCLUDES business-rules still demands the rule', async () => {
+  // The gate is "did this phase run", not "was a phase list supplied".
+  const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['business-rules'] });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});

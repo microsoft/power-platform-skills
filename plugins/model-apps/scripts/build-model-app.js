@@ -342,13 +342,14 @@ async function buildModelApp(spec, opts, deps) {
         // opts.verify without mustVerifyPages and no verifier → silently skip (no pages to enforce).
       } else {
         try {
-          // Hand verify what the BUILD could not do on this environment. Without it, an
-          // environment-gated business-rule skip reports `not deployed` and drives `verify.ok` false
-          // forever — and that value gates the exit code, `.last-applied.json`, AND the
-          // `--changed-only` snapshot, so the baseline would never be written and every later run
-          // would fall back to a full build. Those gates exist for TRANSIENT failures; this one
-          // never clears.
-          const vr = await deps.verify(spec, { environmentSkipped: r.skipped });
+          // Hand verify what the BUILD could not do on this environment, and which phases actually
+          // ran. Without the first, an environment-gated business-rule skip reports `not deployed`
+          // and drives `verify.ok` false forever — and that value gates the exit code,
+          // `.last-applied.json` AND the `--changed-only` snapshot, so the baseline would never be
+          // written and every later run would fall back to a full build. Without the second, the
+          // `--changed-only` FAST path (which runs `phases: ['pages']`, so it produces no skip list
+          // at all) fails the same way on every run after the first.
+          const vr = await deps.verify(spec, { environmentSkipped: r.skipped, phases: opts.phases });
           const present = vr.checks.length - vr.missing.length;
           log(`\n${vr.ok ? '✓ verify PASS' : `✗ verify FAIL — ${vr.missing.length} missing`} (${present}/${vr.checks.length} present)`);
           // Named explicitly rather than folded into the pass, so a green verify never reads as

@@ -165,11 +165,25 @@ test('language resolution warns when org-language discovery fails but still fall
 test('auto-verify (opts.verify) runs the injected reconcile and attaches r.verify on pass', async () => {
   const { sdk } = mockSdk();
   let received = null;
-  const verify = async (s) => { received = s; return { ok: true, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'form', name: 'b', present: true }], missing: [] }; };
+  let receivedOpts = null;
+  const verify = async (s, o) => { received = s; receivedOpts = o; return { ok: true, checks: [{ kind: 'entity', name: 'a', present: true }, { kind: 'form', name: 'b', present: true }], missing: [] }; };
   const r = await buildModelApp(desk, { apply: true, env: 'https://x', verify: true }, { sdk, verify });
   assert.strictEqual(r.ok, true);
   assert.strictEqual(received, desk, 'the injected verifier received the spec');
   assert.deepStrictEqual(r.verify, { ok: true, present: 2, total: 2, missing: [] });
+
+  // The CALL SITE, which nothing covered until a reviewer pointed it out. Dropping the second
+  // argument here leaves every other test green while verify goes back to reporting an
+  // environment-gated business rule as `not deployed` — which drives verify.ok false, which withholds
+  // the exit code, `.last-applied.json` and the `--changed-only` snapshot. The whole fix would be
+  // inert and nothing would say so.
+  assert.ok(receivedOpts, 'the caller must SUPPLY verify options, not just be able to forward them');
+  assert.ok('environmentSkipped' in receivedOpts,
+    'the build must tell verify what this environment could not host');
+  assert.deepStrictEqual(receivedOpts.environmentSkipped, r.skipped,
+    'and it must be the build result\'s own record, so the two cannot drift');
+  assert.ok('phases' in receivedOpts,
+    'and which phases ran — a --changed-only fast apply produces an EMPTY skip list, so the skip list alone is not enough');
 });
 
 test('auto-verify surfaces a silent partial build (verify FAIL) in r.verify and the log; the build itself still succeeded', async () => {

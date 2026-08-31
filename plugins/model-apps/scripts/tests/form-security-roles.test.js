@@ -309,3 +309,23 @@ test('surrounding whitespace in a persona name also resolves', async () => {
   assert.strictEqual(res.ok, true);
   assert.deepStrictEqual(calls.find((c) => c[0] === 'setFormSecurityRoles')[2], { roleIds: [ROLE_DISPATCHER] });
 });
+
+test('the case-insensitive persona lookup DEPENDS on personas[] being unique case-insensitively', () => {
+  // The build resolves `securityRoles.personas` through a lower-cased index of the roles it created.
+  // That is only unambiguous because `personas[]` already rejects two names that differ solely by
+  // case — a check that lives in a completely different part of app-spec.js and was written for an
+  // unrelated reason (the SDK trims and matches role names, so near-duplicates collapse onto one
+  // role and the second silently replaces the first's privileges).
+  //
+  // Nothing connects the two. If that uniqueness rule were ever relaxed, the index would silently
+  // keep one of the two roles and a form could be offered to the WRONG one, with every test here
+  // still green. This pins the dependency so relaxing it fails loudly instead.
+  const spec = specWithFormRoles({ personas: ['Dispatcher'] });
+  spec.personas = [
+    { persona: 'Dispatcher', jobs: [{ name: 'a', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+    { persona: 'dispatcher', jobs: [{ name: 'b', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
+  ];
+  const errs = validateAppSpec(spec, { profile: 'plan' }).errors || [];
+  assert.ok(errs.some((e) => /duplicate persona name/.test(e)),
+    `personas[] must keep rejecting case-only duplicates, or the role index below becomes ambiguous; got ${JSON.stringify(errs)}`);
+});

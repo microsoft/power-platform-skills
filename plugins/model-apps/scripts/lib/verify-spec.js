@@ -29,6 +29,17 @@ async function verifySpec(spec, read, opts = {}) {
   // build's own report, "not deployed" is the honest verdict.
   const environmentSkippedRules = new Set(
     ((opts.environmentSkipped && opts.environmentSkipped.businessRules) || []).map((k) => String(k)));
+  // The phases the invocation actually ran, when it ran a SUBSET. A `--changed-only` fast apply runs
+  // `phases: ['pages']`, so the business-rules loop never executes and `skipped.businessRules` comes
+  // back empty — which made the skip list above useless on exactly the runs that need it most, and
+  // reported every rule as missing on an environment that can never host one.
+  //
+  // Scoped to business rules on purpose. Every other artifact type survives a phase-limited verify,
+  // because a previous full build created it and it is still there; a business rule on a gated
+  // environment is the one thing that can NEVER be there, so it is the one thing a phase-limited
+  // verify must not demand.
+  const ranPhases = Array.isArray(opts.phases) ? new Set(opts.phases) : null;
+  const businessRulesPhaseRan = !ranPhases || ranPhases.has('business-rules');
   const environmentSkipped = [];
 
   // Entities + their declared columns.
@@ -174,6 +185,15 @@ async function verifySpec(spec, read, opts = {}) {
     //
     // Reported as its own outcome rather than passed: nothing here claims the rule exists.
     if (environmentSkippedRules.has(`${entityLogical}|${rule.name}`)) {
+      environmentSkipped.push(`business-rule:${name}`);
+      continue;
+    }
+    // A phase-limited run (a `--changed-only` fast apply is `phases: ['pages']`) never executed the
+    // business-rules phase, so it has no skip list to offer and demanding the rule here would fail
+    // a run that never touched it. On a gated environment that turned every fast apply into a
+    // non-zero exit plus an invalidated snapshot, alternating full/failing-fast forever, and the log
+    // line blamed PAGES for a business-rule gate.
+    if (!businessRulesPhaseRan) {
       environmentSkipped.push(`business-rule:${name}`);
       continue;
     }

@@ -2571,6 +2571,12 @@ async function runSdkBuild(spec, opts = {}) {
           // build does, after every table, form, view, chart, dashboard, page and role already
           // exists. That is precisely the half-built outcome the business-rule skip exists to avoid,
           // and it also falsified this function's own promise that a bad name is caught at the gate.
+          //
+          // This index is only UNAMBIGUOUS because `personas[]` already rejects two names differing
+          // solely by case — a rule that lives elsewhere in app-spec.js and was written for an
+          // unrelated reason. Nothing links the two, so form-security-roles.test.js pins it: relax
+          // that rule and one of the two roles would silently win here, offering a form to the wrong
+          // one with every other test still green.
           const roleByLower = new Map(Object.entries(result.created.roles || {})
             .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
           opts2.roleIds = (sr.personas || []).map((p) => {
