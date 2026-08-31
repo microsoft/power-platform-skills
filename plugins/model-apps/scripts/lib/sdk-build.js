@@ -2564,8 +2564,17 @@ async function runSdkBuild(spec, opts = {}) {
           // Personas, not GUIDs: the spec names roles the way an author does, and the build resolves
           // them against the roles it just created. An unresolved name is a HALT, not a warning — a
           // typo would otherwise silently produce a form offered to nobody.
+          //
+          // Matched CASE-INSENSITIVELY, because the spec gate that pre-checks these names is
+          // case-insensitive. A case-sensitive lookup here made `personas: ["dispatcher"]` against a
+          // declared `"Dispatcher"` pass validation and then halt in phase 7b — the LAST thing the
+          // build does, after every table, form, view, chart, dashboard, page and role already
+          // exists. That is precisely the half-built outcome the business-rule skip exists to avoid,
+          // and it also falsified this function's own promise that a bad name is caught at the gate.
+          const roleByLower = new Map(Object.entries(result.created.roles || {})
+            .map(([name, rr]) => [String(name).trim().toLowerCase(), rr]));
           opts2.roleIds = (sr.personas || []).map((p) => {
-            const rr = result.created.roles[canonicalPersonaName({ persona: p })];
+            const rr = roleByLower.get(String(canonicalPersonaName({ persona: p }) || '').toLowerCase());
             if (!rr || !rr.roleId) {
               throw new Error(`securityRoles names persona "${p}", which this build did not create a role for. Declare it in personas[], or use "everyone": true.`);
             }

@@ -267,7 +267,12 @@ test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every lite
   dirs.push(dir);
 
   const STRING_TOKEN = '14'; // WorkflowAttributeType.String, read from the bundle's own enum.
-  for (const dataType of ['Picklist', 'Boolean', 'Integer', 'Money']) {
+  const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
+  // Every token the spec accepts, plus one that is not a type at all — if the SDK ever starts
+  // consulting the field, a made-up value is the case most likely to behave differently.
+  const TOKENS = [...BUSINESS_RULE_DATA_TYPES, 'NotAWorkflowType'];
+
+  const push = async (def) => {
     const calls = [];
     const sdk = createMakerSdk({
       workspacePath: fs.mkdtempSync(path.join(dir, 'w')), instanceUrl: 'https://contoso.crm.dynamics.com',
@@ -283,22 +288,37 @@ test('REAL BUNDLE: dataType does NOT reach the wire — the SDK types every lite
       },
     });
     sdk.initWorkspace();
-    const def = businessRuleDef({
-      ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType }],
-    });
     const art = sdk.createArtifact('businessRule', def);
     await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
     await sdk.pushArtifact('businessRule', art.id);
+    return JSON.parse(calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url))).body.WfomJson);
+  };
 
-    const bound = calls.find((c) => /CreateProcessWithWfomJson/i.test(String(c.url)));
-    const expr = JSON.parse(bound.body.WfomJson).steps.list[0].steps.list[0].conditionExpression;
-    assert.strictEqual(expr.type, STRING_TOKEN, `dataType '${dataType}' unexpectedly reached the wire as ${expr.type}`);
-    assert.strictEqual(expr.right[0].type, STRING_TOKEN, `dataType '${dataType}' unexpectedly typed the literal as ${expr.right[0].type}`);
+  for (const dataType of TOKENS) {
+    // 1. the CONDITION path
+    const condWfom = await push(businessRuleDef({
+      ...RULE, conditions: [{ field: 'new_status', operator: 'Equals', value: '1', dataType }],
+    }));
+    const expr = condWfom.steps.list[0].steps.list[0].conditionExpression;
+    assert.strictEqual(expr.type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly reached the wire as ${expr.type}`);
+    assert.strictEqual(expr.right[0].type, STRING_TOKEN, `condition dataType '${dataType}' unexpectedly typed the literal as ${expr.right[0].type}`);
+
+    // 2. the SetFieldValue ACTION path, which reads a DIFFERENT field on a different code path — the
+    //    SDK does pass `valueWorkflowType` into the action serializer, so this is the one that could
+    //    plausibly differ, and asserting only the condition path would not have shown it.
+    const actWfom = await push(businessRuleDef({
+      ...RULE,
+      conditions: [{ field: 'new_notes', operator: 'ContainsData' }],
+      actions: [{ type: 'SetFieldValue', field: 'new_owner', value: 'x', dataType }],
+    }));
+    const types = [...JSON.stringify(actWfom.steps.list[0].steps.list[0].steps.list[0]).matchAll(/"type":"(\d+)"/g)].map((m) => m[1]);
+    assert.ok(types.length > 0, `action dataType '${dataType}': no type token found on the wire`);
+    assert.deepStrictEqual([...new Set(types)], [STRING_TOKEN],
+      `action dataType '${dataType}' unexpectedly reached the wire as ${JSON.stringify([...new Set(types)])}`);
   }
 
   // The spec-level list stays a CLOSED set even though the SDK ignores it, so a typo is still a
   // spec-gate error rather than a silently-accepted no-op.
-  const { BUSINESS_RULE_DATA_TYPES } = require('../lib/app-spec.js');
   assert.ok(Array.isArray(BUSINESS_RULE_DATA_TYPES) && BUSINESS_RULE_DATA_TYPES.length > 0);
   assert.ok(!BUSINESS_RULE_DATA_TYPES.includes('DateTime'),
     'DateTime stays out: it was never exercised, and the SDK ignoring the field today is not a reason to promise a type we have not tested');
@@ -764,4 +784,58 @@ test('REAL BUNDLE: BOTH conditions of a multi-clause rule reach the wire, joined
   const flat = JSON.stringify(expr);
   assert.match(flat, /new_status/, 'the FIRST condition column must reach the wire');
   assert.match(flat, /new_owner/, 'the SECOND condition column must reach the wire — dropping it is the silent failure');
+});
+
+// --- verify must not punish an environment that cannot host business rules -----------------------
+//
+// Found in review, and the point is not tidiness. `verify.ok` gates THREE things: the process exit
+// code, whether `.last-applied.json` is written, and whether the `--changed-only` snapshot is
+// persisted. A spec with implemented pages makes verify MANDATORY. So on the 18-of-20 environments
+// that cannot host business rules, a permanently-false `ok` would permanently withhold the
+// changed-only baseline and force a full build on every subsequent run, forever — while the build
+// itself reported success. Those gates are built for TRANSIENT failures; this one never clears.
+
+test('verify SKIPS a rule the build reported as unsupported on this environment', async () => {
+  const r = await verifySpec(ruleSpec(), baseReader([]), {
+    environmentSkipped: { businessRules: ['new_ticket|Lock when closed'] },
+  });
+  // Asserted on the business-rule outcome specifically rather than on `r.ok`: this fixture's reader
+  // also reports an unrelated missing subarea, so `ok` would be false either way and an `ok` check
+  // would pass for the wrong reason.
+  assert.strictEqual(ruleCheck(r), undefined,
+    'the rule must not be counted as a check at all — passing it would claim it exists');
+  assert.strictEqual(r.missing.some((m) => m.kind === 'business-rule'), false,
+    'and it must not count toward `missing`, which is what drives verify.ok');
+  assert.deepStrictEqual(r.environmentSkipped, ['business-rule:new_ticket.Lock when closed'],
+    'it is REPORTED, so a green verify never silently means "everything the spec asked for is deployed"');
+});
+
+test('verify still FAILS a missing rule when the build did NOT skip it', async () => {
+  // The dangerous over-correction: treating every absent rule as environment-gated would turn a real
+  // deployment failure into a pass.
+  const r = await verifySpec(ruleSpec(), baseReader([]), { environmentSkipped: { businessRules: [] } });
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+  assert.strictEqual(r.environmentSkipped, undefined, 'absent when nothing was skipped, so existing callers are unaffected');
+});
+
+test('verify run STANDALONE (no build result) checks every rule', async () => {
+  // `verify-model-app.js` has no build result to consult. Absent one, "not deployed" is the honest
+  // verdict — the alternative would be a verify that quietly stops checking business rules.
+  const r = await verifySpec(ruleSpec(), baseReader([]));
+  assert.strictEqual(ruleCheck(r).present, false);
+  assert.ok(r.missing.some((m) => m.kind === 'business-rule'));
+});
+
+test('the skip key matches the shape the BUILD records', async () => {
+  // The two sides must agree on `entity|name` or the wiring is silently inert: verify would keep
+  // failing and nobody would notice the option is being ignored.
+  const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
+  const { provision } = provisionThatCannotAuthorRules();
+  const built = await runBuild(ruleOnlySpec(), {
+    sdk, provisionSdk: provision, apply: true, phases: ['business-rules'], warn: () => {},
+  });
+  const r = await verifySpec(ruleSpec(), baseReader([]), { environmentSkipped: built.skipped });
+  assert.strictEqual(ruleCheck(r), undefined,
+    `the build recorded ${JSON.stringify(built.skipped.businessRules)}, which verify must recognise`);
 });

@@ -1176,11 +1176,12 @@ test('a corrupt or invalid previous spec is ignored rather than failing the down
 // form with no DisplayConditions is offered to EVERY role. So a restricted form, downloaded and
 // rebuilt into a fresh environment, comes back visible to everyone.
 //
-// The fixtures below are the exact strings MEASURED on a live environment after a build, including
-// the platform's own default shape.
+// The fixtures below are the exact SHAPES measured on a live environment after a build — attribute
+// order, casing and the platform's own default block. The role GUID is synthetic: this repo is
+// public, and the test asserts nothing about the id's value.
 const { isRoleRestrictedFormXml } = require('../download-model-app.js');
 
-const XML_RESTRICTED = '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{52446020-77a5-f111-aab2-000d3a5d0d39}" /></DisplayConditions></form>';
+const XML_RESTRICTED = '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}" /></DisplayConditions></form>';
 const XML_EVERYONE = '<form><tabs /><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
 const XML_NONE = '<form><tabs /></form>';
 

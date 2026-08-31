@@ -434,12 +434,18 @@ const BUSINESS_RULE_BOOLEAN_ACTIONS = new Set(['SetVisibility', 'LockUnlock', 'S
 // in the App Spec because `valueType` in the SDK means something else (Value vs Field vs Lookup),
 // and only `Value` is supported — so exposing that name would invite a distinction authors cannot use.
 //
-// This list MIRRORS the compiler's literal-type map exactly (the `Q5`/type table in the vendored
-// bundle). It previously included `DateTime`, which the compiler does NOT have: such a spec passed
-// validation and then threw a ValidationError from inside the push — the worst place for it, because
-// the bound member may already have committed a workflow row (#482), leaving an orphan behind a
-// "failed" build. `column-visualization`-style drift protection is in business-rules.test.js, which
-// pins this list against the bundle's own map.
+// This list has NO counterpart in the bundle any more, and nothing pins it. It used to mirror the
+// XAML compiler's literal-type map, which this SDK uptake deleted along with the compiler.
+//
+// MEASURED against the replacement JSON path: `dataType` is IGNORED. Across all ten tokens below —
+// and a made-up one — on both the condition path and the SetFieldValue action path, the serializer
+// emits WorkflowAttributeType String ("14") every time:
+//   let r = valueType==='Lookup' ? … : valueType==='Clear' ? (valueWorkflowType ?? String)
+//                                    : WorkflowAttributeType.String
+// So this is a curated closed set kept for two reasons only: it catches a typo at the spec gate, and
+// it keeps the surface forward-compatible if the SDK starts honouring the field. Do NOT add a token
+// on the assumption a test will validate it against the SDK — no such test can exist while there is
+// nothing to validate against. `business-rules.test.js` instead pins the measured no-op.
 const BUSINESS_RULE_DATA_TYPES = ['String', 'Memo', 'Picklist', 'State', 'Status', 'Boolean', 'Integer', 'Double', 'Decimal', 'Money'];
 // Only entity scope is supported. A form-scoped rule needs `processtriggerscope 1` plus a form id,
 // which cannot be resolved before the forms phase has run.
@@ -582,16 +588,16 @@ function validateFormSecurityRoles(f, spec, errors) {
     errors.push(`${label}: securityRoles.everyone must be a boolean`);
   }
   // `everyone: false` is not "restrict to nobody" — it is an author reaching for a switch that does
-  // not exist. Omit the block to leave the form universal.
+  // not exist.
   if (sr.everyone === false) {
-    errors.push(`${label}: securityRoles.everyone: false does nothing — omit securityRoles entirely to leave the form available to every role, or list personas to restrict it`);
+    errors.push(`${label}: securityRoles.everyone: false does nothing — use "everyone": true to make the form available to every role again, or list personas to restrict it`);
   }
 
   if (sr.personas !== undefined) {
     if (!Array.isArray(sr.personas) || sr.personas.some((p) => typeof p !== 'string' || !p.trim())) {
       errors.push(`${label}: securityRoles.personas must be an array of persona names`);
     } else if (!sr.personas.length) {
-      errors.push(`${label}: securityRoles.personas is empty — that would offer the form to NO role. Omit securityRoles to leave it available to everyone.`);
+      errors.push(`${label}: securityRoles.personas is empty — that would offer the form to NO role. List at least one persona, or use "everyone": true.`);
     } else {
       // Resolved against `personas[]` at author time so a typo is a spec error naming the form,
       // rather than a build halt two minutes into a run.
@@ -618,6 +624,22 @@ function validateFormSecurityRoles(f, spec, errors) {
   }
   if (sr.order !== undefined && (!Number.isInteger(sr.order) || sr.order < 0)) {
     errors.push(`${label}: securityRoles.order must be a non-negative integer (got ${JSON.stringify(sr.order)})`);
+  }
+
+  // The build addresses this form by (entity, formType, name) — `created.forms` is keyed by entity
+  // and holds only the Main form, so a later phase cannot reach a sibling any other way. Duplicate
+  // (entity, formType, name) is otherwise LEGAL here: only QuickView forms are checked for a unique
+  // (entity, name), because Main and Card may both be called "Information" harmlessly.
+  //
+  // Harmless, that is, until one of them declares securityRoles: the map would keep whichever was
+  // built last, and the restriction would land on the wrong form while every structural check passed
+  // and the build reported success. Reject the ambiguity instead of picking a winner.
+  const twin = (spec.forms || []).filter((o) => o
+    && String(o.entity || '').toLowerCase() === String(f.entity || '').toLowerCase()
+    && (o.formType || 'Main') === (f.formType || 'Main')
+    && String(o.name || '') === String(f.name || ''));
+  if (twin.length > 1) {
+    errors.push(`${label}: securityRoles needs a form this spec can identify unambiguously, but ${twin.length} forms share (entity ${f.entity}, type ${f.formType || 'Main'}, name '${f.name || ''}') — rename one, or move the assignment to the form you meant`);
   }
 }
 
@@ -1178,9 +1200,9 @@ function validateAppSpec(spec, opts = {}) {
         errors.push(`${label}: '${c.operator}' needs a value`);
       }
       if (c.dataType !== undefined && !BUSINESS_RULE_DATA_TYPES.includes(c.dataType)) {
-        // Name the offending value: this list mirrors the compiler's literal-type map, and the most
-        // likely mistake is a plausible-but-absent type (DateTime is the classic one), so echoing
-        // what was written is what makes the message actionable.
+        // Name the offending value: this is a curated closed set with no bundle counterpart, and the
+        // most likely mistake is a plausible-but-absent type (DateTime is the classic one), so
+        // echoing what was written is what makes the message actionable.
         errors.push(`${label}: condition dataType '${c.dataType}' is not supported — must be one of ${BUSINESS_RULE_DATA_TYPES.join('|')}`);
       }
     }

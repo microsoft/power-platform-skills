@@ -387,14 +387,17 @@ function updateGetSequence(attributeType, currentBody) {
   };
 }
 
-test('REAL BUNDLE: createColumn sends DefaultValue:false on the wire for an EXPLICIT false (not omitted)', () => {
+test('REAL BUNDLE: createColumn sends DefaultValue:false on the wire for an EXPLICIT false (not omitted)', async () => {
+  // `await`, not a returned promise inside try/finally: `finally` fires when the `return` is
+  // EVALUATED, so `r.cleanup()` (an fs.rmSync of the workspace dir) would run before the SDK call
+  // settled. Harmless while the assertions only read `r.requests`, and an intermittent ENOENT the
+  // moment anything touches the workspace. Every sibling REAL BUNDLE test here awaits.
   const r = realSdk();
   try {
-    return r.sdk.createColumn('new_ticket', { schemaName: 'new_isvip', displayName: 'VIP', type: 'boolean', defaultValue: false }).then(() => {
-      const post = r.requests.find((x) => x.verb === 'post');
-      assert.strictEqual(post.body.DefaultValue, false);
-      assert.ok(Object.prototype.hasOwnProperty.call(post.body, 'DefaultValue'));
-    });
+    await r.sdk.createColumn('new_ticket', { schemaName: 'new_isvip', displayName: 'VIP', type: 'boolean', defaultValue: false });
+    const post = r.requests.find((x) => x.verb === 'post');
+    assert.strictEqual(post.body.DefaultValue, false);
+    assert.ok(Object.prototype.hasOwnProperty.call(post.body, 'DefaultValue'));
   } finally {
     r.cleanup();
   }

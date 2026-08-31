@@ -225,11 +225,12 @@ test('everyone and personas together are rejected — the platform treats them a
   assert.ok(errs.some((e) => /cannot set both/.test(e)), JSON.stringify(errs));
 });
 
-test('everyone: false is rejected as a no-op an author would misread', () => {
-  // It looks like "restrict to nobody" and means nothing. Omitting the block is how a form stays
-  // universal, and saying so is the whole point of the message.
+test('everyone: false is rejected, and the message names the way to actually undo a restriction', () => {
+  // It looks like "restrict to nobody" and means nothing. The fix an author needs is
+  // `everyone: true` — deleting the block does NOT undo a deployed restriction, because the build
+  // only visits forms that declare `securityRoles`. Steering them to "just omit it" was wrong.
   const errs = errorsFor({ everyone: false });
-  assert.ok(errs.some((e) => /does nothing/.test(e) && /omit securityRoles/.test(e)), JSON.stringify(errs));
+  assert.ok(errs.some((e) => /does nothing/.test(e) && /"everyone": true/.test(e)), JSON.stringify(errs));
 });
 
 test('an assignment that says nothing at all is rejected', () => {
@@ -255,4 +256,56 @@ test('an unknown key is reported instead of silently ignored', () => {
 test('a duplicated persona is reported', () => {
   const errs = errorsFor({ personas: ['Dispatcher', 'dispatcher'] });
   assert.ok(errs.some((e) => /more than once/.test(e)), JSON.stringify(errs));
+});
+
+test('an AMBIGUOUS form identity is rejected rather than resolved by build order', () => {
+  // Only QuickView forms are checked for a unique (entity, name); Main and Card may both be called
+  // "Information" harmlessly. Harmless, that is, until one declares securityRoles — the build's
+  // (entity, formType, name) map would keep whichever was built last, so the restriction would land
+  // on the WRONG form while every structural check passed and the build reported success.
+  const spec = specWithFormRoles(null);
+  spec.forms = [
+    { entity: 'new_ticket', name: 'Information', formType: 'Main', securityRoles: { personas: ['Dispatcher'] } },
+    { entity: 'new_ticket', name: 'Information', formType: 'Main' },
+  ];
+  const errs = validateAppSpec(spec, { profile: 'plan' }).errors || [];
+  assert.ok(errs.some((e) => /unambiguously/.test(e) && /Information/.test(e)),
+    `expected an ambiguity error naming the form, got ${JSON.stringify(errs)}`);
+});
+
+test('two forms with the SAME name but different types are fine', () => {
+  // The identity includes formType, so this pair is unambiguous and must not be rejected — that is
+  // exactly the Main/Card "Information" case the QuickView-only check was written to permit.
+  const spec = specWithFormRoles(null);
+  spec.forms = [
+    { entity: 'new_ticket', name: 'Information', formType: 'Main', securityRoles: { personas: ['Dispatcher'] } },
+    { entity: 'new_ticket', name: 'Information', formType: 'QuickCreate' },
+  ];
+  assert.deepStrictEqual(validateAppSpec(spec, { profile: 'plan' }).errors || [], []);
+});
+
+test('a persona named in a DIFFERENT CASE resolves — the gate and the build must agree', async () => {
+  // Found in review. The spec gate lower-cases both sides; the build looked the role up in a
+  // case-SENSITIVE map keyed by the persona's own casing. So `personas: ["dispatcher"]` against a
+  // declared "Dispatcher" passed validation and then threw inside the security phase — which is the
+  // LAST thing a build does, after every table, column, form, view, chart, dashboard, page and role
+  // already exists. Exactly the half-built outcome the business-rule skip was written to avoid, and
+  // it falsified this surface's own promise that a bad name is caught at the gate.
+  const spec = specWithFormRoles({ personas: ['dispatcher'] });   // declared as 'Dispatcher'
+  assert.deepStrictEqual(validateAppSpec(spec, { profile: 'plan' }).errors || [], [],
+    'the gate accepts it case-insensitively');
+
+  const { res, calls } = await build(spec);
+  assert.strictEqual(res.ok, true, 'so the build must too, rather than halting at the last phase');
+  const set = calls.find((c) => c[0] === 'setFormSecurityRoles');
+  assert.deepStrictEqual(set[2], { roleIds: [ROLE_DISPATCHER] });
+});
+
+test('surrounding whitespace in a persona name also resolves', async () => {
+  // canonicalPersonaName trims, and the roles map is keyed by the trimmed name — so the lookup has
+  // to trim too or this is the same bug wearing a different hat.
+  const spec = specWithFormRoles({ personas: ['  Dispatcher  '] });
+  const { res, calls } = await build(spec);
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(calls.find((c) => c[0] === 'setFormSecurityRoles')[2], { roleIds: [ROLE_DISPATCHER] });
 });

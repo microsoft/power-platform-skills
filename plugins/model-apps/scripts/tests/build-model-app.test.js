@@ -549,10 +549,18 @@ test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)
 // the exact regression at zero cost.
 test('build --verify wires the role-privilege readers (httpClient + envUrl)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  const call = src.split(/\r?\n/).find((l) => l.includes('verify: (s) => verifySpec'));
+  // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
+  // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
+  // business-rule skip must not read as "not deployed"). Pinning `(s)` exactly made this test fail
+  // for a change that did not touch what it is actually guarding.
+  const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
   assert.match(call, /httpClient/, 'entityPrivileges needs the raw client');
   assert.match(call, /envUrl: env/, 'entityPrivileges needs the org url to build an absolute request');
+  // And the second argument must actually be forwarded, or the environment-skip list is silently
+  // dropped and verify keeps failing on rules the build already reported it could not create.
+  assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
+    'the caller-supplied verify options must reach verifySpec');
 });
 
 test('makeSdk returns the httpClient so the caller can wire verify', () => {

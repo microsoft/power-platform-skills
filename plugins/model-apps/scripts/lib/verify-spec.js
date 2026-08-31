@@ -23,6 +23,13 @@ const { isVisualizationUnsupported } = require('./entity-provision.js');
 async function verifySpec(spec, read, opts = {}) {
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
+  // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
+  // the caller because verify is also runnable standalone, where no build result exists — in that
+  // case the set is empty and every declared rule is checked, which is the right default: absent a
+  // build's own report, "not deployed" is the honest verdict.
+  const environmentSkippedRules = new Set(
+    ((opts.environmentSkipped && opts.environmentSkipped.businessRules) || []).map((k) => String(k)));
+  const environmentSkipped = [];
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -153,6 +160,23 @@ async function verifySpec(spec, read, opts = {}) {
   for (const rule of spec.businessRules || []) {
     const entityLogical = String(rule.entity).toLowerCase();
     const name = `${entityLogical}.${rule.name}`;
+    // A rule the BUILD skipped because this environment cannot host business rules at all is not a
+    // verification failure — it is a capability gap the operator was already told about, by name,
+    // during the build. Checking it anyway would report `not deployed` forever on the 18-of-20
+    // environments that lack the bound member.
+    //
+    // That is not merely noisy. `verify.ok` gates the process EXIT CODE, whether
+    // `.last-applied.json` is written, and whether the `--changed-only` snapshot is persisted — and
+    // page-bearing specs make verify MANDATORY. So a permanently-false `ok` would permanently
+    // withhold the changed-only baseline, forcing a full build on every subsequent run forever.
+    // Those three gates are built for TRANSIENT failures that a later run clears; this one never
+    // clears.
+    //
+    // Reported as its own outcome rather than passed: nothing here claims the rule exists.
+    if (environmentSkippedRules.has(`${entityLogical}|${rule.name}`)) {
+      environmentSkipped.push(`business-rule:${name}`);
+      continue;
+    }
     let rows;
     try {
       // `top: 50`, not 1 — the whole point is to SEE duplicates. Scoped to DEFINITION rows only
@@ -481,7 +505,14 @@ async function verifySpec(spec, read, opts = {}) {
 
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  return { ok: missing2.length === 0 && !unableToRun, checks, missing: missing2, unableToRun: unableToRun || undefined };
+  // `environmentSkipped` is likewise omitted when empty, for the same reason.
+  return {
+    ok: missing2.length === 0 && !unableToRun,
+    checks,
+    missing: missing2,
+    unableToRun: unableToRun || undefined,
+    ...(environmentSkipped.length ? { environmentSkipped } : {}),
+  };
 }
 
 function escapeRe(s) {

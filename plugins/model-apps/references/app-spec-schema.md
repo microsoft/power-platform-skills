@@ -587,7 +587,12 @@ fail to add anyone. Every malformed shape is a hard error for that reason.
   build if it somehow reached it.
 - **`everyone`** — mutually exclusive with `personas`. That is the *platform's* model, not a rule of
   this spec: `<Everyone />` **replaces** the role list rather than adding to it. `everyone: false` is
-  rejected, because it looks like "restrict to nobody" and means nothing — omit the block instead.
+  rejected, because it looks like "restrict to nobody" and means nothing.
+- **Removing a restriction needs `everyone: true`, not deleting the block.** A build only visits
+  forms that *declare* `securityRoles`, so deleting the block leaves the deployed
+  `<DisplayConditions>` exactly as it was — the form stays hidden from everyone outside the old list.
+  This direction fails closed (access never silently widens), but it does mean "undo" is an explicit
+  `{ "everyone": true }`.
 - **`fallbackForm`** *(optional)* — show this form to users whose roles have no form of their own.
 - **`order`** *(optional, non-negative integer)* — display order among the entity's forms.
 - Both `fallbackForm` and `order` are **preserved** when omitted, so a later build that sets only
