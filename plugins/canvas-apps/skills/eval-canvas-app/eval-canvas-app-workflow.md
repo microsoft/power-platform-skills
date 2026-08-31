@@ -1,10 +1,10 @@
 # EvalCanvasApp Workflow
 
-Run the governed AppGen functional scenarios for one Power Apps Canvas App through `power-platform-evals`, retain its canonical evidence and Product report, and publish structured metrics to the OneDS-backed Kusto stream.
+Run the governed AppGen functional scenarios for one Power Apps Canvas App through `power-platform-evals`, retain its canonical evidence and Product report, and publish structured metrics to the OneDS-backed Kusto stream. Run the packaged runner on a Microsoft Dev Box or another Windows-based environment with `pwsh` and Edge; it uses Win32 process APIs.
 
 ## Phase 1: Resolve inputs
 
-1. Extract an HTTPS Power Apps URL from `$ARGUMENTS`. It may use any host and may identify the app with `appId`, `app-id`, or a `/play/e/<envId>/a/<appId>` path. The environment may come from `envId`, `environmentId`, `/e/<envId>/canvas`, or the player path. The runner converts non-player URLs to the corresponding `apps.powerapps.com` or `apps.test.powerapps.com` player URL.
+1. Extract an HTTPS Power Apps URL from `$ARGUMENTS`. It must use a supported maker or player host beginning with `make.` or `apps.` and may identify the app with `appId`, `app-id`, or a `/play/e/<envId>/a/<appId>` path. The environment may come from `envId`, `environmentId`, `/e/<envId>/canvas`, or the player path. The runner preserves the supplied cloud suffix and maps between the corresponding `make.*` and `apps.*` hosts.
 2. Extract the Q prompt ID, such as `Q1` or `Q15`, when it is present.
 3. Extract an optional Power Apps user UPN when the user requests a specific account. Require the full UPN rather than guessing a domain from an alias. Never request a password or authentication token.
 4. If the app URL is missing, ask for it.

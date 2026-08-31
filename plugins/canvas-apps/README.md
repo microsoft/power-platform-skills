@@ -89,6 +89,7 @@ For more information, see [Install a plugin from a marketplace](https://code.vis
 ## Evaluate a Canvas App
 
 Use `/eval-canvas-app` with a Power Apps URL and the Q prompt ID that generated the app.
+Run this skill on a Microsoft Dev Box or another Windows-based environment with Edge and PowerShell 7 (`pwsh`); the bundled runner uses Win32 process APIs.
 The skill opens a stable Studio preview, runs the governed AppGen scenarios from a local
 `power-platform-evals` checkout, retains the Product report and canonical evidence, and
 publishes metrics when OneDS configuration is available.

@@ -21,7 +21,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 if (-not $IsWindows) {
-    throw "The eval-canvas-app runner currently supports Windows only (requires Edge/Win32 process APIs)."
+    throw "Run eval-canvas-app on a Microsoft Dev Box or another Windows-based environment with Edge and pwsh; the runner uses Win32 process APIs."
 }
 
 function Get-CanvasAppUrlDetails {
@@ -77,22 +77,21 @@ function Get-CanvasAppUrlDetails {
         throw "AppUrl must include both appId and envId. Supported forms include appId/envId query parameters, maker URLs with app-id and /e/<envId>/canvas, and /play/e/<envId>/a/<appId> player paths."
     }
 
-    $isTestEnvironment = $Uri.Host -match "(?i)(^|\.)test(\.|$)"
-    $playerHost = if ($isTestEnvironment) {
-        "apps.test.powerapps.com"
+    $sourceHost = $Uri.DnsSafeHost.ToLowerInvariant()
+    if ($sourceHost.StartsWith("make.", [StringComparison]::OrdinalIgnoreCase)) {
+        $makerHost = $sourceHost
+        $playerHost = "apps.$($sourceHost.Substring(5))"
+    } elseif ($sourceHost.StartsWith("apps.", [StringComparison]::OrdinalIgnoreCase)) {
+        $playerHost = $sourceHost
+        $makerHost = "make.$($sourceHost.Substring(5))"
     } else {
-        "apps.powerapps.com"
-    }
-    $makerBaseUrl = if ($isTestEnvironment) {
-        "https://make.test.powerapps.com"
-    } else {
-        "https://make.powerapps.com"
+        throw "AppUrl must use a Power Apps maker or player host beginning with make. or apps."
     }
 
     return [ordered]@{
         app_id = $appId
         environment_id = $environmentId
-        maker_base_url = $makerBaseUrl
+        maker_base_url = "https://$makerHost"
         player_url = "https://$playerHost/play/e/$([Uri]::EscapeDataString($environmentId))/a/$([Uri]::EscapeDataString($appId))"
     }
 }
