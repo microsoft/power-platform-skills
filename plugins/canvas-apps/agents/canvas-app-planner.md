@@ -441,7 +441,7 @@ Shared plan: `[working directory]/canvas-app-shared.md`
 App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
 App compile: [Clean / diagnostics remaining, with detail]
 Functional scenarios: [N total; all assigned to screen briefs / defects]
-Session: stale
+Session: stale (ONLY when a `canvas-authoring` MCP call failed with `HTTP 401 Unauthorized: Invalid session state`)
 ```
 
 Include the `Session:` line **only** when a `canvas-authoring` MCP call in this run failed
