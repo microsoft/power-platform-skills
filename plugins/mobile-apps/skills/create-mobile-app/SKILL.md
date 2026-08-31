@@ -1026,57 +1026,17 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ```bash
 cd <working_dir>
-node <<'NODE'
-const fs = require('fs');
-const { spawnSync } = require('child_process');
-
-// Replace these placeholders with JSON.stringify(...) output so quotes and
-// apostrophes remain data rather than becoming shell syntax.
-const displayName = <JSON_STRING_OF_DISPLAY_NAME>;
-const environmentId = <JSON_STRING_OF_ACTIVE_ENV_ID>;
-let config = {};
-try {
-  config = JSON.parse(fs.readFileSync('power.config.json', 'utf8'));
-} catch (error) {
-  if (error.code !== 'ENOENT') throw error;
-}
-
-if (config.environmentId) {
-  if (String(config.environmentId).toLowerCase() !== environmentId.toLowerCase()) {
-    throw new Error(
-      `BLOCKED: existing power.config.json targets ${config.environmentId}, but the approved environment is ${environmentId}`,
-    );
-  }
-  if (config.appDisplayName !== displayName) {
-    throw new Error(
-      `BLOCKED: existing power.config.json uses app display name ${JSON.stringify(config.appDisplayName)}, but the approved display name is ${JSON.stringify(displayName)}`,
-    );
-  }
-  console.log('↷ Step 6 initialization skipped — power.config.json already targets the approved environment and display name.');
-  process.exit(0);
-}
-
-const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(executable, [
-  'power-apps',
-  'init',
-  '-t',
-  'MobileApp',
-  '--display-name',
-  displayName,
-  '--environment-id',
-  environmentId,
-  '--non-interactive',
-], { stdio: 'inherit', shell: false });
-if (result.error) throw result.error;
-process.exit(result.status ?? 1);
-NODE
+npx power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
 ```
+
+Substitute the approved Step 2 display name and Step 4 environment ID using
+shell-safe quoting; do not ask for either value again. Step 5 must leave
+`power.config.json` absent. If a populated file remains, STOP and report its
+environment instead of overwriting it or running `init` again.
 
 Verify `power.config.json` exists and both its `environmentId` and
 `appDisplayName` match the approved Step 2/Step 4 values. If initialization
-fails, report the exact error and STOP. Never run `init` over a populated
-configuration; the CLI requires a new or placeholder-free target.
+fails, report the exact error and STOP.
 
 ### Step 6.5 — Verify dependencies
 

@@ -33,16 +33,15 @@ test('template preparation is delegated to the deterministic script', () => {
   );
 });
 
-test('Power Apps initialization respects existing state and safely passes display names', () => {
+test('Power Apps initialization directly invokes the CLI with approved values', () => {
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /JSON_STRING_OF_DISPLAY_NAME/);
-  assert.match(initialize, /JSON_STRING_OF_ACTIVE_ENV_ID/);
-  assert.match(initialize, /config\.appDisplayName/);
-  assert.match(initialize, /spawnSync/);
-  assert.match(initialize, /initialization skipped/);
-  assert.match(initialize, /existing power\.config\.json targets/);
-  assert.match(initialize, /approved display name/);
-  assert.doesNotMatch(initialize, /--display-name '<displayName>'/);
+  assert.match(initialize, /npx power-apps init -t MobileApp/);
+  assert.match(initialize, /--display-name "<displayName>"/);
+  assert.match(initialize, /--environment-id "<environment-id>"/);
+  assert.match(initialize, /approved Step 2 display name and Step 4 environment ID/);
+  assert.match(initialize, /shell-safe quoting/);
+  assert.match(initialize, /If a populated file remains, STOP/);
+  assert.doesNotMatch(initialize, /spawnSync|node <<'NODE'/);
 });
