@@ -1520,6 +1520,16 @@ async function runSdkBuild(spec, opts = {}) {
   // Chart DEFINITION edits are not applied in place on a rebuild (there is no SDK chart-update
   // path yet), so an existing chart is skipped WITH A REASON rather than silently reported as
   // (re)built — recreate the chart to change it. New charts are created + added to the solution.
+  //
+  // Charts whose ENTITY should be published at the end. Keyed by entity so one publish covers it,
+  // and holding the artifact id because `publishArtifact` requires the artifact to be
+  // WORKSPACE-RESIDENT: it goes readRaw -> readLocal, which throws ArtifactNotFoundError rather
+  // than lazily fetching. `findArtifact` does NOT populate the workspace, so an existing chart is
+  // only publishable once something has created or fetched it. Recording it here — at the two
+  // points that actually put it in the workspace — is what keeps phase 8 from handing publish an
+  // id it cannot resolve. It is also the right SEMANTICS: publish exactly the entities whose charts
+  // this run changed.
+  const chartsToPublish = new Map();
   if (has('charts')) {
     const charts = spec.charts || [];
     const ids = await runner.mapLimit(charts, concurrency, async (c) => {
@@ -1559,6 +1569,10 @@ async function runSdkBuild(spec, opts = {}) {
             if (String(current.description || '') !== wantDescription) {
               await provision.updateRecord('savedqueryvisualization', existingId, { description: wantDescription });
               reconciled = true;
+              // The PATCH writes the UNPUBLISHED layer, so the entity must be published for the new
+              // text to be served. Safe to queue only here: the fetch above has put the chart in the
+              // workspace, which publishArtifact requires.
+              chartsToPublish.set(String(def.entityLogicalName || '').toLowerCase(), existingId);
             }
           } catch (err) {
             // Best-effort — a description is an inspection aid and must not fail a build. But it must
@@ -1587,6 +1601,8 @@ async function runSdkBuild(spec, opts = {}) {
         const art = provision.createArtifact('chart', def);
         const pushed = requireSuccessfulPush(await provision.pushArtifact('chart', art.id), `chart ${def.name}`, opts.warn);
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+        // Created here, so it IS workspace-resident and publishable.
+        chartsToPublish.set(String(def.entityLogicalName || '').toLowerCase(), pushed.id);
         return pushed.id;
       });
     });
@@ -2456,11 +2472,16 @@ async function runSdkBuild(spec, opts = {}) {
       const perEntity = []; // [type, id] — first artifact found per entity
       for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
       for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
-      // Charts too. Previously an entity carrying ONLY charts was never published by any path, so a
-      // chart description reconciled on a rebuild stayed on the unpublished layer — written, but not
-      // visible. (An entity that also has a form or view was already covered above, which is why the
-      // gap does not show up on a typical app.)
-      for (const c of spec.charts || []) { const k = String(c.entity || '').toLowerCase(); const cid = result.created.charts[c.name]; if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
+      // Charts too — but ONLY the ones this run created or fetched. `publishArtifact` requires the
+      // artifact to be workspace-resident (readRaw -> readLocal throws ArtifactNotFoundError rather
+      // than lazily fetching), and `findArtifact` does not populate the workspace. Deriving the id
+      // from `result.created.charts` would therefore hand publish an id it cannot resolve for an
+      // existing chart with no description to reconcile, and the throw escapes publishArtifact and
+      // halts the phase. `chartsToPublish` is populated at exactly the two points that put a chart in
+      // the workspace. It is also keyed by entity rather than by chart NAME, which sidesteps the
+      // `result.created.charts` name-only keying (two same-named charts on different entities
+      // collide there).
+      for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
       await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
       if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
     });

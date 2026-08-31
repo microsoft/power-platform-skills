@@ -306,7 +306,20 @@ function mockSdk(opts = {}) {
     updateRecord: async (e, id, data) => { calls.push({ name: 'updateRecord', args: [e, id, data] }); },
     pushArtifact: async (t, id) => { calls.push({ name: 'pushArtifact', args: [t, id] }); return { type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }; },
     addSolutionComponent: async (o) => { calls.push({ name: 'addSolutionComponent', args: [o] }); },
-    publishArtifact: async (t, id) => { calls.push({ name: 'publishArtifact', args: [t, id] }); return { type: t, id, shipped: true, publish: { kind: 'verified' } }; },
+    publishArtifact: async (t, id) => {
+      calls.push({ name: 'publishArtifact', args: [t, id] });
+      // The REAL publishArtifact goes readRaw -> readLocal, which THROWS ArtifactNotFoundError for an
+      // artifact that is not workspace-resident — it does NOT lazily fetch. `findArtifact` does not
+      // populate the workspace, so publishing a merely-discovered artifact is a hard failure that
+      // escapes publishArtifact and halts the phase. A recorder that ignores the store cannot model
+      // that, and hid exactly this bug once already.
+      if (!store[`${t}:${id}`]) {
+        const err = new Error(`Artifact ${t}/${id} not found in workspace`);
+        err.name = 'ArtifactNotFoundError';
+        throw err;
+      }
+      return { type: t, id, shipped: true, publish: { kind: 'verified' } };
+    },
     setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
     setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
@@ -1833,6 +1846,36 @@ test('chart reconcile: the CURRENT description is read from the UNPUBLISHED laye
   assert.strictEqual(find(calls, 'updateRecord').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
     'an already-matching description must not be rewritten');
   assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'chart'), 'reading must not push the chart');
+});
+
+test('publish: an EXISTING chart with no description to reconcile is never published (it is not in the workspace)', async () => {
+  // publishArtifact requires the artifact to be workspace-resident — readRaw -> readLocal THROWS
+  // ArtifactNotFoundError rather than lazily fetching — and `findArtifact` does not populate the
+  // workspace. Handing publish a merely-discovered id therefore halts the phase. Nothing was
+  // changed on this chart, so there is nothing to publish either: correctness and semantics agree.
+  const spec = makeSpec();
+  spec.forms = [];
+  spec.views = [];
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingChartDescription: 'maker text' });
+  const res = await runSdkBuild(spec, { sdk, apply: true, publish: true, phases: ['solution', 'data-model', 'charts', 'publish'] });
+  assert.strictEqual(res.ok, true, `the build must not halt: ${JSON.stringify(res.errors)}`);
+  assert.ok(!find(calls, 'publishArtifact').some((c) => c.args[0] === 'chart'),
+    'an untouched, unfetched chart must not be handed to publish');
+});
+
+test('publish: an existing chart whose description WAS reconciled is published (the write needs it)', async () => {
+  // The PATCH lands on the unpublished layer, so the entity must be published for the new text to be
+  // served — and the reconcile fetched the chart, so it IS workspace-resident and publishable.
+  const spec = makeSpec();
+  spec.forms = [];
+  spec.views = [];
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'New text.' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingChartDescription: 'stale text' });
+  const res = await runSdkBuild(spec, { sdk, apply: true, publish: true, phases: ['solution', 'data-model', 'charts', 'publish'] });
+  assert.strictEqual(res.ok, true, JSON.stringify(res.errors));
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'chart'),
+    'a reconciled description must be published or it stays on the unpublished layer');
 });
 
 test('publish: an entity carrying ONLY charts is still published', async () => {
