@@ -4,7 +4,7 @@ version: 3.0.1
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__describe_control
+allowed-tools: Read, Write, Edit, Bash, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode, mcp__canvas-authoring__connect, mcp__canvas-authoring__sync_canvas, mcp__canvas-authoring__compile_canvas, mcp__canvas-authoring__describe_control
 ---
 
 # Create or Edit a Canvas App
@@ -24,6 +24,12 @@ Canvas Authoring tools operate on a local directory containing the app YAML.
    create it with `Bash`, and resolve its absolute path.
 4. Call `sync_canvas` with that absolute working directory before reading or editing app
    files. Do not proceed if sync fails.
+
+If `sync_canvas` (or any later `compile_canvas`) fails with
+`HTTP 401 Unauthorized: Invalid session state`, the coauthoring session has expired — see
+**Shared Invariant 12** and `${PLUGIN_ROOT}/references/ValidationWorkflow.md` →
+"Recovering from an expired coauthoring session". Attempt the single bounded recovery there
+before treating the run as failed.
 
 Always use absolute paths for app files. Never edit `_EditorState.pa.yaml`; Studio owns it.
 
@@ -241,3 +247,17 @@ After all builders finish:
 11. Do not report completion until the workspace compiles clean and the functional
     conformance gate passes, or remaining compile and functional defects are explicitly
     reported.
+12. **Expired coauthoring session recovery is an orchestrator-only agent instruction,
+    bounded to one attempt.** A long-lived Studio tab has been reported to lose its
+    coauthoring session after roughly 25–30 minutes (observed, not a guaranteed lifetime);
+    `sync_canvas` / `compile_canvas` then return `HTTP 401 Unauthorized: Invalid session
+    state` on every call. Only on that specific error — the `Invalid session state` text
+    with a 401, not a generic `401`/`403`, which stays a sign-in problem — and only the
+    orchestrator: call `connect` **once** with the parameters from the last successful
+    `connect` in this conversation, then retry the failed operation **once**. Do not loop,
+    do not repeatedly `connect`/retry, do not re-dispatch the planner or a builder. If the
+    one reconnect + one retry still fails, or the parameters are unknown, stop and give the
+    user the manual recovery steps from
+    `${PLUGIN_ROOT}/references/ValidationWorkflow.md` (reload Studio → reconnect MCP →
+    re-run `compile_canvas`). Builders never call `connect`; a builder that hits the error
+    reports it upward for the orchestrator to handle once.

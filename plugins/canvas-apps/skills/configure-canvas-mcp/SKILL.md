@@ -105,3 +105,63 @@ Tell the user:
 > You can now use Canvas App skills like `/canvas-app` to create or edit your app.
 >
 > To verify the setup, try: "List available Canvas App controls" — this should invoke `list_controls`.
+
+## Recover an expired coauthoring session
+
+A long-lived coauthoring session has been **reported** to become invalid after roughly
+**25–30 minutes** of a Studio tab being left open. Treat this as observed/reported
+behavior, **not a guaranteed session lifetime** — the exact timing varies.
+
+What the user sees when it happens:
+
+- The Power Apps Studio tab goes to a **grey / blank loading screen** and does not recover
+  on its own. Evidence from the reported network trace indicates that the realtime SignalR
+  channel (`/api/signalr/diagnosticshub`) can become unavailable and that subsequent
+  `negotiate` requests may return `410 Gone`. That gateway behavior is outside this
+  repository — this skill cannot repair it.
+- `compile_canvas` (and `sync_canvas`) from the Canvas Authoring MCP start returning
+  **`HTTP 401 Unauthorized: Invalid session state`**, and keep failing the same way on
+  every retry.
+
+Recognize this as a **stale coauthoring/authoring session, not a sign-in failure**, by the
+exact `Invalid session state` text together with the 401. A plain `401`/`403` **without**
+that text is an authentication problem — handle it as in step 3 (`force_account_select`,
+`login_hint`, `auth_flow`) and do **not** treat it as an expired session.
+
+### Automatic recovery attempt
+
+This is an agent orchestration instruction, not a programmatic mechanism. When
+`compile_canvas` / `sync_canvas` fail with `Invalid session state`, the `canvas-app` skill
+makes **one** bounded recovery attempt:
+
+1. Treat the current session as invalid.
+2. Call `connect` **once**, reusing the `environment_id`, `app_id`,
+   `environment_category`, and any `login_hint` / `auth_flow` / `tenant_id` from the last
+   successful `connect` in this conversation.
+3. Retry the failed operation **once**.
+
+Do this at most once per failed operation. Do not repeatedly `connect` and retry. If the
+reconnect or the single retry still returns `Invalid session state`, stop and give the
+manual recovery steps below.
+
+### Manual recovery
+
+`connect` re-establishes the MCP server's authoring session, but it **cannot refresh the
+Studio browser tab or its `authoringsession`** — only a reload does that, and Studio's grey
+screen is not guaranteed to clear without one. If the automatic attempt did not restore
+compilation, or Studio is still on the grey screen, tell the user:
+
+> The Power Apps coauthoring session has expired (this has been reported after roughly
+> 25–30 minutes). To recover:
+>
+> 1. **Reload the Power Apps Studio tab** and wait for the app to finish loading — this
+>    creates a fresh `authoringsession`.
+> 2. Reconnect the Canvas Authoring MCP: run `/configure-canvas-mcp` again (or ask me to
+>    `connect`).
+> 3. Re-run `compile_canvas` to push your local `.pa.yaml` files again.
+>
+> Your local `.pa.yaml` files are not lost — they stay on disk and re-compile once the
+> session is fresh.
+
+If the user reloads Studio, re-run this skill's step 3 (`connect`) with the same parameters
+before retrying `compile_canvas`.

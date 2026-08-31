@@ -41,6 +41,46 @@ the navigation to satisfy an intermediate compile breaks the finished app.
 
 Call `compile_canvas`.
 
+### Recovering from an expired coauthoring session
+
+Run this check **before** normal diagnostic/YAML troubleshooting. A long-lived Studio tab
+has been reported to lose its coauthoring session after roughly 25–30 minutes (observed
+behavior, not a guaranteed lifetime); when that happens `compile_canvas` (and `sync_canvas`)
+return, and keep returning on every retry:
+
+```
+HTTP 401 Unauthorized: Invalid session state
+```
+
+This is **not** a compile diagnostic and **not** a generic authentication failure:
+
+- It is the literal `Invalid session state` text together with a 401. A generic `401` or
+  `403` **without** that text is a sign-in problem — do not reconnect for it; surface it
+  as-is. Do not treat every authentication failure as an expired session.
+- The convergence budget and liveness rules below do **not** apply — a stale session never
+  "converges" by editing YAML.
+
+Recovery is an agent orchestration step, **orchestrator-only**, and bounded:
+
+1. On the known `Invalid session state` condition, treat the session as invalid.
+2. Call `connect` **once**, reusing the `environment_id`, `app_id`,
+   `environment_category`, and any `login_hint` / `auth_flow` / `tenant_id` from the last
+   successful `connect` in this conversation. If those parameters are not available, skip to
+   step 4.
+3. Re-run the failed operation **once**. On success, continue the workflow normally, but
+   tell the user their Studio tab may still show the grey loading screen and should be
+   reloaded so its view resyncs.
+4. If the reconnect fails, the parameters are unknown, or the single retry still returns
+   `Invalid session state`, **stop**. Give the user the manual recovery steps from
+   `skills/configure-canvas-mcp/SKILL.md` → "Manual recovery": reload the Power Apps Studio
+   tab (fresh `authoringsession`) → reconnect the MCP (`/configure-canvas-mcp` or `connect`)
+   → re-run `compile_canvas` to push the local `.pa.yaml` files. No local `.pa.yaml` work is
+   lost.
+
+Exactly one `connect` and exactly one retry per stale-session failure. No retry loop, no
+planner/builder re-dispatch, no spawned agent. Builders and sub-agents never call `connect`
+for recovery — a builder that hits the error reports it upward for the orchestrator to
+handle once.
 
 If compilation fails, fix diagnostics in this order:
 

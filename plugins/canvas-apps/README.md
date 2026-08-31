@@ -168,13 +168,14 @@ For more information, see:
 | **Sign-in fails or uses the wrong account** | Retry the connection and choose the correct organizational account. If your host offers connection options, select browser sign-in or provide the account email as a login hint. |
 | **Access is denied or coauthoring is unavailable** | Confirm that your account can edit the app. Ask your Power Platform administrator whether coauthoring is enabled for the app and environment, and whether organizational policies block third-party MCP servers. |
 | **The connection stops working** | The Power Apps Studio session may have expired. Reopen the app, keep its Studio tab open, and run `configure-canvas-mcp` again. |
+| **Studio goes to a grey loading screen and `compile_canvas` returns `401 Invalid session state`** | A long-lived coauthoring session has been reported to become invalid after roughly 25–30 minutes (an observed pattern, not a guaranteed service limit). The agent attempts one automatic reconnect and retry. If that does not recover it: reload the Power Apps Studio browser tab and let the app finish loading (this creates a fresh authoring session), run `configure-canvas-mcp` again if the tools report no session, then re-run `compile_canvas` to push your local `.pa.yaml` files. Your local files are not lost. |
 
 ### App authoring
 
 | Problem | What to do |
 |---------|------------|
 | **Controls, connectors, or data sources are missing** | Confirm that the MCP server is connected to the intended app and environment. Add required connectors and data sources through the **Data** panel in Power Apps Studio, then ask your agent to list them again. Organizational data policies may restrict what is available. |
-| **Changes are not visible in Power Apps Studio** | Confirm that the original Studio tab is open and signed in, and check whether the agent reported a validation or compilation error. If the Studio session expired, reopen the app and reconnect before retrying. |
+| **Changes are not visible in Power Apps Studio** | Confirm that the original Studio tab is open and signed in, and check whether the agent reported a validation or compilation error. If the Studio session expired (grey loading screen, or `401 Invalid session state` from `compile_canvas`), reload the Studio tab, reconnect, and re-run `compile_canvas` before retrying. |
 
 ## Support
 

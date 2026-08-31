@@ -85,6 +85,28 @@ The `canvas-authoring` MCP server exposes the following tools:
 | `list_data_sources` | Lists all available data sources in the current authoring session |
 | `sync_canvas` | Syncs the current coauthoring session state from the server to a local directory, writing all YAML files |
 
+## Session Lifecycle & Recovery
+
+The MCP server holds one coauthoring session (`connect`), bound to the Studio browser tab.
+Session handling lives in the external `Microsoft.PowerApps.CanvasAuthoring.McpServer`
+package, not here — the only recovery lever in this repo is skill instructions.
+
+- **Observed failure (reported, not a guaranteed lifetime):** after roughly 25–30 minutes a
+  long-lived session goes stale — Studio shows a grey loading screen and
+  `compile_canvas` / `sync_canvas` return `HTTP 401 Unauthorized: Invalid session state` on
+  every call.
+- **Detection signal:** the literal `Invalid session state` text with a 401. A generic
+  401/403 without it stays an authentication problem (`force_account_select`, `login_hint`,
+  `auth_flow`) — not an expired session.
+- **Recovery (orchestrator-only, agent instruction):** one `connect` reusing the earlier
+  parameters, then one retry of the failed operation. No loop, no repeated connect/retry, no
+  planner/builder re-dispatch. Builders never call `connect`.
+- **Manual fallback if that fails:** reload Studio → reconnect MCP (`/configure-canvas-mcp`
+  or `connect`) → re-run `compile_canvas`. Local `.pa.yaml` files are not lost.
+
+Full instructions: `references/ValidationWorkflow.md`, `skills/canvas-app/SKILL.md`
+(Shared Invariant 12), `skills/configure-canvas-mcp/SKILL.md`.
+
 ## Hooks
 
 Both hosts inject a reminder to call `sync_canvas` before acting, so the agent never edits stale
