@@ -24,6 +24,11 @@ You will be invoked by `native-app-planner` in parallel with `data-model-archite
 - **Read-only.** You MUST NOT write TSX, install packages, or modify any project files except your output section file.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **No questions.** The planner runs the approval gate. Make confident decisions from the inputs provided. If a detail is genuinely ambiguous, list it under "Open Questions" in your output for the planner to surface.
+- **Offline-neutral UX.** Ignore offline wording in requirements and the prompt.
+  Do not create offline-specific screens, routes, actions, or UX, including
+  sync bars, status badges, filters, banners, queues, or offline-only states.
+  The foreground asks about a Mobile Offline Profile after data setup and the
+  runtime package owns offline behavior.
 - **Return a section, not a doc.** Output is a markdown `## Screens` section the planner embeds verbatim.
 - **Screens only.** Do not design shared components, hooks, or services. The `screen-builder` writes shared UI inline first; refactoring happens later.
 - **MANDATORY progress reporting.** Every step in the workflow below has a `**Print before starting:**` block. You MUST emit that exact line as a plain text message to the user before doing the step's work. Do not skip, do not paraphrase, do not batch them. The user has no other visibility into what you're doing — silence looks like the agent has hung. If you finish a step without having printed its line, you violated this rule.
@@ -44,13 +49,13 @@ The orchestrator splits Gate 4 into two cheaper gates so the user can edit the s
 
 | `phase` | What you do | What you write | What you skip | Gate that follows |
 |---|---|---|---|---|
-| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 4a (graph approval) |
-| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 4a. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4b (specs approval) |
+| `graph` | Steps 0, 0b, 1, 2, 3 + Step 3.5 (Shared Conventions) only | `_screens_section.md` containing **Navigation Pattern + Screen Map + Navigation Contracts + Shared Conventions** ONLY | Steps 4, 5, 5b, 6 | Gate 3 (graph approval) |
+| `specs` | Steps 4, 5, 5b, 6 | **Append per-screen specs + Open Questions directly into `plan_path` (the `## Screens` section of `native-app-plan.md`).** Do NOT touch `_screens_section.md` — it is scratch from `phase: graph` and not read by anyone after Gate 3. | Steps 1–3 if the locked graph is already present in `plan_path`'s `## Screens` section | Gate 4 (specs approval) |
 | unset / legacy | All steps end-to-end | Full `_screens_section.md` in one pass | nothing | single Gate 4 (back-compat) |
 
-**`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 4a).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
+**`phase: specs` MUST read the locked graph from `plan_path` (the `## Screens` section already merged in by the orchestrator after Gate 3).** The orchestrator may have edited screens, conventions, or routes between phases. Treat the locked graph as immutable input. Do NOT add or remove screens during `phase: specs`; if you find the graph incomplete, return `NEEDS_CONTEXT: graph missing <thing>` so the orchestrator re-runs `phase: graph`.
 
-**Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time on Gate 4b (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
+**Hard rule — single-write in `phase: specs`.** The previous behaviour of writing both `plan_path` and `_screens_section.md` doubles wall-clock time during Gate 4 (full file rewrite of a ~12 KB plan happens twice for an 8-screen app). The duplicate `_screens_section.md` write is forbidden in `phase: specs` — only the append into `plan_path` is allowed.
 
 **The scaffolded project IS available at `<working_dir>/`.** The orchestrator's Step 2d background pipeline finishes the full template scaffold (clone → fixes → npm install → `npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive` → schemas → tsc smoke) in parallel with your run. By the time you start, `<working_dir>/` is populated with the complete template tree. Safe to `Glob` and `Read`:
 
@@ -98,7 +103,7 @@ These are pure progress signals — never block on or check echo output. Use a s
 
 ### Step 0 — Load Industry Patterns
 
-If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards, offline sync bar for field apps, circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends.
+If the planner's prompt includes an industry (from `## Design`), read `${PLUGIN_ROOT}/shared/references/universal-patterns.md` and note which sections apply per the "When to Use This Document" table at the bottom. Incorporate relevant patterns into per-screen specs in Step 5 (e.g., sparklines in finance stat cards or circular progress for health goals). Do NOT add patterns that don't match the app's purpose — only use what the industry mapping recommends. Never select an offline-specific pattern during `/create-mobile-app` planning.
 
 ### Step 0b — Load Design Direction (if present)
 
@@ -251,7 +256,7 @@ Every generated signed-in app MUST include a Profile screen and place sign-out t
 **Print before starting:**
 > "→ Locking shared conventions (row style, field order, hero treatments) before specs…"
 
-Before any per-screen spec is written, decide and lock the cross-screen conventions. These travel with the graph through Gate 4a so the user reviews them ONCE — every spec then expands within these locked rails.
+Before any per-screen spec is written, decide and lock the cross-screen conventions. These travel with the graph through Gate 3 so the user reviews them ONCE — every spec then expands within these locked rails.
 
 Write a **Shared Conventions** subsection into `_screens_section.md` (immediately after Navigation Contracts):
 
@@ -520,8 +525,8 @@ Reference data-model entities by name as the data architect proposed them — do
 > "→ Assembling the ## Screens markdown section…"
 
 **Write target by phase:**
-- `phase: specs` — read `plan_path`, locate the existing `## Screens` section (the locked graph from Gate 4a), and append the **Per-Screen Specs** + **Open Questions** subsections immediately before `## Approvals`. **Do NOT also write `_screens_section.md`** — single-write rule (see phase table above). Use one `Edit` (insert before `## Approvals`) or one `Write` of the full updated `plan_path`. Pick whichever is one operation.
-- `phase: graph` — write to `<working_dir>/_screens_section.md` as scratch for Gate 4a; orchestrator merges the approved graph into `plan_path` after Gate 4a passes.
+- `phase: specs` — read `plan_path`, locate the existing `## Screens` section (the locked graph from Gate 3), and append the **Per-Screen Specs** + **Open Questions** subsections immediately before `## Approvals`. **Do NOT also write `_screens_section.md`** — single-write rule (see phase table above). Use one `Edit` (insert before `## Approvals`) or one `Write` of the full updated `plan_path`. Pick whichever is one operation.
+- `phase: graph` — write to `<working_dir>/_screens_section.md` as scratch for Gate 3; orchestrator merges the approved graph into `plan_path` after Gate 3 passes.
 - legacy / unset — write to `<working_dir>/_screens_section.md` as before.
 
 Section format (same in all phases):

@@ -325,7 +325,7 @@ Every empty state should have a visual element beyond just text. In priority ord
 | No people/team | `people-outline` | `@expo/vector-icons` |
 | Error state | `alert-circle` | `@expo/vector-icons` |
 | Success/complete | `checkmark-circle` | `@expo/vector-icons` |
-| Offline | `cloud-offline-outline` | `@expo/vector-icons` |
+| Explicit connectivity diagnostic (not create-flow offline support) | `cloud-offline-outline` | `@expo/vector-icons` |
 | No permissions | `shield-outline` | `@expo/vector-icons` |
 | Onboarding welcome | `sparkles` | `@expo/vector-icons` |
 

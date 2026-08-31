@@ -14,7 +14,7 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Workflow
 
-0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements → 2b. Requirements discovery → 2c. Plan preview (rough cost + abort gate) → 3. Plan (planner agent + 4 gates) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.85 Offline profile (always asked)** → 7. Auth config → 8. Apply data model → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Design system → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
+0. Resume check + fresh-template gate → 1. Prerequisites → 2. Gather requirements (iOS + Android fixed) → 2b. Requirements and data-platform confirmation → 2c. Plan preview (rough cost + abort gate) → 3. Plan (architecture-first gates; Dataverse model only when selected) → 4. Auth & environment → 5. Prepare existing template → 6. `npx power-apps init` → 6.5 verify `npm install` → **6.5b SafeAreaProvider gate (always runs, idempotent)** → 6.6 scaffold `tsc` smoke check → 6.7 seed memory bank → **6.75 lock design system** → 7. Auth config → 8. Apply data model → 8.5 seed sample data → **8.85 Offline profile opt-in (Dataverse only)** → 9. Apply native capabilities → 9a. Install planned JavaScript dependencies → 9b. Apply design system (integrate tokens) → 10. Add connectors → 10b. Wire navigation layout → 11. Build screens (parallel) → 11.4 Stylistic fix sweep → 12. Start Metro (`npx expo start`) → 12.5 Optional debug handoff → 13. Summary
 
 ---
 
@@ -213,9 +213,12 @@ Then collect with `AskUserQuestion` (batch where possible):
 | Question | Default |
 |---|---|
 | App display name | derived from description |
-| Target platforms | `ios`, `android` (multi-select, default both) |
 | Aesthetic | minimal / playful / professional / matches existing brand |
 | Target environment | Confirm `<ACTIVE_ENV_URL>` / `<ACTIVE_ENV_ID>` from Step 1.6, or choose "use a different environment" and provide another environment ID |
+
+Set `<target_platforms> = "ios, android"` for every new app. Do not ask the
+user to choose between iOS and Android; the mobile template targets both and
+downstream planning must retain platform-specific behavior for each.
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
@@ -318,15 +321,51 @@ Do not ask for confirmation here — the user agreed to this when their prompt s
 
 **Auto-proceed after `yes` (or after auto-plan transparency log).** Fall through directly to Step 2c (plan preview). Do NOT add a separate "Proceed to planning?" prompt — the brief confirmation IS the planning go-ahead. The only abort gate after this is Step 2c's `proceed/edit/abort` block, which is intentionally distinct because it shows the rough cost estimate.
 
-Classify Dataverse planning before Step 2c and stash
-`<dataverse_planning_mode>`:
+Infer a recommended Dataverse planning mode before Step 2c:
 
 - `connector-only` only when every record source and write target is an
   explicit non-Dataverse connector/system of record, and the app needs no
-  app-owned persistent rows, Dataverse offline data, retained File/Image
+  app-owned persistent rows, retained File/Image
   artifact, existing Dataverse table, or Dataverse-backed native capability.
 - `required` for every other case, including ambiguity. Do not infer
   connector-only merely because the brief names a connector.
+
+**Offline wording is not a Dataverse planning signal.** Ignore standalone
+phrases such as "offline", "offline-first", and "works without internet" when
+classifying data ownership, tables, capabilities, screens, or UX. Do not add an
+offline table, screen, route, sync indicator, state, or action from prompt
+wording. Step 8.85 is the only authority for offline opt-in: it asks whether to
+configure a Dataverse Mobile Offline Profile, and the runtime package owns
+offline behavior after that profile is configured.
+
+### Step 2b.5 — Confirm data platform
+
+Ask this one required question before Step 2c. This answer, not keyword
+inference, sets `<dataverse_planning_mode>` and controls whether Step 3.0 reads
+Dataverse metadata or dispatches `data-model-architect`:
+
+> **Question header:** `Data platform`
+>
+> **Question body:** "Should this app use Dataverse for its app-owned business
+> records?"
+>
+> **Options:**
+> - `Use Dataverse` — app-owned records use Dataverse; recommend this when the
+>   brief needs durable business records and no external system owns them
+> - `No Dataverse — connectors own the data` — approved external systems are
+>   the only systems of record
+> - `No Dataverse — no persistent business records` — the app uses transient
+>   or local presentation state only
+
+Use the inferred mode only to mark the matching option as recommended. Do not
+silently choose it, including in auto-plan mode. If either No Dataverse option
+is selected, set `<dataverse_planning_mode> = connector-only`; otherwise set it
+to `required`. Offline wording must not recommend or select either option.
+
+If the selected no-Dataverse option contradicts another confirmed requirement
+that needs durable app-owned records, surface that exact conflict and let the
+user revise the requirement or choose Dataverse. Never dispatch a data-model
+architect for an explicitly confirmed no-Dataverse run.
 
 Also stash `<exact_target_facts_required> = yes` when planning depends on any
 existing/standard/managed table, reuse or extension decision, proposed-name
@@ -375,9 +414,9 @@ Based on your confirmed brief, before any agent runs:
 
 Scope (proxy estimates — actual numbers come from architects):
   Tables       ~<low>-<high>      ← from <N> nouns in brief; architect may merge/split
-  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 3)
+  Connectors    <N> inferred      ← <comma-separated names>  (confirm at Gate 1)
   Screens     ~<low>-<high>       ← from <N> features × ~2-3 screens each
-  Approval gates  4               ← fixed (data model, native, connectors, screen plan)
+  Approval gates  4               ← architecture, data model when applicable, screen graph, screen specs
 
 Time (rough — agent time only, excludes your approval latency at gates):
   Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
@@ -388,7 +427,7 @@ Token tier: Opus everywhere in v0 (model routing not yet shipped).
 
 ⚠ These are proxies, not measurements:
   • Table count is "noun count in brief" — architect may collapse or split
-  • Time excludes your approval latency at the 4 gates
+  • Time excludes your approval latency at up to 4 applicable gates
   • If industry inference is low-confidence, +1 picker prompt
   • If you opted into the design vibe picker, +1 prompt + planner re-spawn
   • If any gate is rejected, that section regenerates (~2-3 min each)
@@ -412,11 +451,11 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
-> "Brief locked in. Planning surfaces 4 approval prompts (data model → native capabilities → connectors → screens). Data-model readiness is quality-first, with a 10–15 minute target:
->  • Gate 1 (data model) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks
->  • Gate 2 (native capabilities) — ~10s (quick)
->  • Gate 3 (connectors) — ~30–60s
->  • Gate 4 (screens + design) — **3–8 minutes** (this is the heavy one: design vibe picker if opted in, then per-screen specs and HTML preview generation)
+> "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
+>  • Gate 1 (architecture) — confirm Dataverse choice, native capabilities, and connectors before schema work
+>  • Gate 2 (data model, Dataverse only) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks; auto-skipped for no-Dataverse apps
+>  • Gate 3 (screen graph) — approve destinations, navigation, and shared conventions
+>  • Gate 4 (screen specs) — **3–8 minutes** for detailed screen contracts
 >
 > For Dataverse-required apps, factual foreground milestones will show
 > environment, inventory, candidate, detail, and timing counts within 30
@@ -430,7 +469,7 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 No background scaffold pipeline is used. The template is already present in `<working_dir>` and dependencies are expected to be installed before this skill starts (`npm install`). Continue directly to Step 3.
 
-### Step 3 — Plan (planner agent + 4 approval gates)
+### Step 3 — Plan (planner agent + up to 4 applicable approval gates)
 
 First, create the working and planning-artifact directories:
 
@@ -586,6 +625,7 @@ Prompt:
 
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
+  Target platforms: iOS and Android (fixed; no platform question)
   Working directory: <absolute path of <working_dir>>
   Plugin root: ${CLAUDE_SKILL_DIR}/../../
   Dataverse planning mode: <required | connector-only>
@@ -597,10 +637,13 @@ Prompt:
   NOT SUPPLIED>
   Publisher prefix (detected from env): <DETECTED_PUBLISHER_PREFIX from Step 1.7, e.g. "cr8142a" — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time.>
 
-  Follow native-app-planner.md. Run all 4 approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
+  Follow native-app-planner.md. Approve data platform + native capabilities + connectors before conditional Dataverse modeling; never dispatch data-model-architect in connector-only mode. Run all applicable approval gates. On terminal return, emit one of `DONE` / `DONE_WITH_CONCERNS:` / `NEEDS_CONTEXT:` / `BLOCKED:` as the literal first line per AGENTS.md rule #10.
 ```
 
-The planner runs gates internally for data model → native capabilities → connectors → screen plan, and writes `<working_dir>/native-app-plan.md`. Wait for it to return before continuing — do not proceed on a partially-approved plan.
+The planner runs gates internally for architecture → conditional data model →
+screen graph → screen specs, and writes `<working_dir>/native-app-plan.md`.
+Wait for it to return before continuing — do not proceed on a
+partially-approved plan.
 On a successful `required` return, require both
 `.tmp/dataverse-schema-contract.json` and `.tmp/mobile-plan-status.json`
 before continuing. If the receipt is missing, STOP as `BLOCKED`; this
@@ -608,26 +651,43 @@ orchestrator must not synthesize it after the planner has returned.
 
 #### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs the four gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
+When the preflight fails OR the planner returns `BLOCKED: tool surface missing <…>`, the orchestrator runs all applicable gates inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print **once**:
 
 > "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
 
 Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
-1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
-2. **If no draft exists:** spawn `mobile-app:data-model-architect` directly via `Task` (single architect, not the orchestrator agent) to draft `## Data Model`; then build `## Native Capabilities` + `## Connectors` inline from the brief; then spawn `mobile-app:screen-planner` with `phase: graph` and `phase: specs` per the two-phase Gate 4 split.
+1. **If a draft `native-app-plan.md` exists:** read it as baseline. Present
+   `Gate 1 — Data Platform + Device Capabilities + Integrations` first from the
+   populated `## Native Capabilities` and `## Connectors` sections plus the
+   foreground-confirmed Dataverse mode. Only after Gate 1 is approved, present
+   the populated Data Model as Gate 2 when mode is `required`. In
+   `connector-only`, mark Data Model not applicable and skip Gate 2.
+2. **If no draft exists:** build `## Native Capabilities` and `## Connectors`
+   inline from the brief, ignoring offline wording, then present
+   `Gate 1 — Data Platform + Device Capabilities + Integrations`. After Gate 1:
+   - In `connector-only`, do not spawn `mobile-app:data-model-architect`.
+     Write an explicit zero-table/no-Dataverse `## Data Model` section and no
+     schema contract or data-model approval receipt.
+   - In `required`, spawn `mobile-app:data-model-architect` directly via
+     `Task`, passing `Approved native capabilities:` and `Approved connectors:`
+     verbatim along with the foreground snapshot/evidence paths. Present its
+     result as Gate 2 and require approval before screen planning.
+
+   Then spawn `mobile-app:screen-planner` with `phase: graph` and
+  `phase: specs` per the two-phase screen-planning split.
 
    **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ [Gate 4a] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ [Gate 4b] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+  - Before `phase: graph`: `> "→ [Gate 3] Spawning screen-planner phase=graph (~2 min for ${N} screens)…"`
+  - Before `phase: specs`: `> "→ [Gate 4] Spawning screen-planner phase=specs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
 
-  **MUST forward the Dataverse planning mode in the direct architect prompt.**
-  In `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and
-  do not resolve the environment or run Dataverse discovery again. In
-  `connector-only`, state that both paths are not supplied; never invent
-  placeholder artifacts.
+  **MUST forward the approved architecture in the direct architect prompt.**
+  Include the exact Gate 1-approved native capabilities and connectors. In
+  `required`, also forward `SNAPSHOT_PATH` and `EVIDENCE_PATH` verbatim and do
+  not resolve the environment or run Dataverse discovery again. A
+  `connector-only` run never dispatches this architect.
 
-  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt:** *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
 
   In `required`, also require the direct architect to write and normalize
   `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
@@ -636,7 +696,11 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 
    **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
 
-3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
+3. **Run the gates yourself** — use `EnterPlanMode` in this order: data
+  platform + native capabilities + connectors → Data Model when Dataverse is
+  selected → Gate 3 screen graph → Gate 4 screen specs. Both are markdown
+  screen-graph review only — design picking happens unconditionally at Step
+  6.75 via `/design-system`.
 4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
@@ -645,20 +709,50 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
    - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
 
-5. **Record the same structured approval receipt as the planner path.** At
-   data-model acceptance, initialize
+5. **Record the same structured approval receipt as the planner path in
+  `required` mode only.** At data-model acceptance, initialize
    `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
    contract content/hash. After each later gate is accepted, update only that
-   gate's approval record and the current plan hash; after Gate 4b, record the
+  gate's approval record and the current plan hash; after Gate 4, record the
    final structured service dependencies and integrity hash. Follow
    `agents/native-app-planner.md` Step 6 exactly. Never call the operation
    manifest builder to create or restamp this receipt. A changed approved
    section invalidates its record until the existing inline gate approves it
    again.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, draft the screen graph + specs against `shared/references/screen-templates.md`, and run the four gates against the user. This is the last-resort path — functional but slower because the orchestrator does work the architects normally parallelize.
+  In `connector-only`, do not create `.tmp/mobile-plan-status.json` or any
+  Dataverse schema/approval artifact.
 
-**Hard rule:** never silently skip a gate just because the planner couldn't run. The user MUST approve each section through `EnterPlanMode` before any mutation step (Step 8 onwards) executes.
+If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even
+leaf agents cannot be spawned), fall further to fully-inline mode. Draft and
+approve native capabilities, connectors, and data platform first. In
+`required`, then draft the data model from `SNAPSHOT_PATH` plus `EVIDENCE_PATH`
+with no live OData probe and write/normalize the same structured schema
+contract required by `agents/data-model-architect.md`. In `connector-only`,
+write an explicit zero-table/no-Dataverse `## Data Model` section and no
+contract or Data Model gate. Then draft the screen graph + specs against
+`shared/references/screen-templates.md`. This is the last-resort path —
+functional but slower because the orchestrator does work the architects
+normally perform.
+
+**Hard rule:** never silently skip an applicable gate just because the planner
+could not run. Connector-only intentionally skips the non-applicable Data Model
+gate; every other section must be approved before mutation starts.
+
+**Data-platform change handoff.** If Gate 1 returns exactly
+`NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>`, accept this
+signal at most once. Update `<dataverse_planning_mode>` to the requested mode,
+invalidate artifacts owned by the previous mode, and return to Step 3.0:
+
+- switching to `connector-only`: remove the foreground Dataverse snapshot,
+  evidence appendix, schema contract, and incomplete approval receipt;
+- switching to `required`: create a fresh foreground snapshot/evidence pair
+  before re-dispatching the planner.
+
+Pass the previously resolved native capabilities and connectors as Gate 1
+feedback on the re-dispatch so the planner re-presents rather than reinvents
+them. A second data-platform change signal is `BLOCKED`; do not oscillate modes
+or reuse evidence from the old choice.
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
@@ -1270,39 +1364,9 @@ This ensures **every path through the flow gets at least one visual preview** be
 
 **Why this matters:** under the OLD two-preview flow, the user saw screens at Gate 4 with default Tamagui colors, mentally committed, then the brand re-rendered later — confusing visual whiplash plus ~3–5 min of wasted token spend on the Gate 4 HTML. Under the NEW flow, Gate 4 is a markdown screen-graph (structural only), and the user only ever sees one HTML preview — at Step 6.75, with the locked brand applied. Single visual decision point, no waste.
 
-### Step 6.85 — Offline profile (always asked)
-
-**Print before starting:**
-> "→ [Step 6.85/13] Asking whether to set up an offline profile…"
-
-Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. **This question must be asked on every run of `/create-mobile-app`** — do NOT skip it based on the initial prompt's wording, the feature picker checkboxes, the requirements brief content, or any keyword heuristic. The user's intent for offline support is not reliably inferrable from any earlier step; the only authoritative signal is an explicit answer here. The plugin owns the setup via [`/setup-offline-profile`](../setup-offline-profile/SKILL.md).
-
-**Pre-conditions — only TWO branches skip this question, both with the explicit print line shown:**
-
-| Condition | Action |
-|---|---|
-| App uses zero Dataverse tables (connectors-only — no `.datamodel-manifest.json`) | Skip — offline profiles are Dataverse-only. Print: `↷ Step 6.85 skipped — no Dataverse tables in this app.` Continue to Step 7. |
-| `memory-bank.md` `## Offline profile` already has `status: done` OR `status: not-applicable` from a prior run | Skip — answered previously. Print: `↷ Step 6.85 skipped — offline profile already <done\|not-applicable> from a prior run.` Continue to Step 7. |
-| Anything else (default — including "user didn't say 'offline' anywhere") | **Ask the question below.** |
-
-> **Important — do NOT add other skip conditions.** Earlier versions of this skill had an "auto-detect / keyword scan" preamble (`offline · field · remote · ...`) that varied the question default based on whether the initial prompt mentioned offline-indicator keywords. That heuristic was removed because it caused the orchestrator to skip the question entirely when no keywords matched, leaving users with a stale or missing profile on the next sync. The question is now unconditional for any Dataverse-backed app that hasn't already answered.
-
-**Ask one `AskUserQuestion`** — phrased neutrally, no implication that the user "should" answer Yes or No based on app type:
-
-> **Question header**: `Offline support`
->
-> **Question body**: "Mobile Offline Profiles let users continue working when their device is disconnected — Dataverse syncs queued changes when connectivity returns. Set one up now?"
->
-> **Options** (default = `Yes`):
-> - `Yes — create profile now (recommended)` — invokes `/setup-offline-profile`, walks the 3-gate flow, then continues to Step 7
-> - `Skip — I'll add it later via /setup-offline-profile` — continues to Step 7 with no profile (memory-bank status stays unset so the question fires again on the next `/create-mobile-app` run against this dir)
-> - `Skip — this app doesn't need offline support` — continues to Step 7; sets `memory-bank.md` `## Offline profile` `status: not-applicable` so future re-runs don't re-ask
-
-If the user picks Yes, invoke `/setup-offline-profile` as a sub-skill. It reads the same `.datamodel-manifest.json` you just wrote (Step 6 `/add-dataverse`'s Step 6d output) — no need to pass arguments. The sub-skill returns `DONE` / `DONE_WITH_CONCERNS:` / `BLOCKED:` per the agent return-status protocol. On `BLOCKED:`, propagate up. On `DONE_WITH_CONCERNS:`, surface concerns to the user inline, then continue.
-
-**State transfer:** `/setup-offline-profile` updates `memory-bank.md` `## Offline profile` and writes `offline-profile.json` to the project root. Step 13 (final summary) reads these for the wrap-up summary.
-
-**Hooked into `/add-dataverse`:** Step 6 (just before this step) sets `IsAvailableOffline=true` + `ChangeTrackingEnabled=true` on every new custom table (see [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) Step 5b body skeleton). That means `/setup-offline-profile` Gate 1 will be a no-op pass-through for fresh scaffolds — saving the user one approval click.
+Offline setup is intentionally deferred to Step 8.85, after the approved
+Dataverse model has been materialized. Do not ask an offline question here and
+do not feed offline intent back into screen or UX planning.
 
 ### Step 7 — Auth config
 
@@ -1420,7 +1484,8 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 If `<dataverse_planning_mode> = connector-only`, verify the approved
 `## Data Model` says zero Dataverse tables and no `.datamodel-manifest.json`
 exists, print `↷ Step 8 skipped — connector-only app has no Dataverse data model.`,
-skip Step 8.5 as well, and continue to Step 9. A non-empty Dataverse plan in
+skip Step 8.5 and Step 8.85 as well, print
+`↷ Step 8.85 skipped — no Dataverse tables in this app.`, and continue to Step 9. A non-empty Dataverse plan in
 this mode is a planning mismatch and must be corrected before continuing.
 
 **Print before starting:**
@@ -1576,7 +1641,49 @@ Arguments:
 
 If `.datamodel-manifest.json` is missing, surface as `DONE_WITH_CONCERNS` and continue — it means Step 8 didn't complete cleanly.
 
-If the seeding step fails (network drop, permission error, etc.), surface the failure but continue to Step 9 — the app is still usable, just empty on first launch. The user can re-run `/add-sample-data` later to retry.
+If the seeding step fails (network drop, permission error, etc.), surface the failure but continue to Step 8.85 — the app is still usable, just empty on first launch. The user can re-run `/add-sample-data` later to retry.
+
+### Step 8.85 — Offline profile (Dataverse-backed apps)
+
+**Print before starting:**
+> "→ [Step 8.85/13] Asking whether to set up an offline profile…"
+
+Mobile Offline Profiles let the runtime package continue against Dataverse
+when connectivity is unavailable and synchronize queued changes later. This
+question is the only authority for offline opt-in. Prompt wording, feature
+picker answers, and the approved requirements brief must not auto-enable it or
+change the generated screen graph, screen states, actions, or UX.
+
+Before asking, parse `.datamodel-manifest.json` and require at least one
+Dataverse table. A missing, malformed, or empty manifest is
+`BLOCKED: offline setup requires the materialized Dataverse manifest from Step 8`.
+Do not infer connector-only from a missing manifest.
+
+Skip only when `memory-bank.md` `## Offline profile` already records
+`status: done` or `status: not-applicable`. Print:
+`↷ Step 8.85 skipped — offline profile already <done|not-applicable> from a prior run.`
+
+Otherwise ask one neutral foreground question:
+
+> **Question header:** `Offline support`
+>
+> **Question body:** "Mobile Offline Profiles let users continue working when
+> their device is disconnected — Dataverse syncs queued changes when
+> connectivity returns. Set one up now?"
+>
+> **Options:**
+> - `Yes — create profile now (recommended)` — invoke
+>   `/setup-offline-profile`, then continue to Step 9
+> - `Skip — I'll add it later via /setup-offline-profile` — continue to Step 9
+>   without recording a final answer
+> - `Skip — this app doesn't need offline support` — record
+>   `status: not-applicable`, then continue to Step 9
+
+If the user selects Yes, invoke `/setup-offline-profile` from the project root.
+It consumes the materialized manifest, owns its own profile approval flow, and
+writes `offline-profile.json`. Surface concerns and stop on a substantive
+failure. Do not reopen data-model or screen approvals after this choice; the
+runtime package owns offline behavior without offline-specific generated UI.
 
 ### Step 9 — Apply native capabilities
 
@@ -1601,7 +1708,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
-Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
+Gate 4 approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
 ### Step 9b — Apply design system
 
