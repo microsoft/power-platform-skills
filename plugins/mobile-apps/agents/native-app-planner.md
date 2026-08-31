@@ -182,12 +182,13 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `biometrics` / `local-authentication` | `expo-local-authentication` | `/add-native biometrics` |
 | `clipboard` | `expo-clipboard` | `/add-native clipboard` |
 | `mail-composer` / `email-draft` | `expo-mail-composer` | `/add-native mail-composer` |
-| `media-library` | `expo-media-library` | `/add-native media-library` |
 | `audio` | `expo-audio` | `/add-native audio` |
 | `video` | `expo-video` | `/add-native video` |
 | `sensors` | `expo-sensors` | `/add-native sensors` |
 | `screen-orientation` | `expo-screen-orientation` | `/add-native screen-orientation` |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-builder form component rule |
+
+For user-selected photos and videos, plan `image-picker`; for documents and other files, plan `document-picker`. Do not plan broad media-library access when a system picker satisfies the workflow.
 
 Do not propose `native-pdf-viewer` or `pen-input` unless the exact extension package is present in the template allowlist output (`@microsoft/power-apps-native-pdf-viewer` and `@microsoft/power-apps-native-pen-input`). Do not propose `geolocation` unless `@microsoft/power-apps-native-bglocation` is present, and only for continuous/background tracking or durable Dataverse upload — use one-shot `location` (`expo-location`) for a single foreground coordinate read. When proposing `geolocation`, record that its Dataverse target table must already exist and must be verified by `/add-native geolocation` (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). Do not propose `pdf-report` unless `expo-print` is present. Do not propose local sharing for generated PDFs unless `expo-sharing` is present. If neither package path is present, drop the PDF capability and add a transparency note.
 
