@@ -117,7 +117,13 @@ test('REAL BUNDLE: a write that becomes visible late is retried and reported app
 });
 
 test('REAL BUNDLE: an unreadable override row is `unverified`, never applied and never notPersisted', async () => {
-  const { sdk } = freshSdk({ gate: '1', effective: '1', failProof: true });
+  // The ORG GATE and the PER-APP setting use different encodings, which is easy to conflate: the
+  // per-app form-fill value is 0=platform default / 1=disabled / 2=enabled, but the gate
+  // short-circuits only on '0'. MEASURED by mutating this fixture: '0' makes both this test and the
+  // next FAIL (the SDK skips before it writes or proves), while '1' and '2' both reach the path and
+  // pass identically. '2' is used here purely so a fixture for a `formFill: true` request does not
+  // read as "disabled".
+  const { sdk } = freshSdk({ gate: '2', effective: '2', failProof: true });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   assert.deepStrictEqual(r.unverified, ['formFill']);
   assert.deepStrictEqual([r.applied, r.notPersisted], [[], []]);
@@ -125,7 +131,7 @@ test('REAL BUNDLE: an unreadable override row is `unverified`, never applied and
 });
 
 test('REAL BUNDLE: a throwing write lands in `failed` and does not abort the batch', async () => {
-  const { sdk } = freshSdk({ gate: '1', effective: '1', failWrite: true });
+  const { sdk } = freshSdk({ gate: '2', effective: '2', failWrite: true });
   const r = await sdk.setAppAiFeatures(APP, { formFill: true, nlChart: true }, FAST);
   assert.deepStrictEqual(r.failed.sort(), ['formFill', 'nlChart'], 'every feature still reports');
   assert.deepStrictEqual(r.applied, []);
@@ -174,7 +180,10 @@ test('REAL BUNDLE: an empty appUniqueName throws rather than writing at ORGANIZA
 });
 
 test('REAL BUNDLE: the override proof is scoped to THIS app and THIS setting', async () => {
-  const { sdk, calls } = freshSdk({ gate: '1', effective: '1', overrideRows: [{ value: '1' }] });
+  // '2' (enabled), not '1' (disabled), for a `formFill: true` request — see the note above on the
+  // gate vs per-app encodings. Measured to behave identically; this only removes the contradiction
+  // between what the fixture says and what the request asks for.
+  const { sdk, calls } = freshSdk({ gate: '2', effective: '2', overrideRows: [{ value: '2' }] });
   await sdk.setAppAiFeatures(APP, { formFill: true }, FAST);
   const proof = calls.find((c) => c.url.includes('/appsettings'));
   assert.ok(proof, 'the override row must actually be queried');
