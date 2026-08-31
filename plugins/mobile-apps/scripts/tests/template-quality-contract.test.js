@@ -49,6 +49,28 @@ test('shipped routes own safe-area edges and avoid forbidden icons and raw hex c
   assert.strictEqual(hasNavigationTapGuard(callback), true);
 });
 
+test('navigation ref guards must reset unless the route performs a terminal replace', () => {
+  const reusableNavigation = `
+    const didNavigate = useRef(false);
+    if (didNavigate.current) return;
+    didNavigate.current = true;
+    router.navigate('/details');
+  `;
+  const resettableNavigation = `
+    const didNavigate = useRef(false);
+    if (didNavigate.current) return;
+    didNavigate.current = true;
+    try {
+      router.navigate('/details');
+    } catch {
+      didNavigate.current = false;
+    }
+  `;
+
+  assert.strictEqual(hasNavigationTapGuard(reusableNavigation), false);
+  assert.strictEqual(hasNavigationTapGuard(resettableNavigation), true);
+});
+
 test('root runtime owns context but not route content edges', () => {
   const layout = read('template/app/_layout.tsx');
   assert.match(layout, /<SafeAreaProvider>/);

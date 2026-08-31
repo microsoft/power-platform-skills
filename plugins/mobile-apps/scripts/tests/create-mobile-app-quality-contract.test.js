@@ -17,6 +17,10 @@ test('template preparation is delegated to the deterministic script', () => {
   const step = skill.slice(start, end);
 
   assert.match(step, /scripts\/prepare-mobile-template\.js/);
+  assert.match(step, /JSON_STRING_OF_WORKING_DIR/);
+  assert.match(step, /JSON_STRING_OF_DISPLAY_NAME/);
+  assert.match(step, /JSON_STRING_OF_SLUG/);
+  assert.doesNotMatch(step, /--display-name "<displayName>"/);
   assert.match(step, /must not create, reset, delete, or\s+write anything under `src\/generated\/`/);
   assert.doesNotMatch(step, /rm\s+-rf[\s\S]*src\/generated/);
   assert.doesNotMatch(step, /src\/generated\/index\.ts[\s\S]*printf/);
@@ -29,17 +33,16 @@ test('template preparation is delegated to the deterministic script', () => {
   );
 });
 
-test('app identity and Power Apps initialization respect existing state', () => {
-  const previewStart = skill.indexOf('### Step 2c — Plan preview');
-  const planningStart = skill.indexOf('### Step 2d — Template-only mode');
-  const preview = skill.slice(previewStart, planningStart);
-  assert.match(preview, /After `proceed`, and only after `proceed`, initialize the app identity/);
-  assert.match(preview, /scripts\/lib\/app-identity\.js/);
-
+test('Power Apps initialization respects existing state and safely passes display names', () => {
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /CONFIG_ENV_ID=/);
+  assert.match(initialize, /JSON_STRING_OF_DISPLAY_NAME/);
+  assert.match(initialize, /JSON_STRING_OF_ACTIVE_ENV_ID/);
+  assert.match(initialize, /config\.appDisplayName/);
+  assert.match(initialize, /spawnSync/);
   assert.match(initialize, /initialization skipped/);
   assert.match(initialize, /existing power\.config\.json targets/);
+  assert.match(initialize, /approved display name/);
+  assert.doesNotMatch(initialize, /--display-name '<displayName>'/);
 });

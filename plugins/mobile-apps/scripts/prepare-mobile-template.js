@@ -111,8 +111,8 @@ function updateIdentity(projectRoot, displayName, slug) {
   }
 
   appConfig = appConfig
-    .replace(namePattern, `$1${singleQuoted(displayName)};`)
-    .replace(slugPattern, `$1${singleQuoted(slug)};`);
+    .replace(namePattern, (_match, prefix) => `${prefix}${singleQuoted(displayName)};`)
+    .replace(slugPattern, (_match, prefix) => `${prefix}${singleQuoted(slug)};`);
   fs.writeFileSync(appConfigPath, appConfig);
 
   const packagePath = path.join(projectRoot, 'package.json');
@@ -228,7 +228,9 @@ function ensureDefaultImport(source, moduleName, localName) {
 }
 
 function ensureColorSchemeHook(source) {
-  if (/\buseColorScheme\s*\(\s*\)/.test(source)) return source;
+  if (/\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/.test(source)) {
+    return source;
+  }
 
   const rootPattern = /(export\s+default\s+function\s+RootLayout\s*\([^)]*\)\s*\{)/;
   if (!rootPattern.test(source)) {
@@ -299,6 +301,7 @@ function verifyRootLayout(source) {
   const requiredChecks = [
     ['SafeAreaProvider import', /import\s*\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
     ['useColorScheme import', /import\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
+    ['colorScheme binding', /\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/],
     ['host light theme', /import\s*\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['host dark theme', /import\s*\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],

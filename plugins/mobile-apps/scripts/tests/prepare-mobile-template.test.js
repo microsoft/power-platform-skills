@@ -61,7 +61,7 @@ test('preparation is idempotent and preserves generated and existing helper file
 
   const first = prepareMobileTemplate({
     workingDir: projectRoot,
-    displayName: "Inspector's Workspace",
+    displayName: "R&D $& Inspector's Workspace",
     slug: 'inspectors-workspace',
   });
 
@@ -72,7 +72,10 @@ test('preparation is idempotent and preserves generated and existing helper file
     fs.readFileSync(path.join(projectRoot, 'native-app-plan.md'), 'utf8'),
     '# Approved plan\n',
   );
-  assert.match(fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8'), /Inspector\\'s Workspace/);
+  assert.match(
+    fs.readFileSync(path.join(projectRoot, 'app.config.js'), 'utf8'),
+    /R&D \$& Inspector\\'s Workspace/,
+  );
   assert.strictEqual(require(path.join(projectRoot, 'package.json')).name, 'inspectors-workspace');
 
   const tsconfig = require(path.join(projectRoot, 'tsconfig.json'));
@@ -96,7 +99,7 @@ test('preparation is idempotent and preserves generated and existing helper file
   const beforeSecondRun = fileSnapshot(projectRoot);
   const second = prepareMobileTemplate({
     workingDir: projectRoot,
-    displayName: "Inspector's Workspace",
+    displayName: "R&D $& Inspector's Workspace",
     slug: 'inspectors-workspace',
   });
   const afterSecondRun = fileSnapshot(projectRoot);
@@ -160,6 +163,22 @@ export default function RootLayout() {
   assert.match(result, /<SafeAreaProvider>[\s\S]*<PowerAppsProvider/);
   assert.match(result, /customHostProp="preserve-me"/);
   assert.match(result, /<CustomNavigation>/);
+});
+
+test('root preparation creates the required colorScheme binding when the hook uses another name', () => {
+  const projectRoot = writeLayoutFixture(`${fixtureImports}
+import { useColorScheme } from 'react-native';
+export default function RootLayout() {
+  const scheme = useColorScheme();
+  return (${providerBody}
+  );
+}
+`);
+  prepareRootLayout(projectRoot);
+  const result = fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8');
+  assert.match(result, /const scheme = useColorScheme\(\);/);
+  assert.match(result, /const colorScheme = useColorScheme\(\);/);
+  assert.match(result, /defaultTheme=\{colorScheme === 'dark' \? 'dark' : 'light'\}/);
 });
 
 test('root preparation handles wrapper-only and already-correct states idempotently', () => {

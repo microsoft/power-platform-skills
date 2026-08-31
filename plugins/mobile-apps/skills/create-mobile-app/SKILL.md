@@ -87,8 +87,13 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 **Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
-Do not initialize app identity yet. Step 2c is the last zero-side-effect exit,
-so `app.json` must remain byte-identical until the user chooses `proceed`.
+After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
+```
+
+`app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
 
 ### Step 1 — Prerequisites
 
@@ -396,20 +401,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Initialize app identity, then continue to Step 3. Default. |
+| `proceed` (or empty / Enter) | Continue to Step 3. Default. |
 | `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
-
-After `proceed`, and only after `proceed`, initialize the app identity:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
-```
-
-`app-identity.js` mints `app.json`
-`expo.extra.telemetry.appInstanceId`. It is idempotent and contains no app
-name, path, environment data, or credential. An `edit` or `abort` response
-must not run this command.
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -906,10 +900,19 @@ If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`,
 Run the deterministic preparation script once:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
-  --working-dir "<working_dir>" \
-  --display-name "<displayName>" \
-  --slug "<slug>"
+PREPARE_SCRIPT="${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js"
+node - "$PREPARE_SCRIPT" <<'NODE'
+const { prepareMobileTemplate } = require(process.argv[2]);
+
+// Replace these placeholders with JSON.stringify(...) output so user-provided
+// quotes and dollar signs remain data rather than becoming shell syntax.
+const result = prepareMobileTemplate({
+  workingDir: <JSON_STRING_OF_WORKING_DIR>,
+  displayName: <JSON_STRING_OF_DISPLAY_NAME>,
+  slug: <JSON_STRING_OF_SLUG>,
+});
+process.stdout.write(`${JSON.stringify(result)}\n`);
+NODE
 ```
 
 The script is the only owner of Step 5 mutations. It updates identity, removes
@@ -1022,22 +1025,57 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ```bash
 cd <working_dir>
-CONFIG_ENV_ID=$(node -e "try { console.log(require('./power.config.json').environmentId || '') } catch { console.log('') }")
-if [ -n "$CONFIG_ENV_ID" ]; then
-  test "$(printf '%s' "$CONFIG_ENV_ID" | tr '[:upper:]' '[:lower:]')" = \
-       "$(printf '%s' "$ACTIVE_ENV_ID" | tr '[:upper:]' '[:lower:]')" || {
-    echo "BLOCKED: existing power.config.json targets $CONFIG_ENV_ID, but the approved environment is $ACTIVE_ENV_ID"
-    exit 2
+node <<'NODE'
+const fs = require('fs');
+const { spawnSync } = require('child_process');
+
+// Replace these placeholders with JSON.stringify(...) output so quotes and
+// apostrophes remain data rather than becoming shell syntax.
+const displayName = <JSON_STRING_OF_DISPLAY_NAME>;
+const environmentId = <JSON_STRING_OF_ACTIVE_ENV_ID>;
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync('power.config.json', 'utf8'));
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+}
+
+if (config.environmentId) {
+  if (String(config.environmentId).toLowerCase() !== environmentId.toLowerCase()) {
+    throw new Error(
+      `BLOCKED: existing power.config.json targets ${config.environmentId}, but the approved environment is ${environmentId}`,
+    );
   }
-  echo "↷ Step 6 initialization skipped — power.config.json already targets the approved environment."
-else
-  npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id "$ACTIVE_ENV_ID" --non-interactive
-fi
+  if (config.appDisplayName !== displayName) {
+    throw new Error(
+      `BLOCKED: existing power.config.json uses app display name ${JSON.stringify(config.appDisplayName)}, but the approved display name is ${JSON.stringify(displayName)}`,
+    );
+  }
+  console.log('↷ Step 6 initialization skipped — power.config.json already targets the approved environment and display name.');
+  process.exit(0);
+}
+
+const executable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const result = spawnSync(executable, [
+  'power-apps',
+  'init',
+  '-t',
+  'MobileApp',
+  '--display-name',
+  displayName,
+  '--environment-id',
+  environmentId,
+  '--non-interactive',
+], { stdio: 'inherit', shell: false });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+NODE
 ```
 
-Verify `power.config.json` exists and its `environmentId` matches Step 4. If
-initialization fails, report the exact error and STOP. Never run `init` over a
-populated configuration; the CLI requires a new or placeholder-free target.
+Verify `power.config.json` exists and both its `environmentId` and
+`appDisplayName` match the approved Step 2/Step 4 values. If initialization
+fails, report the exact error and STOP. Never run `init` over a populated
+configuration; the CLI requires a new or placeholder-free target.
 
 ### Step 6.5 — Verify dependencies
 
