@@ -1,6 +1,6 @@
 ---
 name: add-sample-data
-description: Use when the user wants to seed Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Generates contextually appropriate rows from each table's schema and inserts them in dependency order. Mirrors microsoft/power-platform-skills/power-pages/add-sample-data, adapted for mobile apps.
+description: Use when the user wants to seed Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Derives scenarios from approved product contracts, constrains payloads with the schema, and inserts rows in dependency order.
 user-invocable: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
@@ -10,21 +10,51 @@ model: sonnet
 
 # Add Sample Data
 
-Populate Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Generates rows from each table's schema and inserts them in dependency order. Use after `/add-dataverse` (or `/setup-datamodel`) has created the tables.
+Populate Dataverse tables with realistic sample records so a freshly-scaffolded code app shows real-looking data on first launch. Product contracts determine what the records must demonstrate; the schema determines how valid payloads are inserted. Use after `/add-dataverse` (or `/setup-datamodel`) has created the tables.
 
 ## Core principles
 
 - **Coverage over volume — every table in the manifest gets seeded.** The #1 failure mode of a freshly-scaffolded code app is a home / dashboard / list screen that renders an empty state on first launch because its source table has zero rows. An empty downstream table is **worse than a 3-row table.** Default to minimal-but-complete: small counts everywhere, no table left empty. Volume is a secondary knob — coverage is the contract.
 - **Insertion order matters.** Parent / referenced tables must be inserted before child / referencing tables so lookup IDs are available.
 - **Contextual data, not Lorem Ipsum.** Generate values that match column names + types. A `cr3e9_sitename` column in an inspection app gets "Westside Construction Site", not "Sample Name 1".
-- **Scenario-aware rows.** Read `native-app-plan.md`, especially `### Shared Conventions` and per-screen `Operational pattern` values defined in [screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md). Seed rows should exercise the app's actual workflow: statuses, dates, relationships, priority/severity, media metadata, and edge cases that make the planned first viewport light up.
+- **Contracts lead; schema constrains.** For a generated app, derive records and edge states from the approved Product Experience, Product Scope, Workflow Journey, and compiled screen build packs. Use Dataverse metadata only to constrain payload shape, relationships, option values, and insertion order. A table or column name must never invent the product scenario.
 - **Fail gracefully.** On insertion failure, log the error and continue with remaining records — never auto-rollback. The user can re-run after fixing the issue.
 - **Idempotent re-runs.** If a previous run partially completed, the second run reads `memory-bank.md`'s seeded-data table and skips records already inserted.
 - **Solution-scoped inserts.** Always pass `--solution <uniqueName>` so records land in our solution, not the default.
 
 ## Workflow
 
-1. Verify project + auth → 2. Discover tables → 3. Select tables + count → 4. Generate + preview → 5. Insert → 6. Summary
+1. Verify project + auth → 2. Load product contracts + discover tables → 3. Select tables + count → 4. Generate + preview → 5. Insert → 6. Summary
+
+## Contract-led fixture inputs (HARD)
+
+Before generating any row, inspect these canonical artifacts:
+
+```text
+.tmp/product-experience-contract.json
+.tmp/product-scope-contract.json
+.tmp/workflow-journey-contract.json
+.tmp/compiled-screen-build-pack.json
+```
+
+- If all four exist, run their existing validators, including `compile-screen-build-pack.js --check`, then compile the canonical sample-data projection:
+
+  ```bash
+  node "${CLAUDE_SKILL_DIR}/../../scripts/compile-sample-data-obligations.js" \
+    --project-root "<working_dir>"
+  ```
+
+  Read `.tmp/sample-data-obligations.json` and treat it as the fixture source of truth. Stop when a contract is invalid, stale, or bound to a different revision. Never combine a current schema with stale product contracts.
+- If some but not all exist, stop and report the missing artifacts. A partial contract set is not a legacy project.
+- If none exist, use `native-app-plan.md` and `.datamodel-manifest.json` as a legacy fallback and record `DONE_WITH_CONCERNS: product contracts unavailable` in the summary.
+- Read Product Experience for the user's vocabulary, operating context, decision risk, media strategy, and forbidden defaults.
+- Read Product Scope for every core/supporting job, its evidence, the approved screen graph, and each data entity's realization.
+- Read Workflow Journey for ordered actions, data operations, success outcomes, failure recovery, and job-specific states.
+- Read the compiled screen build packs for the exact first-viewport records, metrics, fields, summary rows, trust signals, media labels, and action outcomes the approved preview promises.
+
+Build a fixture-coverage matrix from `sample-data-obligations.json` before writing payloads. Each product-specific preview value or workflow state must map to either a seeded record/relationship, a deterministic calculation over seeded records, or an explicit local-UI value. Seed at least one coherent end-to-end journey and enough contrasting records to exercise every first-viewport status, queue, metric, and decision signal. Do not add records for screens, states, or offline behavior absent from the obligations.
+
+The scenario-archetype checklist later in this skill is a secondary coverage check only. It must not override contract vocabulary, states, actions, or preview content, and it must not classify an unfamiliar product from table names.
 
 ## Prototype Seed Reuse
 
@@ -215,7 +245,7 @@ For each selected table, generate N rows. Match values to column names + types:
 4. Stop once the media cap is reached. Remaining records keep null Image/File columns and use local placeholders in the app UI.
 5. If no upload helper exists for File columns, leave the column null and report `sample media skipped — upload helper missing`. Never fake File/Image data with a URL string.
 
-**Pull context from the requirements brief.** The user described what the app does (e.g. "HVAC inspection app for field technicians"); use that to flavor the data — sites named after streets typical for the user's industry, statuses in the right vocabulary. Generic Lorem Ipsum is the failure mode.
+**Pull context from the approved contracts.** Use their evidence-backed vocabulary and preview content to flavor the data. The original brief is supporting evidence only; do not bypass an approved contract with a keyword guess. Generic Lorem Ipsum is the failure mode.
 
 **Per-parent fanout floor (HARD).** For every child table in Tier K+, generate AT LEAST 1 row per parent row from Tier K-1 unless the relationship is explicitly optional (`RequiredLevel: None` in the manifest AND the column name doesn't imply 1-to-many like `*audit*`, `*inspection*`, `*order*`). Without this floor, random lookup distribution leaves some parents with zero children and the parent's detail screen renders empty. Concrete rule: if generating `audit_zones` and there are 5 audits, generate AT LEAST 5 zones (one per audit), then add 0-2 more per audit until you hit the per-class count target. Never the reverse — never generate `N` total and let chance decide which parent each row picks.
 

@@ -168,6 +168,25 @@ function validateExperienceSemantics(contract) {
     ));
   }
 
+  if (['intermittent', 'offline-first'].includes(contract.operatingContext?.connectivity)) {
+    const connectivityEvidence = contract.promptEvidence?.operatingContext || [];
+    const explicitConnectivity = connectivityEvidence.some((entry) => (
+      /offline|intermittent|limited connectivity|poor (?:signal|network)|lose(?:s)? (?:signal|connection)|no signal/i
+        .test(entry.text)
+    ));
+    const approvedAssumption = (contract.assumptions || []).some((assumption) => (
+      ['operatingContext', 'connectivity'].includes(assumption.dimension)
+        && assumption.approved === true
+        && assumption.classification !== 'sample'
+    ));
+    if (!explicitConnectivity && !approvedAssumption) {
+      errors.push(finding(
+        'offline-without-evidence',
+        `operatingContext.connectivity is "${contract.operatingContext.connectivity}" without explicit connectivity evidence or an approved operating-context assumption`,
+      ));
+    }
+  }
+
   return { errors, warnings };
 }
 

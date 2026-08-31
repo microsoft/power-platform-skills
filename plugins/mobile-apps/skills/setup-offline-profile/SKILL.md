@@ -2,7 +2,7 @@
 name: setup-offline-profile
 description: Use when the user wants to enable offline mode for a Power Apps mobile app and create a Mobile Offline Profile in Dataverse — designs per-table row scope, relationships, columns, and sync frequency through a 3-gate approval flow.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode
 model: opus
 ---
 
@@ -27,7 +27,7 @@ End-to-end wizard for creating a Dataverse Mobile Offline Profile that the app (
 
 ## Workflow
 
-1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
+1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Design the profile in foreground → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
 
 ---
 
@@ -42,7 +42,7 @@ test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
 node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
 ```
 
-Capture **Environment URL** for `<envUrl>` and **manifest path** for the architect spawn (Step 3) and the artifacts write (Step 9).
+Capture **Environment URL** for `<envUrl>` and **manifest path** for foreground design (Step 3) and the artifacts write (Step 9).
 
 **Web-only target detection** — Mobile Offline Profiles only apply to native targets (iOS/Android). If the project is web-only, the profile will be created in Dataverse but **the generated app will never use it**:
 
@@ -132,7 +132,7 @@ Decision tree — evaluate in order:
 | # | Condition | Action |
 |---|---|---|
 | 1 | Step 1b already detected `status: in-progress` in memory-bank | Resume flow (handled in Step 1b). Do not re-evaluate here. |
-| 2 | `offline-profile.json` has top-level `profileId: <X>` AND profile `<X>` still exists in env | **Collision case — ASK USER.** AskUserQuestion: (a) Extend the pinned profile (re-architect against current data model + add/PATCH items as needed), (b) Delete the pinned profile and create fresh (irreversible — cascade-deletes items + associations + memberships), (c) Cancel. Default = (a) extend. NEVER silently delete. |
+| 2 | `offline-profile.json` has top-level `profileId: <X>` AND profile `<X>` still exists in env | **Collision case — ASK USER.** AskUserQuestion: (a) Extend the pinned profile (reconcile it in foreground against the current data model and add/PATCH items as needed), (b) Delete the pinned profile and create fresh (irreversible — cascade-deletes items + associations + memberships), (c) Cancel. Default = (a) extend. NEVER silently delete. |
 | 3 | `offline-profile.json` has top-level `profileId: <X>` AND profile `<X>` does NOT exist (404 from GET) | `offline-profile.json` is stale (env reset, profile manually deleted). Delete the local file, continue to row #4. |
 | 4 | Any existing profile in env has `name` matching this app's name (case-insensitive substring match on `power.config.appDisplayName` or directory name) | **ASK USER.** AskUserQuestion: (a) Extend the name-matching profile, (b) Create a new profile (the name-matching one may belong to another app — your call), (c) Cancel. No default — both are legitimate. |
 | 5 | Zero profiles in env | Mode = `create-new`. Continue to Step 3. |
@@ -140,31 +140,56 @@ Decision tree — evaluate in order:
 
 > **Why row #2 is critical (empirical 2026-05-25)**: the chanel-rm and FCB Tracker test runs hit this case. Without this check, the skill cascade-deleted the pinned profile silently. After this patch, the user gets a clear three-way choice and `delete` is always an explicit action.
 
-> **Extend mode (rows #2a, #4a) implementation**: re-spawn the architect with `Mode: extend, existingProfileId: <X>`. The architect compares its current proposal to the on-server items + associations and outputs three lists: (i) items to ADD, (ii) items to PATCH (scope/columns/sync diffs), (iii) items to DELETE (in-server but not in current data model). Surface to the user at Gate 2. After approval, the skill issues incremental writes — no profile-shell POST.
+> **Extend mode (rows #2a, #4a) implementation**: compare the foreground proposal to the on-server items + associations and produce three lists: (i) items to ADD, (ii) items to PATCH (scope/columns/sync diffs), (iii) items to DELETE (in-server but not in current data model). Surface to the user at Gate 2. After approval, the skill issues incremental writes — no profile-shell POST.
 
-### Step 3 — Spawn architect agent
+### Step 3 — Design the profile in foreground
 
 **Print before starting:**
-> "→ Spawning mobile-app:offline-profile-architect agent (read-only) to design the profile…"
+> "→ Designing the Mobile Offline Profile from the verified model and screen contracts…"
 
-Spawn via `Task`:
+Read the model manifest, current Product Scope and screen build packs when
+present, live table availability flags, and existing profile state in extend
+mode. Build one in-memory configuration and render `_offline_section.md` for the
+existing review UI. No child agent participates.
 
-```text
-agent: mobile-app:offline-profile-architect
-prompt:
-  Working directory: <workdir>
-  Plugin root: ${PLUGIN_ROOT}
-  Environment URL: <envUrl>
-  Publisher prefix: <prefix>
-  Mode: default
-```
+For each table, apply this deterministic row-scope cascade in order:
 
-The agent returns `_offline_section.md` in the working directory. Read it. Parse its first-line status code:
+1. Organization-owned shared data → All records.
+2. Explicit "my", "mine", or "assigned to me" requirement → User's own rows.
+3. Pure child whose lifecycle depends on a parent → Related rows only.
+4. Shared lookup target with an evidence-backed bounded row count below 500 → All records.
+5. Larger shared lookup target → Business-unit/organization scope, surfaced for confirmation.
+6. Otherwise → User scope and a visible concern for Gate 2.
 
-- `DONE` → continue
-- `DONE_WITH_CONCERNS: <list>` → surface concerns at Gate 2 / Gate 3 where relevant; continue
-- `NEEDS_CONTEXT: <missing>` → resolve the missing context (most often: data model file absent), re-spawn once (cap: 2 retries). If still failing, STOP with the agent's reason.
-- `BLOCKED: <reason>` → STOP, surface to user, do not silently retry.
+Do not infer offline from mobile usage, field-work vocabulary, or an operational
+workflow. Continue only when the user requested offline, the brief explicitly
+records limited/intermittent connectivity, or an evidence-backed operating
+context assumption was approved.
+
+Register relationship associations on the parent (one-side) profile item. Do
+not add association rows for all-records parents, do require at least one parent
+association for related-only children, and exclude system/internal
+relationships.
+
+Build `selectedcolumns` as a sorted deterministic union of:
+
+- primary ID and primary name;
+- `modifiedon`, `createdon`, state/status, and owner fields when present;
+- required lookup attributes;
+- fields used by approved screen build packs and domain operations.
+
+Exclude internal/process fields such as `versionnumber`, `traversedpath`,
+`importsequencenumber`, `processid`, and `stageid`. Use lookup attributes, never
+formatted-value pseudo-columns.
+
+Choose 5 or 10 minutes for hot edited transactional rows, 15 or 30 minutes for
+normal operational rows, and 60 minutes for stable catalogs. Every choice is
+editable in Step 3.5. In extend mode, calculate exact ADD/PATCH/DELETE lists
+without mutating until the consolidated configuration review is accepted.
+
+Missing model data, invalid relationship direction, or unsupported table
+metadata is a visible block. A heuristic concern is surfaced in the relevant
+review section and does not silently change scope.
 
 ### Step 3.5 — Configuration review (interactive AskUserQuestion flow)
 

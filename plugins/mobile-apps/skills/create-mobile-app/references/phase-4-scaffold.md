@@ -224,24 +224,31 @@ visual_companion: <yes|no>   # set in Step 2b — controls whether browser previ
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-Invoke `/design-system` (ships with this plugin). When `--no-design` is
-present, pass `--fast-experience`; this skips alternatives and the component
-gallery but still materializes neutral semantic tokens and the required
-journey preview.
+Invoke `/design-system` (ships with this plugin). For normal prompt-only
+generation, pass `--auto-experience`; it uses the approved experience without a
+brand-input pause, cost picker, style gallery, Figma, history, or alternative
+direction. Explicit brand/design flags use their existing modes instead. When
+`--no-design` is present, pass `--fast-experience` for the neutral path.
+
+Start `designMaterialization` immediately before invoking `/design-system` and
+finish it only after all required design/preview artifacts and contract checks
+pass. Record a bounded failure reason on `NEEDS_CONTEXT` or `BLOCKED`.
 
 ```
 Invoke skill: /design-system
 
 Arguments:
   --working-dir <working_dir>
+  [--auto-experience for normal prompt-only generation]
   [--fast-experience when --no-design is present]
 ```
 
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`),
-collects optional brand inputs, presents the cost picker, materializes the
-approved Product Experience, writes `brand/design-system.md` +
-`brand/tokens.ts`, renders `brand/design-system.html`, renders the interactive
-journey preview at `_plan_preview.html`, and returns with status.
+materializes the approved Product Experience, writes
+`brand/design-system.md`, `brand/tokens.ts`, and
+`brand/signature-components.ts`, then renders the interactive journey preview
+at `_plan_preview.html`. Auto mode does not render the optional component
+gallery.
 
 Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
@@ -250,7 +257,8 @@ Handle the return per the status protocol (AGENTS.md rule #10):
 - `BLOCKED` → surface error, STOP.
 
 After `/design-system` returns `DONE`, require
-`brand/design-system.md`, `brand/tokens.ts`, and `_plan_preview.html`. Missing
+`brand/design-system.md`, `brand/tokens.ts`, `brand/signature-components.ts`,
+and `_plan_preview.html`. Missing
 artifacts are `BLOCKED`; do not silently continue with a generic fallback.
 
 The preview is the **FIRST and ONLY HTML experience preview** in the flow. It
@@ -348,6 +356,10 @@ If rejected, stop before Dataverse mutation, dependency installation, or
 screen/source generation. If approved, mark Gate 4 and
 `implementation.status` approved, refresh the receipt integrity hash, and
 continue to Step 7.
+
+Immediately after Gate 4 approval, finish the `foregroundPlanning` timing wall.
+Every Gate 1-4 wait must have been recorded through `userApproval`; the summary
+will subtract overlapping wait time from foreground execution.
 
 After approval, record the materialized experience checkpoint:
 

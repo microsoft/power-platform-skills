@@ -87,7 +87,7 @@ Pull from manifest the target table's `lookups[]` to inform defaults. Run a quic
 | `Related rows only (for pure child tables)` | `recorddistributioncriteria: 0` |
 | `Custom — specify exact flags in next message` | Prompt user with text |
 
-Recommendation in the question body should be derived from the architect's heuristics for the table being added (use the same priority cascade from `offline-profile-architect.md` Step 4 inline). The user can override.
+Recommendation in the question body must use the foreground priority cascade from `/setup-offline-profile` Step 3. The user can override.
 
 ### Step 5 — POST item + associations + PATCH selectedcolumns
 
@@ -136,7 +136,7 @@ For new tables that are `recorddistributioncriteria: 0` (Related rows only), at 
 
 #### Step 5c — PATCH selectedcolumns
 
-Build `selectedcolumns` using the deterministic union from [offline-profile-architect.md](${CLAUDE_SKILL_DIR}/../../agents/offline-profile-architect.md) Step 6 (always-include ∪ lookups ∪ screen-grep'd, dedupe, sort).
+Build `selectedcolumns` using the deterministic union from `/setup-offline-profile` Step 3 (always-include + lookups + approved screen/build-pack fields, then dedupe and sort).
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/dataverse-request.js" <envUrl> PATCH \

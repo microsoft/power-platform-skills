@@ -1558,20 +1558,21 @@ test('supplied fast-path failures fail closed while absent handoffs retain Step 
   assert.match(createSkill, /--approval-receipt "\$APPROVAL_RECEIPT"/);
   assert.match(
     createSkill,
-    /receipt is missing, STOP as `BLOCKED`[\s\S]*must not synthesize it/,
+    /No mutation begins until the current[\s\S]*approval receipt binds all four required states and artifact hashes/,
   );
-  const planner = fs.readFileSync(path.join(
+  const planning = fs.readFileSync(path.join(
     __dirname,
-    '../../agents/native-app-planner.md',
+    '../../skills/create-mobile-app/references/phase-3-planning.md',
   ), 'utf8');
   assert.match(
-    planner,
-    /Approved:[\s\S]*mobile-plan-status\.json[\s\S]*dataModel.*approval record/,
+    planning,
+    /On\s+acceptance, update `\.tmp\/mobile-plan-status\.json`[\s\S]*exact contract revisions[\s\S]*approval state/,
   );
   assert.match(
-    planner,
-    /Do not call the manifest builder to create or restamp this receipt/,
+    planning,
+    /No mutation begins until the current[\s\S]*approval receipt binds all four required states and artifact hashes/,
   );
+  assert.match(skill, /This skill cannot create or restamp it/);
 });
 
 test('publish checkpoint retries PublishXml after schema writes become idempotent', () => {

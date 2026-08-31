@@ -13,7 +13,7 @@ test('planning ETA uses measured p50, p90, and last-run durations', () => {
   let history = { schemaVersion: 1, samples: [] };
   for (const durationMs of [180000, 120000, 300000, 240000]) {
     history = recordHistory(history, {
-      environmentResolutionMs: durationMs,
+      foregroundPlanningMs: durationMs,
     }, () => '2026-08-28T00:00:00.000Z');
   }
   assert.deepEqual(estimate(history), {
@@ -26,35 +26,27 @@ test('planning ETA uses measured p50, p90, and last-run durations', () => {
 
 test('planning wall time excludes user approval waiting', () => {
   assert.equal(planningWallMs({
-    environmentResolutionMs: 10,
-    dataverseMetadataNetworkMs: 20,
-    outerPlannerWallMs: 1030,
+    foregroundPlanningMs: 30,
     userApprovalWaitingMs: 1000,
-    planRevisionMs: 500,
-  }), 60);
+  }), 30);
 });
 
-test('planning wall time falls back to nested stages without double counting', () => {
+test('planning history does not add diagnostic foreground sub-stages twice', () => {
   assert.equal(planningWallMs({
-    environmentResolutionMs: 10,
-    modelArchitectMs: 20,
-    screenPlannerMs: 30,
-    planRevisionMs: 40,
+    foregroundPlanningMs: 100,
+    requirementsPlanningMs: 20,
+    dataModelPlanningMs: 30,
+    journeyPackPlanningMs: 40,
     userApprovalWaitingMs: 999,
   }), 100);
 });
 
-test('degraded planner attempts include subsequent inline planning work', () => {
+test('screen build channels do not inflate the planning ETA history', () => {
   assert.equal(planningWallMs({
-    outerPlannerWallMs: 10,
-    nativePlannerStatus: 'failed',
-    nativePlannerApprovalWaitingMs: 3,
-    postPlannerModelArchitectMs: 20,
-    postPlannerScreenPlannerMs: 30,
-    postPlannerRevisionMs: 40,
-    modelArchitectMs: 200,
-    screenPlannerMs: 300,
-    planRevisionMs: 400,
+    foregroundPlanningMs: 97,
+    screenBuildDirectWriteMs: 200,
+    screenBuildReturnOnlyMs: 300,
+    screenBuildForegroundMs: 400,
     userApprovalWaitingMs: 999,
   }), 97);
 });

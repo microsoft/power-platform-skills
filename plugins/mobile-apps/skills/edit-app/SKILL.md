@@ -14,8 +14,8 @@ Post-generation editor for an existing mobile app. `native-app-plan.md` remains 
 
 Use `--plan-only` only when the user explicitly asks to update planning docs without changing app code. Normal follow-up prompts in Copilot Chat Agent mode should apply the app change end to end.
 
-`--builder-concurrency <1-10>` overrides the screen-builder wave cap. The
-non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 8.
+`--builder-concurrency <1-6>` overrides the screen-builder wave cap. The
+non-interactive equivalent is `MOBILE_APP_BUILDER_CONCURRENCY`; default is 4.
 
 ## When to use
 
@@ -182,7 +182,7 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 
 | User asks | Plan sections | Apply path | Screens / verification |
 |---|---|---|---|
-| Improve search screen for mobile | Screens | `mobile-app:screen-planner` edit pass only | Rebuild the named search/list screen; run `tsc`, route check, preview |
+| Improve search screen for mobile | Product Scope, Journey, screen pack | Foreground edit of the affected contracts | Rebuild the named search/list screen; run `tsc`, route check, preview |
 | Add loading, empty, and error states | Screens | Screen spec + existing TSX edit | Rebuild affected list screen; verify visible loading, empty, error, retry, refresh states |
 | Add a detail screen for selected record | Screens; Data Model only if fields/services are missing | Update Screen Map + Navigation Contracts; run `/add-dataverse` or `/add-datasource` only if data surface is missing | Create route/folder/layout as needed; build detail screen and source list/search navigation |
 | Update design to match company branding | Design; Screens only if component grammar/density changes | `/design-system --refresh <dimension>` or `--reskin` | Rebuild affected screens only when tokens alone are insufficient; always preview |
@@ -191,8 +191,8 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 | Add a full calendar, agenda, or scheduling view | Screens → JavaScript Dependencies | Add exact `react-native-calendars` version to the approved table, then `npm install --save-exact` before builders | Build the calendar screen with the approved pattern; no `/add-native` or Android/iOS rebuild |
 | Add a new requirement with a new screen | Usually Screens plus whichever of Data Model, Connector, Native, Design the requirement implies | Decompose into one coherent feature; apply data/connector/native/design first, then screens | Generate/refresh service snapshot, layouts, skeletons/shared code, then build affected screens |
 | Add a new data source but no screen | Connector/Data Source; sometimes Data Model | `/add-datasource` when ambiguous; `/add-sharepoint`, `/add-connector`, or `/add-dataverse` when clear | Refresh generated services and memory bank; no screen rebuild unless the user asked for UI |
-| Add a new table/entity but no screen | Data Model | `mobile-app:data-model-architect` -> `/add-dataverse --skip-planning` | Refresh generated services; optionally seed sample data; no preview unless UI changed |
-| Remove, rename, reorder, or change a screen archetype | Screens | `mobile-app:screen-planner` edit pass | Update route files/layouts/navigation contracts; delete only approved files; run route check |
+| Add a new table/entity but no screen | Data Model | `/setup-datamodel --plan-only` then `/add-dataverse --skip-planning` after approval | Refresh generated services; optionally seed sample data; no preview unless UI changed |
+| Remove, rename, reorder, or change a screen archetype | Product Scope, Journey, screen pack | Foreground edit of the affected contracts | Update route files/layouts/navigation contracts; delete only approved files; run route check |
 | Generate a new static preview | None unless source is stale | `/preview-screens` | No source edits; do not run data/native/design work |
 
 One user-visible feature may require multiple plan sections. That is allowed and expected. Multiple unrelated features in one prompt should be split: list the features, ask which to run first, and do not bundle their mutations.
@@ -222,14 +222,14 @@ If a single PDF/signature request requires multiple plan sections, say so and ru
 
 ### Step 1.5 — Impact preview (cheap abort gate)
 
-Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
+Before detailed planning or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
 
 Compute:
 
 - **Cost tier:** Cheap (single existing screen), Medium (new route/form/detail or one data source), Heavy (multi-screen/nav/design/data/native), Major (reskin or broad screen rebuild).
 - **Likely plan sections:** Data Model, Native Capabilities, Connectors/Data Sources, Design, Screens.
 - **Likely files:** exact screen/layout/native/brand/generated/memory files when known.
-- **Likely skills/agents:** `mobile-app:data-model-architect`, `mobile-app:screen-planner`, `mobile-app:screen-builder`, `/add-datasource`, `/add-dataverse`, `/add-sharepoint`, `/add-connector`, `/add-native`, `/design-system`, `/preview-screens`, optional `/debug-app` only when the user gives a concrete runtime symptom.
+- **Likely skills/child:** foreground contract planning, `mobile-app:screen-builder`, `/setup-datamodel --plan-only`, `/add-datasource`, `/add-dataverse`, `/add-sharepoint`, `/add-connector`, `/add-native`, `/design-system`, `/preview-screens`, optional `/debug-app` only when the user gives a concrete runtime symptom.
 - **Verification gates:** schema, generated services, route contracts, screen validators, preview.
 - **Main risks:** environment drift, unsupported native package, generated service missing, navigation contract change, broad design churn, stale installed plugin cache.
 
@@ -282,64 +282,73 @@ Do not stop after design refresh. Continue to Step 7 verification and Step 8 pre
 
 ### Step 2 — Re-plan affected sections
 
-Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
+Planning is always foreground. Reuse the canonical create-flow contracts and
+edit only the affected values; do not dispatch a planning child or maintain a
+second edit-only planning algorithm. The only child-agent boundary remains
+screen implementation after approval.
 
-| Surface | Reuse from create flow | Edit-app scope |
-|---|---|---|
-| Dataverse schema | `data-model-architect` + `/add-dataverse` Step 8 | New/changed tables, columns, lookups, calculated fields, generated services |
-| Connector choice | `/add-datasource`, `/add-sharepoint`, `/add-connector` | New or changed external data/action surface |
-| Native capability | `/add-native` Step 9 | New wrappers/controls needed by edited screens |
-| JavaScript dependency | `screen-planner` + `shared/references/javascript-dependency-planning.md` | Explicit package requests or established JS libraries needed by edited screens |
-| Design | `/design-system` Step 9b | Token refresh, reskin, density/component rules |
-| Navigation | `/create-mobile-app` Step 10b | Changed tabs, stacks, route groups, modal/formSheet presentation |
-| Service snapshot | `/create-mobile-app` Step 10.7 | Refresh `.tmp/generated-services-snapshot.md` after any data source/schema change before builders run; do not rewrite the approved plan |
-| Shared code + skeletons | `/create-mobile-app` Step 10.8 | New screens, changed data imports, new shared row/card/hooks |
-| Screen implementation | `/create-mobile-app` Step 11 | Only affected screens, via `mobile-app:screen-builder` waves |
-| Quality sweep | `/create-mobile-app` Step 11.4 | Changed screen files and route layouts |
+Read the exact current schemas plus these artifacts when present:
 
-Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
+| Authority | Canonical artifact |
+|---|---|
+| Product Experience | `.tmp/product-experience-contract.json` |
+| Product Scope | `.tmp/product-scope-contract.json` |
+| Workflow Journey | `.tmp/workflow-journey-contract.json` |
+| Authored screen packs | `.tmp/screen-build-pack.json` |
+| Compiled screen packs | `.tmp/compiled-screen-build-pack.json` |
+| Dataverse schema | `.tmp/dataverse-schema-contract.json` |
 
-Before the first real agent dispatch, read `memory-bank.md` `## Host
-Capabilities`. Reuse a result only when its host/runtime identifier and plugin
-version match and `checkedAt` is no older than 30 minutes. Treat legacy,
-expired, and mismatched entries as stale. Otherwise dispatch the actual
-required leaf agent; on an agent-routing/tool-surface failure, record the
-result with current scope metadata and print once:
+If only part of the four product-contract set exists, stop instead of mixing
+stale structured state with plan prose. If none exists in a legacy generated
+app, reconstruct all four once in the foreground from the approved plan and
+existing app, validate them, and surface that reconstruction in Step 3. The
+structured sidecars are authoritative after that point.
 
-> "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
+Apply the narrow invalidation cascade:
 
-Inline fallback rules:
+- Product Experience change → restamp Product Scope, then rebuild Journey and packs.
+- Product Scope change → rebuild Journey and packs; preserve Product Experience.
+- Journey change → rebuild packs only.
+- Pack-only composition/content change → recompile only the affected packs.
+- Data-model-only change → preserve all product contracts unless job, entity realization, or visible screen behavior also changed.
 
-- Data Model: draft the section inline from the existing plan, `.datamodel-manifest.json`, generated models, and the user's edit brief; then gate it exactly like an agent result.
-- Screens: draft Screen Map / Navigation Contracts / per-screen spec changes inline using `agents/screen-planner.md`, `shared/references/screen-templates.md`, and the existing screen TSX; then gate it exactly like an agent result.
-- Native Capabilities and Connectors: already handled inline by this skill.
-- Never skip approval just because a leaf agent is unavailable.
+For a Dataverse schema edit, read and execute `/setup-datamodel --plan-only`
+with the current edit brief, Product Scope, environment snapshot/evidence, and
+publisher prefix. It writes `_dm_section.md` and the structured schema contract
+without mutating Dataverse. For connector, native, and design changes, use the
+foreground `/add-datasource`, `/add-sharepoint`, `/add-connector`, `/add-native`,
+and `/design-system` planning rules, but defer external/app mutation until after
+Step 3 approval.
 
-| Section | Agent (read-only) | Output file |
-|---|---|---|
-| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
-| Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
-| Screens | `mobile-app:screen-planner` | `_screens_section.md` |
+For screen, navigation, or visible-workflow changes, edit Product Scope,
+Workflow Journey, and only the affected screen packs in the foreground:
 
+- preserve stable requirement, job, screen, route, and journey IDs when their meaning did not change;
+- cover every new explicit job and critical step with evidence and a concrete surface/action;
+- apply the existing screen ceilings and structured merge evidence without treating a ceiling as a target;
+- derive navigation from durable destinations after the screen graph is complete;
+- keep loading, empty, error, permission, offline, and success conditions as states, not routes;
+- preserve unaffected packs byte-for-byte where their upstream revision remains valid;
+- update pure-JavaScript dependency rows using `shared/references/javascript-dependency-planning.md`.
+
+Validate every changed contract and compile the packs before presenting the
+mutation preview:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-experience.js" --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-product-scope.js" --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/validate-workflow-journey.js" --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" --project-root "<working_dir>"
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-screen-build-pack.js" --project-root "<working_dir>" --check
 ```
-Spawn agent: mobile-app:<agent-name>
 
-Prompt:
-  Update the existing <section-name> section based on the user's change request.
+Render staged `_dm_section.md`, `_native_section.md`,
+`_connectors_section.md`, and `_screens_section.md` projections as applicable.
+Do not rewrite `native-app-plan.md` until Step 3 approval. All questions,
+assumptions, and repair decisions stay in the foreground; a semantic failure
+repairs only its owning contract and downstream bindings.
 
-  User request: <verbatim>
-  Current section content: <verbatim>
-  Working directory: <absolute path>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
-
-  Mode: edit (preserve existing decisions where the change doesn't affect them).
-  Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
-  Return the updated section as a markdown file.
-```
-
-Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
-
-For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
+For Native Capabilities, read the current capability table, apply the change, and regenerate the staged table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
 - `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
 - `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
@@ -495,43 +504,47 @@ If it fails, batch-fix layouts, route names, skeleton imports, generated-service
 
 #### Step 6.1 — Screen-builder capability + waves
 
-Do not run a no-op preflight. Reuse the cached `screen_builder` capability only
-when host/runtime, plugin version, and the 30-minute TTL match; otherwise
-attempt the first real builder wave. On an agent-routing/tool-surface failure,
-record `screen_builder: unavailable` with scope metadata, print once, and
-build inline using `agents/screen-builder.md`; inline mode must satisfy the
-same quality rules. Record a successful real dispatch with the same metadata.
+Use the canonical protocol in
+`create-mobile-app/references/phase-11-screens.md`, limited to the affected
+screen set. `mobile-app:screen-builder` is the only child type. It implements
+exactly one screen and never changes planning decisions.
+
+For every affected screen, create and seal one channel-neutral work order with
+`screen-builder-contract.js`. Use the current complete TSX as the typed baseline
+for an existing screen, or the compiling skeleton for a new screen. Include only
+that screen's compiled pack, route contract, relevant service signatures,
+tokens, signature components, states, test IDs, accessibility requirements, and
+the approved edit intent. Never send the whole plan or sibling screen source.
+
+Build one or two highest-risk changed screens as Wave 0. Use the strongest
+available child model for a durable entry screen, signature interaction,
+capture/media flow, or high-risk decision. Run TypeScript, routes, screen
+quality, contrast, and compiled-pack checks before supporting fan-out.
+
+For each screen choose one transport without changing its sealed fingerprint:
+
+- **Direct-write:** the child may edit only the pre-created assigned target.
+  Capture the pre-wave changed-file baseline and backups, verify the actual
+  changed paths rather than trusting returned metadata, and run
+  `screen-builder-contract.js --verify-direct`. Restore only out-of-scope child
+  writes; preserve valid sibling targets and all pre-existing user changes.
+- **Return-only:** tell the child to make no tool calls and return one complete
+  TSX body using the run-scoped delimiters from `screen-builder.md`. Parse with
+  `screen-builder-contract.js --parse-return`; the foreground atomically writes
+  only the assigned target.
+
+A malformed, oversized, truncated, unavailable, or failed channel retries once
+with exact diagnostics. A second failure moves only that screen to foreground
+implementation from the same work order. Never convert one screen failure into
+a host-wide fallback and never discard completed siblings.
 
 Resolve `BUILDER_CONCURRENCY` from `--builder-concurrency`, then
-`MOBILE_APP_BUILDER_CONCURRENCY`, then `8`; reject values outside `1..10`.
-Batch affected screens using that cap. For each wave:
-
-1. Print the wave start: `Wave <N>/<W> starting: <screen names>`.
-2. Spawn all builders in one message so they can run in parallel.
-3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`). Unknown first lines are `BLOCKED`.
-4. Retry `NEEDS_CONTEXT` once with the missing context from plan/files/services.
-5. Stop on `BLOCKED` unless the user chooses to skip with an approved placeholder.
-6. Run `npx tsc --noEmit` after the wave before launching the next wave.
-7. If the wave gate fails, group errors by root cause and respawn affected builders with consolidated TypeScript output. Cap at 2 retries per screen.
-
-Do not launch wave N+1 until wave N is clean.
-
-Spawn `mobile-app:screen-builder` agents using the resolved wave cap. Prompt each builder with:
-
-```text
-Follow screen-builder.md.
-Mode: edit existing generated app.
-User change request: <verbatim>
-working_dir: <absolute path>
-screen_name: <screen id>
-route: <route>
-target_file: <absolute path>
-plan_path: <absolute path>/native-app-plan.md
-generated_services_path: <absolute path>/.tmp/generated-services-snapshot.md
-current_file: <paste current file content if the file exists>
-
-Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
-```
+`MOBILE_APP_BUILDER_CONCURRENCY`, then `4`; reject values outside `1..6`. Launch
+one child per screen. After every wave run TypeScript, routes, changed-screen
+quality, contrast, and compiled-pack validation. Do not launch the next wave
+until the current one is clean. Record channel outcomes and validation
+fingerprints in `.tmp/screen-builder-state.json`; reuse a successful validation
+only when both workspace fingerprint and exact validator set still match.
 
 ### Step 7 — Verify
 
@@ -592,7 +605,7 @@ Append an edit entry to `memory-bank.md`:
 - Request: <verbatim or concise summary>
 - Intent brief: <target screens/routes, data surface, native capability, design scope>
 - Assumptions: <inferred choices or none>
-- Skills/agents invoked: <data-model-architect, screen-planner, add-dataverse, screen-builder, etc.>
+- Foreground skills/child invoked: <setup-datamodel plan-only, add-dataverse, screen-builder, etc.>
 - Plan sections changed: <Data Model / Native Capabilities / Screens / Design / Connectors>
 - App changes: <screens/routes/native wrappers/data sources>
 - Verification: <commands/gates + pass/fail/skipped with reason>
@@ -607,5 +620,5 @@ Final summary must say what changed in the app, what verification ran, where the
 
 - `native-app-plan.md` is still the durable source of truth. The change should be planned before it is applied, but planning is not the end state.
 - For complex multi-section edits, update and gate every required section first, then apply the mutation in dependency order. Do not leave a native capability entry that references missing Dataverse storage or a screen state that was never planned.
-- The architect agents are the same ones used by `native-app-planner` during initial creation, so planning improvements flow through here.
+- Edit planning uses the same foreground contracts, validators, and compilers as initial creation, so planning improvements flow through here.
 - This skill intentionally covers post-generation iteration. It is acceptable for `/edit-app` to touch Dataverse, `src/native/`, route layouts, screen TSX, brand tokens, `preview.html`, and `memory-bank.md` when the approved edit requires it.

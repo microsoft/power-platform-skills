@@ -19,26 +19,7 @@ function percentile(values, fraction) {
 }
 
 function planningWallMs(summary) {
-  const outerPlannerWallMs = Number(summary.outerPlannerWallMs || 0);
-  const plannerMs = outerPlannerWallMs > 0
-    ? summary.nativePlannerStatus === 'failed' || summary.nativePlannerStatus === 'needs-context'
-      ? Math.max(0, outerPlannerWallMs - Number(
-        summary.nativePlannerApprovalWaitingMs ?? summary.userApprovalWaitingMs ?? 0,
-      ))
-        + Number(summary.postPlannerModelArchitectMs || 0)
-        + Number(summary.postPlannerScreenPlannerMs || 0)
-        + Number(summary.postPlannerRevisionMs || 0)
-      : Math.max(0, outerPlannerWallMs - Number(summary.userApprovalWaitingMs || 0))
-    : Number(summary.modelArchitectMs || 0)
-      + Number(summary.screenPlannerMs || 0)
-      + Number(summary.planRevisionMs || 0);
-  return [
-    summary.environmentResolutionMs,
-    summary.publisherPrefixDetectionMs,
-    summary.dataverseMetadataNetworkMs,
-    summary.localDeterministicProcessingMs,
-    plannerMs,
-  ].reduce((total, value) => total + Number(value || 0), 0);
+  return Number(summary.foregroundPlanningMs || 0);
 }
 
 function readHistory(file) {

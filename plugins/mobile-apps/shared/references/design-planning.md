@@ -1,7 +1,7 @@
 # Design Planning Reference
 
 Shared logic for planning the visual design system for a Power Apps mobile app.
-Used by `native-app-planner` (Step 3c) and `setup-datamodel`.
+Used by foreground `/create-mobile-app`, `/edit-app`, and `/design-system` planning.
 
 Read
 [`product-experience-compiler.md`](product-experience-compiler.md) first.
@@ -242,9 +242,9 @@ Product-experience-derived baseline.
 
 ---
 
-## Step 4 — Pass to Screen Planner
+## Step 4 — Pass to foreground screen planning
 
-Include the `## Design` section in the screen-planner prompt so per-screen specs reference the right tokens:
+Include the approved design values while authoring per-screen packs and work orders so screen implementation references the right tokens:
 
 ```
 Approved design:

@@ -382,14 +382,14 @@ preset.
 | Screens | Independent journeys and roles | Focused journey `4-7`; 2-3 connected journeys `7-12`; complex workflow `12-16`; multi-role `16-20` | medium — critical steps may share one surface |
 | Planning min | Tables + screens | lower bound `max(10, tables × 0.3 + screens × 0.4 + 2)`; upper bound `max(15, computed upper)` | low — protects the quality-first Gate 1 budget |
 | Scaffold min | Fixed | `1-2` (template preparation + npm install already happened before skill invocation) | high |
-| Build min | Screens, configurable parallel cap | `ceil(screens / <builder-cap>) × 0.6`; default cap 8 | medium |
+| Build min | Screens, canary plus configurable supporting waves | canary `0.6-1.2`, then `ceil(remaining screens / <builder-cap>) × 0.6`; default cap 4, maximum 6 | medium |
 | Extra prompts | Contract confidence + design path | `+1 only when Gate 1 contains a consequential low-confidence assumption; +1 when the user requests style alternatives` | medium |
 
 Print the block once, exactly in this format (substitute computed values; ranges as `low-high`):
 
 ```
 ─── Plan preview (rough) ─────────────────────────────────
-Based on your confirmed brief, before any agent runs:
+Based on your confirmed brief, before foreground planning runs:
 
 Scope (proxy estimates — actual numbers come from architects):
   New tables   ~<low>-<high>      ← independently persistent records only; reuse/columns/Choices may reduce this
@@ -397,12 +397,12 @@ Scope (proxy estimates — actual numbers come from architects):
   Screens     ~<low>-<high>       ← from journey/role complexity, not entity CRUD multiplication
   Approval reviews <1 consolidated | 4 gated> ← same sections and contracts; `--gated` keeps the legacy flow
 
-Time (rough — agent time only, excludes your approval latency at gates):
-  Planning      ~<low>-<high> min ← includes the quality-first 10–15 min data-model target; approvals add latency
+Time (rough — excludes your approval latency at gates):
+  Planning      ~<low>-<high> min ← foreground contract/data-model planning; approvals add latency
   Scaffolding   ~1-2 min          ← validates prepared template + runs power-apps init
-  Screen build  ~<low>-<high> min ← parallel, default cap 8; configurable from 1-10
+  Screen build  ~<low>-<high> min ← strongest-model canary, then supporting waves; default cap 4, maximum 6
 
-Token tier: quality-sensitive planning/design stay on the strongest configured model; mechanical checks use the host-supported lower tier declared by their skill.
+Model tier: foreground planning/design use the current foreground model. Screen canary, signature, capture, media-heavy, and high-risk screens use the strongest available child model; routine supporting screens may use a cheaper available child model.
 
 ⚠ These are proxies, not measurements:
   • Nouns do not automatically become tables; every new table needs a lifecycle boundary

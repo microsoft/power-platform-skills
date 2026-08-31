@@ -2,7 +2,7 @@
 name: add-dataverse
 description: Use when the user wants to add Dataverse tables (existing or new) to a Power Apps mobile app, extend an existing Dataverse table with new columns, or apply an approved data model plan.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Skill
 model: opus
 ---
 
@@ -64,12 +64,12 @@ Carry forward any `adapt` (auto-renamed) and `defer` (out-of-scope this run) dec
 **If absent:** check `$ARGUMENTS` for diagram hints (`*.png`, `*.jpg`, `*.jpeg` filename, `erDiagram` keyword, `||--o{` cardinality syntax). 
 
 - **Diagram hint present** → Path A (Step 2.5).
-- **No hint AND `$ARGUMENTS` describes what the app does** (the typical case) → silently take Path B (Step 2.6 — spawn architect). No prompt.
+- **No hint AND `$ARGUMENTS` describes what the app does** (the typical case) → silently take Path B (Step 2.6 — foreground plan-only skill). No prompt.
 - **No hint AND `$ARGUMENTS` is empty / non-descriptive** → only then prompt with `AskUserQuestion`:
 
   > "How would you like to define the data model?
   > (a) I have an existing ER diagram to upload (PNG/JPG path, Mermaid syntax, or text description)
-  > (b) Let the data-model-architect agent analyze and propose one (default)
+  > (b) Let `/setup-datamodel --plan-only` analyze and propose one (default)
   > (c) Cancel — I'll plan it elsewhere first"
 
   Default the answer to (b) so empty/cancel input auto-proceeds. The 99% case (user gave a description but no diagram) skips this prompt entirely.
@@ -110,9 +110,9 @@ Accept three input formats:
 |---|---|
 | **Image path** (`*.png` / `*.jpg` / `*.jpeg`) | Use `Read` on the file path. The vision-capable model extracts entities, columns, relationships. |
 | **Mermaid syntax** | User pastes a `erDiagram` block in chat. Parse the entities, columns, and `\|\|--o{` cardinalities directly. |
-| **Text description** | User types a structured description ("Account has many ServiceVisits; each ServiceVisit has many WorkItems and Photos"). Spawn `data-model-architect` agent in `parse-only` mode with the text as input. |
+| **Text description** | User types a structured description ("Account has many ServiceVisits; each ServiceVisit has many WorkItems and Photos"). Parse it in this foreground skill into the same structured contract shape. |
 
-Whichever format, normalize into the same structure used by the planner agent:
+Whichever format, normalize into the structured schema-contract shape:
 
 ```yaml
 publisherPrefix: <from detected publisher prefix or user>
@@ -131,11 +131,16 @@ Then:
 4. On `ExitPlanMode`, write the approved data model into `native-app-plan.md` `## Data Model` section (creating the file if it doesn't exist).
 5. Continue to Step 3.
 
-### Step 2.6 — Path B: Spawn architect agent
+### Step 2.6 — Path B: Foreground plan-only skill
 
-If the user picked Path B (or the user-provided diagram parse failed), spawn the `mobile-app:data-model-architect` agent via `Task` (the `mobile-app:` plugin-name prefix is required) with the user's high-level requirements as input. The agent returns `_dm_section.md`. Embed it in `native-app-plan.md`, present via `EnterPlanMode` for approval, then continue to Step 3.
+Read and execute `/setup-datamodel` with `--plan-only`, passing the confirmed
+requirements, working directory, publisher/environment facts, and any available
+snapshot/evidence paths. It writes `_dm_section.md` plus the normalized schema
+contract without approval or mutation. This skill presents the returned section
+through `EnterPlanMode`, then continues to Step 3 after approval.
 
-If they need new tables and refuse both paths, recommend they run `/setup-datamodel` (alias of this skill) explicitly, or `native-app-planner` for a full app-level plan. STOP if neither.
+If they need new tables and refuse both paths, recommend `/setup-datamodel`
+explicitly and stop. Do not dispatch a planning agent.
 
 ### Step 3 — Setup Dataverse Web API auth
 

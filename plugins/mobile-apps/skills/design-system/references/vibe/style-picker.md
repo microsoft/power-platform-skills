@@ -129,9 +129,9 @@ Required sections:
 - `## Project` (for app name + description)
 - `## Screens` → `### Screen Map` (so we know what to render)
 
-If `## Screens` is missing, screen compilation has not completed. STOP with:
+If `## Screens` is missing, foreground screen compilation has not completed. STOP with:
 `BLOCKED: native-app-plan.md has no ## Screens section. Run
-/create-mobile-app through Gate 2 and screen compilation first.`
+/create-mobile-app through planning approval and screen compilation first.`
 
 **Pick the representative screen** to render in the 3-up. Heuristic, in order:
 
@@ -410,7 +410,7 @@ For a hybrid pick, the `Picked:` line reads `Hybrid (Product base + Inspection d
 Append a one-line note for downstream agents:
 
 ```markdown
-> Downstream agents (`screen-planner`, `screen-builder`) MUST use these values as the defaults for their own per-screen Surface / Density / List style / Motion fields unless a per-screen spec explicitly overrides.
+> Foreground screen planning and `screen-builder` MUST use these values as the defaults for their own per-screen Surface / Density / List style / Motion fields unless a per-screen build pack explicitly overrides.
 ```
 
 ## Step 7 — Update the memory bank
@@ -458,7 +458,7 @@ If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with scr
 
 This skill's only side-effect on shared state is **one block** written into `native-app-plan.md`. Existing agents check for it conditionally:
 
-- `agents/screen-planner.md` — consumes Product Experience and Product Scope,
+- Foreground screen planning — consumes Product Experience and Product Scope,
   then records per-screen refinements without selecting style from industry.
 - `agents/screen-builder.md` — consumes Product Experience, the screen build
   pack, and the materialized design system. Samples remain code/API references
@@ -474,7 +474,7 @@ If this skill folder is removed:
 ## Notes
 
 - **Read-only with respect to source code.** This skill writes only `_design_vibe.html`, the `## Design Direction` block in `native-app-plan.md`, and one line in `memory-bank.md`. It never touches TSX, configs, or generated services.
-- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `native-app-planner` Gate 4. No new dependencies.
+- **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and the foreground experience-preview gate. No new dependencies.
 - **Re-runnable.** Each run overwrites `_design_vibe.html` and replaces the `## Design Direction` block. Memory bank entries accumulate so the design history is preserved.
 
 ## References

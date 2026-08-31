@@ -24,7 +24,7 @@ Scan the user's description and wizard answers for these signals, then confirm i
 | "Teams", "chat", "message" | Teams connector |
 | "report", "dashboard", "history", "view all" | Read/list screens |
 
-Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; if a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Use `agents/native-app-planner.md` Step 3.0 as the canonical native allowlist.
+Do not infer capabilities the template does not ship. Resolve every native signal against the live `template/package.json`; it is the canonical native package allowlist. If a package is absent or runtime-banned, surface that as a transparency note instead of pretending the capability exists. Confirm implementation details against `/add-native` before approving the capability.
 
 PDF/pen rules:
 - Do not infer `document-picker` from generic "PDF" alone; use the specific signal rows above.

@@ -14,6 +14,7 @@
     "deferredJobs",
     "screenBudget",
     "screens",
+    "navigation",
     "newTableBudget",
     "newTables",
     "dataEntities"
@@ -24,6 +25,41 @@
     "experienceRevision": { "$ref": "#/definitions/revision" },
     "productComplexity": { "enum": ["focused", "standard", "complex", "multi-role", "exceptional"] },
     "complexityJustification": { "type": "string", "minLength": 20, "maxLength": 400 },
+    "requirements": {
+      "description": "Locked explicit requirements from the confirmed brief. Shipping requirements must be covered; deferred requirements remain visible through deferredJobs.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "required": ["id", "statement", "evidence", "disposition", "jobId"],
+        "properties": {
+          "id": { "$ref": "#/definitions/slug" },
+          "statement": { "type": "string", "minLength": 5, "maxLength": 240 },
+          "evidence": { "type": "string", "minLength": 3, "maxLength": 300 },
+          "disposition": { "enum": ["shipping", "deferred"] },
+          "jobId": { "$ref": "#/definitions/slug" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "requirementCoverage": {
+      "description": "Concrete action, state, or domain-operation coverage for every shipping requirement.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 120,
+      "items": {
+        "type": "object",
+        "required": ["requirementId", "screenId", "mechanism", "target"],
+        "properties": {
+          "requirementId": { "$ref": "#/definitions/slug" },
+          "screenId": { "$ref": "#/definitions/slug" },
+          "mechanism": { "enum": ["action", "state", "domain-operation"] },
+          "target": { "type": "string", "minLength": 2, "maxLength": 120 }
+        },
+        "additionalProperties": false
+      }
+    },
     "coreJobs": {
       "type": "array",
       "minItems": 1,
@@ -46,6 +82,7 @@
       }
     },
     "screenBudget": {
+      "description": "Review target and ceiling. Exceeding either triggers consolidation review but never authorizes removing explicit functionality.",
       "type": "object",
       "required": ["target", "max"],
       "properties": {
@@ -61,7 +98,7 @@
       "maxItems": 60,
       "items": {
         "type": "object",
-        "required": ["id", "title", "purpose", "userFacing", "pattern", "jobIds", "justification"],
+        "required": ["id", "title", "purpose", "userFacing", "pattern", "jobIds", "justification", "classification"],
         "properties": {
           "id": { "$ref": "#/definitions/slug" },
           "route": { "type": "string", "pattern": "^/" },
@@ -99,11 +136,84 @@
             "items": { "$ref": "#/definitions/slug" },
             "uniqueItems": true
           },
+          "classification": {
+            "enum": [
+              "durable-destination",
+              "nested-detail",
+              "bounded-flow-step",
+              "modal-or-immersive-utility"
+            ]
+          },
+          "parentScreenId": { "$ref": "#/definitions/slug" },
+          "hideTabs": { "type": "boolean" },
+          "tabVisibilityReason": { "type": "string", "minLength": 15, "maxLength": 240 },
+          "cannotMergeBecause": {
+            "type": "object",
+            "required": ["kind", "evidence"],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "distinct-user-job",
+                  "durable-destination",
+                  "decision-boundary",
+                  "capture-or-workflow-fit",
+                  "independently-revisited-workspace"
+                ]
+              },
+              "evidence": { "type": "string", "minLength": 20, "maxLength": 300 }
+            },
+            "additionalProperties": false
+          },
+          "interactionSignature": {
+            "description": "Stable semantic key shared by screens with equivalent interaction structure.",
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 100
+          },
+          "parameterizedBy": {
+            "description": "Record/category discriminator used when equivalent interactions share one screen family.",
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 100
+          },
           "justification": { "type": "string", "minLength": 15, "maxLength": 300 },
           "compositionNote": { "type": "string", "maxLength": 240 }
         },
         "additionalProperties": false
       }
+    },
+    "navigation": {
+      "type": "object",
+      "required": [
+        "pattern",
+        "durableDestinationIds",
+        "visibleTabIds",
+        "authenticated",
+        "profileAccess"
+      ],
+      "properties": {
+        "pattern": { "enum": ["tabs-plus-stacks", "stack-only", "drawer"] },
+        "durableDestinationIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/slug" },
+          "uniqueItems": true
+        },
+        "visibleTabIds": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "$ref": "#/definitions/slug" },
+          "uniqueItems": true
+        },
+        "authenticated": { "type": "boolean" },
+        "profileScreenId": { "$ref": "#/definitions/slug" },
+        "profileAccess": {
+          "enum": ["tab", "persistent-app-chrome", "account-action", "not-applicable"]
+        },
+        "stackOnlyReason": { "type": "string", "minLength": 15, "maxLength": 300 },
+        "returnHomeMechanism": { "type": "string", "minLength": 10, "maxLength": 240 },
+        "drawerReason": { "type": "string", "minLength": 15, "maxLength": 300 }
+      },
+      "additionalProperties": false
     },
     "newTableBudget": {
       "type": "object",
@@ -195,7 +305,7 @@
       }
     },
     "exceptionalJustification": {
-      "description": "Required only when the contract exceeds the absolute 20 user-facing screen ceiling.",
+      "description": "Optional legacy product-level evidence. Per-screen cannotMergeBecause evidence is authoritative above 12 screens.",
       "type": "object",
       "required": ["statement", "independentRoles", "independentJourneys"],
       "properties": {

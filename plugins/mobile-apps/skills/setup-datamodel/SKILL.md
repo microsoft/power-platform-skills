@@ -2,7 +2,7 @@
 name: setup-datamodel
 description: Use when the user wants to design or redesign the Dataverse schema and connector plan for an existing mobile app, or has an ER diagram (image, Mermaid, or text) to apply. Skip when the user is creating a brand-new app — /create-mobile-app handles the data model inline.
 user-invocable: true
-allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task, Skill
+allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, EnterPlanMode, ExitPlanMode, Skill
 model: opus
 ---
 
@@ -11,6 +11,12 @@ model: opus
 # Set Up Data Model + Connectors
 
 Combined orchestrator for standalone data source planning. Designs the Dataverse schema, plans connectors, gets approval on both, then delegates execution to `/add-dataverse` and `/add-connector`.
+
+`--plan-only` is the foreground planning API used by `/create-mobile-app` and
+`/edit-app`. It writes `_dm_section.md` and, when Dataverse is required,
+`.tmp/dataverse-schema-contract.json`; validates both against supplied snapshot
+evidence; and returns without approval or mutation. The calling foreground skill
+owns the combined plan approval.
 
 | Use this skill when | Use `/add-dataverse` directly when |
 |---|---|
@@ -37,17 +43,17 @@ Capture the **environment URL**, **environment ID**, **tenant ID**, and **organi
 
 ### Phase 2 — Design Data Model
 
-Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present → Path A. If `$ARGUMENTS` describes the app at all → silently take Path B (architect propose). Only if both are empty, ask:
+Check `$ARGUMENTS` for diagram hints first (`*.png`, `*.jpg`, `erDiagram` keyword, `||--o{` cardinality syntax). If a hint is present, use Path A. If `$ARGUMENTS` describes the app at all, silently take Path B (foreground proposal). Only if both are empty, ask:
 
 > "How would you like to define the data model?"
 
 | Option | What happens |
 |---|---|
 | Upload an existing ER diagram | Provide a PNG/JPG path, Mermaid block, or text description |
-| Let the Data Model Architect propose one (default) | Spawns `data-model-architect` agent to infer from requirements |
+| Propose one from the requirements (default) | The foreground reconciles requirements with verified Dataverse evidence |
 | Skip — no Dataverse tables needed | Jump to Phase 3 |
 
-Default the answer to "architect propose" so an empty answer auto-proceeds without blocking the user.
+Default the answer to "propose from requirements" so an empty answer auto-proceeds without blocking the user.
 
 #### Artifact storage rules for PDFs and signatures
 
@@ -66,26 +72,52 @@ PDF content must never be modeled as long text/base64 text. Use Dataverse File c
 
 Accept PNG/JPG (use `Read` to view), Mermaid syntax (paste in chat), or text description. Parse into tables + columns + relationships. Query existing Dataverse tables to mark each as new / extend / reuse. Generate a Mermaid ER diagram for confirmation. Enter `EnterPlanMode` for data model approval. On `ExitPlanMode` approval, write the data model into `native-app-plan.md` `## Data Model` section (creating the file if absent).
 
-#### Path B — Spawn data-model-architect
+#### Path B — Foreground data-model proposal
 
-```
-Task: mobile-app:data-model-architect
+The foreground owns the proposal. Read the requirements, approved Product Scope
+when supplied, publisher prefix, compact planning evidence, and full snapshot
+only through deterministic validators. Build one canonical in-memory model and
+derive both `_dm_section.md` and `.tmp/dataverse-schema-contract.json` from it.
 
-Prompt:
-  You are the data-model-architect agent for a Power Apps mobile app.
-  Requirements: <$ARGUMENTS or ask the user what the app does>
-  Working directory: <cwd>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+Apply these decision rules:
 
-  Follow your agent file. Return a ## Data Model section with Mermaid ER diagram,
-  reuse/extend/create table, and dependency-tier ordering. If requirements mention
-  signatures, pen/ink, generated PDFs, report exports, evidence packets, or uploaded
-  documents, include the artifact storage target: on-device/share-only, Dataverse
-  Image column, Dataverse File column, or child Evidence/Attachment table. Retained
-  PDF content must use a File column, not long text/base64.
-```
+- `Reuse`: verified existing table/column satisfies the job without mutation.
+- `Extend`: verified customizable table fits and needs additive compatible
+  columns or relationships only.
+- `Create`: app-owned lifecycle with a collision-checked proposed name.
+- `Adapt`: an incompatible name collision requires a checked alternate name.
+- `Defer`: explicit functionality is outside this approved release, with a
+  visible reason.
+- Never replace a column in place to change its type.
 
-Present the returned section via `EnterPlanMode` / `ExitPlanMode` for approval.
+Every persistent concept has exactly one owner: Dataverse, a confirmed
+connector, local configuration, or transient UI state. Do not duplicate a
+connector-owned system of record in Dataverse without an approved projection and
+sync/staleness boundary. A table needs `Service required: yes` whenever a screen,
+lookup, hook, or identity flow reads it, including `systemuser` resolution.
+
+New tables require independent lifecycle, ownership/security, repeated child
+rows, independent reporting, offline boundary, audit/history, or many-to-many
+needs. A UI noun alone is not a table. Respect the Product Scope table review
+budget without dropping explicit functionality.
+
+Retained photos/signatures use Image or File ownership as appropriate; retained
+PDFs use File, never long text/base64. Barcode identity may justify an alternate
+key. Retained location needs explicit schema fields. Offline schema is added only
+when the approved operating context selects offline.
+
+The Markdown section includes target reconciliation, evidence, decisions,
+Mermaid ER diagram, dependency tiers, service-required tables, cross-entity read
+paths, risks, and scope boundaries. The structured contract is the executable
+authority and must distinguish verified existing identities from proposed ones.
+Normalize it with `build-dataverse-operation-manifest.js --normalize-contract`,
+then validate it against the full supplied snapshot with
+`validate-dataverse-planning-decisions.js`. Missing full metadata for
+Reuse/Extend/Adapt is `NEEDS_CONTEXT`, never a guessed decision.
+
+In normal standalone mode, present the resulting section through the existing
+approval flow. In `--plan-only`, return the two validated artifact paths and any
+bounded concern to the calling foreground skill without asking a question.
 
 #### Path C — No Dataverse
 
@@ -99,11 +131,17 @@ Follow [`shared/references/connector-planning.md`](${CLAUDE_SKILL_DIR}/../../sha
 2. **Confirm** — present via `AskUserQuestion`. Let the user add, remove, or confirm.
 3. **Record** — build the `## Connectors` section.
 
+In `--plan-only`, infer and record connector candidates from already confirmed
+requirements without another prompt. Mark any unresolved connector choice as a
+visible pending approval for the calling foreground skill.
+
 If the user provided no requirements context, ask:
 
 > "What does your app need to connect to? (e.g. SharePoint, Teams, email, Excel, OneDrive, Azure DevOps — or none)"
 
 ### Phase 4 — Combined Approval
+
+Skip this phase in `--plan-only`.
 
 Present the full plan — data model + connectors — together in a single `EnterPlanMode` block:
 
@@ -126,6 +164,8 @@ Approve both to proceed with execution?
 - **Change connectors** → loop back to Phase 3, then re-present Phase 4
 
 ### Phase 5 — Execute Data Model
+
+Skip Phases 5-7 in `--plan-only`.
 
 Invoke `/add-dataverse` with `--skip-planning` so it reads the approved plan directly without re-prompting:
 
@@ -207,4 +247,5 @@ Next steps:
 - [shared/references/connector-planning.md](${CLAUDE_SKILL_DIR}/../../shared/references/connector-planning.md) — connector inference + confirmation logic
 - [shared/references/offline-profile-reconciliation.md](${CLAUDE_SKILL_DIR}/../../shared/references/offline-profile-reconciliation.md) — Phase 6.5 offline delta check + reconciliation flow
 - [skills/add-dataverse/SKILL.md](../add-dataverse/SKILL.md) — full data model execution workflow
-- [agents/data-model-architect.md](../../agents/data-model-architect.md) — read-only architect agent
+- `build-dataverse-operation-manifest.js` — structured contract normalization
+- `validate-dataverse-planning-decisions.js` — snapshot-bound decision validation

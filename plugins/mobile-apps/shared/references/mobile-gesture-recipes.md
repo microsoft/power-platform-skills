@@ -117,4 +117,4 @@ import { Pressable } from 'tamagui';
 
 - Pull-to-refresh enforcement: `agents/screen-builder.md` rule 23
 - Hardware back button (Android) + swipe-back (iOS): `agents/screen-builder.md` rules 31 + 32
-- Animation vocabulary the planner uses: `agents/screen-planner.md` Step 4
+- Animation vocabulary foreground screen packs use: `skills/create-mobile-app/references/phase-3-planning.md` Step 3.4

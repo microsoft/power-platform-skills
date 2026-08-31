@@ -171,7 +171,7 @@ What happens:
 5. **Design system** — materializes the approved Product Experience into
    `brand/design-system.md`, `brand/tokens.ts`, and `_plan_preview.html`.
    Inspection styling is an explicit option, not the no-brand default.
-6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, validates a screen-builder canary, then builds supporting screens in bounded parallel waves
 7. **Dev server** — `npm run dev` starts Metro; scan the QR with your native dev client on a device
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
@@ -182,7 +182,7 @@ End state: a working app you can iterate on with hot reload. ~5–12 minutes for
 > /add-dataverse I need an Asset table with name, serial number, and a lookup to an existing Account
 ```
 
-Or paste an ER diagram (image / Mermaid / text). The data-model-architect agent discovers what already exists in your environment, scores reuse vs extend vs create, walks through approval, then creates the tables in dependency order and regenerates `src/generated/services/`.
+Or paste an ER diagram (image / Mermaid / text). The foreground skill discovers what already exists in your environment, scores reuse vs extend vs create, walks through approval, then creates the tables in dependency order and regenerates `src/generated/services/`.
 
 ### 3. Add a native capability
 
@@ -255,8 +255,8 @@ Example edit flows:
 | --- | --- | --- |
 | `/create-mobile-app` | ✅ v0 | Product Experience Compiler orchestrator — extracts UX DNA and adaptive scope, compiles a workflow journey and revision-bound screen build packs, runs four approval gates including an interactive HTML experience preview, then applies data/native/connectors and builds screens in parallel |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
-| `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
-| `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
+| `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts an approved schema contract or routes planning through `/setup-datamodel --plan-only`. |
+| `/setup-datamodel` | ✅ v0 | Foreground Dataverse and connector planner. Discovers existing metadata, proposes reuse / extend / create decisions, validates a structured contract, and can return plan-only artifacts to `/create-mobile-app` or `/edit-app`. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
@@ -270,22 +270,18 @@ Example edit flows:
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
 | `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
-| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Offered by `/create-mobile-app` Step 6.85 whenever the app has Dataverse tables; also runs standalone on existing apps. |
+| `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire, foreground schema-and-screen-aware proposal, and a single `accept` confirmation. Writes `offline-profile.json`; never mutates `power.config.json`. Author-only — no runtime stubs in the generated app yet; runtime support is deferred until upstream host support is confirmed. Offered after Dataverse materialization and also runs standalone on existing apps. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |
 | `/assign-offline-profile` | 🟡 v0.1 | Bind users / teams to a Mobile Offline Profile via `usermobileofflineprofilemembership` / `teammobileofflineprofilemembership` rows. Without this, the profile exists but no one's app uses it. Accepts `--user <upn>`, `--team <name>`, `--me`, `--all-app-users`, `--unassign-*` flags. |
 | `/edit-offline-profile` | 🟡 v0.1 | Change ONE aspect of an existing profile (table scope, sync frequency, column list, name/description) without re-running the full wizard. Mirrors the `/edit-app` gated edit pattern. Accepts `--rename`, `--table X --scope`, `--table X --sync`, `--table X --columns add:/remove:/reset` flags. |
 | `/add-table-to-offline-profile` | 🟡 v0.1 | Add ONE new table to an existing profile (typically after running `/add-dataverse` to extend the data model). Auto-enables table prereqs; single scope-picker question; POST item + PATCH selectedcolumns + publish. `--all-new` for bulk-adding every manifest table not yet in the profile. |
 | `/preview-offline-scope` | 🟡 v0.1 | Read-only diagnostic. Per-table row count + cache-size estimate + sync-cost forecast. Useful before `/assign-offline-profile` (so users don't get surprised by data caps) and after `/edit-offline-profile` to gauge impact. Wraps `verify-offline-profile.js` with row-count probes. |
 
-## Agents
+## Agent
 
 | Agent | Role |
 | --- | --- |
-| `native-app-planner` | Read-only compiler orchestrator — creates UX DNA/scope contracts, coordinates data and screen planning, runs Gates 1-2, and compiles journey/build-pack artifacts |
-| `data-model-architect` | Read-only — discovers Dataverse, scores reuse / extend / create, returns an ER section |
-| `screen-planner` | Read-only — creates the minimal journey-oriented screen graph, Workflow Journey, and authored screen build packs |
-| `screen-builder` | Mutation — writes one TSX file from its revision-bound compiled build pack; runs in parallel waves |
-| `offline-profile-architect` | Read-only — proposes per-table row scope, relationships, selected columns, sync frequency; returns `_offline_section.md` for `/setup-offline-profile` to embed in `native-app-plan.md` |
+| `screen-builder` | Implements exactly one TSX screen from a sealed, revision-bound work order. Supports direct-write and run-delimited return-only channels; canary and wave validation remain foreground-owned. |
 
 ## Telemetry and privacy
 

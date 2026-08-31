@@ -13,7 +13,7 @@ const assert = require('node:assert');
 
 const { validateScopeContract } = require('../validate-product-scope');
 const {
-  ABSOLUTE_SCREEN_CEILING,
+  SCREEN_CONSOLIDATION_THRESHOLD,
   SCREEN_BUDGETS,
   contractRevision,
 } = require('../lib/product-experience-contracts');
@@ -44,6 +44,7 @@ function screen(id, overrides = {}) {
     userFacing: true,
     pattern: 'workflow-step',
     jobIds: overrides.jobIds || ['job-a'],
+    classification: overrides.classification || 'bounded-flow-step',
     justification: `Exists because a declared job needs the ${id} surface`,
     ...overrides,
   };
@@ -96,12 +97,12 @@ test('scope binds to the experience revision it was derived from', () => {
 
 // ── Adaptive budgets ─────────────────────────────────────────────────────────
 
-test('each complexity band accepts a screen count inside its own range', () => {
+test('each complexity band accepts a screen count at its review ceiling', () => {
   const cases = [
-    ['focused', 6, 7],
-    ['standard', 10, 12],
-    ['complex', 14, 16],
-    ['multi-role', 18, 20],
+    ['focused', 6, 6],
+    ['standard', 9, 9],
+    ['complex', 12, 12],
+    ['multi-role', 12, 12],
   ];
   for (const [complexity, count, max] of cases) {
     const scope = buildScope(EXPERIENCE, {
@@ -121,39 +122,41 @@ test('each complexity band accepts a screen count inside its own range', () => {
   }
 });
 
-test('a screen count above the declared complexity band is rejected rather than silently allowed', () => {
+test('a screen count above review ceilings warns without removing functionality', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 6, max: 7 },
+    screenBudget: { target: 6, max: 6 },
     screens: fillerScreens(9),
     dataEntities: [entity('Work item')],
   });
   const result = validateScopeContract(scope, EXPERIENCE);
-  assert.strictEqual(result.ok, false);
-  assert.ok(codes(result).includes('screen-count-over-budget'));
-  assert.ok(codes(result).includes('screen-count-over-complexity-band'));
+  assert.strictEqual(result.ok, true);
+  assert.ok(result.warnings.some((entry) => entry.code === 'screen-count-above-review-ceiling'));
+  assert.ok(result.warnings.some((entry) => entry.code === 'screen-count-above-complexity-review-ceiling'));
 });
 
-test('a budget raised above its band is rejected instead of unlocking more screens', () => {
+test('a budget raised above its ceiling is surfaced for review', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
     screenBudget: { target: 9, max: 12 },
     screens: fillerScreens(9),
     dataEntities: [entity('Work item')],
   });
-  assert.ok(codes(validateScopeContract(scope, EXPERIENCE)).includes('screen-budget-exceeds-band'));
+  const result = validateScopeContract(scope, EXPERIENCE);
+  assert.strictEqual(result.ok, true);
+  assert.ok(result.warnings.some((entry) => entry.code === 'screen-review-ceiling-raised'));
 });
 
-test('a screen count below the band is a warning, not a rejection', () => {
+test('a screen count below the review ceiling has no minimum warning', () => {
   const scope = buildScope(EXPERIENCE, {
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 4, max: 7 },
+    screenBudget: { target: 4, max: 6 },
     screens: fillerScreens(3),
     dataEntities: [entity('Work item')],
   });
   const result = validateScopeContract(scope, EXPERIENCE);
   assert.strictEqual(result.ok, true);
-  assert.ok(result.warnings.some((entry) => entry.code === 'screen-count-under-band'));
+  assert.ok(!result.warnings.some((entry) => entry.code === 'screen-count-under-band'));
 });
 
 test('infrastructure routes do not consume screen budget', () => {
@@ -173,33 +176,57 @@ test('infrastructure routes do not consume screen budget', () => {
   assert.strictEqual(result.summary.userFacingScreenCount, 4);
 });
 
-test(`more than ${ABSOLUTE_SCREEN_CEILING} screens is rejected without an exceptional justification`, () => {
-  const screens = fillerScreens(22);
+test(`more than ${SCREEN_CONSOLIDATION_THRESHOLD} screens requires per-screen consolidation evidence`, () => {
+  const screens = fillerScreens(13);
   const base = {
-    productComplexity: 'multi-role',
+    productComplexity: 'complex',
     complexityJustification: 'Four independent roles each with their own workspace and journey',
     coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'filler-1' } })],
-    screenBudget: { target: 20, max: 20 },
+    screenBudget: { target: 12, max: 12 },
     screens,
     dataEntities: [entity('Work item')],
   };
 
   const rejected = validateScopeContract(buildScope(EXPERIENCE, base), EXPERIENCE);
   assert.strictEqual(rejected.ok, false);
-  assert.ok(codes(rejected).includes('screen-ceiling-without-exceptional-justification'));
+  assert.ok(codes(rejected).includes('screen-consolidation-evidence-required'));
 
   const accepted = validateScopeContract(buildScope(EXPERIENCE, {
     ...base,
-    productComplexity: 'exceptional',
-    complexityJustification: 'Five independent role workspaces that cannot be composed into shared surfaces',
-    screenBudget: { target: 22, max: 24 },
-    exceptionalJustification: {
-      statement: 'Five roles each own an end-to-end journey with no shared surface; composing them would hide each role behind another role\u2019s navigation.',
-      independentRoles: ['Dispatcher', 'Operator', 'Supervisor', 'Auditor', 'Client'],
-      independentJourneys: ['Dispatch run', 'Operate run', 'Review exceptions', 'Audit closed runs'],
-    },
+    screens: screens.map((item) => ({
+      ...item,
+      cannotMergeBecause: {
+        kind: 'distinct-user-job',
+        evidence: `${item.id} retains an explicit interaction and outcome that no sibling surface can safely host.`,
+      },
+    })),
   }), EXPERIENCE);
   assert.deepStrictEqual(accepted.errors, []);
+  assert.ok(accepted.warnings.some((entry) => entry.code === 'screen-count-above-consolidation-threshold'));
+});
+
+test('navigation follows durable destinations and keeps Profile reachable outside tabs', () => {
+  const screens = [
+    screen('home', { classification: 'durable-destination' }),
+    screen('work', { classification: 'durable-destination' }),
+    screen('history', { classification: 'durable-destination' }),
+    screen('profile', { pattern: 'settings', classification: 'nested-detail', parentScreenId: 'home' }),
+  ];
+  const scope = buildScope(EXPERIENCE, {
+    coreJobs: [job('job-a', { surface: { kind: 'screen', screenId: 'home' } })],
+    screens,
+    screenBudget: { target: 4, max: 6 },
+    navigation: {
+      pattern: 'tabs-plus-stacks',
+      durableDestinationIds: ['home', 'work', 'history'],
+      visibleTabIds: ['home', 'work', 'history'],
+      authenticated: true,
+      profileScreenId: 'profile',
+      profileAccess: 'account-action',
+    },
+    dataEntities: [entity('Work item')],
+  });
+  assert.deepStrictEqual(validateScopeContract(scope, EXPERIENCE).errors, []);
 });
 
 // ── Table budgets ────────────────────────────────────────────────────────────
@@ -370,6 +397,53 @@ test('a supporting entity given its own record screen with no core job is reject
 });
 
 // ── Coverage ─────────────────────────────────────────────────────────────────
+
+test('locked shipping requirements require concrete coverage on a real screen', () => {
+  const { experience, scope } = bundleFor('commerce');
+
+  const uncovered = structuredClone(scope);
+  uncovered.requirementCoverage = uncovered.requirementCoverage
+    .filter((row) => row.requirementId !== 'pay');
+  assert.ok(codes(validateScopeContract(uncovered, experience)).includes('uncovered-requirement'));
+
+  const missingScreen = structuredClone(scope);
+  missingScreen.requirementCoverage.find((row) => row.requirementId === 'pay').screenId = 'nowhere';
+  assert.ok(codes(validateScopeContract(missingScreen, experience)).includes('requirement-coverage-screen-missing'));
+
+  const unlocked = structuredClone(scope);
+  unlocked.coreJobs[0].criticalSteps = unlocked.coreJobs[0].criticalSteps
+    .filter((requirementId) => requirementId !== 'pay');
+  assert.ok(codes(validateScopeContract(unlocked, experience)).includes('core-requirement-not-locked'));
+});
+
+test('partial or deferred requirement coverage cannot masquerade as shipped functionality', () => {
+  const { experience, scope } = bundleFor('commerce');
+
+  const partial = structuredClone(scope);
+  delete partial.requirementCoverage;
+  assert.ok(codes(validateScopeContract(partial, experience)).includes('partial-requirement-contract'));
+
+  const deferred = structuredClone(scope);
+  deferred.requirements.push({
+    id: 'bulk-refund',
+    statement: 'Refund every order in one bulk operation',
+    evidence: 'finance asked for a future bulk refund workflow',
+    disposition: 'deferred',
+    jobId: 'bulk-refunds-later',
+  });
+  deferred.deferredJobs.push({
+    id: 'bulk-refunds-later',
+    statement: 'Process refunds for many orders in one operation',
+    deferralReason: 'Bulk refund authorization is outside this release',
+  });
+  deferred.requirementCoverage.push({
+    requirementId: 'bulk-refund',
+    screenId: 'checkout',
+    mechanism: 'action',
+    target: 'Refund all orders',
+  });
+  assert.ok(codes(validateScopeContract(deferred, experience)).includes('deferred-requirement-covered'));
+});
 
 test('a critical job whose surface does not exist is rejected as missing coverage', () => {
   const scope = buildScope(EXPERIENCE, {

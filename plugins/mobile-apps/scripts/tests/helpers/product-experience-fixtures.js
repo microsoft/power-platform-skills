@@ -99,7 +99,21 @@ const BASE_EXPERIENCE = {
 };
 
 function buildExperience(overrides = {}) {
-  return deepMerge(clone(BASE_EXPERIENCE), overrides);
+  const experience = deepMerge(clone(BASE_EXPERIENCE), overrides);
+  if (['intermittent', 'offline-first'].includes(experience.operatingContext.connectivity)) {
+    const operatingEvidence = experience.promptEvidence.operatingContext || [];
+    const hasConnectivityEvidence = operatingEvidence.some((entry) => (
+      /offline|intermittent|limited connectivity|poor (?:signal|network)|lose(?:s)? (?:signal|connection)|no signal/i
+        .test(entry.text)
+    ));
+    if (!hasConnectivityEvidence) {
+      experience.promptEvidence.operatingContext = [
+        ...operatingEvidence,
+        ...evidence('work must continue when the connection is intermittent or unavailable'),
+      ];
+    }
+  }
+  return experience;
 }
 
 function buildScope(experience, overrides = {}) {
@@ -114,6 +128,15 @@ function buildScope(experience, overrides = {}) {
     deferredJobs: [],
     screenBudget: { target: 6, max: 7 },
     screens: [],
+    navigation: {
+      pattern: 'stack-only',
+      durableDestinationIds: [],
+      visibleTabIds: [],
+      authenticated: false,
+      profileAccess: 'not-applicable',
+      stackOnlyReason: 'One bounded journey is completed in a single navigation stack.',
+      returnHomeMechanism: 'Completion or Back returns to the first journey screen.',
+    },
     newTableBudget: { target: 2, max: 4 },
     newTables: [],
     dataEntities: [],
@@ -161,13 +184,13 @@ function buildBuildPack(experience, scope, journey, overrides = {}) {
   return buildPack;
 }
 
-function defaultStates(label) {
+function defaultStates(label, { offline = false } = {}) {
   return {
     loading: `Skeleton of the ${label} layout`,
     empty: `Explains why ${label} is empty and what to do`,
     error: `States what failed on ${label} and offers a retry`,
     populated: `${label} with real content`,
-    offline: `${label} from the last synced snapshot, marked as such`,
+    ...(offline ? { offline: `${label} from the last synced snapshot, marked as such` } : {}),
   };
 }
 
@@ -276,13 +299,16 @@ function scenarioBundle(descriptor) {
     primaryGoal: descriptor.primaryGoal,
     ...descriptor.dimensions,
   });
+  const offlineSelected = ['intermittent', 'offline-first'].includes(
+    experience.operatingContext.connectivity,
+  );
 
   const jobId = descriptor.job.id;
   const steps = descriptor.steps.map((step, index) => normalizeStep(step, descriptor, index, descriptor.steps.length));
   const primaryEntity = descriptor.entity;
   const entityScreenId = descriptor.entityScreenId || null;
 
-  const screens = steps.map((step) => ({
+  const screens = steps.map((step, index) => ({
     id: step.screenId,
     route: `/${step.screenId}`,
     title: step.title,
@@ -291,6 +317,10 @@ function scenarioBundle(descriptor) {
     pattern: step.pattern,
     ...(entityScreenId === step.screenId ? { entity: primaryEntity } : {}),
     jobIds: [jobId],
+    classification: index === 0 ? 'durable-destination'
+      : step.pattern === 'capture' ? 'modal-or-immersive-utility'
+        : step.pattern === 'detail' ? 'nested-detail' : 'bounded-flow-step',
+    ...(index > 0 && step.pattern === 'detail' ? { parentScreenId: steps[0].screenId } : {}),
     justification: step.justification,
   }));
 
@@ -298,6 +328,19 @@ function scenarioBundle(descriptor) {
     productComplexity: descriptor.productComplexity || 'focused',
     complexityJustification: descriptor.complexityJustification
       || 'A single primary journey performed by one role; no independent second workspace.',
+    requirements: steps.map((step) => ({
+      id: step.id,
+      statement: step.userAction,
+      evidence: descriptor.job.evidence,
+      disposition: 'shipping',
+      jobId,
+    })),
+    requirementCoverage: steps.map((step) => ({
+      requirementId: step.id,
+      screenId: step.screenId,
+      mechanism: 'action',
+      target: step.primaryAction,
+    })),
     coreJobs: [{
       id: jobId,
       statement: descriptor.job.statement,
@@ -309,7 +352,16 @@ function scenarioBundle(descriptor) {
       evidence: descriptor.job.evidence,
     }],
     screens,
-    screenBudget: descriptor.screenBudget || { target: Math.max(4, steps.length), max: 7 },
+    screenBudget: descriptor.screenBudget || { target: steps.length, max: 6 },
+    navigation: {
+      pattern: 'stack-only',
+      durableDestinationIds: [steps[0].screenId],
+      visibleTabIds: [],
+      authenticated: false,
+      profileAccess: 'not-applicable',
+      stackOnlyReason: 'One bounded primary journey owns the prototype navigation.',
+      returnHomeMechanism: `Completion or Back returns to ${steps[0].title}.`,
+    },
     newTableBudget: { target: 2, max: 4 },
     newTables: [{
       name: primaryEntity,
@@ -347,7 +399,7 @@ function scenarioBundle(descriptor) {
         dataOperation: step.dataOperation || { kind: 'read', entity: primaryEntity, classification: 'schema-backed' },
         entryCondition: step.entryCondition,
         exitCondition: step.exitCondition,
-        states: defaultStates(step.title),
+        states: defaultStates(step.title, { offline: offlineSelected }),
       })),
       successOutcome: descriptor.job.successOutcome,
       failureRecovery: descriptor.job.failureRecovery,
@@ -389,7 +441,7 @@ function scenarioBundle(descriptor) {
         vocabulary: descriptor.vocabulary,
         contextualData: [{ label: step.contextLabel, classification: 'safe-presentation' }],
       },
-      states: defaultStates(step.title),
+      states: defaultStates(step.title, { offline: offlineSelected }),
       navigation: { incoming: step.incoming || [], outgoing: step.outgoing || [] },
       signatureInteraction: { name: step.signatureName, description: step.signatureDescription },
       forbiddenDefaults: [step.forbiddenDefault],

@@ -1056,58 +1056,37 @@ test('atomic output replaces the target and leaves no sibling temporary file', (
 
 test('planning contracts require the snapshot-only path and bounded expansion', () => {
   const pluginRoot = path.resolve(__dirname, '..', '..');
-  const architect = fs.readFileSync(
-    path.join(pluginRoot, 'agents', 'data-model-architect.md'),
+  const setup = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'setup-datamodel', 'SKILL.md'),
     'utf8',
   );
-  const planner = fs.readFileSync(
-    path.join(pluginRoot, 'agents', 'native-app-planner.md'),
+  const planning = fs.readFileSync(
+    path.join(pluginRoot, 'skills', 'create-mobile-app', 'references', 'phase-3-planning.md'),
     'utf8',
   );
-  const createSkill = composeCreateMobileAppWorkflow(pluginRoot);
   const snapshotScript = fs.readFileSync(
     path.join(pluginRoot, 'scripts', 'create-dataverse-snapshot.js'),
     'utf8',
   );
-  assert.match(architect, /## Snapshot-only fast path/);
-  assert.match(architect, /Do \*\*not\*\* run Bash discovery/);
-  assert.match(architect, /NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>/);
-  assert.match(architect, /NEEDS_CONTEXT: proposed-dataverse-names:<comma-separated-logical-names>/);
-  assert.match(architect, /\.tmp\/data-model-planning-status\.json/);
-  assert.match(architect, /--validate-only/);
-  assert.match(architect, /Do not use `Read`, `Grep`, or shell\s+output to load the full snapshot/s);
-  assert.match(architect, /detailLevel: core/);
-  assert.match(planner, /Dataverse planning forwarding is verbatim/);
-  assert.match(planner, /Do not duplicate raw evidence/);
-  assert.match(planner, /validate-dataverse-planning-decisions\.js/);
-  assert.match(planner, /only exit `0` permits embedding and Gate 1/);
-  assert.match(planner, /Timing ownership/);
-  assert.match(planner, /modelArchitect/);
-  assert.match(planner, /screenPlanner/);
-  assert.match(planner, /userApproval/);
-  assert.match(planner, /planRevision/);
-  assert.match(createSkill, /render-dataverse-architect-evidence\.js/);
-  assert.match(createSkill, /--concepts-file "\$CONCEPTS_PATH"/);
-  assert.match(createSkill, /--progressive-detail/);
-  assert.match(createSkill, /--combined-base-read/);
-  assert.match(createSkill, /--read-concurrency 1/);
-  assert.match(createSkill, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
-  assert.match(createSkill, /--telemetry-output "\$PLANNING_TELEMETRY_PATH"/);
-  assert.match(createSkill, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
-  assert.match(createSkill, /strongCollisionCandidates/);
-  assert.match(createSkill, /coreCandidates/);
-  assert.match(createSkill, /--stage environmentResolution --action start/);
-  assert.match(createSkill, /--stage publisherPrefixDetection/);
-  assert.match(createSkill, /--project-root "<working_dir>" --summary/);
-  assert.match(createSkill, /validate-dataverse-planning-decisions\.js/);
-  assert.match(createSkill, /--base-snapshot "\$SNAPSHOT_PATH"/);
-  assert.match(createSkill, /--proposed-tables "<exact comma-separated logical names>"/);
-  assert.match(createSkill, /connector-only.*skip every command/s);
-  assert.match(createSkill, /Publisher-prefix discovery skipped — connector-only planning/);
-  assert.doesNotMatch(createSkill, /legacy-unverified/);
-  assert.match(createSkill, /does not accept an unresolved\s+`Unverified` plan/s);
-  assert.match(createSkill, /BLOCKED: Dataverse planning metadata unavailable for exact target decisions/);
-  assert.match(createSkill, /planning-eta\.js/);
-  assert.match(createSkill, /measured p50/);
+  assert.match(setup, /The foreground owns the proposal/);
+  assert.match(setup, /full snapshot\s+only through deterministic validators/);
+  assert.match(setup, /validate-dataverse-planning-decisions\.js/);
+  assert.match(setup, /Missing full metadata for\s+Reuse\/Extend\/Adapt is `NEEDS_CONTEXT`/s);
+  assert.match(planning, /`connector-only`: skip Dataverse metadata reads/);
+  assert.match(planning, /`required`:[\s\S]+one\s+normalized snapshot/);
+  assert.match(planning, /render-dataverse-architect-evidence\.js/);
+  assert.match(planning, /--concepts-file "\$CONCEPTS_PATH"/);
+  assert.match(planning, /--progressive-detail/);
+  assert.match(planning, /--combined-base-read/);
+  assert.match(planning, /--read-concurrency 1/);
+  assert.match(planning, /--inventory-cache "\$INVENTORY_CACHE_PATH"/);
+  assert.match(planning, /--telemetry-output "\$PLANNING_TELEMETRY_PATH"/);
+  assert.match(planning, /--planning-timings-output "\$PLANNING_TIMINGS_PATH"/);
+  assert.match(planning, /Required exact-name metadata failures block Dataverse planning/);
+  assert.match(planning, /Reuse the one bounded exact-name expansion/);
+  assert.match(planning, /never rerun broad discovery/);
+  assert.match(planning, /\/setup-datamodel` in the foreground/);
+  assert.match(planning, /validate-dataverse-planning-decisions\.js/);
+  assert.match(planning, /planning-eta\.js/);
   assert.doesNotMatch(snapshotScript, /execFileSync/);
 });

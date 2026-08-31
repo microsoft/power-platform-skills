@@ -8,9 +8,9 @@
 // exist to complete? — and never asks what industry the product is in.
 
 const {
-  ABSOLUTE_SCREEN_CEILING,
   GENERIC_RECORD_PATTERNS,
   SCREEN_BUDGETS,
+  SCREEN_CONSOLIDATION_THRESHOLD,
   TABLE_BUDGETS,
   finding,
 } = require('./product-experience-contracts');
@@ -132,6 +132,116 @@ function validateCoverage(contract, errors, warnings) {
   }
 }
 
+function validateRequirementCoverage(contract, errors, summary) {
+  const hasRequirements = Object.prototype.hasOwnProperty.call(contract, 'requirements');
+  const hasCoverage = Object.prototype.hasOwnProperty.call(contract, 'requirementCoverage');
+  if (hasRequirements !== hasCoverage) {
+    errors.push(finding(
+      'partial-requirement-contract',
+      'requirements and requirementCoverage must be supplied together; a partial set cannot prove explicit functionality was preserved',
+    ));
+    return;
+  }
+  if (!hasRequirements) return;
+
+  const requirements = contract.requirements || [];
+  const coverage = contract.requirementCoverage || [];
+  const requirementById = indexById(requirements);
+  const screenById = indexById(contract.screens || []);
+  const coreJobById = indexById(contract.coreJobs || []);
+  const shippingJobIds = new Set([
+    ...(contract.coreJobs || []).map((job) => job.id),
+    ...(contract.supportingJobs || []).map((job) => job.id),
+  ]);
+  const deferredJobIds = new Set((contract.deferredJobs || []).map((job) => job.id));
+
+  for (const id of duplicates(requirements.map((requirement) => requirement.id))) {
+    errors.push(finding('duplicate-requirement-id', `requirement id "${id}" is declared more than once`));
+  }
+  for (const key of duplicates(coverage.map((row) => (
+    [row.requirementId, row.screenId, row.mechanism, row.target].join('|')
+  )))) {
+    errors.push(finding('duplicate-requirement-coverage', `requirement coverage "${key}" is declared more than once`));
+  }
+
+  const coverageByRequirement = new Map();
+  for (const row of coverage) {
+    if (!coverageByRequirement.has(row.requirementId)) coverageByRequirement.set(row.requirementId, []);
+    coverageByRequirement.get(row.requirementId).push(row);
+
+    const requirement = requirementById.get(row.requirementId);
+    if (!requirement) {
+      errors.push(finding(
+        'unknown-requirement-coverage',
+        `coverage references requirement "${row.requirementId}", which is not declared`,
+      ));
+      continue;
+    }
+    if (requirement.disposition === 'deferred') {
+      errors.push(finding(
+        'deferred-requirement-covered',
+        `deferred requirement "${requirement.id}" has shipping coverage on screen "${row.screenId}"`,
+      ));
+    }
+    const screen = screenById.get(row.screenId);
+    if (!screen || !screen.userFacing || screen.pattern === 'infrastructure') {
+      errors.push(finding(
+        'requirement-coverage-screen-missing',
+        `requirement "${row.requirementId}" maps to "${row.screenId}", which is not a user-facing product screen`,
+      ));
+    }
+  }
+
+  for (const requirement of requirements) {
+    const rows = coverageByRequirement.get(requirement.id) || [];
+    if (requirement.disposition === 'shipping') {
+      if (!shippingJobIds.has(requirement.jobId)) {
+        errors.push(finding(
+          'shipping-requirement-without-job',
+          `shipping requirement "${requirement.id}" references job "${requirement.jobId}", which is not a core or supporting job`,
+        ));
+      }
+      if (rows.length === 0) {
+        errors.push(finding(
+          'uncovered-requirement',
+          `shipping requirement "${requirement.id}" has no concrete action, state, or domain-operation coverage`,
+        ));
+      }
+      const coreJob = coreJobById.get(requirement.jobId);
+      if (coreJob && !(coreJob.criticalSteps || []).includes(requirement.id)) {
+        errors.push(finding(
+          'core-requirement-not-locked',
+          `requirement "${requirement.id}" belongs to core job "${requirement.jobId}" but is absent from its criticalSteps`,
+        ));
+      }
+    } else if (!deferredJobIds.has(requirement.jobId)) {
+      errors.push(finding(
+        'deferred-requirement-without-job',
+        `deferred requirement "${requirement.id}" references job "${requirement.jobId}", which is not declared in deferredJobs`,
+      ));
+    }
+  }
+
+  if (requirements.length > 0) {
+    const requirementIds = new Set(requirements.map((requirement) => requirement.id));
+    for (const coreJob of contract.coreJobs || []) {
+      for (const criticalStep of coreJob.criticalSteps || []) {
+        if (!requirementIds.has(criticalStep)) {
+          errors.push(finding(
+            'critical-step-without-requirement',
+            `core job "${coreJob.id}" critical step "${criticalStep}" is not present in the locked requirements`,
+          ));
+        }
+      }
+    }
+  }
+
+  summary.requirementCount = requirements.length;
+  summary.shippingRequirementCount = requirements.filter((item) => item.disposition === 'shipping').length;
+  summary.deferredRequirementCount = requirements.filter((item) => item.disposition === 'deferred').length;
+  summary.requirementCoverageCount = coverage.length;
+}
+
 function validateScreenBudget(contract, errors, warnings, summary) {
   const complexity = contract.productComplexity;
   const band = SCREEN_BUDGETS[complexity];
@@ -154,45 +264,136 @@ function validateScreenBudget(contract, errors, warnings, summary) {
     errors.push(finding('invalid-screen-budget', 'screenBudget.target exceeds screenBudget.max'));
   }
   if (band.max !== null && declared.max > band.max) {
-    errors.push(finding(
-      'screen-budget-exceeds-band',
-      `screenBudget.max ${declared.max} exceeds the ${complexity} band maximum of ${band.max}; reclassify productComplexity instead of raising the budget`,
+    warnings.push(finding(
+      'screen-review-ceiling-raised',
+      `screenBudget.max ${declared.max} exceeds the ${complexity} review ceiling of ${band.max}; consolidate before retaining the larger graph`,
     ));
   }
   if (count > declared.max) {
-    errors.push(finding(
-      'screen-count-over-budget',
-      `${count} user-facing screens exceed the declared budget max of ${declared.max}`,
+    warnings.push(finding(
+      'screen-count-above-review-ceiling',
+      `${count} user-facing screens exceed the declared review ceiling of ${declared.max}; explicit functionality must remain while the graph is consolidated`,
     ));
   }
   if (band.max !== null && count > band.max) {
-    errors.push(finding(
-      'screen-count-over-complexity-band',
-      `${count} user-facing screens exceed the ${complexity} band of ${band.min}-${band.max}; either compose surfaces or reclassify the product`,
+    warnings.push(finding(
+      'screen-count-above-complexity-review-ceiling',
+      `${count} user-facing screens exceed the ${complexity} review ceiling of ${band.max}; review composition without removing covered jobs`,
     ));
   }
-  if (count < band.min) {
-    // Under-target is a conversation, not a defect: a product can be genuinely smaller than
-    // its declared complexity band suggests.
-    warnings.push(finding(
-      'screen-count-under-band',
-      `${count} user-facing screens is below the ${complexity} band minimum of ${band.min}; confirm the complexity classification`,
+  if (count > SCREEN_CONSOLIDATION_THRESHOLD) {
+    for (const screen of facing) {
+      if (!screen.cannotMergeBecause) {
+        errors.push(finding(
+          'screen-consolidation-evidence-required',
+          `screen "${screen.id}" needs cannotMergeBecause evidence because the graph retains ${count} user-facing screens after consolidation`,
+        ));
+      }
+    }
+    if (facing.every((screen) => screen.cannotMergeBecause)) {
+      warnings.push(finding(
+        'screen-count-above-consolidation-threshold',
+        `${count} screens remain after consolidation with per-screen evidence; require explicit review but preserve covered functionality`,
+      ));
+    }
+  }
+}
+
+function validateNavigation(contract, errors, warnings, summary) {
+  const navigation = contract.navigation;
+  const screens = indexById(contract.screens || []);
+  const facing = userFacingScreens(contract);
+  const actualDurableIds = facing
+    .filter((screen) => screen.classification === 'durable-destination')
+    .map((screen) => screen.id)
+    .sort();
+  const declaredDurableIds = [...(navigation.durableDestinationIds || [])].sort();
+  summary.durableDestinationCount = actualDurableIds.length;
+  summary.visibleTabCount = (navigation.visibleTabIds || []).length;
+
+  if (JSON.stringify(actualDurableIds) !== JSON.stringify(declaredDurableIds)) {
+    errors.push(finding(
+      'durable-destination-mismatch',
+      `navigation durableDestinationIds must exactly match screens classified durable-destination (${actualDurableIds.join(', ') || 'none'})`,
+    ));
+  }
+  for (const tabId of navigation.visibleTabIds || []) {
+    const screen = screens.get(tabId);
+    if (!screen || !screen.userFacing) {
+      errors.push(finding(
+        'visible-tab-screen-missing',
+        `visible tab "${tabId}" does not reference a user-facing screen`,
+      ));
+    } else if (screen.classification !== 'durable-destination') {
+      errors.push(finding(
+        'visible-tab-not-durable',
+        `visible tab "${tabId}" is ${screen.classification}; only durable destinations may own tabs`,
+      ));
+    }
+  }
+  if ((navigation.visibleTabIds || []).length > 5) {
+    errors.push(finding('too-many-visible-tabs', 'navigation may expose at most five visible tabs'));
+  }
+
+  if (navigation.pattern === 'tabs-plus-stacks') {
+    if (actualDurableIds.length < 3 || actualDurableIds.length > 5) {
+      errors.push(finding(
+        'tabs-require-three-to-five-destinations',
+        `tabs-plus-stacks requires 3-5 durable destinations; found ${actualDurableIds.length}`,
+      ));
+    }
+    if ((navigation.visibleTabIds || []).length < 3) {
+      errors.push(finding('tabs-require-visible-destinations', 'tabs-plus-stacks requires at least three visible durable tabs'));
+    }
+  }
+  if (navigation.pattern === 'stack-only') {
+    if (!navigation.stackOnlyReason || !navigation.returnHomeMechanism) {
+      errors.push(finding(
+        'stack-only-contract-incomplete',
+        'stack-only navigation requires stackOnlyReason and returnHomeMechanism',
+      ));
+    }
+    if (actualDurableIds.length > 1) {
+      errors.push(finding(
+        'stack-only-with-multiple-destinations',
+        `stack-only cannot hide ${actualDurableIds.length} independently revisited durable destinations`,
+      ));
+    }
+  }
+  if (navigation.pattern === 'drawer'
+    && actualDurableIds.length <= 5
+    && !navigation.drawerReason) {
+    errors.push(finding(
+      'drawer-without-hierarchy-reason',
+      'drawer navigation with five or fewer durable destinations requires a real hierarchy reason',
     ));
   }
 
-  if (count > ABSOLUTE_SCREEN_CEILING) {
-    const justification = contract.exceptionalJustification;
-    if (complexity !== 'exceptional' || !justification) {
+  if (navigation.authenticated) {
+    const profile = navigation.profileScreenId && screens.get(navigation.profileScreenId);
+    if (!profile || !profile.userFacing || navigation.profileAccess === 'not-applicable') {
       errors.push(finding(
-        'screen-ceiling-without-exceptional-justification',
-        `${count} user-facing screens exceed the ${ABSOLUTE_SCREEN_CEILING}-screen ceiling; this requires productComplexity "exceptional" plus an exceptionalJustification naming the independent roles and journeys that cannot be composed`,
+        'authenticated-profile-unreachable',
+        'authenticated apps require a reachable user-facing Profile/account screen and sign-out owner',
       ));
+    } else if (navigation.profileAccess === 'tab'
+      && !(navigation.visibleTabIds || []).includes(profile.id)) {
+      errors.push(finding('profile-tab-missing', `profileAccess is tab but "${profile.id}" is not a visible tab`));
+    } else if (navigation.profileAccess !== 'tab'
+      && (navigation.visibleTabIds || []).includes(profile.id)) {
+      errors.push(finding('profile-tab-not-durable', `Profile "${profile.id}" is a tab without durable account work`));
     }
-  } else if (contract.exceptionalJustification && complexity !== 'exceptional') {
-    warnings.push(finding(
-      'unused-exceptional-justification',
-      'exceptionalJustification is present but the contract is within the screen ceiling',
-    ));
+  } else if (navigation.profileAccess !== 'not-applicable') {
+    warnings.push(finding('unused-profile-access', 'profileAccess is set for a contract that is not authenticated'));
+  }
+
+  for (const screen of facing) {
+    if (screen.classification === 'nested-detail' && !screen.parentScreenId) {
+      errors.push(finding('nested-detail-parent-required', `nested detail "${screen.id}" requires parentScreenId`));
+    }
+    if (screen.hideTabs && !screen.tabVisibilityReason) {
+      errors.push(finding('hidden-tabs-without-reason', `screen "${screen.id}" hides tabs without tabVisibilityReason`));
+    }
   }
 }
 
@@ -286,6 +487,32 @@ function validateCompositionEconomy(contract, errors, warnings, summary) {
   const screens = indexById(contract.screens || []);
   const coreJobIds = new Set((contract.coreJobs || []).map((job) => job.id));
   const facing = userFacingScreens(contract);
+
+  const byInteractionSignature = new Map();
+  for (const screen of facing) {
+    if (screen.parameterizedBy && !screen.interactionSignature) {
+      errors.push(finding(
+        'parameterized-screen-without-signature',
+        `screen "${screen.id}" declares parameterizedBy without an interactionSignature`,
+      ));
+    }
+    if (!screen.interactionSignature) continue;
+    if (!byInteractionSignature.has(screen.interactionSignature)) {
+      byInteractionSignature.set(screen.interactionSignature, []);
+    }
+    byInteractionSignature.get(screen.interactionSignature).push(screen);
+  }
+  for (const [signature, equivalentScreens] of byInteractionSignature) {
+    if (equivalentScreens.length < 2) continue;
+    const withoutEvidence = equivalentScreens.filter((screen) => !screen.cannotMergeBecause);
+    if (withoutEvidence.length) {
+      errors.push(finding(
+        'equivalent-interaction-not-consolidated',
+        `interaction signature "${signature}" remains on ${equivalentScreens.length} screens without separation evidence (${withoutEvidence.map((screen) => screen.id).join(', ')})`,
+      ));
+    }
+  }
+  summary.parameterizedScreenCount = facing.filter((screen) => screen.parameterizedBy).length;
 
   for (const screen of facing) {
     if (screen.entity && !(contract.dataEntities || []).some((entity) => entity.name === screen.entity)) {
@@ -391,7 +618,9 @@ function validateScopeSemantics(contract) {
 
   validateIdentity(contract, errors);
   validateCoverage(contract, errors, warnings);
+  validateRequirementCoverage(contract, errors, summary);
   validateScreenBudget(contract, errors, warnings, summary);
+  validateNavigation(contract, errors, warnings, summary);
   validateTableBudget(contract, errors, warnings, summary);
   validateCompositionEconomy(contract, errors, warnings, summary);
 

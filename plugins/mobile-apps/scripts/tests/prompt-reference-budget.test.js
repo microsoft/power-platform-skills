@@ -22,14 +22,14 @@ test('orchestrator and agent prompts stay within progressive-loading budgets', (
   assert.ok(core.split('\n').length <= 300, 'create core exceeds 300 lines');
 
   assert.ok(bytes('agents/screen-builder.md') <= 15 * 1024, 'screen builder exceeds 15 KiB');
-  for (const fileName of [
-    'native-app-planner.md',
-    'data-model-architect.md',
-    'screen-planner.md',
-    'offline-profile-architect.md',
-  ]) {
-    assert.ok(bytes(`agents/${fileName}`) <= 20 * 1024, `${fileName} exceeds 20 KiB`);
-  }
+  assert.ok(
+    bytes('skills/create-mobile-app/references/phase-3-planning.md') <= 40 * 1024,
+    'foreground planning phase exceeds 40 KiB',
+  );
+  assert.ok(
+    bytes('skills/create-mobile-app/references/phase-11-screens.md') <= 32 * 1024,
+    'screen wave phase exceeds 32 KiB',
+  );
   assert.ok(
     bytes('shared/shared-instructions-core.md') <= 3 * 1024,
     'mandatory shared instructions exceed 3 KiB',

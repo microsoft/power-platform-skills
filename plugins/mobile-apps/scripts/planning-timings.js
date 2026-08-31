@@ -12,13 +12,33 @@ const STAGES = new Set([
   'metadataCandidateSelection',
   'metadataDetailLoading',
   'metadataExpansion',
-  'nativePlanner',
-  'modelArchitect',
-  'screenPlanner',
+  'foregroundPlanning',
+  'requirementsPlanning',
+  'experienceScopePlanning',
+  'dataModelPlanning',
+  'capabilityConnectorPlanning',
+  'journeyPackPlanning',
+  'planRendering',
+  'designMaterialization',
   'artifactValidation',
-  'planRevision',
+  'planRepair',
   'userApproval',
+  'screenBuildDirectWrite',
+  'screenBuildReturnOnly',
+  'screenBuildForeground',
+  'screenValidation',
 ]);
+
+const FOREGROUND_DETAIL_STAGES = [
+  'requirementsPlanning',
+  'experienceScopePlanning',
+  'dataModelPlanning',
+  'capabilityConnectorPlanning',
+  'journeyPackPlanning',
+  'planRendering',
+  'designMaterialization',
+  'planRepair',
+];
 
 function parseArgs(argv) {
   const args = {};
@@ -155,23 +175,6 @@ function parsedInterval(attempt) {
   return { start, end };
 }
 
-function latestStageCompletion(artifact, stage) {
-  return (artifact.stages?.[stage]?.history || [])
-    .map(parsedInterval)
-    .filter(Boolean)
-    .reduce((latest, interval) => Math.max(latest, interval.end), -Infinity);
-}
-
-function stageDurationStartingAtOrAfter(artifact, stage, cutoff) {
-  if (!Number.isFinite(cutoff)) return 0;
-  return (artifact.stages?.[stage]?.history || []).reduce((total, attempt) => {
-    const interval = parsedInterval(attempt);
-    return interval && interval.start >= cutoff
-      ? total + (Number.isFinite(attempt.durationMs) ? attempt.durationMs : 0)
-      : total;
-  }, 0);
-}
-
 function stageOverlapDuration(artifact, stage, containerStage) {
   const containers = (artifact.stages?.[containerStage]?.history || [])
     .map(parsedInterval)
@@ -187,42 +190,74 @@ function stageOverlapDuration(artifact, stage, containerStage) {
   }, 0);
 }
 
+function totalStageDuration(artifact, stages) {
+  return stages.reduce((total, stage) => total + stageDuration(artifact, stage), 0);
+}
+
+function stageAttemptCount(artifact, stage) {
+  return (artifact.stages?.[stage]?.history || []).length;
+}
+
 function summarizePlanningTimings(artifact) {
-  const plannerCompletion = latestStageCompletion(artifact, 'nativePlanner');
+  const environmentResolutionMs = stageDuration(artifact, 'environmentResolution');
+  const publisherPrefixDetectionMs = stageDuration(artifact, 'publisherPrefixDetection');
+  const dataverseMetadataNetworkMs = stageDuration(artifact, 'metadataInventory')
+    + stageDuration(artifact, 'metadataDetailLoading')
+    + stageDuration(artifact, 'metadataExpansion');
+  const localDeterministicProcessingMs = stageDuration(artifact, 'metadataCandidateSelection')
+    + stageDuration(artifact, 'artifactValidation');
+  const foregroundPlanningWallMs = stageDuration(artifact, 'foregroundPlanning');
+  const foregroundPlanningApprovalWaitingMs = stageOverlapDuration(
+    artifact,
+    'userApproval',
+    'foregroundPlanning',
+  );
+  const detailedForegroundMs = totalStageDuration(artifact, FOREGROUND_DETAIL_STAGES);
+  const foregroundPlanningMs = foregroundPlanningWallMs > 0
+    ? Math.max(0, foregroundPlanningWallMs - foregroundPlanningApprovalWaitingMs)
+    : environmentResolutionMs + publisherPrefixDetectionMs
+      + dataverseMetadataNetworkMs
+      + localDeterministicProcessingMs
+      + detailedForegroundMs;
+  const screenBuildDirectWriteMs = stageDuration(artifact, 'screenBuildDirectWrite');
+  const screenBuildReturnOnlyMs = stageDuration(artifact, 'screenBuildReturnOnly');
+  const screenBuildForegroundMs = stageDuration(artifact, 'screenBuildForeground');
+  const screenBuildMs = screenBuildDirectWriteMs
+    + screenBuildReturnOnlyMs
+    + screenBuildForegroundMs;
+  const screenValidationMs = stageDuration(artifact, 'screenValidation');
+  const userApprovalWaitingMs = stageDuration(artifact, 'userApproval');
+  const totalExecutionMs = foregroundPlanningMs + screenBuildMs + screenValidationMs;
   return {
-    environmentResolutionMs: stageDuration(artifact, 'environmentResolution'),
-    publisherPrefixDetectionMs: stageDuration(artifact, 'publisherPrefixDetection'),
-    dataverseMetadataNetworkMs: stageDuration(artifact, 'metadataInventory')
-      + stageDuration(artifact, 'metadataDetailLoading')
-      + stageDuration(artifact, 'metadataExpansion'),
-    localDeterministicProcessingMs: stageDuration(artifact, 'metadataCandidateSelection')
-      + stageDuration(artifact, 'artifactValidation'),
-    outerPlannerWallMs: stageDuration(artifact, 'nativePlanner'),
-    nativePlannerStatus: artifact.stages?.nativePlanner?.status || null,
-    nativePlannerApprovalWaitingMs: stageOverlapDuration(
-      artifact,
-      'userApproval',
-      'nativePlanner',
-    ),
-    modelArchitectMs: stageDuration(artifact, 'modelArchitect'),
-    screenPlannerMs: stageDuration(artifact, 'screenPlanner'),
-    planRevisionMs: stageDuration(artifact, 'planRevision'),
-    postPlannerModelArchitectMs: stageDurationStartingAtOrAfter(
-      artifact,
-      'modelArchitect',
-      plannerCompletion,
-    ),
-    postPlannerScreenPlannerMs: stageDurationStartingAtOrAfter(
-      artifact,
-      'screenPlanner',
-      plannerCompletion,
-    ),
-    postPlannerRevisionMs: stageDurationStartingAtOrAfter(
-      artifact,
-      'planRevision',
-      plannerCompletion,
-    ),
-    userApprovalWaitingMs: stageDuration(artifact, 'userApproval'),
+    environmentResolutionMs,
+    publisherPrefixDetectionMs,
+    dataverseMetadataNetworkMs,
+    localDeterministicProcessingMs,
+    foregroundPlanningWallMs,
+    foregroundPlanningStatus: artifact.stages?.foregroundPlanning?.status || null,
+    foregroundPlanningApprovalWaitingMs,
+    foregroundPlanningMs,
+    requirementsPlanningMs: stageDuration(artifact, 'requirementsPlanning'),
+    experienceScopePlanningMs: stageDuration(artifact, 'experienceScopePlanning'),
+    dataModelPlanningMs: stageDuration(artifact, 'dataModelPlanning'),
+    capabilityConnectorPlanningMs: stageDuration(artifact, 'capabilityConnectorPlanning'),
+    journeyPackPlanningMs: stageDuration(artifact, 'journeyPackPlanning'),
+    planRenderingMs: stageDuration(artifact, 'planRendering'),
+    designMaterializationMs: stageDuration(artifact, 'designMaterialization'),
+    planRepairMs: stageDuration(artifact, 'planRepair'),
+    screenBuildDirectWriteMs,
+    screenBuildReturnOnlyMs,
+    screenBuildForegroundMs,
+    screenBuildMs,
+    screenBuildAttemptsByChannel: {
+      directWrite: stageAttemptCount(artifact, 'screenBuildDirectWrite'),
+      returnOnly: stageAttemptCount(artifact, 'screenBuildReturnOnly'),
+      foreground: stageAttemptCount(artifact, 'screenBuildForeground'),
+    },
+    screenValidationMs,
+    userApprovalWaitingMs,
+    totalExecutionMs,
+    totalMeasuredMs: totalExecutionMs + userApprovalWaitingMs,
     retries: Object.fromEntries(Object.entries(artifact.stages || {})
       .filter(([, value]) => Number(value.retryCount || 0) > 0)
       .map(([stage, value]) => [stage, value.retryCount])),
@@ -271,6 +306,7 @@ function main(argv = process.argv) {
 if (require.main === module) process.exitCode = main();
 
 module.exports = {
+  FOREGROUND_DETAIL_STAGES,
   STAGES,
   main,
   parseArgs,

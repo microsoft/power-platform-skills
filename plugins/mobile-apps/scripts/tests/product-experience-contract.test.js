@@ -81,6 +81,27 @@ test('a recorded assumption substitutes for prompt evidence', () => {
   assert.deepStrictEqual(result.errors, []);
 });
 
+test('offline behavior requires explicit evidence or an approved assumption', () => {
+  const unsupported = buildExperience({
+    operatingContext: { environment: 'indoor-mobile', connectivity: 'intermittent', interruptionLevel: 'moderate' },
+  });
+  unsupported.promptEvidence.operatingContext = evidence('the user moves between rooms during the task');
+  assert.ok(codes(validateExperienceContract(unsupported)).includes('offline-without-evidence'));
+
+  const approved = buildExperience({
+    operatingContext: { environment: 'indoor-mobile', connectivity: 'offline-first', interruptionLevel: 'moderate' },
+    sessionPattern: { frequency: 'daily', duration: 'one-to-three-minutes', resumability: 'must-resume' },
+    assumptions: [{
+      dimension: 'connectivity',
+      statement: 'Assume offline-first operation until environment testing confirms network availability',
+      classification: 'proposed-requires-approval',
+      approved: true,
+    }],
+  });
+  approved.promptEvidence.operatingContext = evidence('the user moves between rooms during the task');
+  assert.deepStrictEqual(validateExperienceContract(approved).errors, []);
+});
+
 test('a low-confidence dimension without an assumption is rejected', () => {
   const result = validateExperienceContract(buildExperience({
     confidence: { overall: 'medium', byDimension: { collaborationMode: 'low' } },

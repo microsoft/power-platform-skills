@@ -1,98 +1,70 @@
-# Degraded Host Recovery
+# Screen-Builder Channel Recovery
 
-Load this file only after a real planner or screen-builder spawn fails because the host cannot route the requested agent or required gate tools are unavailable. Never use degraded mode for convenience, screen count, or timing.
+Foreground planning is the normal path on every host. Missing child-agent,
+question, plan-mode, filesystem, or shell tools never select an alternate
+planning workflow. The foreground owns planning, questions, approvals, shared
+files, mutations, validation, and checkpoints.
 
-#### 3.0a — Inline-gate fallback (planner unavailable OR returned `BLOCKED: tool surface missing`)
+Load this file only while implementing screens at Step 11.
 
-When the preflight fails OR the planner returns `BLOCKED: tool surface missing
-<…>`, the orchestrator runs Gates 1-2 and the internal screen compilation
-inline. Do NOT re-spawn the planner — it cannot succeed in this host. Print
-**once**:
+## Channel selection
 
-> "→ Planner agent unavailable in this host — running approval gates inline. (No action needed; this is automatic.)"
+Every screen uses the same sealed semantic work order and input fingerprint.
+Choose a channel per screen:
 
-Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
+1. Use `direct-write` when the host routes the child with Read, Write, and Edit.
+2. Use `return-only` when child file tools are unavailable or direct-write
+   dispatch fails because of host tool mapping.
+3. After a second channel failure for that screen, implement only that screen in
+   the foreground from the same work order.
 
-1. **If a draft `native-app-plan.md` exists:** read it as baseline. Surface each populated section (`## Data Model`, `## Native Capabilities`, `## Connectors`) one at a time via `EnterPlanMode`, take user feedback inline, edit the file in place. Skip generating sections that are already populated and approved.
-2. **If no draft exists:** compile Product Experience and Product Scope,
-   spawn `mobile-app:data-model-architect` directly via `Task`, build `##
-   Native Capabilities` + `## Connectors` inline, then spawn
-   `mobile-app:screen-planner` with `phase: graph` and `phase: specs`.
+Do not cache one screen's channel failure as a run-wide or host-wide builder
+failure. Valid sibling results remain usable.
 
-   **Before each `screen-planner` spawn, print a one-line ETA so the user knows the agent is live and roughly how long to wait** (the agent's own `Bash echo` progress markers — see `agents/screen-planner.md` "Progress streaming" — surface every milestone, but the orchestrator's pre-spawn line gives the wall-clock budget):
-   - Before `phase: graph`: `> "→ Compiling journey graph (~2 min for ${N} screens)…"`
-   - Before `phase: specs`: `> "→ Compiling experience specs and build packs (~1 min/screen, ~${N} min for ${N} screens). Progress markers will appear inline."`
+## Direct-write recovery
 
-  **MUST forward the Dataverse planning mode in the direct architect prompt.**
-  In `required`, also forward `SNAPSHOT_PATH` and `ARCHITECT_EVIDENCE_PATH` verbatim and
-  do not resolve the environment or run Dataverse discovery again. In
-  `connector-only`, state that both paths are not supplied; never invent
-  placeholder artifacts.
+Before the wave, capture the changed-file baseline. The child may edit exactly
+its pre-created target screen. After the wave, compare the changed set against
+the assigned targets.
 
-  **MUST forward `$DETECTED_PUBLISHER_PREFIX` from Step 1.7 in the architect prompt** — same line as the planner prompt at Step 3 line 1034: *"Publisher prefix (detected from env): `<DETECTED_PUBLISHER_PREFIX>` — use literally as `<prefix>_<entity>` in all logical names. If empty/NOT DETECTED, fall back to `cr` placeholder and surface a `DONE_WITH_CONCERNS` note that Dataverse will normalize at create time."* Without this, the architect defaults to `cr_` and the whole plan needs a post-hoc sweep when the real prefix is something else (e.g. `cr3e9`).
+- Accept an assigned target change only after the screen validators pass.
+- Restore an out-of-scope child edit from the pre-wave backup without touching
+  valid sibling targets.
+- Never permit child edits to layouts, navigation configuration, tokens,
+  design-system files, shared components, generated services/models, package or
+  configuration files, or another screen.
+- A malformed status retries that screen once with exact diagnostics.
 
-  In `required`, also require the direct architect to write and normalize
-  `<working_dir>/.tmp/dataverse-schema-contract.json` per its agent contract.
-  A draft Markdown section without that sidecar is not an executable Gate 1
-  result.
+## Return-only recovery
 
-  Wrap every direct architect dispatch with the same timing protocol using the
-  `modelArchitect` stage. Wrap direct graph/spec screen-planner dispatches with
-  `screenPlanner`; graph and specs are separate successful attempts, while only
-  a corrective re-dispatch adds `--retry`.
+The foreground passes one compact inline work order with the assigned build-pack
+entry, route/params, typed skeleton, relevant generated signatures, permitted
+tokens/signature interfaces, states, test IDs, and accessibility requirements.
 
-   **Why this works even though the planner just returned BLOCKED for tool surface:** the orchestrator (this skill, running in the user's slash-command session) always has the full tool surface — Task, EnterPlanMode, ExitPlanMode, AskUserQuestion, Read, Write, Bash. What's missing is the surface inside *nested* agent contexts (the `native-app-planner` agent runs in a sandbox without EnterPlanMode/AskUserQuestion, which is why its Step 0 preflight returned BLOCKED). The leaf agents `data-model-architect` and `screen-planner` only need Read/Write/Bash to draft markdown — they don't need EnterPlanMode/AskUserQuestion themselves. Spawn them; the orchestrator owns the gates.
+The child makes no tool calls and returns one TSX body using the run-scoped
+delimiter from the work order. It must not serialize a whole plan or multiple
+files. The foreground verifies the delimiter, fingerprint, target, status, and
+content before writing the assigned target atomically.
 
-3. **Run Gates 1-2 yourself** — use `EnterPlanMode` for Product
-   Experience/scope/data model, then native capabilities/connectors. Compile
-   graph/specs after Gate 2 without another user gate.
-4. **Write `native-app-plan.md`** with Gate 1-2 approval records and Gate 3-4
-   pending. Step 6.75 owns the remaining approvals.
+## Bounded statuses
 
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
-   - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`,
-     `## Product Experience`, `## Product Scope`, `## Data Model`, `## Native
-     Capabilities`, `## Design`, `## Connectors`, `## Screens`, `## Approval
-     Status`, `## Plan Provenance`. Do NOT invent a `## Brief` super-section.
-   - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
-   - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
-   - Sample data notes, immutability plug-in notes, file-column setup notes, dispatch-block server rules go under a single `### Notes` subsection in `## Data Model`. Cap each at 2 sentences; link to `post-deployment-tasks.md` for longer write-ups instead of inlining.
+- `DONE`: validate the assigned file and continue.
+- `DONE_WITH_CONCERNS`: validate, preserve the file, and aggregate concerns at
+  the wave boundary.
+- `NEEDS_CONTEXT`: foreground supplies only the named missing fact and retries
+  that screen once.
+- `BLOCKED`: retry only when exact corrective context exists; otherwise build
+  that screen in foreground.
+- Malformed output: retry the same work order once, then use foreground for that
+  screen.
 
-5. **Record the same structured approval receipt as the planner path.** At
-   Gate 1 acceptance, initialize
-   `<working_dir>/.tmp/mobile-plan-status.json` with the exact normalized
-   contract content/hash. After Gate 2, update only that gate's approval
-   record. After the specs pass, record `screenPlan: compiled`, the build-pack
-   hash, structured service dependencies, and integrity hash. Follow
-   `agents/native-app-planner.md` Step 6 exactly. Never call the operation
-   manifest builder to create or restamp this receipt. A changed approved
-   section invalidates its record until the existing inline gate approves it
-   again.
+No child may ask the user, enter/exit plan mode, spawn another agent, install a
+package, mutate a connector or Dataverse, start Metro, or change product scope.
 
-If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even leaf agents can't be spawned), fall further to fully-inline mode. In `required`, draft the data model from `ARCHITECT_EVIDENCE_PATH` with no live OData probe and write/normalize the same structured schema contract required by `agents/data-model-architect.md`; use `SNAPSHOT_PATH` only through deterministic validation. In `connector-only`, write an explicit zero-table/no-Dataverse `## Data Model` section and no contract. Then draft native caps + connectors heuristically, compile the screen graph +
-specs against the Product Experience and
-`shared/references/screen-templates.md`, and run Gates 1-2 against the user.
-This is the last-resort path.
+## Genuine host limitations
 
-**Hard rule:** never silently skip Gates 1-2 because the planner could not run.
-Gate 3 and Gate 4 still run at Step 6.75 before any mutation step executes.
-
-
-## Screen-builder fallback
-
-Enter this path only after the first real screen-builder dispatch fails with an
-agent-routing or tool-surface error.
-
-- Print **once**:
-  > "→ Parallel screen-builders unavailable in this host — building screens inline. (No action needed; this is automatic.)"
-- Record `screen_builder: unavailable` under `## Host Capabilities` with the
-  current host/runtime identifier, plugin version, and `checkedAt`; it expires
-  after 30 minutes and must not permanently disable builders.
-- Iterate the assigned files inline using the complete `screen-builder.md`
-  workflow, compiled build-pack entry, screen spec, selected archetype shard,
-  code idioms, and the same validators.
-- Inline mode is not a reduced-quality or scale shortcut. Do not ask about
-  build mode and do not skip the wave TypeScript/route/style gates.
-- If the host changes mid-run, downgrade only after the real dispatch fails.
-- Screen builders never spawn nested agents. Missing context returns through
-  the standard status protocol and the top-level orchestrator resolves it.
+When a host cannot render structured questions or plan mode, use normal
+foreground conversation for the same question/approval and persist the pending
+interaction before yielding. When browser opening is unavailable, print the
+absolute preview path. These are presentation limitations, not degraded product
+behavior.

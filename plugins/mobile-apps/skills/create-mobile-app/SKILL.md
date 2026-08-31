@@ -79,7 +79,7 @@ pipeline state and artifact revisions before skipping any phase.
 - `--full-discovery`, `--no-discovery`, and `--no-design` retain their existing
   meanings.
 - `--refresh` invalidates the planning inventory cache before snapshot work.
-- `--builder-concurrency <1-10>` overrides the default screen-builder wave cap.
+- `--builder-concurrency <1-6>` overrides the default screen-builder wave cap of 4.
   `MOBILE_APP_BUILDER_CONCURRENCY` is the non-interactive equivalent.
 - `--dataverse-cache-ttl-minutes <positive-number>` overrides the default
   30-minute planning inventory TTL.

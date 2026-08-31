@@ -243,6 +243,42 @@ function validateBuildPackSemantics(buildPackContract, { experience, scope, jour
     }
   }
 
+  for (const row of scope?.requirementCoverage || []) {
+    const pack = packById.get(row.screenId);
+    if (!pack) continue;
+    if (row.mechanism === 'action') {
+      const actionLabels = [
+        ...(pack.primaryActions || []),
+        ...(pack.secondaryActions || []),
+      ].map((action) => action.label);
+      if (!actionLabels.includes(row.target)) {
+        errors.push(finding(
+          'requirement-action-missing',
+          `requirement "${row.requirementId}" targets action "${row.target}" on screen "${row.screenId}", but no build-pack action has that label`,
+        ));
+      }
+    } else if (row.mechanism === 'state') {
+      if (!Object.prototype.hasOwnProperty.call(pack.states || {}, row.target)) {
+        errors.push(finding(
+          'requirement-state-missing',
+          `requirement "${row.requirementId}" targets state "${row.target}" on screen "${row.screenId}", but the build pack does not declare it`,
+        ));
+      }
+    } else if (row.mechanism === 'domain-operation') {
+      const operations = (journey?.journeys || []).flatMap((entry) => (
+        (entry.steps || [])
+          .filter((step) => step.surface?.screenId === row.screenId)
+          .map((step) => `${step.dataOperation?.kind}:${step.dataOperation?.entity || 'none'}`)
+      ));
+      if (!operations.includes(row.target)) {
+        errors.push(finding(
+          'requirement-operation-missing',
+          `requirement "${row.requirementId}" targets operation "${row.target}" on screen "${row.screenId}", but its journey steps declare [${operations.join(', ') || 'none'}]`,
+        ));
+      }
+    }
+  }
+
   const visualExperience = experience
     && (experience.mediaStrategy?.necessity === 'essential' || VISUAL_EMPHASES.has(experience.contentEmphasis?.primary));
   const highRisk = experience && ['high', 'critical'].includes(experience.decisionRisk?.level);
@@ -250,6 +286,14 @@ function validateBuildPackSemantics(buildPackContract, { experience, scope, jour
   for (const pack of packs) {
     const screen = scope ? (scope.screens || []).find((candidate) => candidate.id === pack.screenId) : null;
     const servesCoreJob = screen ? (screen.jobIds || []).some((id) => coreJobIds.has(id)) : false;
+
+    if (pack.states?.offline
+      && !['intermittent', 'offline-first'].includes(experience?.operatingContext?.connectivity)) {
+      errors.push(finding(
+        'offline-state-without-approved-context',
+        `screen "${pack.screenId}" declares an offline state while Product Experience connectivity is "${experience?.operatingContext?.connectivity || 'unknown'}"`,
+      ));
+    }
 
     if (screen?.route && pack.route && pack.route !== screen.route) {
       errors.push(finding(

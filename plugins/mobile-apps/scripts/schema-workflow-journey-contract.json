@@ -91,7 +91,11 @@
         "error": { "type": "string", "minLength": 3, "maxLength": 200 },
         "populated": { "type": "string", "minLength": 3, "maxLength": 200 },
         "offline": { "type": "string", "minLength": 3, "maxLength": 200 },
-        "recovery": { "type": "string", "minLength": 3, "maxLength": 200 }
+        "recovery": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "permission": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "noResults": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "success": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "retry": { "type": "string", "minLength": 3, "maxLength": 200 }
       },
       "additionalProperties": false
     }

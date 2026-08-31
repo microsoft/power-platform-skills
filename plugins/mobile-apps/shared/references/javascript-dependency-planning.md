@@ -1,6 +1,6 @@
 # JavaScript Dependency Planning
 
-Canonical policy for selecting and adding app-scoped JavaScript libraries. Used by `screen-planner`, `/create-mobile-app`, `/edit-app`, and `/debug-app`.
+Canonical policy for selecting and adding app-scoped JavaScript libraries. Used by foreground `/create-mobile-app`, `/edit-app`, and `/debug-app` planning.
 
 ## Boundary
 

@@ -12,7 +12,7 @@ Apply these patterns whenever a List screen queries a Dataverse table that can g
 
 **Skip for:** small lookup tables (status types, categories, job types) where total rows are bounded and known.
 
-The `screen-planner` flags this in the per-screen spec as `pagination: cursor` or `pagination: none`.
+Foreground screen planning records this in the affected screen's plan projection and sealed work order as `pagination: cursor` or `pagination: none`.
 
 ---
 
@@ -114,7 +114,7 @@ The primary key is usually returned even if not selected, but include it in `ord
 
 ## Cross-entity Reads
 
-The single source of truth for how a screen displays a column that lives on a **different entity** than the one it primarily fetches. Every other file in this repo (`agents/screen-builder.md`, `agents/screen-planner.md`, `agents/data-model-architect.md`, `agents/native-app-planner.md`, `skills/setup-datamodel/SKILL.md`, `skills/add-dataverse/SKILL.md`) references this section — do not duplicate the rule elsewhere.
+The single source of truth for how a screen displays a column that lives on a **different entity** than the one it primarily fetches. Foreground planning, `agents/screen-builder.md`, `skills/setup-datamodel/SKILL.md`, and `skills/add-dataverse/SKILL.md` reference this section — do not duplicate the rule elsewhere.
 
 ### When to apply
 
@@ -230,11 +230,11 @@ The screen-builder walks every cross-entity field and selects a formatted
 lookup, scaffolds one bounded chained fetch, or returns `BLOCKED` for an
 external projection.
 
-### How the data-model-architect proposes this
+### How foreground planning proposes this
 
-The screen-planner emits a `related_entity_fields` block with cardinality,
-archetype, and one of `formatted-lookup`, `chained-fetch`, or
-`external-projection-required`. The data-model architect audits that every
+Foreground screen planning emits a `related_entity_fields` block with
+cardinality, composition, and one of `formatted-lookup`, `chained-fetch`, or
+`external-projection-required`. `/setup-datamodel --plan-only` audits that every
 field has a supported read path; it does not synthesize formula metadata.
 
 ---
@@ -258,7 +258,7 @@ field has a supported read path; it does not synthesize formula metadata.
 ## Where This Is Enforced
 
 - `shared/references/mobile-ui-patterns.md` — pagination is a required rule for List screens that query unbounded tables
-- `screen-planner` — flags `pagination: cursor` in per-screen spec for List archetypes with unbounded data; emits `related_entity_fields` block per screen
+- Foreground screen planning — flags `pagination: cursor` for list compositions with unbounded data and emits `related_entity_fields` per affected screen
 - `screen-builder` — applies pagination pattern when spec says `pagination: cursor`; applies the Cross-entity Field Resolution rule on every UI field
-- `data-model-architect` — Step 6a verifies every related field has a supported read path
+- `/setup-datamodel --plan-only` — verifies every related field has a supported read path
 - `/setup-datamodel` and `/add-dataverse` — never synthesize formula definitions; they validate any user-supplied computed dependency before reuse

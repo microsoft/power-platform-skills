@@ -2,7 +2,7 @@
 name: design-system
 description: Creates the Tamagui brand system for an Expo/React Native Power Apps mobile app, including design-system.md, tokens.ts, and an HTML gallery.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, WebFetch
 model: opus
 ---
 
@@ -10,11 +10,12 @@ model: opus
 
 # Design System
 
-Source of truth for every screen built in a Power Apps mobile app. Produces three artifacts:
+Source of truth for every screen built in a Power Apps mobile app. Produces four artifacts:
 
 1. `brand/design-system.md` — full spec (palette, typography, spacing, components, negatives)
 2. `brand/tokens.ts` — importable Tamagui token export
 3. `brand/design-system.html` — deterministic visual gallery (zero LLM cost)
+4. `brand/signature-components.ts` — typed interfaces and implementation recipe for approved signature components
 
 Design-system and Tamagui integration are complementary, not alternatives. `/design-system` owns user-facing brand/design decisions and preview artifacts; `/create-mobile-app` Step 9b applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) as internal implementation plumbing so those decisions become Tamagui tokens, aliases, and provider props. The old separate `tamagui-design-system` skill existed before this split was clear; keeping it separate made users choose implementation details and added prompt surface. Do not reintroduce it as a user-invocable skill.
 
@@ -41,11 +42,20 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 - Optional: `--fast-experience` — skip the cost/style picker and component
   gallery; materialize neutral semantic tokens plus the required journey
   preview
+- Optional: `--auto-experience` — orchestrated prompt-only path. Skip brand
+  input, cost/style/gallery/history/Figma/reskin references, then materialize the
+  approved experience, complete tokens, signature components, negatives, and
+  required journey preview without pausing.
 - Optional: `--add-dark-mode` — derive + wire dark theme
 - Optional: `--add-theme <name>` — add named theme variant
 - Optional: `--history` / `--diff <ts>` / `--rollback <ts>` — version history
 
 ## References — read before executing
+
+In `--auto-experience`, read only `design-system-schema.md`, the approved
+Product Experience/Scope/Journey/build packs, and the deterministic journey
+preview renderer contract. Do not load input modes, style galleries, Figma,
+reskin, history, brand examples, or alternative-direction references.
 
 - [`references/design-system-schema.md`](./references/design-system-schema.md) — schema for `brand/design-system.md`
 - [`references/preview-template.md`](./references/preview-template.md) — HTML template for gallery render
@@ -100,7 +110,11 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+When `--auto-experience` is present, skip this sub-step without prompting. Brand
+documents, logos, URLs, Figma, and style exploration remain explicit standalone
+or flagged modes.
+
+Otherwise, **MUST stop and wait for user response.** Do NOT skip this step.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
@@ -158,8 +172,25 @@ If flag was passed on invocation, skip asking — process directly.
 **Print:**
 > "→ [design-system] How much design depth do you want?"
 
-If `--fast-experience` is present, select option (d) and continue without
-asking.
+If `--auto-experience` is present, do not show this picker. Run the automatic
+path below. If `--fast-experience` is present, select option (d) and continue
+without asking.
+
+**Automatic orchestrated path (`--auto-experience`):**
+
+1. Derive a design recipe from the approved Product Experience and screen packs
+  only. Do not select an industry or named style direction.
+2. Write the complete `brand/design-system.md` and `brand/tokens.ts` artifacts.
+3. Materialize `brand/signature-components.ts` from the approved
+  `signatureExperience` and per-screen `signatureInteraction` contracts. Export
+  typed interfaces and token-driven component recipes; do not invent product
+  scope or screen behavior.
+4. Skip the style picker, cost picker, alternative directions, component
+  gallery, Figma, reskin, and history reads.
+5. Render `_plan_preview.html` from the compiled packs with at least three
+  representative screens and every critical screen when five or fewer exist.
+6. Return without another design question; Gate 3 in `/create-mobile-app` owns
+  experience approval.
 
 Show the cost picker, adapting the intro and option set to brand input.
 
@@ -340,6 +371,12 @@ Generated: {{ISO timestamp}} | Personality: {{visual personality}} | Direction: 
   supplied, brand notes, generator version, and source
 ```
 
+**Write `brand/signature-components.ts`:** derive one typed, token-driven
+component contract for each signature interaction reused by the compiled packs.
+Include props, states, accessibility behavior, media treatment, and forbidden
+fallback. Keep domain operations in the build pack; this file owns presentation
+interfaces only.
+
 **Write `brand/tokens.ts`:**
 
 ```typescript
@@ -409,6 +446,9 @@ cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial
 ---
 
 ## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
+
+Skip this component gallery in `--auto-experience`; the journey preview remains
+mandatory.
 
 **Print:**
 > "→ [design-system] Rendering design system gallery (deterministic, 0 tokens)…"
@@ -509,7 +549,8 @@ It selects screens from `.tmp/compiled-screen-build-pack.json`, applies
 `_plan_preview.html`, and returns the preview screen IDs plus a stable HTML
 revision. A non-zero exit is `BLOCKED`; do not hand-author a fallback preview.
 
-**Orchestrator mode (all paths, including `--fast-experience`):** do not ask a
+**Orchestrator mode (all paths, including `--fast-experience` and
+`--auto-experience`):** do not ask a
 preview question and do not allow skip. Render every critical screen in the
 primary journey when there are five or fewer. For larger journeys, render
 entry, core workflow, and outcome plus up to two supporting screens. Always
@@ -556,7 +597,7 @@ When `visual_companion: no`, print the absolute file URL instead of opening.
 - visual_companion: {{yes|no|skip}}
 - design_system_locked: {{ISO timestamp}}
 - brand_notes: "{{notes or 'none'}}"
-- design_system_files: brand/design-system.md, brand/design-system.html, brand/tokens.ts
+- design_system_files: brand/design-system.md, brand/design-system.html, brand/tokens.ts, brand/signature-components.ts
 ```
 
 **Return to orchestrator (Mode A):**
@@ -565,6 +606,7 @@ When `visual_companion: no`, print the absolute file URL instead of opening.
 DONE
 brand_path: brand/design-system.md
 tokens_path: brand/tokens.ts
+signature_components_path: brand/signature-components.ts
 gallery_path: brand/design-system.html
 experience_preview_path: _plan_preview.html
 direction: {{direction name}}
@@ -664,7 +706,7 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
-| `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
+| `screen-builder` | `brand/design-system.md` + `brand/signature-components.ts` (MANDATORY) | Negatives = HARD RULES. Token and approved signature interfaces required. |
 | Tamagui integration reference | `brand/tokens.ts` | Imported into `tamagui.config.ts` by `/create-mobile-app` Step 9b |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
 | `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
@@ -701,7 +743,7 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 
 ## Notes
 
-- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
+- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. `brand/signature-components.ts` is a design contract consumed by foreground integration; this skill never touches app TSX, services, or generated code.
 - **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

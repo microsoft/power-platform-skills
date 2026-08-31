@@ -8,6 +8,10 @@ const { composeCreateMobileAppWorkflow } = require('./workflow-test-helpers');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const skill = composeCreateMobileAppWorkflow(pluginRoot);
+const sampleDataSkill = fs.readFileSync(
+  path.join(pluginRoot, 'skills', 'add-sample-data', 'SKILL.md'),
+  'utf8',
+);
 
 test('template preparation is delegated to the deterministic script', () => {
   const start = skill.indexOf('### Step 5 — Prepare existing template');
@@ -69,6 +73,24 @@ test('offline setup follows materialized Dataverse data and never infers connect
   assert.match(skill, /Do not classify a missing\s+manifest as connector-only/);
   assert.match(skill, /Missing,\s+malformed, or empty manifests are `BLOCKED/);
   assert.match(skill, /seeding step fails for a non-manifest reason[\s\S]*continue to Step 8\.85/);
+});
+
+test('sample fixtures are led by validated product contracts rather than schema names', () => {
+  for (const artifact of [
+    'product-experience-contract.json',
+    'product-scope-contract.json',
+    'workflow-journey-contract.json',
+    'compiled-screen-build-pack.json',
+  ]) {
+    assert.match(sampleDataSkill, new RegExp(artifact.replaceAll('.', '\\.')));
+  }
+  assert.match(sampleDataSkill, /compile-screen-build-pack\.js --check/);
+  assert.match(sampleDataSkill, /compile-sample-data-obligations\.js/);
+  assert.match(sampleDataSkill, /\.tmp\/sample-data-obligations\.json/);
+  assert.match(sampleDataSkill, /fixture-coverage matrix/);
+  assert.match(sampleDataSkill, /schema constrains/i);
+  assert.match(sampleDataSkill, /partial contract set is not a legacy project/i);
+  assert.match(sampleDataSkill, /must not classify an unfamiliar product from table names/i);
 });
 
 test('final summary declares the same number of options that it renders', () => {

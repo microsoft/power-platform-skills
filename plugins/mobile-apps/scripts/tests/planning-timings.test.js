@@ -39,26 +39,26 @@ test('planning timing records completed attempts and duration', () => {
 test('planning timing preserves failed attempt history across retry', () => {
   const artifact = { schemaVersion: 1, stages: {} };
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'start', ...clock(['start-1'], [10]),
+    stage: 'journeyPackPlanning', action: 'start', ...clock(['start-1'], [10]),
   });
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'needs-context', reason: 'detailed metadata',
+    stage: 'journeyPackPlanning', action: 'needs-context', reason: 'missing route contract',
     ...clock(['end-1'], [20]),
   });
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'start', retry: true, ...clock(['start-2'], [30]),
+    stage: 'journeyPackPlanning', action: 'start', retry: true, ...clock(['start-2'], [30]),
   });
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'finish', ...clock(['end-2'], [50]),
+    stage: 'journeyPackPlanning', action: 'finish', ...clock(['end-2'], [50]),
   });
-  assert.equal(artifact.stages.nativePlanner.attempts, 2);
+  assert.equal(artifact.stages.journeyPackPlanning.attempts, 2);
   assert.deepEqual(
-    artifact.stages.nativePlanner.history.map((entry) => entry.status),
+    artifact.stages.journeyPackPlanning.history.map((entry) => entry.status),
     ['needs-context', 'done'],
   );
-  assert.equal(artifact.stages.nativePlanner.history[0].reason, 'detailed metadata');
-  assert.equal(artifact.stages.nativePlanner.retryCount, 1);
-  assert.equal(artifact.stages.nativePlanner.needsContextCount, 1);
+  assert.equal(artifact.stages.journeyPackPlanning.history[0].reason, 'missing route contract');
+  assert.equal(artifact.stages.journeyPackPlanning.retryCount, 1);
+  assert.equal(artifact.stages.journeyPackPlanning.needsContextCount, 1);
 });
 
 test('planning timing records snapshot-measured durations without a synthetic start', () => {
@@ -77,13 +77,13 @@ test('planning timing records snapshot-measured durations without a synthetic st
 test('planning timing records optional model usage only when supplied', () => {
   const artifact = { schemaVersion: 1, stages: {} };
   updatePlanningTiming(artifact, {
-    stage: 'modelArchitect', action: 'start', ...clock(['start'], [10]),
+    stage: 'screenBuildReturnOnly', action: 'start', ...clock(['start'], [10]),
   });
   updatePlanningTiming(artifact, {
-    stage: 'modelArchitect', action: 'finish', tokenCount: '1200', costUsd: '0.08',
+    stage: 'screenBuildReturnOnly', action: 'finish', tokenCount: '1200', costUsd: '0.08',
     ...clock(['end'], [20]),
   });
-  assert.deepEqual(artifact.stages.modelArchitect.modelUsage, {
+  assert.deepEqual(artifact.stages.screenBuildReturnOnly.modelUsage, {
     tokenCount: 1200,
     costUsd: 0.08,
   });
@@ -93,104 +93,109 @@ test('planning timing records optional model usage only when supplied', () => {
 test('planning timing upgrades earlier schema-v1 stages with explicit counters', () => {
   const artifact = {
     schemaVersion: 1,
-    stages: { nativePlanner: { attempts: 1, history: [] } },
+    stages: { foregroundPlanning: { attempts: 1, history: [] } },
   };
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'start', ...clock(['start'], [10]),
+    stage: 'foregroundPlanning', action: 'start', ...clock(['start'], [10]),
   });
   updatePlanningTiming(artifact, {
-    stage: 'nativePlanner', action: 'finish', ...clock(['end'], [20]),
+    stage: 'foregroundPlanning', action: 'finish', ...clock(['end'], [20]),
   });
-  assert.equal(artifact.stages.nativePlanner.retryCount, 0);
-  assert.equal(artifact.stages.nativePlanner.needsContextCount, 0);
+  assert.equal(artifact.stages.foregroundPlanning.retryCount, 0);
+  assert.equal(artifact.stages.foregroundPlanning.needsContextCount, 0);
 });
 
-test('planning timing summary keeps outer wall, model, and approval durations separate', () => {
+test('timing summary keeps foreground planning, approval, and screen channels separate', () => {
   const artifact = {
     schemaVersion: 1,
     stages: {
+      environmentResolution: { history: [{ durationMs: 5 }] },
       metadataInventory: { history: [{ durationMs: 20 }] },
       metadataCandidateSelection: { history: [{ durationMs: 3 }] },
       metadataDetailLoading: { history: [{ durationMs: 40 }] },
       metadataExpansion: { history: [{ durationMs: 10 }] },
-      nativePlanner: {
-        status: 'failed',
+      foregroundPlanning: {
+        status: 'done',
         retryCount: 1,
         needsContextCount: 1,
-        history: [{ durationMs: 100 }],
+        history: [{
+          startedAt: '2026-08-28T00:00:00.000Z',
+          completedAt: '2026-08-28T00:00:00.100Z',
+          durationMs: 100,
+        }],
       },
-      modelArchitect: { history: [{ durationMs: 50 }] },
-      screenPlanner: { history: [{ durationMs: 25 }, { durationMs: 30 }] },
+      requirementsPlanning: { history: [{ durationMs: 8 }] },
+      experienceScopePlanning: { history: [{ durationMs: 12 }] },
+      dataModelPlanning: { history: [{ durationMs: 20 }] },
+      capabilityConnectorPlanning: { history: [{ durationMs: 7 }] },
+      journeyPackPlanning: { history: [{ durationMs: 18 }] },
+      planRendering: { history: [{ durationMs: 4 }] },
+      designMaterialization: { history: [{ durationMs: 6 }] },
       artifactValidation: { history: [{ durationMs: 2 }] },
-      userApproval: { history: [{ durationMs: 60 }] },
+      planRepair: { history: [{ durationMs: 3 }] },
+      userApproval: { history: [
+        {
+          startedAt: '2026-08-28T00:00:00.020Z',
+          completedAt: '2026-08-28T00:00:00.040Z',
+          durationMs: 20,
+        },
+        { durationMs: 40 },
+      ] },
+      screenBuildDirectWrite: { history: [{ durationMs: 50 }] },
+      screenBuildReturnOnly: { history: [{ durationMs: 25 }, { durationMs: 30 }] },
+      screenBuildForeground: { history: [{ durationMs: 10 }] },
+      screenValidation: { history: [{ durationMs: 15 }] },
     },
   };
   assert.deepEqual(summarizePlanningTimings(artifact), {
-    environmentResolutionMs: 0,
+    environmentResolutionMs: 5,
     publisherPrefixDetectionMs: 0,
     dataverseMetadataNetworkMs: 70,
     localDeterministicProcessingMs: 5,
-    outerPlannerWallMs: 100,
-    nativePlannerStatus: 'failed',
-    nativePlannerApprovalWaitingMs: 0,
-    modelArchitectMs: 50,
-    screenPlannerMs: 55,
-    planRevisionMs: 0,
-    postPlannerModelArchitectMs: 0,
-    postPlannerScreenPlannerMs: 0,
-    postPlannerRevisionMs: 0,
+    foregroundPlanningWallMs: 100,
+    foregroundPlanningStatus: 'done',
+    foregroundPlanningApprovalWaitingMs: 20,
+    foregroundPlanningMs: 80,
+    requirementsPlanningMs: 8,
+    experienceScopePlanningMs: 12,
+    dataModelPlanningMs: 20,
+    capabilityConnectorPlanningMs: 7,
+    journeyPackPlanningMs: 18,
+    planRenderingMs: 4,
+    designMaterializationMs: 6,
+    planRepairMs: 3,
+    screenBuildDirectWriteMs: 50,
+    screenBuildReturnOnlyMs: 55,
+    screenBuildForegroundMs: 10,
+    screenBuildMs: 115,
+    screenBuildAttemptsByChannel: { directWrite: 1, returnOnly: 2, foreground: 1 },
+    screenValidationMs: 15,
     userApprovalWaitingMs: 60,
-    retries: { nativePlanner: 1 },
-    needsContext: { nativePlanner: 1 },
+    totalExecutionMs: 210,
+    totalMeasuredMs: 270,
+    retries: { foregroundPlanning: 1 },
+    needsContext: { foregroundPlanning: 1 },
   });
 });
 
-test('planning timing separates nested planner work from post-failure fallback work', () => {
+test('timing summary falls back to additive foreground stages when no wall is recorded', () => {
   const artifact = {
     schemaVersion: 1,
     stages: {
-      nativePlanner: {
-        status: 'failed',
-        history: [{
-          startedAt: '2026-08-28T00:00:00.000Z',
-          completedAt: '2026-08-28T00:00:01.000Z',
-          durationMs: 1000,
-        }],
-      },
-      modelArchitect: {
-        history: [
-          {
-            startedAt: '2026-08-28T00:00:00.100Z',
-            completedAt: '2026-08-28T00:00:00.500Z',
-            durationMs: 400,
-          },
-          {
-            startedAt: '2026-08-28T00:00:01.100Z',
-            completedAt: '2026-08-28T00:00:01.300Z',
-            durationMs: 200,
-          },
-        ],
-      },
-      screenPlanner: {
-        history: [{
-          startedAt: '2026-08-28T00:00:01.300Z',
-          completedAt: '2026-08-28T00:00:01.600Z',
-          durationMs: 300,
-        }],
-      },
-      userApproval: {
-        history: [{
-          startedAt: '2026-08-28T00:00:00.600Z',
-          completedAt: '2026-08-28T00:00:00.800Z',
-          durationMs: 200,
-        }],
-      },
+      environmentResolution: { history: [{ durationMs: 10 }] },
+      metadataInventory: { history: [{ durationMs: 20 }] },
+      metadataCandidateSelection: { history: [{ durationMs: 3 }] },
+      artifactValidation: { history: [{ durationMs: 2 }] },
+      requirementsPlanning: { history: [{ durationMs: 5 }] },
+      planRepair: { history: [{ durationMs: 4 }] },
+      userApproval: { history: [{ durationMs: 999 }] },
     },
   };
   const summary = summarizePlanningTimings(artifact);
-  assert.equal(summary.nativePlannerApprovalWaitingMs, 200);
-  assert.equal(summary.postPlannerModelArchitectMs, 200);
-  assert.equal(summary.postPlannerScreenPlannerMs, 300);
+  assert.equal(summary.foregroundPlanningWallMs, 0);
+  assert.equal(summary.foregroundPlanningMs, 44);
+  assert.equal(summary.userApprovalWaitingMs, 999);
+  assert.equal(summary.totalExecutionMs, 44);
 });
 
 test('snapshot timings record initial stages and bounded expansion separately', () => {
@@ -242,7 +247,7 @@ test('planning timing rejects unknown stages and completion without start', () =
   );
   assert.throws(
     () => updatePlanningTiming(artifact, {
-      stage: 'screenPlanner', action: 'finish', nowMs: () => 2, nowIso: () => 'end',
+      stage: 'screenBuildDirectWrite', action: 'finish', nowMs: () => 2, nowIso: () => 'end',
     }),
     /must be started/,
   );

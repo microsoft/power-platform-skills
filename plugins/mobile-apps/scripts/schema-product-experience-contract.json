@@ -255,7 +255,8 @@
         "properties": {
           "dimension": { "type": "string", "minLength": 3, "maxLength": 60 },
           "statement": { "type": "string", "minLength": 10, "maxLength": 240 },
-          "classification": { "$ref": "#/definitions/dataClassification" }
+          "classification": { "$ref": "#/definitions/dataClassification" },
+          "approved": { "type": "boolean" }
         },
         "additionalProperties": false
       }

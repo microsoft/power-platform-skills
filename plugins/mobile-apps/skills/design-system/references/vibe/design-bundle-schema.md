@@ -1,6 +1,6 @@
 # `## Design Direction` block schema
 
-This file documents the exact shape of the `## Design Direction` markdown block that the internal `/design-system` style picker can write into `native-app-plan.md`. Downstream agents (`screen-planner`, `screen-builder`) read this block conditionally — if present, its values become defaults for per-screen design fields.
+This file documents the exact shape of the `## Design Direction` markdown block that the internal `/design-system` style picker can write into `native-app-plan.md`. Foreground screen planning and `screen-builder` read this block conditionally — if present, its values become defaults for per-screen design fields.
 
 ## Location in the plan
 
@@ -45,7 +45,7 @@ primary_action_position: <bottom-pinned | top-right-or-in-flow | in-flow-or-bott
 accent_color: <human-readable name (#hex)>
 tone: <direct | professional | conversational>
 
-> Downstream agents (`screen-planner`, `screen-builder`) MUST use these values
+> Foreground screen planning and `screen-builder` MUST use these values
 > as defaults for their own per-screen Surface / Density / List style / Motion
 > fields unless a per-screen spec explicitly overrides.
 ```
@@ -70,9 +70,9 @@ status_saturation: full         # from Inspection (data density needs status vis
 ... (rest from Product)
 ```
 
-## How `screen-planner` uses this block
+## How foreground screen planning uses this block
 
-The planner's per-screen spec template (`agents/screen-planner.md` Step 4) includes these design fields:
+The foreground per-screen build packs include these design fields:
 
 - `Density mode` (sparse / comfortable / dense)
 - `Surface style` (flat / subtle-depth / strong-cards / editorial)
@@ -105,7 +105,7 @@ Experience plus the neutral defaults from `mobile-design-philosophy.md` and
 
 ## Conditional reading (the play-out contract)
 
-Both planner and builder use a single conditional check at the top of their workflow:
+Foreground planning and the builder use a single conditional check at the top of their workflow:
 
 ```text
 Read native-app-plan.md

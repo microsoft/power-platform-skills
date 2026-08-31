@@ -15,8 +15,8 @@ Dataverse, routing, accessibility, or TypeScript gates.
   indexes.
 - Mandatory shared policy is in `shared-instructions-core.md`; memory,
   documentation, safety, CLI, failure, and execution details are topic files.
-- Planner, data-model, screen-planner, screen-builder, and offline-profile
-  agent prompts have explicit size budgets.
+- The one-screen builder work order and return-only output have explicit byte
+  budgets; all planning remains in foreground skills.
 
 ## Preserved quality authority
 
@@ -37,11 +37,11 @@ enforced by contracts or validators:
 - TypeScript uses incremental state at `.tmp/tsc.tsbuildinfo`.
 - Dataverse planning inventory cache defaults to 30 minutes and supports
   explicit refresh.
-- Host agent capability is learned from a real dispatch and cached instead of
-  paying for no-op probe agents.
+- Screen-builder channel capability is learned from a real canary dispatch
+  instead of paying for a no-op probe.
 - Independent native-capability writes may run concurrently.
-- Screen-builder concurrency is configurable from 1–10 and defaults to 8.
-- Edit-app uses the same capability cache and configurable builder waves.
+- Screen-builder concurrency is configurable from 1–6 and defaults to 4.
+- Edit-app uses the same sealed work orders, dual channels, and canary-first waves.
 - The compatible Power Apps CLI is pinned directly in the template.
 - `check-updates` uses the lower-cost Sonnet tier; judgment-heavy planning and
   design remain on the quality tier pending comparative evidence.

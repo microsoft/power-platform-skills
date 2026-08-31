@@ -84,17 +84,14 @@ const EVIDENCE_REQUIRED_DIMENSIONS = [
   'visualPersonality',
 ];
 
-// Adaptive review budgets for user-facing screens, keyed by declared product complexity.
-// These are budgets to argue against, not universal low caps: a genuinely multi-role product
-// is expected to land near 20 screens, and a single-journey product near 6.
+// Review ceilings for user-facing screens, keyed by declared product complexity. These are
+// prompts to consolidate, never minimums or authorization to remove explicit functionality.
 const SCREEN_BUDGETS = {
-  focused: { min: 4, max: 7 },
-  standard: { min: 7, max: 12 },
-  complex: { min: 12, max: 16 },
-  'multi-role': { min: 16, max: 20 },
-  // `exceptional` has no upper bound in the table; it is unlocked only by an explicit
-  // justification naming the independent roles and journeys that cannot be composed.
-  exceptional: { min: 20, max: null },
+  focused: { max: 6 },
+  standard: { max: 9 },
+  complex: { max: 12 },
+  'multi-role': { max: 12 },
+  exceptional: { max: 12 },
 };
 
 // Adaptive budgets for NEW Dataverse tables. A noun in the brief is not table justification;
@@ -107,9 +104,11 @@ const TABLE_BUDGETS = {
   exceptional: { target: 12, max: null },
 };
 
-// Above this count of user-facing screens the contract must declare complexity `exceptional`
-// AND supply an exceptional justification, regardless of how it was classified.
-const ABSOLUTE_SCREEN_CEILING = 20;
+// Above this threshold every retained screen needs structured evidence explaining why it
+// cannot be composed into an existing surface. The threshold is not a hard cap.
+const SCREEN_CONSOLIDATION_THRESHOLD = 12;
+// Kept as an export alias for callers compiled against the previous contract module.
+const ABSOLUTE_SCREEN_CEILING = SCREEN_CONSOLIDATION_THRESHOLD;
 
 // The generic record patterns. Repeating these per entity is the specific failure mode scope
 // validation guards against — they are legitimate individually, suspicious in bulk.
@@ -295,6 +294,7 @@ module.exports = {
   EXPERIENCE_DIMENSIONS,
   GENERIC_RECORD_PATTERNS,
   SCREEN_BUDGETS,
+  SCREEN_CONSOLIDATION_THRESHOLD,
   TABLE_BUDGETS,
   UNSUPPORTED_PRODUCTION_CLASSIFICATIONS,
   canonicalJson,

@@ -1,6 +1,6 @@
 # Connector Planning Reference
 
-Shared logic for inferring and confirming Power Platform connectors from app requirements. Used by `native-app-planner` (Gate 3) and `setup-datamodel` (Phase 2).
+Shared logic for inferring and confirming Power Platform connectors from app requirements. Used by foreground `/create-mobile-app`, `/edit-app`, and `/setup-datamodel` planning.
 
 ---
 
@@ -68,9 +68,9 @@ If no connectors: write "None — this app uses only Dataverse and/or device-nat
 
 ---
 
-## Step 4 — Pass to Screen Planner
+## Step 4 — Pass to foreground screen planning
 
-When spawning the screen-planner agent, include the confirmed connector list in the prompt:
+When authoring Workflow Journey and screen build packs, include the confirmed connector list in the planning context:
 
 ```
 Connectors confirmed:
@@ -82,7 +82,7 @@ Per-screen specs must reference the correct generated service for each data acce
 - Connectors → use <ConnectorName>Service from src/generated/services/
 ```
 
-This ensures every screen spec names the exact service the screen-builder agent will import.
+This ensures every screen work order names the exact service the screen builder will import.
 
 ---
 

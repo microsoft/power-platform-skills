@@ -256,6 +256,14 @@ test('a non-visual experience is not forced to invent media', () => {
   assert.deepStrictEqual(compile(bundle).errors, []);
 });
 
+test('an always-online experience cannot silently acquire offline screen states', () => {
+  const bundle = bundleFor('analytics');
+  assert.strictEqual(bundle.experience.operatingContext.connectivity, 'always-online');
+  const buildPack = clone(bundle.buildPack);
+  buildPack.packs[0].states.offline = 'Show the last synchronized metrics';
+  assert.ok(codes(compileScreenBuildPack(buildPack, bundle)).includes('offline-state-without-approved-context'));
+});
+
 test('declared media without a fallback or a source is rejected', () => {
   const bundle = bundleFor('community');
   const noFallback = clone(bundle.buildPack);

@@ -35,9 +35,9 @@ confirmed requirements
   -> React Native implementation
 ```
 
-The UX DNA and product scope are resolved before `data-model-architect` runs.
-This prevents descriptive nouns from becoming tables before the planner knows
-which records require independent persistence.
+The UX DNA and Product Scope are resolved before foreground data-model planning
+runs. This prevents descriptive nouns from becoming tables before the skill
+knows which records require independent persistence.
 
 ## UX DNA
 
