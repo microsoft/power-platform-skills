@@ -147,7 +147,11 @@ function main(argv) {
     process.stderr.write(`${errors.join('\n')}\n\n${usage()}\n`);
     return 1;
   }
-  if (!projectRootArg || (!allSource && targets.length === 0) || targets.some((target) => !target)) {
+  if (
+    !projectRootArg
+    || (allSource ? targets.length > 0 : targets.length === 0)
+    || targets.some((target) => !target)
+  ) {
     process.stderr.write(`${usage()}\n`);
     return 1;
   }
@@ -158,9 +162,7 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
-  const validationTargets = allSource
-    ? [...targets, ...collectSourceTargets(projectRoot)]
-    : targets;
+  const validationTargets = allSource ? collectSourceTargets(projectRoot) : targets;
 
   const files = new Set();
   let blocked = false;
