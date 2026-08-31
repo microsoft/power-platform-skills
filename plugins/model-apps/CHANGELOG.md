@@ -27,6 +27,14 @@ never a half-created one. `--verify` reports those rules as not deployed, and sa
 
 Nothing else about `businessRules[]` changed for environments that do support it.
 
+**What this means for `--verify` and `--changed-only`.** A skipped rule is reported as *not
+applicable on this environment* rather than *missing*, so it does not fail the build, withhold
+`.last-applied.json`, or invalidate the `--changed-only` snapshot. That matters more than it sounds:
+`verify.ok` gates the exit code, the deployed baseline and the changed-only snapshot at once, and a
+spec with implemented pages makes verify mandatory — so treating an unreachable capability as a
+failure would have forced a full build on every subsequent run, forever, while the build itself
+reported success.
+
 ### Added
 - **Per-form security roles** (`forms[].securityRoles`). Offer a form to named `personas[]`, or to
   `everyone`, with optional `fallbackForm` and `order`. This was previously documented as impossible

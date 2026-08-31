@@ -853,8 +853,25 @@ test('a PHASE-LIMITED verify does not demand a rule whose phase never ran', asyn
   const r = await verifySpec(ruleSpec(), baseReader([]), { phases: ['pages'] });
   assert.strictEqual(ruleCheck(r), undefined, 'a phase that did not run must not be demanded');
   assert.strictEqual(r.missing.some((m) => m.kind === 'business-rule'), false);
-  assert.deepStrictEqual(r.environmentSkipped, ['business-rule:new_ticket.Lock when closed'],
+  assert.deepStrictEqual(r.phaseSkipped, ['business-rule:new_ticket.Lock when closed'],
     'still reported, so it is visible rather than silently dropped');
+});
+
+test('the two skip REASONS are reported separately — they warrant opposite messages', async () => {
+  // Merging them was wrong in a way the live run could not surface, because it happened to read
+  // correctly on a gated environment. On a HEALTHY one, every `--changed-only` fast apply runs
+  // `phases: ['pages']`, so every business rule would be reported as "not applicable on this
+  // environment" — telling an operator whose environment works perfectly well that it does not.
+  // Wrong 100% of the time on the normal fast-apply path.
+  const gated = await verifySpec(ruleSpec(), baseReader([]), {
+    environmentSkipped: { businessRules: ['new_ticket|Lock when closed'] },
+  });
+  assert.deepStrictEqual(gated.environmentSkipped, ['business-rule:new_ticket.Lock when closed']);
+  assert.strictEqual(gated.phaseSkipped, undefined, 'a gated environment is NOT a phase that did not run');
+
+  const phased = await verifySpec(ruleSpec(), baseReader([]), { phases: ['pages'] });
+  assert.deepStrictEqual(phased.phaseSkipped, ['business-rule:new_ticket.Lock when closed']);
+  assert.strictEqual(phased.environmentSkipped, undefined, 'a skipped phase says NOTHING about the environment');
 });
 
 test('a FULL-phase verify still demands the rule', async () => {

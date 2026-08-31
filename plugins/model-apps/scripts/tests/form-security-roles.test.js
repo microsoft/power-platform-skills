@@ -329,3 +329,34 @@ test('the case-insensitive persona lookup DEPENDS on personas[] being unique cas
   assert.ok(errs.some((e) => /duplicate persona name/.test(e)),
     `personas[] must keep rejecting case-only duplicates, or the role index below becomes ambiguous; got ${JSON.stringify(errs)}`);
 });
+
+test('an entity whose ONLY form is a QuickCreate is still PUBLISHED, or the restriction never lands', async () => {
+  // `created.forms` is written only for MAIN forms, so for an entity whose sole declared form is a
+  // QuickCreate carrying `securityRoles`, the publish phase's fallback to `created.formIds` is the
+  // ONLY thing that puts that entity in the publish set.
+  //
+  // Why that matters: MEASURED live, `setFormSecurityRoles` writes to the UNPUBLISHED layer — the
+  // published row still read `<Everyone />` until PublishXml ran. So without the fallback,
+  // `--apply --publish` reports success, the security phase reports "1 role(s)", and the form stays
+  // visible to every role. A silent widening of access behind a green build.
+  const { sdk } = makeSimpleMockSdk();
+  const { provision, calls } = provisionForRoles();
+  const published = [];
+  provision.publishArtifact = async (type, id) => { published.push([type, id]); return { shipped: true }; };
+
+  const spec = specWithFormRoles(null);
+  spec.forms = [{ entity: 'new_ticket', name: 'Quick', formType: 'QuickCreate', securityRoles: { personas: ['Dispatcher'] } }];
+
+  const res = await runSdkBuild(spec, {
+    sdk, provisionSdk: provision, apply: true, publish: true,
+    phases: ['forms', 'security', 'publish'], emit: () => {}, warn: () => {},
+  });
+  assert.strictEqual(res.ok, true);
+
+  const qcId = res.created.formIds['new_ticket|QuickCreate|Quick'];
+  assert.ok(qcId, 'the QuickCreate form must have been built');
+  assert.strictEqual(res.created.forms['new_ticket'], undefined,
+    'and created.forms must NOT hold it — that is the whole point of this test');
+  assert.ok(published.some(([t, id]) => t === 'form' && id === qcId),
+    `the entity must be published via its QuickCreate form; published: ${JSON.stringify(published)}`);
+});

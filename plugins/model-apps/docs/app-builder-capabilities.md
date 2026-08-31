@@ -31,17 +31,45 @@ apart deliberately.
 - Relationships: OneToMany (lookup) **and** ManyToMany; Customer (polymorphic) columns.
 - Sample data: Choice/MultiChoice label→int resolution (inline **and** global choices), `$parent`/`$parents` lookup binds (incl. junction rows with both sides), custom status reasons; resolve-by-name idempotency via the SDK's `seedRecordGraph`.
 - ⚠ Calculated / Rollup formula columns — `source` + `formula` plumbed through, **not live-verified**.
+- **Per-column write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead`) —
+  this is how a column is made read-only. Applied on create **and** reconciled on rebuild, and each
+  flag is sent independently so setting one does not disturb the others. Live-verified by reading the
+  deployed metadata back: `IsValidForUpdate: false` with Create/Read untouched at `true`, and
+  unchanged through a download → rebuild round trip (an omitted setting means *leave alone*, never
+  *reset*). Not available on `Customer` columns — the SDK has no update path for that type at all.
+  (AB#6651276)
+- **Boolean `defaultValue`** — which option a Yes/No column starts on; the SDK previously hardcoded
+  `false`. An explicit `false` is preserved rather than treated as absent. Live-verified.
+  (AB#6648523)
+- **Whole-number `integerFormat`** — `None` · `Duration` · `TimeZone` · `Language` · `Locale`; the
+  SDK previously hardcoded `None`, so a column holding minutes could not render as a duration.
+  Live-verified as `Duration`. (AB#6648522)
 - **Table icons** (`entities[].vectorIcon` = SVG web resource → `IconVectorName`; `entities[].icon` = raster web resource → `IconMediumName`) — sets a custom table's own icon (what the modern designer + nav render). Applied after the web-resources phase via the SDK's `setEntityIcon`; hard-validated against declared web resources so an unresolvable value can't break the designer (glimmer). Live-verified: `IconVectorName` set to a published SVG web resource.
 
-### Business rules — ✅ verified live
+### Business rules — ⚠️ environment-gated
 - `businessRules[]` — declarative form logic with no code: show/hide (`SetVisibility`), lock/unlock
-  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on a
-  condition over the record (`Equals` · `DoesNotEqual` · `ContainsData` · `DoesNotContainData`).
-  The presence pair was blocked until the compiler stopped emitting an empty parameter list where
-  the platform requires a null one (#481); fixed upstream, re-verified live.
-- Compiled to classic workflow XAML by the vendored SDK and activated on create. The supported slice
-  is exactly what that compiler accepts; every field is validated against the rule's own entity, so a
-  rule naming a column that does not exist is rejected up front rather than deploying and never firing.
+  (`LockUnlock`), set-required (`SetBusinessRequired`) and set-value (`SetFieldValue`), gated on one
+  or more conditions over the record (ANDed). Sixteen operators, taken from the SDK's own table:
+  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
+  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
+  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` · `ContainsData` · `DoesNotContainData`.
+- **The SDK writes a rule through the bound `CreateProcessWithWfomJson` member, or not at all.** The
+  client-side workflow-XAML compiler it used to fall back on was removed upstream, because it covered
+  4 of the 7 action types and a single clause and therefore silently narrowed a rule into something
+  that did not say what the author wrote. An environment that does not declare that member **cannot
+  host business rules**, and that is the common case (18 of 20 measured). The build then skips them,
+  warns once naming the member, and builds everything else normally; `--verify` reports them as *not
+  applicable on this environment* rather than missing, so the exit code, the deployed baseline and
+  the `--changed-only` snapshot are unaffected.
+- The operator allowlist is load-bearing rather than cosmetic: the SDK resolves an operator it does
+  not recognise to **Equals**, so `GreaterThan` (the natural misspelling of `IsGreaterThan`) would
+  deploy, activate and quietly test equality. The spec pins the list against the bundle's own table
+  in both directions.
+- `dataType` is currently **decorative** — measured across every accepted token, on both the
+  condition and the action path, the SDK types every literal as `String`. It is still validated as a
+  closed set so a typo is caught.
+- Every field is validated against the rule's own entity, so a rule naming a column that does not
+  exist is rejected up front rather than deploying and never firing.
 - Additive on rebuild (matched by `entity` + `name`, reused if present); torn down with the app.
 - **Activating a rule creates a second `workflows` row, and that is normal.** Dataverse keeps the
   definition (`type 1`, no parent) and an activated copy (`type 2`, parented to it). Live-measured: a
@@ -49,12 +77,24 @@ apart deliberately.
   anything, so the platform makes it. Every business-rule query in build, verify and teardown filters
   `type eq 1`; omitting it made the build attempt to delete the copy (405), warn about a duplicate
   that did not exist, and would have made `--verify` fail every active rule.
-- Live-verified end to end through the App Spec: rules authored from `businessRules[]` deployed,
-  activated, and the platform's own generated `clientdata` named the authored columns.
+- Live-verified end to end through the App Spec on an environment that supports it: rules authored
+  from `businessRules[]` deployed, activated, and the platform's own generated `clientdata` named the
+  authored columns.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
+- **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
+  `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship
+  (`systemform` reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }` and there is no
+  `systemformrole` entity, so no association shape can ever work); they live inside `formxml` as a
+  `<DisplayConditions>` element. Note the direction: a form with **no** assignment is offered to
+  **every** role, so this **restricts** a form rather than granting it — and removing a restriction
+  is an explicit `everyone: true`, not deleting the block. Applied in the **security** phase, because
+  the persona's role does not exist until then, and the write lands on the **unpublished** layer, so
+  it takes effect after a publish. Live-verified: the persona's real role id inside
+  `<DisplayConditions Order="2">` on the restricted form, `<Everyone />` on its unrestricted sibling.
+  (AB#6648526)
 - Form JS event handlers (`onload`/`onsave`/`onchange`) wired via web resources.
 - Views with rich filters (`eq-userid`/`this-week`/`in`/`not-in`/… + Choice-label resolution); default Active/Inactive view **column enrichment** via the SDK's `enrichDefaultViews`.
 - Choice-column charts.

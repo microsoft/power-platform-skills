@@ -1219,3 +1219,34 @@ test('missing or malformed formxml is not a restriction', () => {
     assert.strictEqual(isRoleRestrictedFormXml(bad), false, `${JSON.stringify(bad)} must not read as restricted`);
   }
 });
+
+test('readDescriptionInventory RECORDS which forms are role-restricted', () => {
+  // The predicate above is pure and well covered; this pins the WIRING. Deleting the
+  // `inventory.roleRestrictedForms.push(...)` call left every one of those assertions green while
+  // the warning it feeds went silent — and this is the one guard against a silent access WIDENING,
+  // so it is the last thing that should be undefended. (The same wiring already produced one
+  // `inventory is not defined` crash.)
+  const src = fs.readFileSync(path.join(__dirname, '..', 'download-model-app.js'), 'utf8');
+  assert.match(src, /inventory\.roleRestrictedForms\.push\(/,
+    'the inventory must record role-restricted forms');
+  assert.match(src, /isRoleRestrictedFormXml\(r\.formxml\)/,
+    'and it must decide that from the form xml it just read');
+  // The flag must NOT ride on the form entries: sanitizeDescriptionInventory spreads those into
+  // app-spec.json, and a diagnostic has no business in the user-facing spec.
+  assert.doesNotMatch(src, /roleRestricted:\s*isRoleRestrictedFormXml/,
+    'the flag belongs on the sibling key, not on each form entry');
+});
+
+test('runDownload WARNS about a role-restricted form, naming it', async () => {
+  // The behavioural half. `forms[]` is not reconstructed by download, so this warning is the only
+  // thing standing between "download, rebuild elsewhere" and a restricted form coming back visible
+  // to everyone.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'download-model-app.js'), 'utf8');
+  const warn = src.split(/\r?\n/).find((l) => l.includes('form(s) are restricted to specific security roles'));
+  assert.ok(warn, 'the warning must exist');
+  assert.match(warn, /restricted\.map/, 'and must NAME the forms — a bare count is not actionable');
+  assert.match(warn, /forms\[\]\.securityRoles/, 'and must say how to carry the restriction forward');
+  // It must be driven by the captured inventory, not recomputed or hardcoded.
+  assert.match(src, /const restricted = \(capturedInventory && capturedInventory\.roleRestrictedForms\) \|\| \[\]/,
+    'the warning must read the inventory the download actually captured');
+});

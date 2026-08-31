@@ -34,13 +34,20 @@ async function verifySpec(spec, read, opts = {}) {
   // back empty — which made the skip list above useless on exactly the runs that need it most, and
   // reported every rule as missing on an environment that can never host one.
   //
-  // Scoped to business rules on purpose. Every other artifact type survives a phase-limited verify,
-  // because a previous full build created it and it is still there; a business rule on a gated
-  // environment is the one thing that can NEVER be there, so it is the one thing a phase-limited
-  // verify must not demand.
+  // Scoped to business rules on purpose. Business rules are the only artifact class that can be
+  // PERMANENTLY absent through no fault of the run; everything else is absent because something
+  // failed or has not been built yet, which is precisely what verify exists to report. Generalising
+  // this would turn "verify is spec-complete regardless of --phases" into "verify checks whatever
+  // this run happened to touch", and the failure mode of getting THAT wrong is a verify that
+  // silently checks nothing.
   const ranPhases = Array.isArray(opts.phases) ? new Set(opts.phases) : null;
   const businessRulesPhaseRan = !ranPhases || ranPhases.has('business-rules');
+  // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
+  // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
+  // an operator on a perfectly healthy environment that their environment is broken — and on the
+  // normal `--changed-only` fast-apply path that would be wrong every single time.
   const environmentSkipped = [];
+  const phaseSkipped = [];
 
   // Entities + their declared columns.
   for (const e of spec.entities || []) {
@@ -193,8 +200,12 @@ async function verifySpec(spec, read, opts = {}) {
     // a run that never touched it. On a gated environment that turned every fast apply into a
     // non-zero exit plus an invalidated snapshot, alternating full/failing-fast forever, and the log
     // line blamed PAGES for a business-rule gate.
+    //
+    // Reported SEPARATELY from the environment gate: on a healthy environment the rules are deployed
+    // and fine, and telling that operator their environment cannot host business rules would be
+    // wrong on every fast apply they ever run.
     if (!businessRulesPhaseRan) {
-      environmentSkipped.push(`business-rule:${name}`);
+      phaseSkipped.push(`business-rule:${name}`);
       continue;
     }
     let rows;
@@ -525,13 +536,14 @@ async function verifySpec(spec, read, opts = {}) {
 
   const missing2 = checks.filter((c) => !c.present);
   // Keep unableToRun absent (undefined) on the normal path so existing callers and tests are unaffected.
-  // `environmentSkipped` is likewise omitted when empty, for the same reason.
+  // `environmentSkipped` / `phaseSkipped` are likewise omitted when empty, for the same reason.
   return {
     ok: missing2.length === 0 && !unableToRun,
     checks,
     missing: missing2,
     unableToRun: unableToRun || undefined,
     ...(environmentSkipped.length ? { environmentSkipped } : {}),
+    ...(phaseSkipped.length ? { phaseSkipped } : {}),
   };
 }
 
