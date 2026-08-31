@@ -75,6 +75,7 @@ test('rejects prereleases without explicit confirmation', () => {
 
   assert.equal(result.viable, false);
   assert.match(result.failures.join('\n'), /prerelease/);
+  assert.deepEqual(result.failureCodes, ['prerelease-not-approved']);
 });
 
 test('reports license review alongside hard package failures', () => {
@@ -173,6 +174,7 @@ test('requires mode evidence for unknown alternatives', () => {
   assert.equal(result.requiresConfirmation, true);
   assert.equal(result.modeEvidence.classificationRequired, true);
   assert.equal(result.failures.length, 0);
+  assert.deepEqual(result.failureCodes, ['mode-inconclusive']);
   assert.match(result.warnings.join('\n'), /requires agent classification/);
 });
 

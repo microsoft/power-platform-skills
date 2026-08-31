@@ -22,6 +22,7 @@ const {
 const {
   sanitizeUntrustedText,
 } = require('./lib/safe-untrusted-text');
+const telemetry = require('./lib/telemetry/power-pages-telemetry');
 
 const MAX_EVIDENCE_TEXT_CHARS = 200000;
 const MAX_NPM_METADATA_BYTES = 10 * 1024 * 1024;
@@ -881,7 +882,10 @@ async function runCli() {
       '--mode <runtime|static> [--modeEvidenceUrl <official-https-url>] ' +
       '[--modeEvidenceClassificationFile <project-relative-json-path>] ' +
       '[--allowPrerelease] [--allowUnverifiedMode] ' +
-      '[--confirmLicenseReview]'
+      '[--confirmLicenseReview] ' +
+      '[--telemetryLocales <canonical-tags>] ' +
+      '[--telemetryOperation <operation>] ' +
+      '[--telemetryPackageSelection <selection>]'
     );
   }
   const projectRoot = path.resolve(args.projectRoot);
@@ -985,12 +989,51 @@ async function runCli() {
     ),
     rangeSatisfies: versionSatisfiesRangeWithNpm,
   });
+  try {
+    telemetry.emitPackageValidation(
+      projectRoot,
+      telemetry.buildPackageValidationEventInfo({
+        framework,
+        operation: args.telemetryOperation,
+        intendedLocales: args.telemetryLocales,
+        packageName: args.package,
+        resolvedVersion: result.version,
+        packageSelection: args.telemetryPackageSelection,
+        mode: args.mode,
+        validationStatus: result.status,
+        failureCodes: result.failureCodes,
+        prerelease: result.prerelease,
+        unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+      })
+    );
+  } catch {
+    // Package validation results must not depend on telemetry availability.
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.viable ? 0 : 1;
 }
 
 if (require.main === module) {
   runCli().catch(() => {
+    try {
+      const args = parseArgs(process.argv.slice(2));
+      telemetry.emitPackageValidation(
+        args.projectRoot,
+        telemetry.buildPackageValidationEventInfo({
+          framework: args.framework,
+          operation: args.telemetryOperation,
+          intendedLocales: args.telemetryLocales,
+          packageName: args.package,
+          packageSelection: args.telemetryPackageSelection,
+          mode: args.mode,
+          validationStatus: 'error',
+          failureCodes: ['npm-resolution-failed'],
+          unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+        })
+      );
+    } catch {
+      // Preserve the original validation failure.
+    }
     process.stderr.write(
       'Localization package validation failed before a result could be produced.\n'
     );
