@@ -171,12 +171,17 @@ deployed descriptions are exposed under `descriptionInventory` for inspection on
 partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted, never written as
 `""`.
 
-**Rebuild behaviour:** a description is written at CREATE, and is also **reconciled on an artifact
-that already exists** for tables, columns, views and charts — so authoring one on a table whose
-Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still lands. In every
-case the write happens only when the spec **explicitly sets** a description **and** it differs from
-the deployed value, so an ordinary rebuild issues no extra write and an omitted description never
-blanks text a maker typed in the UI. Forms, dashboards and business rules are still create-only.
+**Rebuild behaviour:** a description is written at CREATE, and is additionally **reconciled on an
+artifact that already exists** for **views and charts** — so authoring one on a table whose
+Dataverse-generated *"Active &lt;Plural&gt;"* view the build reconciles onto still lands. Those two
+write only when the spec **explicitly sets** a description **and** it differs from the deployed
+value, so an ordinary rebuild issues no extra write and an omitted description never blanks text a
+maker typed in the UI.
+
+Everything else is **create-only** — the description reaches Dataverse when the artifact is first
+created and is not revisited: tables, columns, the solution, global choices, forms, dashboards and
+business rules. Adding a description to one of those *after* it exists is accepted by validation,
+builds green, and does not change the deployed artifact.
 
 ## entities[]
 ```jsonc

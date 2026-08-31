@@ -417,7 +417,7 @@ function viewDef(spec, v) {
       conditions.push(cond);
     }
   }
-  return { name: v.name, description: v.description || '', entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
+  return { name: v.name, description: String(v.description || '').trim(), entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
     filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
 }
@@ -587,7 +587,7 @@ function artifactIdentityQuery(type, def) {
 }
 
 function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
-  return { name: ch.name, description: ch.description || '', entityLogicalName: entityLogical, chartType: ch.chartType, isDefault: false,
+  return { name: ch.name, description: String(ch.description || '').trim(), entityLogicalName: entityLogical, chartType: ch.chartType, isDefault: false,
     series: [{ attribute: `${entityLogical}id`, aggregate: ch.measure || 'count' }],
     categories: [{ attribute: String(ch.groupBy).toLowerCase() }], presentation: { showLegend: true, title: ch.name } };
 }
@@ -1541,6 +1541,7 @@ async function runSdkBuild(spec, opts = {}) {
         // Same two guards as views: only when the spec EXPLICITLY sets a description (chartDef emits
         // `|| ''`, and writing that would blank a maker's text), and only when it DIFFERS.
         const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
+        let reconciled = false;
         if (wantDescription && typeof provision.queryRecords === 'function' && typeof provision.updateRecord === 'function') {
           try {
             const rows = await provision.queryRecords('savedqueryvisualization', {
@@ -1551,13 +1552,28 @@ async function runSdkBuild(spec, opts = {}) {
             const currentDescription = String(((rows || [])[0] || {}).description || '');
             if (currentDescription !== wantDescription) {
               await provision.updateRecord('savedqueryvisualization', existingId, { description: wantDescription });
+              reconciled = true;
             }
-          } catch {
-            // Best-effort: a description is an inspection aid, and failing a build over one would be
-            // a worse outcome than the stale text it leaves behind.
+          } catch (err) {
+            // Best-effort — a description is an inspection aid and must not fail a build. But it must
+            // not be SILENT either: the skip line below says "chart edits aren't applied on rebuild",
+            // so an operator whose write was rejected would read that as expected and never look.
+            // Silence here would recreate the exact non-convergence #496 exists to remove, one layer
+            // down.
+            if (typeof opts.warn === 'function') {
+              opts.warn(`chart "${def.name}": could not reconcile its description (${(err && err.message) || err}); the deployed chart keeps its previous description.`);
+            }
           }
         }
-        runner.skip('charts', `chart "${def.name}" (exists — chart edits aren't applied on rebuild; recreate to change)`);
+        // The label reports what actually happened, so "description written" and "nothing to do" are
+        // not the same line.
+        runner.skip('charts', `chart "${def.name}" (exists — ${reconciled ? 'description reconciled; other ' : ''}chart edits aren't applied on rebuild; recreate to change)`);
+        // An existing chart the spec claims is still a component of this solution — otherwise it is
+        // absent from the exported solution and teardown does not see it. Previously this branch
+        // returned without adding it; the create path (below) and reconcileView both add theirs.
+        try {
+          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+        } catch { /* already a component, or not ours to add — never fail a build over it */ }
         return existingId;
       }
       return runner.run('charts', `chart "${def.name}"`, async () => {

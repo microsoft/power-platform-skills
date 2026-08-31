@@ -291,6 +291,57 @@ test('REAL BUNDLE: a command does NOT accept a description — so the build neve
   assert.ok(!('description' in art), 'the command surface drops description; wiring one would be inert');
 });
 
+test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and the push carries it (#496)', async () => {
+  // The whole view mechanic in reconcileView rests on two bundle contracts that no mock can vouch
+  // for, because the sdk-build mock's jpSet creates a missing key while the REAL updateElement
+  // throws PathNotFoundError when its pointer resolves to undefined:
+  //   1. `/description` is a resolvable pointer on a fetched view;
+  //   2. the view push includes `description` in its PATCH body — which is WHY the description must
+  //      ride the push rather than be written as a separate record PATCH (that would be clobbered).
+  // A re-vendor that changed either would otherwise go green. AGENTS.md treats re-vendoring as a
+  // normal operation, so this is pinned here rather than assumed.
+  const ID = '33333333-3333-3333-3333-333333333333';
+  const { createMakerSdk } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'view496-'));
+  dirs.push(dir);
+  const writes = [];
+  // A deployed view as Dataverse returns it — note `description: null`, the shape a view that never
+  // had one comes back as.
+  const deployed = {
+    savedqueryid: ID, name: 'Active Work Items', description: null,
+    returnedtypecode: 'new_item', querytype: 0, isdefault: true,
+    fetchxml: '<fetch><entity name="new_item"><attribute name="new_name"/></entity></fetch>',
+    layoutxml: '<grid name="resultset" object="1" jump="new_name" select="1" icon="1" preview="1">'
+      + '<row name="result" id="new_itemid"><cell name="new_name" width="150"/></row></grid>',
+  };
+  const sdk = createMakerSdk({
+    workspacePath: dir,
+    instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async (url) => (/savedqueries\(/.test(String(url))
+        ? { status: 200, headers: { etag: 'W/"1"' }, body: deployed }
+        : { status: 200, headers: {}, body: { value: [] } }),
+      post: async (url, body) => { writes.push({ verb: 'POST', url: String(url), body }); return { status: 200, headers: {}, body: {} }; },
+      patch: async (url, body) => { writes.push({ verb: 'PATCH', url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    },
+  });
+  sdk.initWorkspace();
+
+  await sdk.fetchArtifact('view', ID);
+  const fetched = await sdk.getArtifact('view', ID);
+  assert.strictEqual(fetched.description, '', 'the adapter must normalise a null description to "" — a missing key would make updateElement throw');
+
+  await sdk.updateElement('view', ID, '/description', 'Authored text.');
+  await sdk.pushArtifact('view', ID);
+
+  const patch = writes.find((w) => w.verb === 'PATCH');
+  assert.ok(patch, 'the view push must PATCH');
+  assert.ok('description' in patch.body, `the push body must carry description; keys: ${Object.keys(patch.body).join(', ')}`);
+  assert.strictEqual(patch.body.description, 'Authored text.');
+});
+
 test('a persona NEVER sends a description — it would break the SDK ownership guard', () => {
   // The bundle builds its role payload as
   //     { name, description: SDK_ROLE_MARKER, 'businessunitid@odata.bind': ... }

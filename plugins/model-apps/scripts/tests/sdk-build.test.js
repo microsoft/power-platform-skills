@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { commandDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { commandDef, chartDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
@@ -200,7 +200,12 @@ function mockSdk(opts = {}) {
       // Seed the store to mimic a fetched, deployed artifact so reconcile can read + mutate it.
       if (!store[`${t}:${id}`]) {
         if (t === 'form') store[`${t}:${id}`] = seedForm(id, opts.existingFormFields || []);
-        else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), ...(opts.existingViewDescription !== undefined ? { description: opts.existingViewDescription } : {}) };
+        // `description` is seeded UNCONDITIONALLY (default '') because the real ViewAdapter always
+        // emits `description: t.description ?? ''`. A view artifact with no `description` key is a
+        // shape production never produces — and the real `updateElement` THROWS PathNotFoundError
+        // when its pointer resolves to undefined, whereas this mock's jpSet would happily create the
+        // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
+        else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
         else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
         else store[`${t}:${id}`] = { id };
       }
@@ -1712,9 +1717,13 @@ test('view reconcile: an authored description is written to an EXISTING view', a
   const patch = find(calls, 'updateElement').find((c) => c.args[0] === 'view' && c.args[2] === '/description');
   assert.ok(patch, `no description write; updateElement pointers: ${find(calls, 'updateElement').map((c) => c.args[2]).join(', ')}`);
   assert.strictEqual(patch.args[3], 'Open work, newest first.');
-  // It must ride the artifact push: the push rewrites `description` from the artifact, so a separate
-  // record PATCH would be overwritten by the stale fetched value.
-  assert.ok(find(calls, 'pushArtifact').some((c) => c.args[0] === 'view'), 'the view must still be pushed');
+  // ORDER is the whole mechanic: the local artifact mutation reaches Dataverse ONLY via the push, so
+  // a description write placed after `pushArtifact` would be a no-op that still looks correct.
+  // Asserting "a push happened" does not catch that — assert the sequence.
+  const push = find(calls, 'pushArtifact').find((c) => c.args[0] === 'view');
+  assert.ok(push, 'the view must still be pushed');
+  assert.ok(calls.indexOf(patch) < calls.indexOf(push),
+    'the description must be written BEFORE the push, or it never reaches Dataverse');
 });
 
 test('view reconcile: an UNSET description never blanks the deployed one', async () => {
@@ -1775,6 +1784,75 @@ test('chart reconcile: an unset or already-matching description issues no write'
   await runSdkBuild(same, { sdk: h.sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
   assert.strictEqual(find(h.calls, 'updateRecord').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
     'a matching description must not be rewritten');
+});
+
+test('view reconcile: a description with surrounding whitespace converges in ONE build, not two', async () => {
+  // validateDescription only rejects a FULLY blank description, so "  text  " is legal. The reconcile
+  // compares and writes `.trim()`, so if the CREATE path stored the untrimmed value the two would
+  // disagree and every first rebuild would issue one spurious write before settling. Both paths trim.
+  const spec = makeSpec();
+  spec.views = [{ entity: 'new_ticket', name: 'Active Tickets', description: '  Open work, newest first.  ', columns: ['new_subject'] }];
+  const { sdk, calls } = mockSdk({
+    artifactsExist: true,
+    existingViewColumns: [{ name: 'new_subject', width: 100, order: 0 }],
+    // What the CREATE path would have stored for that same spec value.
+    existingViewDescription: 'Open work, newest first.',
+  });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'views'] });
+  assert.strictEqual(find(calls, 'updateElement').filter((c) => c.args[2] === '/description').length, 0,
+    'an untrimmed spec value must match what create stored, or every rebuild rewrites it');
+});
+
+test('viewDef/chartDef trim the description they store, matching what the reconcile compares against', () => {
+  const spec = makeSpec();
+  assert.strictEqual(viewDef(spec, { entity: 'new_ticket', name: 'V', description: '  padded  ', columns: ['new_subject'] }).description, 'padded');
+  assert.strictEqual(chartDef(spec, { entity: 'new_ticket', name: 'C', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: '  padded  ' }).description, 'padded');
+  // An absent description is still '' (not undefined) — the def shape the SDK requires.
+  assert.strictEqual(viewDef(spec, { entity: 'new_ticket', name: 'V', columns: ['new_subject'] }).description, '');
+});
+
+test('chart reconcile: a FAILED description write is warned about and reflected in the skip line', async () => {
+  const spec = makeSpec();
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'Ticket mix by priority.' }];
+  const { sdk } = mockSdk({ artifactsExist: true, existingChartDescription: 'stale text' });
+  const base = sdk.updateRecord;
+  sdk.updateRecord = async (e, id, data) => {
+    if (e === 'savedqueryvisualization') throw new Error('403 write rejected');
+    return base(e, id, data);
+  };
+  const warnings = [];
+  const events = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'charts'], warn: (m) => warnings.push(m), emit: (e) => events.push(e) });
+  // Silence here would be the worst outcome: the skip line says "chart edits aren't applied on
+  // rebuild", so an operator whose write was rejected would read that as expected and never look.
+  assert.ok(warnings.some((w) => /By Priority/.test(w) && /description/.test(w)),
+    `a rejected description write must warn; warnings: ${JSON.stringify(warnings)}`);
+});
+
+test('chart reconcile: the skip line distinguishes "description reconciled" from "nothing to do"', async () => {
+  const mk = async (existing, description) => {
+    const spec = makeSpec();
+    spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', ...(description ? { description } : {}) }];
+    const { sdk } = mockSdk({ artifactsExist: true, existingChartDescription: existing });
+    const events = [];
+    await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'charts'], emit: (e) => events.push(e) });
+    return (events.find((e) => e.status === 'skip' && /By Priority/.test(e.label || '')) || {}).label || '';
+  };
+  assert.match(await mk('stale text', 'Ticket mix by priority.'), /description reconciled/);
+  assert.doesNotMatch(await mk('already right', 'already right'), /description reconciled/);
+  assert.doesNotMatch(await mk('maker text', null), /description reconciled/);
+});
+
+test('chart reconcile: an EXISTING chart is still added to the solution', async () => {
+  // The branch used to return without adding it, so a chart the spec claims was absent from the
+  // exported solution — and invisible to teardown. It is no longer a pure skip: it now mutates the
+  // chart, so it must also own it.
+  const spec = makeSpec();
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingChartDescription: 'x' });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
+  assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0] && c.args[0].componentType === 59),
+    `existing chart not added to the solution; components: ${JSON.stringify(find(calls, 'addSolutionComponent').map((c) => c.args[0].componentType))} (chart is 59)`);
 });
 
 test('form reconcile: an explicit layout with prune:false keeps fields it does not list', async () => {
