@@ -1542,15 +1542,21 @@ async function runSdkBuild(spec, opts = {}) {
         // `|| ''`, and writing that would blank a maker's text), and only when it DIFFERS.
         const wantDescription = typeof def.description === 'string' ? def.description.trim() : '';
         let reconciled = false;
-        if (wantDescription && typeof provision.queryRecords === 'function' && typeof provision.updateRecord === 'function') {
+        if (wantDescription && typeof provision.updateRecord === 'function') {
           try {
-            const rows = await provision.queryRecords('savedqueryvisualization', {
-              select: ['savedqueryvisualizationid', 'description'],
-              filter: `savedqueryvisualizationid eq ${existingId}`,
-              top: 1,
-            });
-            const currentDescription = String(((rows || [])[0] || {}).description || '');
-            if (currentDescription !== wantDescription) {
+            // Read through the SDK's artifact surface, NOT `queryRecords`. Measured live: a chart
+            // description PATCH lands on the UNPUBLISHED layer, while a plain/filtered GET returns
+            // the PUBLISHED row. Reading the published value would compare across layers — the guard
+            // would see a difference on every rebuild and re-issue the identical PATCH forever, which
+            // is non-convergence, not a blank. `chartApi.get` uses
+            // `Microsoft.Dynamics.CRM.RetrieveUnpublished()`, which is exactly the layer the PATCH
+            // writes to. Verified on a live org:
+            //   PATCH description -> plain GET: old value | RetrieveUnpublished(): new value
+            // fetchArtifact only READS (it populates the local workspace); the chart is still never
+            // pushed, so its definition is not exposed to a serialize round trip.
+            await provision.fetchArtifact('chart', existingId);
+            const current = await provision.getArtifact('chart', existingId) || {};
+            if (String(current.description || '') !== wantDescription) {
               await provision.updateRecord('savedqueryvisualization', existingId, { description: wantDescription });
               reconciled = true;
             }
@@ -1569,8 +1575,9 @@ async function runSdkBuild(spec, opts = {}) {
         // not the same line.
         runner.skip('charts', `chart "${def.name}" (exists — ${reconciled ? 'description reconciled; other ' : ''}chart edits aren't applied on rebuild; recreate to change)`);
         // An existing chart the spec claims is still a component of this solution — otherwise it is
-        // absent from the exported solution and teardown does not see it. Previously this branch
-        // returned without adding it; the create path (below) and reconcileView both add theirs.
+        // absent from the exported solution. (It was always visible to TEARDOWN, which resolves
+        // charts by name from `spec.charts` rather than by solution membership.) Previously this
+        // branch returned without adding it; the create path below and reconcileView both add theirs.
         try {
           await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         } catch { /* already a component, or not ours to add — never fail a build over it */ }
@@ -2449,6 +2456,11 @@ async function runSdkBuild(spec, opts = {}) {
       const perEntity = []; // [type, id] — first artifact found per entity
       for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
       for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
+      // Charts too. Previously an entity carrying ONLY charts was never published by any path, so a
+      // chart description reconciled on a rebuild stayed on the unpublished layer — written, but not
+      // visible. (An entity that also has a form or view was already covered above, which is why the
+      // gap does not show up on a typical app.)
+      for (const c of spec.charts || []) { const k = String(c.entity || '').toLowerCase(); const cid = result.created.charts[c.name]; if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
       await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
       if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
     });

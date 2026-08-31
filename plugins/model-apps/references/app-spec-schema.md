@@ -179,9 +179,9 @@ value, so an ordinary rebuild issues no extra write and an omitted description n
 maker typed in the UI.
 
 Everything else is **create-only** — the description reaches Dataverse when the artifact is first
-created and is not revisited: tables, columns, the solution, global choices, forms, dashboards and
-business rules. Adding a description to one of those *after* it exists is accepted by validation,
-builds green, and does not change the deployed artifact.
+created and is not revisited: tables, columns, the solution, global choices, `webResources[]`,
+`app.description`, forms, dashboards and business rules. Adding a description to one of those *after*
+it exists is accepted by validation, builds green, and does not change the deployed artifact.
 
 ## entities[]
 ```jsonc

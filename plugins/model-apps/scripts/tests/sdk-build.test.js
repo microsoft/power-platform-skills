@@ -207,6 +207,10 @@ function mockSdk(opts = {}) {
         // key. Omitting it would let a test pass against an artifact the SDK would have rejected.
         else if (t === 'view') store[`${t}:${id}`] = { id, columns: (opts.existingViewColumns || []).slice(), description: opts.existingViewDescription !== undefined ? opts.existingViewDescription : '' };
         else if (t === 'app') store[`${t}:${id}`] = { id, siteMap: opts.existingSitemap ? JSON.parse(JSON.stringify(opts.existingSitemap)) : { areas: [] } };
+        // The chart description reconcile reads through fetchArtifact/getArtifact rather than
+        // queryRecords, because a plain query returns the PUBLISHED row while the PATCH writes the
+        // unpublished one (measured live). Seed `description` for the same reason as the view.
+        else if (t === 'chart') store[`${t}:${id}`] = { id, description: opts.existingChartDescription !== undefined ? opts.existingChartDescription : '' };
         else store[`${t}:${id}`] = { id };
       }
       return store[`${t}:${id}`];
@@ -1811,6 +1815,39 @@ test('viewDef/chartDef trim the description they store, matching what the reconc
   assert.strictEqual(viewDef(spec, { entity: 'new_ticket', name: 'V', columns: ['new_subject'] }).description, '');
 });
 
+test('chart reconcile: the CURRENT description is read from the UNPUBLISHED layer, not a plain query', async () => {
+  // Measured on a live org: a chart description PATCH lands on the UNPUBLISHED layer, while a plain
+  // or filtered GET returns the PUBLISHED row:
+  //   PATCH description -> plain GET: old value | RetrieveUnpublished(): new value
+  // Reading the published value would compare across layers, so the guard would see a difference on
+  // every rebuild and re-issue the identical PATCH forever. `chartApi.get` (behind fetchArtifact)
+  // uses RetrieveUnpublished, which is the layer the PATCH writes to.
+  const spec = makeSpec();
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'Ticket mix by priority.' }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingChartDescription: 'Ticket mix by priority.' });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'charts'] });
+  assert.ok(find(calls, 'fetchArtifact').some((c) => c.args[0] === 'chart'),
+    'the current description must be read through the artifact surface (RetrieveUnpublished)');
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
+    'a plain query reads the PUBLISHED row and would never converge');
+  assert.strictEqual(find(calls, 'updateRecord').filter((c) => c.args[0] === 'savedqueryvisualization').length, 0,
+    'an already-matching description must not be rewritten');
+  assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'chart'), 'reading must not push the chart');
+});
+
+test('publish: an entity carrying ONLY charts is still published', async () => {
+  // perEntity was built from forms and views only, so a chart-only entity was never published by any
+  // path — leaving a reconciled description written to the unpublished layer and invisible.
+  const spec = makeSpec();
+  spec.forms = [];
+  spec.views = [];
+  spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true, publish: true, phases: ['solution', 'data-model', 'charts', 'publish'] });
+  assert.ok(find(calls, 'publishArtifact').some((c) => c.args[0] === 'chart'),
+    `a chart-only entity was not published; published: ${JSON.stringify(find(calls, 'publishArtifact').map((c) => c.args[0]))}`);
+});
+
 test('chart reconcile: a FAILED description write is warned about and reflected in the skip line', async () => {
   const spec = makeSpec();
   spec.charts = [{ entity: 'new_ticket', name: 'By Priority', chartType: 'Pie', groupBy: 'new_priority', measure: 'count', description: 'Ticket mix by priority.' }];
@@ -1827,6 +1864,12 @@ test('chart reconcile: a FAILED description write is warned about and reflected 
   // rebuild", so an operator whose write was rejected would read that as expected and never look.
   assert.ok(warnings.some((w) => /By Priority/.test(w) && /description/.test(w)),
     `a rejected description write must warn; warnings: ${JSON.stringify(warnings)}`);
+  // The title claims the skip line reflects it, so assert that too rather than leaving `events`
+  // collected and unchecked. A REJECTED write must NOT claim it reconciled anything.
+  const skip = events.find((e) => e.status === 'skip' && /By Priority/.test(e.label || ''));
+  assert.ok(skip, 'the chart still emits a skip event');
+  assert.doesNotMatch(skip.label, /description reconciled/,
+    'a failed write must not report a reconciled description');
 });
 
 test('chart reconcile: the skip line distinguishes "description reconciled" from "nothing to do"', async () => {
