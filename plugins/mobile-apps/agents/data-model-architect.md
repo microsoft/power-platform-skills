@@ -4,6 +4,7 @@ description: Use when an orchestrator needs a Dataverse data model proposed (exi
 user-invocable: false
 color: cyan
 model: sonnet
+
 tools:
   - Read
   - Write
@@ -22,10 +23,12 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - Wizard answers (target users, aesthetic, features)
 - The working directory
 - The plugin root
-- **Normalized Dataverse foreground planning snapshot path (preferred)** — an absolute path to
-  `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`.
-- **Planning evidence path (preferred)** — an absolute path to the deterministic
-  Markdown appendix rendered from that same foreground planning snapshot.
+- **Normalized Dataverse foreground planning snapshot path (validation only)** —
+  an absolute path to
+  `<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json`. Do not read
+  this large artifact into model context.
+- **Compact architect evidence path (preferred)** — an absolute path to the
+  hash-bound JSON sidecar rendered from that foreground planning snapshot.
 - **Dataverse planning mode** — `required` or `connector-only`.
   `connector-only` intentionally has no snapshot/evidence paths.
 - **Publisher prefix (detected from env)** — e.g. `cr8142a` (no trailing underscore). Use this literally when constructing logical names: `<prefix>_<entity>` → `cr8142a_inspection`. If the prefix is empty / `NOT DETECTED`, fall back to the placeholder `cr` and add a `DONE_WITH_CONCERNS` note that the actual prefix will be assigned by Dataverse at create time. **Do not invent or assume `cr_` if a real prefix was supplied.**
@@ -38,7 +41,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 - **Reuse-first and target-grounded.** Use exact target metadata for every
   proposed table, including standard tables, and prefer reuse > extension >
   new. In planning-snapshot-only mode that evidence comes only from the validated
-  foreground planning snapshot. Don't propose a `cr123_customer` table if a verified
+  compact architect sidecar. Don't propose a `cr123_customer` table if a verified
   target `contact` table fits.
 - **Never invent existing schema.** Never propose recreating or imitating a missing standard, managed, or solution-owned table/column. If discovery cannot run, you may still draft a plan from requirements, but mark it `Discovery skipped` so every decision remains unverified and non-executable. Step 8 verifies approved decisions against fresh bounded metadata; it never invents `Adapt` or `Defer`.
 - **Mode fidelity.** `connector-only` means zero Dataverse tables and zero
@@ -91,32 +94,42 @@ artifact milestone, and return `DONE`.
 
 ## Snapshot-only fast path
 
-In `required` mode, both snapshot and planning-evidence paths must be supplied.
-Validate before planning:
+In `required` mode, both the full snapshot validation path and compact architect
+evidence path must be supplied. Before planning, validate their hash, environment,
+table facts, candidate order, and top-three cap without reading the full snapshot:
 
-- snapshot `version >= 3`;
-- snapshot environment URL and tenant match the foreground-resolved target;
-- inventory, detailed tables, candidate ranking, proposed-name checks, and
-  timing metrics are present;
-- the evidence appendix names the same environment and generated timestamp.
+```bash
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
+  --snapshot "<foreground snapshot path>" \
+  --output "<compact architect evidence path>" \
+  --validate-only
+```
+
+The compact sidecar must have `schemaVersion: 1`, the foreground environment URL
+and tenant, and a valid `sourceSnapshotSha256`. A non-zero validation result is
+`NEEDS_CONTEXT: matching-dataverse-snapshot-and-evidence`.
 
 If validation succeeds, this path is mandatory:
 
-1. Read the snapshot once and the evidence appendix once.
+1. Read the compact architect evidence once. Do not use `Read`, `Grep`, or shell
+  output to load the full snapshot into model context; its path is only for the
+  deterministic validation command above and the post-contract decision gate.
 2. Skip Steps 1–3 environment resolution, access verification, and broad
    discovery. Skip every live Dataverse query in Step 5.
 3. Do **not** run Bash discovery or call `resolve-environment.js`,
    `verify-dataverse-access.js`, `dataverse-request.js`, or
    `list-table-columns.js`.
-4. Use `candidateRanking` for concept selection, `tables` for exact
-   column/relationship/key/choice/computed evidence, and
+4. Use `concepts[].topCandidates` for concept selection, `selectedTables` for
+  exact column/relationship/key/choice/computed evidence, and
    `proposedNameChecks` for Create/Adapt decisions. Do not rescan inventory.
-   Treat candidates with `detailStatus: unavailable` and matching
+  Treat candidates with `detailStatus: inventory-only` or `unavailable` and matching
    `detailLoadFailures` entries as advisory inventory evidence only; never
-   describe them as detailed. Proposed-name checks are collision evidence, not
-   required existing-table discovery.
-5. If a required existing candidate, relationship target, or standard/managed
-   dependency is present only in `inventory`, stop and return exactly:
+  describe them as detailed. A selected table with `detailLevel: core` lacks
+  decision-bearing enrichment and cannot authorize Reuse, Extend, or Adapt.
+  Proposed-name checks are collision evidence, not required existing-table discovery.
+5. If a Reuse, Extend, or Adapt candidate, relationship target, or
+  standard/managed dependency is absent from `selectedTables`, is represented
+  only by a top candidate, or has `detailLevel: core`, stop and return exactly:
 
    `NEEDS_CONTEXT: detailed-dataverse-metadata:<comma-separated-logical-names>`
 
@@ -230,8 +243,8 @@ count and elapsed time.
 > "→ Reconciling every required table and column against verified target metadata…"
 
 In the validated snapshot-only path, interpret this line as "against the
-foreground planning snapshot", run no command, and use detailed `snapshot.tables`
-entries plus the deterministic appendix. Before assigning any decision on the
+compact architect evidence", run no live Dataverse command, and use
+`selectedTables` plus its selection evidence. Before assigning any decision on the
 legacy live path, resolve every required entity — including `contact`,
 `account`, `incident`, other standard tables, and managed-solution
 dependencies — in a **single** filtered query that also expands their columns:
@@ -295,7 +308,7 @@ Build a table:
 ```
 
 In snapshot-only mode, keep `Target evidence` concise: cite the relevant
-concept/table anchor in the planning evidence appendix and state only the
+concept/table anchor in the compact architect evidence and state only the
 decision-bearing fact (for example, "appendix: `contact`; customizable=yes;
 2/2 required columns present"). Do not restate raw inventory, option lists, or
 full column payloads.
@@ -407,8 +420,8 @@ Write the section to a file in the working directory named `_dm_section.md` (the
 
 ### Planning Evidence
 
-- Deterministic appendix: `<relative planning evidence path>`
-- Environment and generated timestamp match the validated snapshot.
+- Compact hash-bound sidecar: `<relative architect evidence path>`
+- Environment and source snapshot hash passed deterministic validation.
 
 ### Target Reconciliation
 
