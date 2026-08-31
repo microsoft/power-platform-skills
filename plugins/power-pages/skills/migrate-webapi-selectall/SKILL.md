@@ -124,9 +124,8 @@ For SPA sites:
 2. Treat `compiledPath` and every configured build-output directory as a hard
    exclusion.
 3. Exclude `.powerpages-site/web-files/`, `node_modules/`, coverage and cache
-   directories, source maps, minified bundles, framework output directories,
-   and content-hashed assets matching
-   `<entry-name>-<content-hash>.<extension>`.
+   directories, source maps, framework output directories, and content-hashed
+   assets matching `<entry-name>-<content-hash>.<extension>`.
 4. Use `.powerpages-site/site-settings/` only for configuration inventory,
    never for source analysis.
 5. Search editable roots such as configured source directories and framework
@@ -138,9 +137,9 @@ file merely because it is deployed as a web file.
 
 Search source extensions including `.js`, `.jsx`, `.ts`, `.tsx`, `.vue`,
 `.html`, `.htm`, `.liquid`, `.aspx`, `.ascx`, `.cshtml`, and XML web
-templates. If a call exists only in compiled, minified, generated, or
-content-hashed output, record a `missing-source` blocker and stop the
-migration. Do not infer columns from that output.
+templates. If a call exists only in compiled, generated, or content-hashed
+output, record a `missing-source` blocker and stop the migration. Do not infer
+columns from that output.
 
 Search for:
 
