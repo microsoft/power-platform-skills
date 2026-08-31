@@ -50,6 +50,10 @@ skills/
     SKILL.md                   ← Registers the Canvas Authoring MCP server with Claude Code
   add-data-source/
     SKILL.md                   ← Guides user to add a data source or connector in Studio, then verifies
+  eval-cnvas-app/
+    SKILL.md                   ← Evaluates a Canvas App URL and publishes governed metrics
+  run-functional-eval/
+    SKILL.md                   ← Runs the packaged power-platform-evals workflow
 ```
 
 ## Skills
@@ -59,6 +63,8 @@ skills/
 | `/canvas-app` | Create or edit a Canvas App — auto-detects whether to generate from scratch or edit existing |
 | `/configure-canvas-mcp` | Configure the Canvas Authoring MCP server for the current coauthoring session |
 | `/add-data-source` | Guide the user to add a data source, connection, or API connector in Studio, then verify it is available |
+| `/eval-cnvas-app` | Evaluate a Canvas App URL with governed AppGen scenarios and publish the report metrics |
+| `/run-functional-eval` | Run the packaged functional evaluation and retain its evidence and Product report |
 
 ## Agents
 
