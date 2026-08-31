@@ -67,10 +67,12 @@ test('rejects project root as schema output', () => {
   }
 });
 
-test('rejects output through an escaping junction', () => {
+test('rejects output through an escaping junction', (t) => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'webapi-schema-link-'));
   const projectRoot = path.join(workspace, 'project');
   const outside = path.join(workspace, 'outside');
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+
   fs.mkdirSync(projectRoot);
   fs.mkdirSync(outside);
   fs.writeFileSync(
@@ -78,31 +80,40 @@ test('rejects output through an escaping junction', () => {
     `${TABLE_LOGICAL_NAME_1}\n`,
     'utf8'
   );
-  fs.symlinkSync(outside, path.join(projectRoot, 'linked'), 'junction');
 
   try {
-    assert.throws(
-      () => schema.validateOptions({
-        environmentUrl: ENVIRONMENT_URL_1,
-        projectRoot,
-        output: path.join(projectRoot, 'linked', 'schema.json'),
-        tables: [TABLE_LOGICAL_NAME_1],
-      }),
-      /inside the project root/
+    fs.symlinkSync(
+      outside,
+      path.join(projectRoot, 'linked'),
+      process.platform === 'win32' ? 'junction' : 'dir'
     );
-    assert.throws(
-      () => schema.validateOptions({
-        environmentUrl: ENVIRONMENT_URL_1,
-        projectRoot,
-        output: path.join(projectRoot, 'schema.json'),
-        tables: [],
-        tablesFile: path.join(projectRoot, 'linked', 'tables.txt'),
-      }),
-      /Tables file must exist inside the project root/
-    );
-  } finally {
-    fs.rmSync(workspace, { recursive: true, force: true });
+  } catch (error) {
+    if (error.code === 'EPERM' || error.code === 'EACCES') {
+      t.skip(`symlinks are unavailable: ${error.code}`);
+      return;
+    }
+    throw error;
   }
+
+  assert.throws(
+    () => schema.validateOptions({
+      environmentUrl: ENVIRONMENT_URL_1,
+      projectRoot,
+      output: path.join(projectRoot, 'linked', 'schema.json'),
+      tables: [TABLE_LOGICAL_NAME_1],
+    }),
+    /inside the project root/
+  );
+  assert.throws(
+    () => schema.validateOptions({
+      environmentUrl: ENVIRONMENT_URL_1,
+      projectRoot,
+      output: path.join(projectRoot, 'schema.json'),
+      tables: [],
+      tablesFile: path.join(projectRoot, 'linked', 'tables.txt'),
+    }),
+    /Tables file must exist inside the project root/
+  );
 });
 
 test('normalizes attributes and navigation metadata', () => {
