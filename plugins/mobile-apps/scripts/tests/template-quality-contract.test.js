@@ -15,10 +15,11 @@ function read(relativePath) {
 }
 
 function loadReadableForeground(source) {
-  const start = source.indexOf('function parseColorChannels');
-  const end = source.indexOf('\n}\n\n/**', start);
-  assert.ok(start >= 0 && end > start, 'color parsing and readableForeground implementation');
-  const javascript = source.slice(start, end + 2)
+  const match = source.match(
+    /function parseColorChannels[\s\S]*?function readableForeground[\s\S]*?\r?\n}/,
+  );
+  assert.ok(match, 'color parsing and readableForeground implementation');
+  const javascript = match[0]
     .replace('color: string', 'color')
     .replace('background: string | undefined', 'background')
     .replace('fallback: string', 'fallback');
@@ -64,26 +65,31 @@ test('base Tamagui config exposes the complete generated-screen semantic contrac
 });
 
 test('accent foregrounds meet WCAG AA for default and representative brand colors', () => {
-  const readableForeground = loadReadableForeground(read('template/tamagui.config.ts'));
-  for (const [background, normalized] of [
-    ['#0588f0', '#0588f0'], // Config v5 light blue10
-    ['#3b9eff', '#3b9eff'], // Config v5 dark blue10
-    ['hsl(208, 90%, 46%)', '#0c7cdf'],
-    ['hsla(208, 90%, 46%, 1)', '#0c7cdf'],
-    ['rgb(5, 136, 240)', '#0588f0'],
-    ['#ffffff', '#ffffff'],
-    ['#000000', '#000000'],
-    ['#ffd60a', '#ffd60a'],
-    ['#7a1f5c', '#7a1f5c'],
+  const source = read('template/tamagui.config.ts');
+  for (const readableForeground of [
+    loadReadableForeground(source),
+    loadReadableForeground(source.replace(/\n/g, '\r\n')),
   ]) {
-    const foreground = readableForeground(background, '#ffffff');
-    assert.ok(
-      contrastRatio(foreground, normalized) >= 4.5,
-      `${foreground} on ${background}`,
-    );
+    for (const [background, normalized] of [
+      ['#0588f0', '#0588f0'], // Config v5 light blue10
+      ['#3b9eff', '#3b9eff'], // Config v5 dark blue10
+      ['hsl(208, 90%, 46%)', '#0c7cdf'],
+      ['hsla(208, 90%, 46%, 1)', '#0c7cdf'],
+      ['rgb(5, 136, 240)', '#0588f0'],
+      ['#ffffff', '#ffffff'],
+      ['#000000', '#000000'],
+      ['#ffd60a', '#ffd60a'],
+      ['#7a1f5c', '#7a1f5c'],
+    ]) {
+      const foreground = readableForeground(background, '#ffffff');
+      assert.ok(
+        contrastRatio(foreground, normalized) >= 4.5,
+        `${foreground} on ${background}`,
+      );
+    }
+    assert.strictEqual(readableForeground('rgba(0, 0, 0, 0)', '#123456'), '#123456');
+    assert.strictEqual(readableForeground('hsla(0, 0%, 0%, 0.5)', '#123456'), '#123456');
   }
-  assert.strictEqual(readableForeground('rgba(0, 0, 0, 0)', '#123456'), '#123456');
-  assert.strictEqual(readableForeground('hsla(0, 0%, 0%, 0.5)', '#123456'), '#123456');
 });
 
 test('shipped routes own safe-area edges and avoid forbidden icons and raw hex colors', () => {
