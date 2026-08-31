@@ -107,6 +107,15 @@ const WEB_RESOURCE_KINDS = new Set(['js', 'html', 'css', 'xml', 'png', 'jpg', 'g
 // Form-event kinds the engine can wire (onload/onsave/onchange) via the /bag/c <events> region.
 const FORM_EVENTS = new Set(['onload', 'onsave', 'onchange']);
 
+// The ONLY supported way to author a business rule: the bound member the modern business-rule
+// designer itself uses. Named here for the warning text so the operator can search for it, and so a
+// rename shows up in one place rather than inside a string.
+//
+// The vendored SDK writes rules through this member or refuses — it no longer compiles a client-side
+// WWF XAML substitute. Environments where the member is undeclared therefore cannot host business
+// rules at all; that is a platform-side rollout, not something a spec can work around.
+const BUSINESS_RULE_MEMBER = 'Microsoft.Dynamics.CRM.CreateProcessWithWfomJson';
+
 // The per-app setting name that turns on the modern ("new look") shell. Verified live against a real
 // organization: `settingdefinition` uniquename `NewLookAlwaysOn`, datatype 2 (boolean), default
 // "false". See the app-shell phase for why this one rather than the other new-look definitions.
@@ -368,6 +377,11 @@ function planFor(spec, opts) {
   if (has('security')) for (const p of spec.personas || []) {
     const n = (p.jobs || []).length;
     items.push({ phase: 'security', label: `security role "${p.persona}" (${n} job${n === 1 ? '' : 's'})` });
+  }
+  // Form role assignment is planned under `security` (not `forms`) because it can only run once the
+  // roles exist — see the 7b block in the engine for why.
+  if (has('security')) for (const f of spec.forms || []) {
+    if (f && f.securityRoles) items.push({ phase: 'security', label: `form roles for ${f.name || f.formType || 'Main'} on ${f.entity}` });
   }
   if (has('publish') && opts.publish) items.push({ phase: 'publish', label: 'publish customizations' });
   return items;
@@ -843,6 +857,17 @@ function businessRuleFilter(name, entityLogical) {
   return `category eq 2 and type eq 1 and name eq '${odataLit(name)}' and primaryentity eq '${odataLit(String(entityLogical).toLowerCase())}'`;
 }
 
+// The (entity, formType, name) triple the App Spec uses to identify a form. Used to address a form
+// from a LATER phase: `forms[].securityRoles` is applied during `security`, because a persona's role
+// does not exist until then, and by that point the forms phase has finished and only the entity's
+// Main form is reachable through `created.forms`.
+//
+// `name` is included because one entity may declare several forms of the same type, and the id must
+// bind to the form the author annotated rather than to whichever sibling was built last.
+function formIdentityKey(f) {
+  return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
+}
+
 // `valueWorkflowType` — how the platform interprets the literal — renamed because `valueType` already
 // means something else here.
 function businessRuleDef(rule) {
@@ -1026,7 +1051,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -1676,6 +1701,14 @@ async function runSdkBuild(spec, opts = {}) {
     // Key the entity's MAIN form by entity (the app wires one form per entity below); quick-create
     // / quick-view forms are still built + added to the solution, just not the entity's app form.
     defs.forEach((d, i) => { if ((d.f.formType || 'Main') === 'Main') result.created.forms[d.f.entity.toLowerCase()] = ids[i]; });
+    // Every form, addressable individually. `created.forms` is keyed by ENTITY and holds only the
+    // Main form, which is all the app shell needs — but `forms[].securityRoles` is applied in the
+    // SECURITY phase (roles do not exist until then), by which time the forms phase is long over and
+    // a non-Main form would be unreachable. Keyed on the same (entity, formType, name) triple the
+    // spec uses to identify a form, so the lookup cannot silently bind to a same-named sibling.
+    defs.forEach((d, i) => {
+      result.created.formIds[formIdentityKey(d.f)] = ids[i];
+    });
     // Quick-view placement: embed a built QuickView form onto a host form via a lookup column,
     // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
     // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
@@ -1719,10 +1752,29 @@ async function runSdkBuild(spec, opts = {}) {
   //     solution — it's not a standard solution-component type — but is entity-scoped so it shows
   //     on the entity's command bar in the app regardless).
   // 6b-pre. Business rules. Additive discover-reconcile like charts/commands: a rule is identified by
-  // (entity, name), and re-pushing on every rebuild would stack duplicate rules on the table. The SDK
-  // routes to the supported bound member first and falls back to a classic `workflows` row carrying
-  // compiled WWF XAML when that member faults — see sdk-uptake-contract.test.js for the exact routing.
+  // (entity, name), and re-pushing on every rebuild would stack duplicate rules on the table.
+  //
+  // The SDK writes rules ONLY through the bound `CreateProcessWithWfomJson` member — the same one the
+  // modern business-rule designer uses. It used to compile a client-side WWF XAML fallback when that
+  // member faulted; that fallback was DELETED upstream because it covered only 4 of the 7 action
+  // types and one clause, so it silently narrowed a rule into something the platform would accept but
+  // that did not say what the author wrote.
+  //
+  // The consequence is environment-visible and is handled below: an environment that does not declare
+  // the member cannot host business rules AT ALL. MEASURED on a live org — `$metadata` (16.5 MB) does
+  // not mention the member and every POST answers 404 — and the SDK's own message reports 18 of 20
+  // measured environments in the same state. See the `businessRuleApiUnavailable` handling.
   if (has('business-rules')) {
+    // Warn ONCE per build, not once per rule: on an environment without the member every rule skips,
+    // and N copies of the same paragraph buries the rest of the build output.
+    let businessRuleApiWarned = false;
+    // A rule is skipped only for this ONE reason; anything else still halts. Matching is on the
+    // SDK's documented `code`, never on `err.name` — the bundle is minified, so the class name is a
+    // rebuild-unstable string (`Xe`, which is really the base SdkError), and matching it would
+    // silently disarm this guard the next time the bundle is rebuilt.
+    const businessRuleApiUnavailable = (err) => (err && err.code === 'BUSINESS_RULE_API_UNAVAILABLE'
+      ? 'unsupported in this environment'
+      : false);
     for (const rule of spec.businessRules || []) {
       const entityLogical = String(rule.entity).toLowerCase();
       const existing = await provision.queryRecords('workflow', {
@@ -1807,25 +1859,19 @@ async function runSdkBuild(spec, opts = {}) {
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
-
-        // DE-DUPLICATE — belt-and-braces now that the SDK fixes this at source.
+        // DE-DUPLICATE — legacy repair only.
         //
-        // The SDK tries the supported bound member first and falls back to a classic `workflows` row
-        // on a qualifying 400. That fallback USED to assume the 400 meant "nothing was written";
-        // live measurement showed the platform commits the row and THEN faults generating its
-        // UiData, so the fallback wrote a SECOND copy and both fired. Observed as two rows ~5s apart
-        // in one run, one server-assigned and one carrying the client-generated id.
+        // The SDK USED to fall back to a classic `workflows` row on a qualifying 400, and that
+        // fallback assumed the 400 meant "nothing was written". Live measurement showed the platform
+        // commits the row and THEN faults generating its UiData, so the fallback wrote a SECOND copy
+        // and both fired. Observed as two rows ~5s apart in one run, one server-assigned and one
+        // carrying the client-generated id. https://github.com/microsoft/power-platform-skills/issues/482
         //
-        // Fixed upstream and vendored here: on the qualifying 400 the SDK now probes for the
-        // committed row and DELETES it before writing its own, failing closed if the probe is
-        // indeterminate. Live-verified against the org that originally reproduced the bug —
-        // one authored rule now yields exactly one row.
-        // https://github.com/microsoft/power-platform-skills/issues/482
-        //
-        // This sweep is KEPT because it covers what the SDK fix cannot: duplicates left on the org
-        // by an EARLIER build (those rows are already committed and often refuse both deactivate and
-        // delete), and any future path that reintroduces a second write. With the fix in place it
-        // finds nothing on a clean org, so it costs one query.
+        // The fallback no longer exists in the vendored SDK — business rules are written through the
+        // bound member or not at all — so this sweep can no longer find a duplicate THIS build made.
+        // It is KEPT because it still repairs an org that a PREVIOUS build damaged: those rows are
+        // already committed and frequently refuse both deactivate and delete, so they will not
+        // disappear on their own. On a clean org it costs exactly one query and finds nothing.
         //
         // Scope is deliberately tight: only rules matching THIS rule's exact name and entity, and
         // only ones that are not the id the push returned. That cannot touch a rule this build did
@@ -1851,10 +1897,31 @@ async function runSdkBuild(spec, opts = {}) {
           try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch (e) { why = (e && e.message) ? String(e.message).replace(/\s+/g, ' ').slice(0, 200) : String(e); }
           if (typeof opts.warn === 'function') {
             opts.warn(removed
-              ? `business rule "${rule.name}": removed a duplicate the SDK's fallback created (${extra.workflowid})`
-              : `business rule "${rule.name}": the SDK's fallback created a duplicate (${extra.workflowid}) that could not be removed automatically (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
+              ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
+              : `business rule "${rule.name}": an earlier build left a duplicate (${extra.workflowid}) that could not be removed automatically (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
           }
         }
+      }, {
+        // An environment that does not declare the bound member cannot host business rules at all.
+        // Halting here would abandon a build that has ALREADY created the solution, tables, columns,
+        // forms, views and the app — leaving a half-built app and an error 90% of the way through a
+        // run, for a cause the operator can do nothing about from here.
+        //
+        // So this degrades the way `app.newLook` already does for its tenant-gated setting: skip the
+        // artifact, say so loudly and specifically, and let the rest of the app build. Nothing wrong
+        // is written — the alternative the SDK deleted (compiling a narrowed rule) is precisely what
+        // must not happen. The skip is recorded on the result so `--verify` and the run summary can
+        // report it rather than implying the rules exist.
+        skipIf: (err) => {
+          const reason = businessRuleApiUnavailable(err);
+          if (!reason) return false;
+          result.skipped.businessRules.push(`${entityLogical}|${rule.name}`);
+          if (!businessRuleApiWarned && typeof opts.warn === 'function') {
+            businessRuleApiWarned = true;
+            opts.warn(`business rules were NOT created: this environment does not expose the '${BUSINESS_RULE_MEMBER}' member that the modern business-rule designer uses, so there is no supported way to author them here. Everything else in the app was built normally. Re-run against an environment that exposes the member, or drop businessRules[] from the spec. Detail: ${String((err && err.message) || err).replace(/\s+/g, ' ').slice(0, 300)}`);
+          }
+          return reason;
+        },
       });
     }
   }
@@ -2462,6 +2529,57 @@ async function runSdkBuild(spec, opts = {}) {
         return `${rr.reused ? 'reused' : 'created'} — ${priv} privilege${priv === 1 ? '' : 's'}${appId && persona.appAccess !== false ? ', app access' : ''}${assigned ? `, ${assigned} assignment(s)` : ''}`;
       });
     }
+
+    // 7b. Offer forms to specific security roles (`forms[].securityRoles`). AB#6648526.
+    //
+    // This runs in the SECURITY phase, not the forms phase, because a persona's role does not exist
+    // until the loop above has run — `forms[]` is built at phase 6, `personas[]` at phase 13.
+    //
+    // The roles do NOT live in a relationship. MEASURED against a live environment: `systemform`
+    // declares no many-to-many relationships and reports
+    // `CanBeInManyToMany: { Value: false, CanBeChanged: false }`, there is no `systemformrole`
+    // entity, and `role`'s six N:N partners are systemuser / privilege / appmodule / team /
+    // application / applicationuser — none of them forms. They live INSIDE `formxml`, as a
+    // `<DisplayConditions>` child of `<form>`, which is why only the SDK's dedicated call can write
+    // them and why no `associateRecords` shape ever worked.
+    //
+    // A form with NO DisplayConditions is offered to every role, so this is a RESTRICTION: declaring
+    // `securityRoles` narrows a form that was previously universal.
+    const formsWithRoles = (spec.forms || []).filter((f) => f && f.securityRoles);
+    for (const f of formsWithRoles) {
+      const label = `${f.name || f.formType || 'Main'} on ${f.entity}`;
+      const formId = result.created.formIds[formIdentityKey(f)];
+      if (!formId) {
+        // The forms phase did not run in this invocation (`--phases security`, or a --changed-only
+        // apply). Skipping is right — silently doing nothing is not, because the author asked for a
+        // restriction and its absence is a security-relevant difference.
+        runner.skip('security', `form roles for ${label} (form not built in this run — re-run with the forms phase)`);
+        continue;
+      }
+      await runner.run('security', `form roles for ${label}`, async () => {
+        const sr = f.securityRoles;
+        const opts2 = {};
+        if (sr.everyone === true) opts2.everyone = true;
+        else {
+          // Personas, not GUIDs: the spec names roles the way an author does, and the build resolves
+          // them against the roles it just created. An unresolved name is a HALT, not a warning — a
+          // typo would otherwise silently produce a form offered to nobody.
+          opts2.roleIds = (sr.personas || []).map((p) => {
+            const rr = result.created.roles[canonicalPersonaName({ persona: p })];
+            if (!rr || !rr.roleId) {
+              throw new Error(`securityRoles names persona "${p}", which this build did not create a role for. Declare it in personas[], or use "everyone": true.`);
+            }
+            return rr.roleId;
+          });
+        }
+        // Both are PRESERVED by the SDK when omitted, so only send what the author actually set —
+        // sending `undefined` would be indistinguishable from "reset it" if that ever changes.
+        if (sr.fallbackForm !== undefined) opts2.fallbackForm = sr.fallbackForm;
+        if (sr.order !== undefined) opts2.order = sr.order;
+        await provision.setFormSecurityRoles(formId, opts2);
+        return sr.everyone === true ? 'every role' : `${opts2.roleIds.length} role(s)`;
+      });
+    }
   }
 
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)
@@ -2470,7 +2588,17 @@ async function runSdkBuild(spec, opts = {}) {
     await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set();
       const perEntity = []; // [type, id] — first artifact found per entity
-      for (const f of spec.forms || []) { const id = result.created.forms[f.entity.toLowerCase()]; if (id && !seen.has(f.entity.toLowerCase())) { seen.add(f.entity.toLowerCase()); perEntity.push(['form', id]); } }
+      for (const f of spec.forms || []) {
+        const k = f.entity.toLowerCase();
+        // Prefer the entity's Main form (what `created.forms` holds), but fall back to THIS form's
+        // own id. A `securityRoles` assignment lands on the UNPUBLISHED layer — live-measured: the
+        // published row still read `<Everyone />` until PublishXml ran — so an entity whose only
+        // annotated form is, say, a QuickCreate would otherwise never be published and the
+        // restriction would silently not take effect. Publishing is per-ENTITY, so any one of its
+        // forms covers the rest.
+        const id = result.created.forms[k] || result.created.formIds[formIdentityKey(f)];
+        if (id && !seen.has(k)) { seen.add(k); perEntity.push(['form', id]); }
+      }
       for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
       // Charts too — but ONLY the ones this run created or fetched. `publishArtifact` requires the
       // artifact to be workspace-resident (readRaw -> readLocal throws ArtifactNotFoundError rather

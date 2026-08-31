@@ -379,25 +379,52 @@ const DIRECT_ENTRY_BEHAVIORS = ['selector', 'emptyState'];
 // there was anything to clear.
 const COLUMN_VISUALIZATIONS = ['None', 'RadialDial', 'LineChart', 'HeatMap', 'StarRating'];
 
+// Whole Number display Format (AB#6648522). MIRRORS the vendored SDK's `integerFormat` union
+// (types/schema.ts) exactly, same reasoning as COLUMN_VISUALIZATIONS above — widening one without
+// the other produces a mid-build InvalidArgumentError instead of a spec-gate rejection.
+//
+// 'None' is the platform default (plain integer). It is accepted here, same as visualization's
+// 'None', so a spec can explicitly clear a Format set by an earlier build or a maker in the portal.
+// Unlike visualization, this is Integer-type-only — the SDK throws InvalidArgumentError for any
+// other numeric type (BigInt/Decimal/Double/Money), so validated below alongside the enum check.
+const INTEGER_FORMATS = ['None', 'Duration', 'TimeZone', 'Language', 'Locale'];
+
 // Business rules. These MIRROR the vendored SDK's supported slice.
 //
-// `ContainsData` / `DoesNotContainData` were blocked here for a while: they compiled to XAML the
-// platform could not process, answering `HTTP 500 ... Error generating UiData for workflow`. Root
-// cause (#481) was in the compiler, not the rule shape — for a valueless operator it emitted an
-// EMPTY parameter array, `[New Object() { }]`, where every server-authored rule writes
-// `<x:Null x:Key="Parameters" />`. An empty Object[] is not null, and the UiData generator cannot
-// render it.
+// The list is the SDK's operator TABLE, not a subset of it, and that table is the authority for a
+// sharp reason: the serializer resolves an operator with
+// `Uf[operator] ?? WorkflowConditionOperator.Equal`, so an operator it does not know becomes
+// **Equals**. `IsGreaterThan` is in the table; `GreaterThan` is not — writing the latter silently
+// deploys an equality test. That is a wrong rule behind a green build, which is exactly what this
+// gate exists to prevent, so `business-rules.test.js` pins this list against the bundle's own table.
 //
-// Fixed upstream and vendored here. RE-VERIFIED LIVE against the new bundle on a real org: all four
-// operators now push successfully in one run (previously the two presence operators failed 500 while
-// `Equals` succeeded in the same run).
-const BUSINESS_RULE_OPERATORS = ['Equals', 'DoesNotEqual', 'ContainsData', 'DoesNotContainData'];
+// The list was four entries long for a long time. That was never a platform limit: the SDK used to
+// fall back to a client-side workflow-XAML compiler that could only express those four, and the
+// restriction outlived it. The compiler has been deleted upstream, so the JSON path's full table is
+// available.
+const BUSINESS_RULE_OPERATORS = [
+  'Equals', 'DoesNotEqual',
+  'IsGreaterThan', 'IsGreaterThanEqualTo', 'IsLessThan', 'IsLessThanEqualTo',
+  'Contains', 'DoesNotContain',
+  'BeginsWith', 'DoesNotBeginWith', 'EndsWith', 'DoesNotEndWith',
+  'On', 'NotOn',
+  'ContainsData', 'DoesNotContainData',
+];
 // Nothing is blocked at present. Kept (empty) so a future platform-side breakage can be re-declared
 // here with an explanation, rather than being folded into "unknown operator".
 const BUSINESS_RULE_BLOCKED_OPERATORS = new Set();
-// Operators that take NO value: they test presence, so a `value` would be meaningless.
+// Operators that take NO value: they test presence, so a `value` would be meaningless. Measured —
+// the serializer emits an EMPTY right-hand operand list for exactly these two.
 const BUSINESS_RULE_VALUELESS_OPERATORS = new Set(['ContainsData', 'DoesNotContainData']);
 // action type -> the field carrying its payload. `null` = no payload (none currently).
+//
+// The SDK models seven action types (adding `SetDefaultValue`, `ShowErrorMessage` and
+// `Recommendation`), and all seven were measured serializing correctly through the real bundle.
+// They are deliberately NOT exposed yet: each needs new mapping in `businessRuleDef`, and business
+// rules cannot be exercised end to end on an environment that does not declare
+// `CreateProcessWithWfomJson` — which is the environment this was developed against. Shipping
+// mapping code that has never round-tripped against the platform is how a rule deploys and quietly
+// does the wrong thing. Expose them from an environment where they can be live-verified.
 const BUSINESS_RULE_ACTIONS = { SetVisibility: 'visible', LockUnlock: 'lock', SetBusinessRequired: 'required', SetFieldValue: 'value' };
 const BUSINESS_RULE_ACTION_TYPES = Object.keys(BUSINESS_RULE_ACTIONS);
 // Boolean-payload actions, so a string "false" (truthy in JS) is rejected rather than silently
@@ -527,6 +554,73 @@ function validateDescription(value, label, errors, opts = {}) {
 // a no-op rather than an un-set, so it is rejected here instead of being accepted and quietly
 // ignored — an author who writes `readOnly: false` expecting it to clear an existing lock would
 // otherwise get a green build and no change.
+// `forms[].securityRoles` — who a form is offered to. AB#6648526.
+//
+// Direction matters and is easy to get backwards: a form with NO assignment is offered to EVERY
+// role, so declaring this RESTRICTS the form. That makes every failure mode here access-relevant —
+// a typo'd persona or an empty list narrows a form to nobody — so each is a hard error rather than
+// a warning, and the build additionally halts on an unresolvable persona.
+//
+// `everyone` and `roleIds` are mutually exclusive in the PLATFORM's model (`<Everyone />` replaces
+// the `<Role>` list rather than adding to it), not merely in this validator; the SDK rejects the
+// combination with INVALID_ARGUMENT, so catching it here just names the form.
+function validateFormSecurityRoles(f, spec, errors) {
+  const sr = f.securityRoles;
+  if (sr === undefined) return;
+  const label = `form '${f.name || f.entity}'`;
+  if (!sr || typeof sr !== 'object' || Array.isArray(sr)) {
+    errors.push(`${label}: securityRoles must be an object like { "personas": ["Dispatcher"] } or { "everyone": true }`);
+    return;
+  }
+  const known = new Set(['personas', 'everyone', 'fallbackForm', 'order']);
+  for (const k of Object.keys(sr)) {
+    if (!known.has(k)) errors.push(`${label}: securityRoles has unknown key '${k}' — expected ${[...known].join(', ')}`);
+  }
+
+  const hasEveryone = sr.everyone !== undefined;
+  if (hasEveryone && typeof sr.everyone !== 'boolean') {
+    errors.push(`${label}: securityRoles.everyone must be a boolean`);
+  }
+  // `everyone: false` is not "restrict to nobody" — it is an author reaching for a switch that does
+  // not exist. Omit the block to leave the form universal.
+  if (sr.everyone === false) {
+    errors.push(`${label}: securityRoles.everyone: false does nothing — omit securityRoles entirely to leave the form available to every role, or list personas to restrict it`);
+  }
+
+  if (sr.personas !== undefined) {
+    if (!Array.isArray(sr.personas) || sr.personas.some((p) => typeof p !== 'string' || !p.trim())) {
+      errors.push(`${label}: securityRoles.personas must be an array of persona names`);
+    } else if (!sr.personas.length) {
+      errors.push(`${label}: securityRoles.personas is empty — that would offer the form to NO role. Omit securityRoles to leave it available to everyone.`);
+    } else {
+      // Resolved against `personas[]` at author time so a typo is a spec error naming the form,
+      // rather than a build halt two minutes into a run.
+      const declared = new Set((spec.personas || []).map((p) => String(canonicalPersonaName(p) || '').toLowerCase()));
+      for (const p of sr.personas) {
+        if (!declared.has(String(p).trim().toLowerCase())) {
+          errors.push(`${label}: securityRoles names persona '${p}', which is not declared in personas[]`);
+        }
+      }
+      const dupes = sr.personas.map((p) => String(p).trim().toLowerCase()).filter((p, i, a) => a.indexOf(p) !== i);
+      if (dupes.length) errors.push(`${label}: securityRoles lists persona '${dupes[0]}' more than once`);
+    }
+  }
+
+  if (sr.everyone === true && sr.personas !== undefined) {
+    errors.push(`${label}: securityRoles cannot set both 'everyone' and 'personas' — the platform models <Everyone /> as a replacement for the role list, not an addition to it`);
+  }
+  if (!hasEveryone && sr.personas === undefined) {
+    errors.push(`${label}: securityRoles must say who the form is for — set 'personas' or 'everyone': true`);
+  }
+
+  if (sr.fallbackForm !== undefined && typeof sr.fallbackForm !== 'boolean') {
+    errors.push(`${label}: securityRoles.fallbackForm must be a boolean`);
+  }
+  if (sr.order !== undefined && (!Number.isInteger(sr.order) || sr.order < 0)) {
+    errors.push(`${label}: securityRoles.order must be a non-negative integer (got ${JSON.stringify(sr.order)})`);
+  }
+}
+
 function validateFormFieldOptions(f, entityByLower, errors, warnings) {
   const label = `form '${f.name || f.entity}'`;
   const entity = entityByLower.get(String(f.entity || '').toLowerCase());
@@ -770,6 +864,52 @@ function validateAppSpec(spec, opts = {}) {
       if (c.visualization !== undefined && !COLUMN_VISUALIZATIONS.includes(c.visualization)) {
         errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown visualization '${c.visualization}' — must be one of ${COLUMN_VISUALIZATIONS.join('|')}`);
       }
+      // AB#6648523: Boolean default value. The SDK used to hardcode `DefaultValue: false`; the
+      // vendored bundle now honours an explicit value on create AND update (measured against
+      // cds-maker-sdk.cjs). Boolean-only for the same reason as the form-event flags below —  a
+      // truthy-but-non-boolean value (e.g. the string "false") must be rejected, not coerced — and
+      // type-gated to the exact 'Boolean' column: the SDK itself throws InvalidArgumentError for
+      // defaultValue on any other type, so this just moves that same failure to the spec gate and
+      // names the column instead of surfacing mid-build.
+      if (c.defaultValue !== undefined) {
+        if (typeof c.defaultValue !== 'boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} defaultValue must be a boolean (got ${JSON.stringify(c.defaultValue)})`);
+        } else if (c.type !== 'Boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} defaultValue is only valid on a Boolean column (this one is '${c.type || 'Text'}')`);
+        }
+      }
+      // AB#6648522: Whole Number display Format (e.g. render a raw integer count of minutes as a
+      // Duration picker in the maker UI). Restricted to the exact 'Integer' App Spec type, NOT the
+      // wider Integer/BigInt/Decimal/Double/Money switch case columnOptions() shares for min/max/
+      // precision — the SDK's Format option is Integer-only, so a spec targeting Decimal would
+      // otherwise pass this gate and hit the SDK's own InvalidArgumentError deep inside the
+      // data-model phase instead of here.
+      if (c.integerFormat !== undefined) {
+        if (!INTEGER_FORMATS.includes(c.integerFormat)) {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} has unknown integerFormat '${c.integerFormat}' — must be one of ${INTEGER_FORMATS.join('|')}`);
+        } else if (c.type !== 'Integer') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} integerFormat is only valid on an Integer column (this one is '${c.type || 'Text'}')`);
+        }
+      }
+      // AB#6651276: per-verb write/read permissions (e.g. isValidForUpdate:false makes a column
+      // write-once after creation — the entire point of the feature, so `false` must validate and
+      // build identically to `true`). Boolean-only, same reasoning as the form-event flags below.
+      // Type-agnostic per the SDK — every buildable column type accepts these on BOTH create and
+      // update (measured) — EXCEPT Customer, which is created through createCustomerColumn, a
+      // wholly separate SDK call whose options carry no such fields. Warned rather than rejected
+      // there, matching the Customer + description precedent above: the spec stays valid and still
+      // builds, the author just needs to know the flag will not reach Dataverse.
+      let hasValidForFlag = false;
+      for (const flag of ['isValidForCreate', 'isValidForUpdate', 'isValidForRead']) {
+        if (c[flag] === undefined) continue;
+        hasValidForFlag = true;
+        if (typeof c[flag] !== 'boolean') {
+          errors.push(`entity ${e.schemaName}: column ${c.schemaName} ${flag} must be a boolean (got ${JSON.stringify(c[flag])})`);
+        }
+      }
+      if (hasValidForFlag && c.type === 'Customer') {
+        warnings.push(`entity ${e.schemaName}: column ${c.schemaName} is a Customer column — the SDK's createCustomerColumn accepts no isValidForCreate/isValidForUpdate/isValidForRead, so these will NOT be written to Dataverse`);
+      }
     }
   }
   if (!entityNames.size) {
@@ -898,6 +1038,7 @@ function validateAppSpec(spec, opts = {}) {
       }
     }
     validateFormFieldOptions(f, entityByLower, errors, warnings);
+    validateFormSecurityRoles(f, spec, errors);
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the
@@ -1007,26 +1148,25 @@ function validateAppSpec(spec, opts = {}) {
     };
 
     if (!Array.isArray(r.conditions) || !r.conditions.length) {
-      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the compiler emits as an empty rule that silently never fires)`);
-    } else if (r.conditions.length > 1) {
-      // The XAML compiler supports EXACTLY ONE clause — `bodyXml` reads `clauses[0]` and the adapter
-      // throws `this increment supports a single clause (got N); multi-clause AND/OR is a follow-up`.
-      // LIVE-MEASURED: a two-clause rule fails to deploy while a one-clause rule succeeds on the same
-      // org in the same run, so without this gate a multi-condition spec validates and then dies
-      // mid-build. Model an AND by putting the second test in the rule's own scope, or author two
-      // rules.
-      errors.push(`${label}: only ONE condition is supported (got ${r.conditions.length}) — the business-rule compiler emits a single clause; author separate rules instead of a multi-condition AND/OR`);
+      errors.push(`${label}: conditions[] is required (a rule with no condition would apply unconditionally, which the SDK serializes as an empty rule that silently never fires)`);
     }
     for (const c of r.conditions || []) {
       if (!c || typeof c !== 'object') { errors.push(`${label}: each condition must be an object`); continue; }
       checkField(c.field, 'condition');
       if (!BUSINESS_RULE_OPERATORS.includes(c.operator)) {
         // Name the platform failure rather than pretending the operator is unrecognised: an author
-        // who reaches for ContainsData has written something reasonable that we cannot deploy.
+        // who reaches for a blocked operator has written something reasonable that we cannot deploy.
         if (BUSINESS_RULE_BLOCKED_OPERATORS.has(c.operator)) {
-          errors.push(`${label}: operator '${c.operator}' is not usable — the SDK compiles it to XAML the platform rejects with "Error generating UiData" (HTTP 500), live-measured on every column type. Use ${BUSINESS_RULE_OPERATORS.join(' or ')}, or test the value directly. Tracking: https://github.com/microsoft/power-platform-skills/issues/481`);
+          errors.push(`${label}: operator '${c.operator}' is not usable — see https://github.com/microsoft/power-platform-skills/issues/481`);
         } else {
-          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')`);
+          // The near-misses matter more than the nonsense here. `GreaterThan` is a natural thing to
+          // write and is NOT in the SDK's table, and the serializer resolves an unknown operator to
+          // Equals — so without this gate that spec would deploy an equality test. Name the closest
+          // legal spelling so the fix is obvious.
+          const near = BUSINESS_RULE_OPERATORS.find((o) => o.toLowerCase() === `is${String(c.operator).toLowerCase()}`
+            || o.toLowerCase().replace(/^is/, '') === String(c.operator).toLowerCase()
+            || o.toLowerCase() === String(c.operator).toLowerCase());
+          errors.push(`${label}: condition operator must be one of ${BUSINESS_RULE_OPERATORS.join('|')} (got '${c.operator}')${near ? ` — did you mean '${near}'?` : ''}`);
         }
         continue;
       }
@@ -1773,6 +1913,7 @@ module.exports = {
   VALIDATION_PROFILES,
   DIRECT_ENTRY_BEHAVIORS,
   COLUMN_VISUALIZATIONS,
+  INTEGER_FORMATS,
   BUSINESS_RULE_OPERATORS,
   BUSINESS_RULE_VALUELESS_OPERATORS,
   BUSINESS_RULE_ACTIONS,

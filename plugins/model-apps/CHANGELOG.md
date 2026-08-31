@@ -11,7 +11,44 @@ Takes the vendored SDK up again: business-rule presence operators now work, the 
 is controllable per capability, and on/off is read with the platform's real semantics rather than a
 "non-zero means on" guess.
 
+### Changed — business rules may not be available on your environment
+
+The SDK now writes a business rule **only** through the bound `CreateProcessWithWfomJson` member —
+the same one the modern business-rule designer uses. The client-side workflow-XAML compiler it used
+to fall back on has been **removed upstream**, because it covered 4 of the 7 action types and a
+single clause, so it silently narrowed a rule into something the platform accepted but that did not
+say what you wrote.
+
+The consequence is visible: **an environment that does not declare that member can no longer host
+business rules at all**, and that is the common case rather than an edge case (18 of 20 measured).
+Rules that used to deploy through the fallback will now be **skipped**. The build says so once,
+names the member, and **builds everything else normally** — you get a working app without the rules,
+never a half-created one. `--verify` reports those rules as not deployed, and says why.
+
+Nothing else about `businessRules[]` changed for environments that do support it.
+
 ### Added
+- **Per-form security roles** (`forms[].securityRoles`). Offer a form to named `personas[]`, or to
+  `everyone`, with optional `fallbackForm` and `order`. This was previously documented as impossible
+  through any API — the documentation was right that `systemform` has no role relationship (it
+  reports `CanBeInManyToMany: { Value: false, CanBeChanged: false }`) and wrong that this made it
+  unscriptable: the roles live inside `formxml` as `<DisplayConditions>`, and the SDK now writes them
+  there. Note the direction — a form with **no** assignment is offered to **every** role, so this
+  restricts a form rather than granting it, and the restriction takes effect after a publish.
+  (AB#6648526)
+- **Boolean `defaultValue`, whole-number `integerFormat`, and per-column write permissions**
+  (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — the way to make a column read-only).
+  All three were values the SDK hardcoded or never sent, so a maker had to finish the column by hand
+  after every build. Applied on create **and** reconciled on rebuild.
+  ([#495](https://github.com/microsoft/power-platform-skills/issues/495), AB#6648523, AB#6648522,
+  AB#6651276)
+- **Twelve more business-rule operators** — `IsGreaterThan`, `IsGreaterThanEqualTo`, `IsLessThan`,
+  `IsLessThanEqualTo`, `Contains`, `DoesNotContain`, `BeginsWith`, `DoesNotBeginWith`, `EndsWith`,
+  `DoesNotEndWith`, `On`, `NotOn` — and **multi-condition rules**, which are ANDed. Neither was ever
+  a platform limit; both were shaped by the XAML compiler that has now been deleted. Mind the
+  spelling: it is `IsGreaterThan`, not `GreaterThan`, because the SDK resolves an operator it does
+  not recognise to **Equals** rather than rejecting it. The spec rejects anything outside the SDK's
+  own table and suggests the right spelling.
 - **A `description` on every artifact that accepts one.** Tables, columns, views, charts, forms,
   dashboards, business rules, the solution and global choices now take an optional `description`,
   written to Dataverse **at create time** rather than backfilled. A name says what a thing is called;
@@ -23,6 +60,15 @@ is controllable per capability, and on/off is read with the platform's real sema
   instead of silent loss; `personas[]` takes none at all, because a security role's description
   carries the SDK's own ownership marker, which it requires an exact match on before it will touch
   the role.
+
+### Fixed
+- **Dashboards survive a download again.** The SDK could not deserialize a dashboard it had itself
+  serialized — its grammar walk descended into text nodes, and the bundled XML parser returns `null`
+  for a text node's children — so `download-model-app.js` recovered no tiles, dropped the dashboard's
+  sitemap subarea, and failed the whole download unless `--allow-lossy-download` was passed. Fixed
+  upstream; measured across the re-vendor as 0/4 → 4/4 round-trips, and now pinned by a regression
+  test that feeds a serialized dashboard straight back in.
+  ([#478](https://github.com/microsoft/power-platform-skills/issues/478))
 - **Presence operators for business rules.** `ContainsData` / `DoesNotContainData` were gated because
   they compiled to XAML the platform answered with `HTTP 500 — Error generating UiData`. The compiler
   emitted an empty parameter array where a null one is required; fixed upstream and re-verified live,

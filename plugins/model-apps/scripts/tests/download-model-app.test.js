@@ -1168,3 +1168,53 @@ test('a corrupt or invalid previous spec is ignored rather than failing the down
   assert.doesNotThrow(() => preserveAuthoredLanguageCode(spec, 'x', { existsSync: () => true, readFileSync: () => { throw new Error('EACCES'); } }));
   assert.strictEqual(spec.languageCode, undefined);
 });
+
+// --- a form restricted to security roles must not be lost SILENTLY ------------------------------
+//
+// Every other download gap loses a customization. This one WIDENS ACCESS: form security roles live
+// inside formxml as `<DisplayConditions>`, `forms[]` is not reconstructed by this download, and a
+// form with no DisplayConditions is offered to EVERY role. So a restricted form, downloaded and
+// rebuilt into a fresh environment, comes back visible to everyone.
+//
+// The fixtures below are the exact strings MEASURED on a live environment after a build, including
+// the platform's own default shape.
+const { isRoleRestrictedFormXml } = require('../download-model-app.js');
+
+const XML_RESTRICTED = '<form><tabs /><DisplayConditions Order="2" FallbackForm="false"><Role Id="{52446020-77a5-f111-aab2-000d3a5d0d39}" /></DisplayConditions></form>';
+const XML_EVERYONE = '<form><tabs /><DisplayConditions Order="0" FallbackForm="true"><Everyone /></DisplayConditions></form>';
+const XML_NONE = '<form><tabs /></form>';
+
+test('a role-restricted form is detected', () => {
+  assert.strictEqual(isRoleRestrictedFormXml(XML_RESTRICTED), true);
+});
+
+test('the DEFAULT shapes are NOT reported as restricted', () => {
+  // Both of these mean "every role can see it". Warning on them would make the warning noise, and a
+  // warning that fires on every form is a warning nobody reads.
+  assert.strictEqual(isRoleRestrictedFormXml(XML_EVERYONE), false,
+    '<Everyone /> is the unrestricted default, not a restriction');
+  assert.strictEqual(isRoleRestrictedFormXml(XML_NONE), false,
+    'a form with no DisplayConditions at all is visible to every role');
+});
+
+test('detection does not depend on attribute order or element casing', () => {
+  // Platform-authored and SDK-authored formxml differ in both, so matching either exactly would make
+  // this fire on one source and not the other.
+  assert.strictEqual(isRoleRestrictedFormXml('<form><displayconditions fallbackform="false" order="2"><role id="{A}" /></displayconditions></form>'), true);
+  assert.strictEqual(isRoleRestrictedFormXml('<form><DisplayConditions><Role  Id = "{A}" /></DisplayConditions></form>'), true);
+});
+
+test('a <Role> OUTSIDE DisplayConditions does not count', () => {
+  // Scoped to the block deliberately: the word Role appears elsewhere in formxml (control names,
+  // labels), and matching it loosely would report every such form as restricted.
+  assert.strictEqual(isRoleRestrictedFormXml('<form><tabs><cell><control id="Role" /></cell></tabs></form>'), false);
+  assert.strictEqual(isRoleRestrictedFormXml('<form><labels><label description="Role" /></labels></form>'), false);
+});
+
+test('missing or malformed formxml is not a restriction', () => {
+  // Fail OPEN here, not closed: an unreadable form must not produce a spurious security warning that
+  // sends someone hunting for a restriction that does not exist.
+  for (const bad of [undefined, null, '', '<form', 123, {}]) {
+    assert.strictEqual(isRoleRestrictedFormXml(bad), false, `${JSON.stringify(bad)} must not read as restricted`);
+  }
+});

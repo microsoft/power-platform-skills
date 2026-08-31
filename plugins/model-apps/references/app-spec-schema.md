@@ -241,7 +241,9 @@ it exists is accepted by validation, builds green, and does not change the deplo
       "description": "How urgently the ticket needs attention." },   // RECOMMENDED — see below
     { "schemaName": "new_duedate",  "displayName": "Due Date", "type": "DateTime" },
     { "schemaName": "new_score",    "displayName": "Score", "type": "Integer",
-      "visualization": "RadialDial" }         // optional — CUSTOM GRID RENDERING (preview), below
+      "visualization": "RadialDial" },        // optional — CUSTOM GRID RENDERING (preview), below
+    { "schemaName": "new_externalref", "displayName": "External Reference", "type": "Text",
+      "isValidForUpdate": false }             // optional — WRITE-ONCE after creation, below
   ]
 }
 ```
@@ -250,15 +252,34 @@ it exists is accepted by validation, builds green, and does not change the deplo
   **Lookups are NOT columns** — declare a `OneToMany` relationship instead.
 - **Per-type options** (all optional): `required: true` / `"recommended"`; Text → `maxLength`,
   `format` (`Text`/`Email`/`Url`/`Phone`); numeric → `minValue`/`maxValue`/`precision`;
-  DateTime → `dateFormat` (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`;
-  File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber → `autoNumberFormat`
-  (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` + `formula`.
+  Integer → also `integerFormat` (`None`/`Duration`/`TimeZone`/`Language`/`Locale` — e.g. render a
+  raw minute count as a Duration picker instead of a plain number); DateTime → `dateFormat`
+  (`DateOnly`/`DateAndTime`); Boolean → `trueLabel`/`falseLabel`/`defaultValue` (explicit `true` or
+  `false` — see note below); File/Image → `maxSizeKb`, Image → `isPrimaryImage`; AutoNumber →
+  `autoNumberFormat` (e.g. `"C-{SEQNUM:5}"`); Calculated/Rollup → `source: "Calculated"|"Rollup"` +
+  `formula`.
+- **Write permissions** (optional, every column type **except Customer**): `isValidForCreate` /
+  `isValidForUpdate` / `isValidForRead` — see `isValidForCreate / isValidForUpdate /
+  isValidForRead` below.
+- **`defaultValue` and `integerFormat` are boolean-typed / enum-typed spec-gate checks, not
+  free-form.** `defaultValue` must be a literal `true`/`false` and only applies to a `Boolean`
+  column; `integerFormat` must be one of the five literals above and only applies to an `Integer`
+  column (not `BigInt`/`Decimal`/`Double`/`Money`, even though they share the same numeric
+  `minValue`/`maxValue`/`precision` options) — either mismatch is rejected by name at validation
+  time rather than surfacing as a mid-build SDK error.
 - **`required` converges on rebuild only when authored explicitly.** For a new column, `true` creates
   Dataverse `ApplicationRequired` and `"recommended"` creates `Recommended`. For a column that
   already exists (including the primary/name column), a rebuild first reads its current
   `RequiredLevel` and only writes when the explicit spec value differs. If `required` is omitted,
   the build leaves the existing column alone instead of treating omission as `None`, so it never
   silently demotes a field a maker already made Business Required.
+- **`defaultValue`, `integerFormat`, and `isValidFor*` converge differently: by re-assertion, not
+  by diff.** Unlike `required` above, a rebuild does not read the column's current state first —
+  it simply re-sends whichever of these fields the spec sets explicitly, on every build, for both a
+  brand-new column and one that already exists. This is safe because re-sending an already-correct
+  value is a no-op on the wire; it does mean (unlike `required`) there is no "leave it alone if
+  omitted" behavior to rely on for a value set by hand in the portal — omit the field entirely to
+  leave portal-set state untouched, exactly as for `visualization` below.
 - **Choice / MultiChoice** need `options[]` (string labels) **or** a `globalChoice` reference
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
@@ -291,6 +312,36 @@ on each `views[]` entry.
   reports no divergence. Live-measured: the backing `controlconfigurations` table was present on
   only 1 of 18 test environments. If a renderer does not appear, check the environment first — the
   same spec succeeds unchanged on a provisioned org.
+
+### `isValidForCreate` / `isValidForUpdate` / `isValidForRead` — per-verb write/read permissions (optional)
+
+Governs which API verbs Dataverse allows against the column, independent of the table-level
+security a `personas[]` role grants. The common case is **write-once**: a column that should be
+populated at creation (an external system id, an intake source) and never touched again —
+`"isValidForUpdate": false` blocks every later write, whether from a form, a flow, or the API,
+without needing a business rule or a plug-in to enforce it.
+
+```jsonc
+{ "schemaName": "new_externalref", "displayName": "External Reference", "type": "Text",
+  "isValidForUpdate": false }
+```
+
+- **All three are independently optional booleans** — set only the ones you mean to constrain.
+  Omitting all three leaves the column at the Dataverse default (valid for create, update, AND
+  read).
+- **`false` is the entire point of the feature, and is honoured exactly like `true`.** The spec
+  validation and the build both use an explicit-value check (`!== undefined`), never a truthy
+  check, specifically so `isValidForUpdate: false` is never silently dropped the way a naive
+  `if (value)` guard would drop it.
+- **Every buildable column type accepts these EXCEPT Customer.** A `Customer` column is created
+  through a separate Dataverse API path (a polymorphic account/contact lookup) that carries no
+  such option. Setting any of the three on a Customer column does not fail the build — it
+  **warns** and the flag is silently not written, the same treatment `description` gets on a
+  Customer column elsewhere in this doc.
+- **Rebuild-safe, by re-assertion (see the reconcile note above).** Whichever of the three fields
+  the spec sets explicitly is re-sent on every build for an existing column, not just a newly
+  created one — so tightening `isValidForUpdate` to `false` in the spec and rebuilding converges an
+  already-shipped table, not only a fresh one.
 
 ### entity sub-sections (optional)
 ```jsonc
@@ -424,6 +475,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
     "new_daysremaining":  { "after": "new_duedate" }     // move it directly after Due Date
   } }
 
+// offer this form only to particular personas (a form with no assignment is offered to EVERY role)
+{ "entity": "new_ticket", "name": "Dispatcher Ticket", "layout": "auto",
+  "securityRoles": { "personas": ["Dispatcher"], "fallbackForm": false, "order": 1 } }
+
 // the same options inline, when an explicit layout already lists the fields
 { "entity": "new_workitem", "name": "Work Item", "layout": "explicit", "prune": false,
   "tabs": [ { "label": "General", "sections": [ { "columns": 1, "fields": [
@@ -514,6 +569,42 @@ in the designer, or drop the field and let the next build re-add it.
   without re-declaring every other field just to preserve it. It has no effect on an `auto` layout
   (already additive) and is warned about there.
 
+### `securityRoles` — who the form is offered to
+
+A form with **no** `securityRoles` block is offered to **every** security role. Declaring one is
+therefore a **restriction**, not a grant, and that direction is what makes each mistake here
+access-relevant: an empty list or a mistyped persona would hide the form from everyone, not simply
+fail to add anyone. Every malformed shape is a hard error for that reason.
+
+```jsonc
+{ "securityRoles": { "personas": ["Dispatcher", "Supervisor"] } }   // only these roles see it
+{ "securityRoles": { "everyone": true } }                            // explicitly every role
+{ "securityRoles": { "personas": ["Dispatcher"], "fallbackForm": true, "order": 2 } }
+```
+
+- **`personas[]`** — names from this spec's `personas[]`, **not** role GUIDs. The build resolves each
+  to the role it created. A name that is not declared is rejected at the spec gate, and would halt the
+  build if it somehow reached it.
+- **`everyone`** — mutually exclusive with `personas`. That is the *platform's* model, not a rule of
+  this spec: `<Everyone />` **replaces** the role list rather than adding to it. `everyone: false` is
+  rejected, because it looks like "restrict to nobody" and means nothing — omit the block instead.
+- **`fallbackForm`** *(optional)* — show this form to users whose roles have no form of their own.
+- **`order`** *(optional, non-negative integer)* — display order among the entity's forms.
+- Both `fallbackForm` and `order` are **preserved** when omitted, so a later build that sets only
+  `personas` does not reset them.
+
+**Two things worth knowing.** The roles are stored **inside `formxml`**, as a `<DisplayConditions>`
+element — `systemform` has no role relationship at all (it reports
+`CanBeInManyToMany: { Value: false, CanBeChanged: false }`), which is why no association-style API
+ever worked and why this needs a dedicated call. And the write lands on the **unpublished** layer:
+live-measured, the published form still reported `<Everyone />` until the customization was
+published, so the restriction takes effect only after a publish. The build publishes the entity when
+publishing is enabled.
+
+Assignment happens in the **security** phase, not the forms phase, because the roles do not exist
+until then. If you build with `--phases` excluding `forms`, the assignment is skipped with a message
+rather than applied to a form this run did not build.
+
 ### Column types that cannot go on a form
 
 **Big Integer (`BigInt`) has no Unified Interface form control.** A BigInt placed on a form renders
@@ -569,7 +660,7 @@ custom control), but the spec validator emits a warning.
   "description": "Closed tickets are read-only history, so the working fields are hidden.",
   "scope": "Entity",          // only Entity today
   "status": "Active",         // Active (default) | Draft — a Draft rule is deployed but inert
-  "conditions": [             // ALL must hold (ANDed)
+  "conditions": [             // ALL must hold (ANDed); more than one is allowed
     { "field": "new_status", "operator": "Equals", "value": "100000001", "dataType": "Picklist" }
   ],  "actions": [
     { "type": "SetVisibility",       "field": "new_notes",  "visible": false },
@@ -579,24 +670,41 @@ custom control), but the spec validator emits a warning.
   ] }
 ```
 
-- **Operators**: `Equals` · `DoesNotEqual` (both must carry a `value`), and the presence operators
-  `ContainsData` · `DoesNotContainData` (which must **not** carry one — they test presence, so a
-  value would be meaningless).
-  The presence pair was rejected for a while: the compiler emitted an empty parameter array where
-  the platform requires a null one, and every attempt answered `HTTP 500 — Error generating UiData`
-  ([#481](https://github.com/microsoft/power-platform-skills/issues/481)). Fixed upstream and
-  re-verified live — all four operators now deploy in a single run.
+- **Environment gate — read this first.** The SDK writes a rule through the bound
+  `CreateProcessWithWfomJson` member, the same one the modern business-rule designer uses, and has
+  **no fallback**. An environment that does not declare that member cannot host business rules at
+  all, and that is the common case rather than an edge case (18 of 20 measured). The build then
+  **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
+  so you get a working app without the rules, not a half-built one. `--verify` will report those
+  rules as not deployed, which is the truth.
+- **Operators**, all of which the SDK's own table defines:
+  `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
+  `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
+  `EndsWith` · `DoesNotEndWith` · `On` · `NotOn` (all carry a `value`), plus the presence operators
+  `ContainsData` · `DoesNotContainData`, which must **not** carry one.
+  Mind the spelling: it is `IsGreaterThan`, **not** `GreaterThan`. The SDK resolves an operator it
+  does not recognise to **Equals** rather than rejecting it, so a misspelling would deploy, activate,
+  and quietly test equality. The spec rejects anything outside the table for exactly that reason, and
+  suggests the correct spelling when it can.
 - **Actions**: `SetVisibility` (`visible`) · `LockUnlock` (`lock`) · `SetBusinessRequired`
   (`required`) · `SetFieldValue` (`value`). The three boolean payloads must be **real booleans** — a
   string `"false"` is truthy and would invert the intent, so it is rejected.
-- **`dataType`** (optional, default `String`) is how the platform should read the literal:
-  `String` · `Picklist` · `Boolean` · `Integer` · `Decimal` · `Money` · `DateTime` · `Memo`. For a
-  Choice column use `Picklist` and give the option's **integer value**, not its label.
+  The SDK also models `SetDefaultValue`, `ShowErrorMessage` and `Recommendation`. They are not
+  exposed yet: each needs mapping that cannot be exercised end to end on an environment without the
+  bound member, and shipping unverified mapping is how a rule deploys and does the wrong thing.
+- **`conditions[]` are ANDed**, and there may be **more than one** — they are folded with the
+  platform's `LogicalAnd`. (An earlier single-condition limit came from a client-side XAML compiler
+  that has since been deleted upstream; it was never a platform limit.) `OR` is not exposed.
+- **`dataType`** (optional) — accepted values are `String` · `Memo` · `Picklist` · `State` ·
+  `Status` · `Boolean` · `Integer` · `Double` · `Decimal` · `Money`.
+  **It currently has no effect.** Measured across every accepted value, on both the condition and the
+  action path, the SDK types every literal as `String` and never consults this field. It is still
+  validated as a closed set so a typo is caught and so the surface stays forward-compatible, but do
+  not expect it to change the deployed rule. For a Choice column, give the option's **integer
+  value**, not its label — that part matters regardless.
 - Every `field` must be a column on the rule's own `entity` (its own columns, its primary name, or a
   lookup a relationship creates). A rule naming a column that does not exist is accepted by the
   platform and then simply **never fires**, so this is validated up front.
-- Why this slice and not more: the vendored SDK compiles rules to classic workflow XAML, and these
-  four actions plus four operators are what that compiler supports. Anything else throws mid-build.
 - **Rebuild behaviour is additive** — a rule is matched by `(entity, name)` and reused if present;
   edits are **not** re-applied. Recreate the rule to change it.
 

@@ -652,14 +652,15 @@ function planTeardown(spec) {
       target: { manifestName: manifestResourceName(appUniqueName(spec)) },
     });
   }
-  // Persona security roles — deleted right after the app, before the data model (a role holding a
-  // table's privileges could block that table's delete). The role handler is SEC-1 safe (marker-gated)
-  // and BU-scoped. Uses the TRIMMED (canonical) persona name so it matches the name the SDK created.
-  for (const p of spec.personas || []) {
-    const name = canonicalPersonaName(p);
-    if (!name) continue;
-    steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
-  }
+  // Persona security roles were once deleted right here, immediately after the app. They are now
+  // ordered AFTER the forms below, because `forms[].securityRoles` writes the role into the form's
+  // `formxml` as a `<DisplayConditions>` entry — which the platform treats as a real dependency.
+  // MEASURED live: deleting the role while its form still existed answered
+  //   HTTP 400 ... The Role(<id>) component cannot be deleted because it is referenced by 1 other
+  //   components
+  // and the same delete succeeded (204, zero dependencies) the moment the forms were gone. The
+  // original constraint that put roles early — a role holding a table's privileges can block that
+  // table's delete — is still satisfied, because forms are themselves deleted well before tables.
   for (const d of spec.dashboards || []) {
     steps.push({ kind: 'dashboard', phase: 'dashboards', label: `dashboard "${d.name}"`, target: { name: d.name } });
   }
@@ -702,6 +703,16 @@ function planTeardown(spec) {
     // deleting (restoreStockMainForm), so flag them here.
     const isMain = String(f.formType || f.type || 'main').toLowerCase() === 'main';
     steps.push({ kind: 'form', phase: 'forms', label: `form "${f.name}" (${f.entity})`, target: { name: f.name, entity: String(f.entity).toLowerCase(), formType: f.formType, formId: f.formId, isMain } });
+  }
+  // Persona security roles — AFTER the forms, BEFORE the data model. See the note above the
+  // dashboards loop for why this moved: a form that names a role in its `<DisplayConditions>` holds a
+  // platform dependency on that role, so the role cannot be deleted until the form is. The role
+  // handler is SEC-1 safe (marker-gated) and BU-scoped. Uses the TRIMMED (canonical) persona name so
+  // it matches the name the SDK created.
+  for (const p of spec.personas || []) {
+    const name = canonicalPersonaName(p);
+    if (!name) continue;
+    steps.push({ kind: 'role', phase: 'security', label: `security role "${name}"`, target: { name, businessUnitId: p.businessUnitId } });
   }
   for (const c of spec.charts || []) {
     steps.push({ kind: 'chart', phase: 'charts', label: `chart "${c.name}" (${c.entity})`, target: { name: c.name, entity: String(c.entity).toLowerCase() } });

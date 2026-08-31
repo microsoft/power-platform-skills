@@ -169,7 +169,20 @@ async function verifySpec(spec, read, opts = {}) {
       continue;
     }
     const list = rows || [];
-    if (!list.length) { add('business-rule', name, false, 'not deployed'); continue; }
+    if (!list.length) {
+      // Name the most likely cause instead of the bare fact. The SDK writes rules ONLY through the
+      // bound `CreateProcessWithWfomJson` member and no longer compiles a workflow-XAML fallback, so
+      // an environment that does not declare that member cannot host business rules at all — and
+      // that is the COMMON case (18 of 20 measured). The build already skips them with a warning, so
+      // without this hint the operator reads "not deployed" as a build failure and goes looking for
+      // one that is not there.
+      //
+      // It stays a FAIL, not a pass or a skip: the app genuinely does not have the rule the spec
+      // asks for, and verify's job is to report the deployed truth.
+      add('business-rule', name, false,
+        'not deployed — if the build reported "business rules were NOT created", this environment does not expose the CreateProcessWithWfomJson member and cannot host them');
+      continue;
+    }
     if (list.length > 1) {
       add('business-rule', name, false, `${list.length} rules share this name on ${entityLogical} — duplicates fire the same logic more than once (see issue #482)`);
       continue;

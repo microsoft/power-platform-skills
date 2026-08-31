@@ -247,7 +247,7 @@ async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
 }
 
 async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
-  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [] };
+  const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [] };
   try {
     const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
     const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
@@ -267,9 +267,24 @@ async function readDescriptionInventory(sdk, appId, solutionUniqueName) {
           inventory.charts.push(...await rowsByIds(sdk, 'savedqueryvisualization', 'savedqueryvisualizationid', ids, ['savedqueryvisualizationid', 'name', 'primaryentitytypecode', 'description'], (r) =>
             withDescription({ id: r.savedqueryvisualizationid, name: r.name, entity: r.primaryentitytypecode }, r.description)));
         } else if (src.set === 'systemform') {
-          const forms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description'], (r) =>
-            withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
-          inventory.forms.push(...forms.filter((f) => f.entity && f.entity !== 'none'));
+          // `formxml` is pulled ONLY to detect a role restriction — it is never stored. A form's
+          // security roles live inside formxml as `<DisplayConditions>` (there is no
+          // systemform↔role relationship), and `forms[]` is not reconstructed by this download at
+          // all, so a restricted form would come back as one every role can see. That is a silent
+          // WIDENING of access on a cross-environment rebuild, which is why it is worth one extra
+          // column on a query this download already makes.
+          //
+          // The flag is kept OFF the form entries and on a sibling key, because
+          // `sanitizeDescriptionInventory` whitelists exactly five keys — so this reaches the
+          // download CLI for its warning without leaking a new field into `app-spec.json`.
+          const rawForms = await rowsByIds(sdk, 'systemform', 'formid', ids, ['formid', 'name', 'objecttypecode', 'description', 'formxml'], (r) => r);
+          for (const r of rawForms) {
+            if (!r || !r.objecttypecode || r.objecttypecode === 'none') continue;
+            inventory.forms.push(withDescription({ id: r.formid, name: r.name, entity: r.objecttypecode }, r.description));
+            if (isRoleRestrictedFormXml(r.formxml)) {
+              inventory.roleRestrictedForms.push({ name: r.name, entity: r.objecttypecode });
+            }
+          }
         }
       }
     }
@@ -434,6 +449,26 @@ const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
 // and DateTime round-trip while Choice quietly degrades) is harder to notice than the old
 // everything-is-Text, so the affected columns are warned about by name.
 const TYPES_NEEDING_COMPANION_DATA = new Set(['Choice', 'MultiChoice']);
+
+// Does this form's `formxml` restrict it to particular security roles?
+//
+// The roles live INSIDE formxml, as a `<DisplayConditions>` child of `<form>` — `systemform` has no
+// role relationship at all — e.g.:
+//
+//   <DisplayConditions Order="2" FallbackForm="false"><Role Id="{GUID}" /></DisplayConditions>
+//
+// The unrestricted default is the sibling shape `<DisplayConditions ...><Everyone /></...>`, or no
+// element at all. Only the `<Role>` form is a restriction, so match on that specifically rather than
+// on the presence of `<DisplayConditions>`, which every form has.
+//
+// Attribute order and casing vary between platform-authored and SDK-authored xml, so this matches
+// the element name case-insensitively and does not assume `Id` is the first attribute.
+function isRoleRestrictedFormXml(formxml) {
+  const xml = String(formxml || '');
+  const block = xml.match(/<DisplayConditions[\s\S]*?<\/DisplayConditions>/i);
+  if (!block) return false;
+  return /<Role\b/i.test(block[0]);
+}
 
 // Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
 // trip does not silently create them as Text. `type` is absent for a Choice/MultiChoice (above), or
@@ -979,6 +1014,9 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     process.stderr.write(`(dashboards reconstruction skipped: ${e.message})\n`);
   }
 
+  // Captured by the descriptionInventory accessor below so the role-restriction warning can read it
+  // without making a second query.
+  let capturedInventory;
   const read = {
     // Ensure the app's REAL uniquename reaches hydrateSpec (→ spec.app.uniqueName) even if the artifact
     // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
@@ -991,9 +1029,23 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     dashboards: async () => dashboards,
     solution: async () => solution,
     design: async () => (manifest ? manifest.design : undefined),
-    descriptionInventory: async () => readDescriptionInventory(sdk, appId, solution.uniqueName),
+    // Captured on the way past so the role-restriction warning below can read it. The accessor stays
+    // a function (hydrateSpec's contract) and is still called exactly once, so this adds no query.
+    descriptionInventory: async () => {
+      capturedInventory = await readDescriptionInventory(sdk, appId, solution.uniqueName);
+      return capturedInventory;
+    },
   };
   const spec = await hydrateSpec(read);
+
+  // A form restricted to particular security roles. `forms[]` is not reconstructed by this download,
+  // so nothing carries the restriction forward: rebuilding into a FRESH environment regenerates the
+  // form with no `<DisplayConditions>`, and a form with none is offered to EVERY role. Every other
+  // download gap loses a customization; this one silently WIDENS access, so it is named explicitly.
+  const restricted = (capturedInventory && capturedInventory.roleRestrictedForms) || [];
+  if (restricted.length) {
+    process.stderr.write(`WARNING: ${restricted.length} form(s) are restricted to specific security roles (${restricted.map((f) => `${f.entity}.${f.name}`).join(', ')}). This download does not reconstruct forms[], so that restriction is NOT carried into the spec — rebuilding into a fresh environment would recreate them visible to EVERY role. Re-declare it with forms[].securityRoles before a cross-environment rebuild.\n`);
+  }
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
   return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings };
@@ -1115,4 +1167,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { untypedColumnNames, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, isRoleRestrictedFormXml, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

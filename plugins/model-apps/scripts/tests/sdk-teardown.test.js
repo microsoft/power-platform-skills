@@ -1053,7 +1053,7 @@ test('teardown still deletes a real (non-restricted) solution — regression', a
 
 // --- Security persona roles (Group N P1) ---------------------------------------------------
 
-test('planTeardown inserts persona role steps right after the app, before the data model', () => {
+test('planTeardown orders persona roles AFTER forms and before the data model', () => {
   const spec = Object.assign(fullSpec(), { personas: [
     { persona: 'Agent', jobs: [{ name: 'w', privileges: [{ entity: 'new_ticket', access: ['read'] }] }] },
     { persona: 'Lead', jobs: [{ name: 'm', privileges: [{ entity: 'new_ticket', access: ['read', 'write'] }] }] },
@@ -1062,11 +1062,21 @@ test('planTeardown inserts persona role steps right after the app, before the da
   assert.strictEqual(kinds[0], 'app');
   // Generative pages are torn down immediately after the app (the SDK no longer cascades them).
   assert.strictEqual(kinds[1], 'genpage');
-  assert.strictEqual(kinds[2], 'role');
-  assert.strictEqual(kinds[3], 'role');
-  // Roles are torn down before any relationship/table delete (a role holding a table's privileges
-  // could otherwise block that table's delete).
+
+  // Roles come AFTER forms. `forms[].securityRoles` writes the role id into the form's formxml as a
+  // `<DisplayConditions>` entry, and the platform treats that as a real dependency.
+  // MEASURED live: deleting the role first answered
+  //   HTTP 400 ... The Role(<id>) component cannot be deleted because it is referenced by 1 other
+  //   components
+  // and the identical delete returned 204 with zero reported dependencies once the forms were gone.
+  assert.ok(kinds.indexOf('role') > kinds.lastIndexOf('form'),
+    `roles must be deleted after every form; order was ${JSON.stringify(kinds)}`);
+
+  // And still BEFORE any relationship/table delete — the original reason they were early. A role
+  // holding a table's privileges can block that table's delete, so this constraint has to survive
+  // the move rather than be traded away for the one above.
   assert.ok(kinds.lastIndexOf('role') < kinds.indexOf('relationship'), 'roles before relationships/tables');
+  assert.strictEqual(kinds.filter((k) => k === 'role').length, 2, 'both personas are still planned');
 });
 
 test('role handler resolves ONLY SDK-authored (marker) unmanaged roles — never a foreign same-name role', async () => {

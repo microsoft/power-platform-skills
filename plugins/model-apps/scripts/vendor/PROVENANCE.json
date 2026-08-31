@@ -1,14 +1,14 @@
 {
-  "commit": "ae1be504c8bedf330d1f22c4a6b65f3cd37e59cd",
-  "subject": "feat(cds-maker-sdk): AI form-fill capability settings + forms can carry a description",
+  "commit": "15bd1b16cdcb8ba8e7cfb82408924e4f860926df",
+  "subject": "fix(cds-maker-sdk): sort the VERSION_CONFLICT_CODE import (CI Rush lint)",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-28T21:26:21.902Z",
-  "newestSrcAt": "2026-08-28T21:23:52.676Z",
+  "libBuiltAt": "2026-08-31T17:44:14.175Z",
+  "newestSrcAt": "2026-08-31T17:43:21.997Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-28T21:26:41.230Z",
-  "bundleSha256": "f4ff93b5d0985286f4a3f4275088b01333ad0768e5fde4f62862f2748376e899",
-  "bundleBytes": 688045
+  "builtAt": "2026-08-31T18:44:53.881Z",
+  "bundleSha256": "2d459dec4bad316c468a05ce9d21f13eef48984a483b0aaa29d3f627213db0f5",
+  "bundleBytes": 682531
 }
