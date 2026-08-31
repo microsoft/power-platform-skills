@@ -148,7 +148,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `device-info` | `expo-device` / `expo-application` / `expo-cellular` | `src/native/deviceInfo.ts` | Read-only device/app/cellular metadata wrappers |
 | `date-time-picker` | `@react-native-community/datetimepicker` | screen-level component usage | Use directly in form screens per screen-builder rules; no `/add-native` wrapper required |
 
-For user-selected photos and videos, use `expo-image-picker`; for documents and other files, use `expo-document-picker`. These system-picker flows keep access scoped to the items the user selects and avoid broad photo/video library permissions.
+For custom workflows outside Dataverse File/Image form fields, use the `image-picker` capability via `/add-native image-picker` for user-selected photos and videos, or the `document-picker` capability via `/add-native document-picker` for documents and other files. These wrappers use scoped system-picker flows. Dataverse File/Image form fields remain the exception: use host `<FilePicker>` / `<ImagePicker>` controls as described above, not `/add-native` wrappers or raw Expo module imports.
 
 ### PDF / pen routing rules
 
