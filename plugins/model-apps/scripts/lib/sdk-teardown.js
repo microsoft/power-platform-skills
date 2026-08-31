@@ -53,7 +53,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, businessRuleFilter } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -324,7 +324,12 @@ const KIND_HANDLERS = {
     // round trip and the platform runs it asynchronously (a WorkflowSetState job), which is why a
     // solution uninstall immediately afterwards can transiently 429 — see the teardown notes.
     async resolve(sdk, target) {
-      const filter = businessRuleFilter(target.name, target.entity).replace('type eq 1', '(type eq 1 or type eq 2)');
+      // Built explicitly rather than by string-patching `businessRuleFilter()`'s output. It used to
+      // be `businessRuleFilter(...).replace('type eq 1', '(type eq 1 or type eq 2)')`, which coupled
+      // teardown to that function's exact spelling: any reordering or whitespace change there would
+      // silently stop the widening, the type-2 row would survive, and #493's residue would come back
+      // with every test still green. Same `odataLit` escaping, stated once, visible in full.
+      const filter = `category eq 2 and (type eq 1 or type eq 2) and name eq '${odataLit(target.name)}' and primaryentity eq '${odataLit(String(target.entity).toLowerCase())}'`;
       const rows = await sdk.queryRecords('workflow', {
         select: ['workflowid', 'statecode', 'type', '_parentworkflowid_value'],
         // Teardown deliberately widens businessRuleFilter from the build's definition-only query:

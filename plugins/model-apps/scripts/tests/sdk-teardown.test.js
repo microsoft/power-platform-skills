@@ -1486,3 +1486,57 @@ test('clearing a visualization writes None through the SDK', async () => {
   await KIND_HANDLERS.columnVisualization.del(sdk, { entityLogical: 'account', columnLogical: 'new_score' });
   assert.deepStrictEqual(calls, [['account', 'new_score', 'None']]);
 });
+
+// --- the teardown business-rule filter is built explicitly, not string-patched ------------------
+//
+// PR review: this filter used to be `businessRuleFilter(...).replace('type eq 1', '(type eq 1 or
+// type eq 2)')`, which coupled teardown to the exact spelling of a function in another module. Any
+// reordering or whitespace change there would silently stop the widening — the type-2 activated copy
+// would survive the table delete, and #493's residue would return with every test still green.
+//
+// LIVE-VERIFIED that the widening matters: teardown of a genuinely activated rule reports
+// "2 deleted" — the definition AND the platform's activated copy.
+
+test('teardown resolves BOTH the definition and the activated copy (type 1 and type 2)', async () => {
+  const queries = [];
+  const sdk = {
+    queryRecords: async (set, opts) => { queries.push({ set, opts }); return []; },
+    updateRecord: async () => {},
+    deleteRecord: async () => {},
+  };
+  await KIND_HANDLERS.businessRules.resolve(sdk, { name: "Lock O'Brien", entity: 'New_Ticket' });
+
+  assert.strictEqual(queries.length, 1);
+  const f = queries[0].opts.filter;
+  assert.match(f, /\(type eq 1 or type eq 2\)/, 'both row types must be in scope for teardown');
+  assert.match(f, /category eq 2/, 'business rules only — never a classic workflow');
+  assert.match(f, /primaryentity eq 'new_ticket'/, 'the entity is lower-cased, and the rule is table-scoped');
+  // An apostrophe must be OData-escaped by doubling, or the filter is malformed AND injectable.
+  assert.match(f, /name eq 'Lock O''Brien'/, "a quote in the name must be escaped, not passed through");
+});
+
+test('the teardown filter does NOT depend on businessRuleFilter\'s spelling', async () => {
+  // The specific brittleness that was reported. `businessRuleFilter` is the BUILD's definition-only
+  // query; teardown must not derive from its text. Asserted on the source so a re-introduction of the
+  // `.replace(...)` coupling fails here rather than silently in production.
+  //
+  // COMMENTS ARE STRIPPED FIRST. The fix's own comment quotes the old pattern verbatim to explain
+  // what changed, and a naive source scan matched that prose — a test that fails on its own
+  // documentation is worse than no test.
+  const raw = fs.readFileSync(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'), 'utf8');
+  const code = raw
+    .split(/\r?\n/)
+    // No `$` anchor: this file is CRLF, and in JS `.` does not match `\r`, so `.*$` never reached the
+    // end of a line that still carried one — the strip silently did nothing and this test failed on
+    // its own documentation.
+    .map((l) => l.replace(/^\s*\/\/.*/, ''))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');           // block comments
+  assert.doesNotMatch(code, /businessRuleFilter\([^)]*\)\s*\.replace\(/,
+    'teardown must not string-patch businessRuleFilter output');
+  // And it must not import the symbol at all, so the coupling cannot creep back in another form.
+  const importLine = code.split('\n').find((l) => l.includes("require('./sdk-build.js')")) || '';
+  assert.ok(importLine, 'the sdk-build import line must still be findable for this check to mean anything');
+  assert.strictEqual(importLine.includes('businessRuleFilter'), false,
+    `teardown must not import businessRuleFilter; got: ${importLine.trim().slice(0, 160)}`);
+});
