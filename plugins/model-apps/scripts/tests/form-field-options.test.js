@@ -211,6 +211,35 @@ test('after: a chain resolves against the running order, so b-after-a then c-aft
   assert.deepStrictEqual(fields, ['new_name', 'new_points', 'new_daysremaining', 'new_duedate']);
 });
 
+test('after: a chain declared in REVERSE dependency order still produces a create order that satisfies it', () => {
+  // The anchor walk is in entity-column order, not the author's fieldOptions order, so a single pass
+  // can place a field against an anchor that is itself relocated later — leaving a create order that
+  // violates its own anchors, which the first rebuild then silently "fixes". The reorder therefore
+  // runs to a fixed point. Declaration order must not matter.
+  const forward = specWithBigInt({ fieldOptions: { new_daysremaining: { after: 'new_duedate' }, new_points: { after: 'new_daysremaining' } } });
+  const reverse = specWithBigInt({ fieldOptions: { new_points: { after: 'new_daysremaining' }, new_daysremaining: { after: 'new_duedate' } } });
+  const want = ['new_name', 'new_duedate', 'new_daysremaining', 'new_points'];
+  assert.deepStrictEqual(logicalsOf(compileFormIntent(forward, forward.forms[0])), want);
+  assert.deepStrictEqual(logicalsOf(compileFormIntent(reverse, reverse.forms[0])), want, 'declaration order changed the result');
+});
+
+test('validation rejects two fields anchored after the SAME field (they would fight forever)', () => {
+  const spec = specWithBigInt({ fieldOptions: { new_points: { after: 'new_duedate' }, new_daysremaining: { after: 'new_duedate' } } });
+  // Each build moves one to anchor+1 and then the other, displacing the first — a no-op pair
+  // re-issued on every rebuild, which is exactly the non-convergence the anchor work exists to end.
+  assert.ok(errsFor(spec).some((e) => /both anchored after 'new_duedate'/.test(e)), errsFor(spec).join(' | '));
+});
+
+test('validation rejects an anchor cycle — no order satisfies it', () => {
+  const two = specWithBigInt({ fieldOptions: { new_points: { after: 'new_duedate' }, new_duedate: { after: 'new_points' } } });
+  assert.ok(errsFor(two).some((e) => /form a cycle/.test(e)), errsFor(two).join(' | '));
+  const three = specWithBigInt({ fieldOptions: { new_points: { after: 'new_duedate' }, new_duedate: { after: 'new_daysremaining' }, new_daysremaining: { after: 'new_points' } } });
+  assert.ok(errsFor(three).some((e) => /form a cycle/.test(e)), errsFor(three).join(' | '));
+  // A plain chain is NOT a cycle and must stay legal.
+  const chain = specWithBigInt({ fieldOptions: { new_points: { after: 'new_duedate' }, new_daysremaining: { after: 'new_points' } } });
+  assert.deepStrictEqual(errsFor(chain), []);
+});
+
 test('after: moving a field FORWARD (source before anchor) lands directly after the anchor, not one past it', () => {
   // The compensation case the naive implementation gets wrong: splicing the source out first shifts
   // the anchor DOWN by one, so an anchor index captured before the removal overshoots.

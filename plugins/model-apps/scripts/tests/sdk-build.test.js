@@ -1662,6 +1662,17 @@ test('form reconcile: a lone-row field anchored to a LAST cell still uses the ch
   assert.ok(move, 'no moveElement issued');
   assert.strictEqual(move.args[2], '/tabs/0/columns/0/sections/0/rows/2', 'the whole ROW moves');
   assert.strictEqual(move.args[3], '/tabs/0/columns/0/sections/0/rows');
+  // Pin the INDEX and the RESULT too. Asserting only that the call happened leaves the row-branch
+  // index arithmetic unpinned in this orientation (source AFTER anchor, so the same-array
+  // compensation must NOT fire): inverting the compensation would emit index 0, put new_late first,
+  // and never converge — and a call-only assertion would still pass.
+  assert.deepStrictEqual(move.args[4], { index: 1 });
+  const form = await sdk.getArtifact('form', 'form-existing');
+  assert.deepStrictEqual(
+    form.tabs[0].columns[0].sections[0].rows.map((r) => r.cells.map((c) => c.control.fieldName)),
+    [['new_name', 'new_tier'], ['new_late'], ['new_other']],
+    'the moved row must land directly after the anchor row'
+  );
 });
 
 test('form reconcile: a second build over an anchored 2-column form issues NO move (it converges)', async () => {

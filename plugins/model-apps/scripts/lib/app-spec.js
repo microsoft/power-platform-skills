@@ -619,6 +619,38 @@ function validateFormFieldOptions(f, entityByLower, errors, warnings) {
     }
   }
 
+  // Two contradictory anchor shapes. Both are silently unstable rather than wrong-but-stable: the
+  // reconcile moves each field to its anchor on every build and they undo each other, so the form
+  // never converges and a rebuild issues writes forever. Neither can be resolved automatically —
+  // "immediately after X" cannot be true of two fields at once, and a cycle has no valid order — so
+  // they are rejected at author time instead of being papered over by the placement code.
+  const anchorOf = new Map();
+  for (const { name, opt } of seen) {
+    if (opt.after && typeof opt.after === 'string') anchorOf.set(name, String(opt.after).toLowerCase());
+  }
+  const claimants = new Map();
+  for (const [name, anchor] of anchorOf) {
+    if (!claimants.has(anchor)) claimants.set(anchor, []);
+    claimants.get(anchor).push(name);
+  }
+  for (const [anchor, names] of claimants) {
+    if (names.length > 1) {
+      errors.push(`${label}: ${names.map((n) => `'${n}'`).join(' and ')} are both anchored after '${anchor}' — only one field can sit immediately after another. Chain them instead (anchor the second one after the first).`);
+    }
+  }
+  for (const start of anchorOf.keys()) {
+    const seenInWalk = new Set([start]);
+    let cur = anchorOf.get(start);
+    while (cur !== undefined) {
+      if (seenInWalk.has(cur)) {
+        if (cur === start) errors.push(`${label}: the 'after' anchors form a cycle through '${start}' — there is no order that satisfies them all.`);
+        break;
+      }
+      seenInWalk.add(cur);
+      cur = anchorOf.get(cur);
+    }
+  }
+
   if (f.prune !== undefined) {
     if (typeof f.prune !== 'boolean') {
       errors.push(`${label}: prune must be a boolean`);

@@ -1252,9 +1252,11 @@ async function runSdkBuild(spec, opts = {}) {
   //     field's row is inserted after the anchor's row, which is flat-adjacent only under that
   //     second condition.
   //   * CELL move — everything else. The cell is spliced into the anchor's own row directly after
-  //     it, which always satisfies flat adjacency. The anchor's row then holds one extra cell;
-  //     Dataverse renders the overflow on the next line rather than rejecting it, and a row emptied
-  //     by the move is removed so blank rows cannot accumulate.
+  //     it, which always satisfies flat adjacency. The anchor's row then holds one extra cell — an
+  //     over-full row for the section's column count. The SDK accepts that (its form validator
+  //     imposes no row/cell cardinality rule, only "a cell control must be an object or null"), and
+  //     Dataverse accepts the push; how UCI lays the overflow out is NOT verified here. A row
+  //     emptied by the move is removed so blank rows cannot accumulate.
   const applyFieldPositions = async (formId, def) => {
     const positions = def.__fieldPositions || {};
     for (const logical of Object.keys(positions)) {

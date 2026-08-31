@@ -284,29 +284,42 @@ function viewColumnsIntent(cols) {
 // Reorder a flat auto-layout cell list in place so each anchored field immediately follows its
 // anchor. `positions` is { <logical>: <anchorLogical> }.
 //
-// Anchors are resolved against the CURRENT arrangement one at a time, in declaration order, so
-// chains behave the way an author would read them: given `b after a` then `c after b`, c lands
-// after the already-moved b. An anchor that is absent (or that resolves to the field itself) is
-// skipped rather than treated as an error — the anchor may name a column that is not on this form.
+// Runs to a FIXED POINT rather than a single pass. A single pass walks `positions` in key order —
+// which is entity-column order, not dependency order — so when a field's anchor is itself relocated
+// LATER in the same walk, the earlier placement is silently invalidated. Given `y after a` and
+// `x after y`, one pass can emit `[a][y][n][x]`: x is not after y, the create order violates its own
+// anchors, and the first rebuild then "fixes" it — precisely the create/rebuild divergence this
+// function exists to prevent.
 //
-// Cycles cannot hang this: each field is moved at most once, and a move only ever relocates the
-// moved element, so the loop is bounded by positions.length regardless of how the anchors point.
+// Bounded by the number of anchors: each pass either changes nothing (done) or applies at least one
+// move, and a contradictory spec (a cycle, or two fields claiming the same anchor) simply exhausts
+// the bound with a deterministic result rather than spinning. Both of those shapes are rejected at
+// author time, so the bound is a safety net, not the normal path.
+//
+// An anchor that is absent (or that resolves to the field itself) is skipped rather than treated as
+// an error — the anchor may name a column that is not on this form.
 function reorderCellsByAnchors(cells, positions) {
+  const keys = Object.keys(positions || {});
   const indexOfField = function (logical) {
     return cells.findIndex(function (c) {
       return c.control && String(c.control.fieldName || '').toLowerCase() === logical;
     });
   };
-  for (const logical of Object.keys(positions || {})) {
-    const anchor = positions[logical];
-    const from = indexOfField(logical);
-    const at = indexOfField(anchor);
-    if (from < 0 || at < 0 || from === at) continue;
-    const [moved] = cells.splice(from, 1);
-    // Recompute the anchor AFTER the removal: splicing out an earlier element shifts the anchor
-    // down by one, and inserting at the stale index would land the field one slot too far right.
-    const anchorNow = indexOfField(anchor);
-    cells.splice(anchorNow + 1, 0, moved);
+  for (let pass = 0; pass < keys.length; pass++) {
+    let moved = false;
+    for (const logical of keys) {
+      const anchor = positions[logical];
+      const from = indexOfField(logical);
+      const at = indexOfField(anchor);
+      if (from < 0 || at < 0 || from === at) continue;
+      if (from === at + 1) continue; // already immediately after its anchor
+      const [el] = cells.splice(from, 1);
+      // Recompute the anchor AFTER the removal: splicing out an earlier element shifts the anchor
+      // down by one, and inserting at the stale index would land the field one slot too far right.
+      cells.splice(indexOfField(anchor) + 1, 0, el);
+      moved = true;
+    }
+    if (!moved) break;
   }
   return cells;
 }
@@ -478,8 +491,16 @@ function compileFormIntent(spec, formSpec, opts) {
   // resolves anchors against the DEPLOYED form, and positioning a control an explicit layout does not
   // re-declare is precisely the `prune: false` case the anchor exists to serve — recording only
   // placed fields made that documented (and validation-permitted) combination silently do nothing.
-  // Harmless for the compile-time reorder: an unplaced field is simply not found in the cell list.
-  for (const key of Object.keys(formOptions)) recordPosition(formOptions[key]);
+  // Harmless for the compile-time reorder: it already ran above, and an unplaced field is simply not
+  // found in the cell list.
+  //
+  // Existing keys are NOT overwritten: the explicit-layout loop records the MERGED option (an inline
+  // entry beats the form-level default), and re-recording the raw form-level value here would invert
+  // that documented precedence. Only reachable via a spec validation already rejects, but the
+  // precedence rule should hold in the code that implements it, not only in the gate in front of it.
+  for (const key of Object.keys(formOptions)) {
+    if (!Object.prototype.hasOwnProperty.call(positions, key)) recordPosition(formOptions[key]);
+  }
 
   // Notes section (opt-in: formSpec.notes or entity.hasNotes) — Main forms only.
   // Quick-create / quick-view forms don't host the activity timeline.

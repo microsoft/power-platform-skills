@@ -436,8 +436,9 @@ const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
 const TYPES_NEEDING_COMPANION_DATA = new Set(['Choice', 'MultiChoice']);
 
 // Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
-// trip does not silently create them as Text. `entity.type` is absent for exactly two reasons:
-// a Choice/MultiChoice (above), or an attribute type with no App Spec equivalent.
+// trip does not silently create them as Text. `type` is absent for a Choice/MultiChoice (above), or
+// for an attribute whose metadata carried no `attributeType` at all — an attribute with a type that
+// simply has no App Spec equivalent is filtered out of `columns[]` entirely, so it never gets here.
 function untypedColumnNames(entities) {
   const out = [];
   for (const e of entities || []) {
