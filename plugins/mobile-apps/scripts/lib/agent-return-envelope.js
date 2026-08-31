@@ -18,10 +18,12 @@ const ENVELOPE_FIELDS = new Set([
   'agent',
   'inputFingerprint',
   'artifacts',
+  'result',
   'concerns',
   'clarification',
 ]);
 const ARTIFACT_FIELDS = new Set(['artifactId', 'targetPath', 'content']);
+const RESULT_DESCRIPTOR_FIELDS = new Set(['resultId', 'resultType']);
 const CLARIFICATION_FIELDS = new Set(['question', 'reason', 'affectedDecisions']);
 const TRUNCATION_PATTERN = /\[(?:output\s+)?truncated\]|<(?:output\s+)?truncated>|content\s+omitted/iu;
 const TOOL_BLOCK_PATTERN = /^(?=[\s\S]*(?:missing|unavailable|not available|not exposed))(?=[\s\S]*(?:read|write|edit|bash|task|enterplanmode|exitplanmode|askuserquestion|plan mode|structured question|grep|glob|filesystem|shell|tool surface))[\s\S]*$/iu;
@@ -121,8 +123,25 @@ function normalizeWorkOrder(workOrder, { projectRoot, fileSystem = fs } = {}) {
   if (sealWorkOrder(workOrder).inputFingerprint !== workOrder.inputFingerprint) {
     throw new Error('work order inputFingerprint does not match its complete content');
   }
-  if (!Array.isArray(workOrder.artifacts) || workOrder.artifacts.length === 0) {
-    throw new Error('work order artifacts must be a non-empty array');
+  if (!Array.isArray(workOrder.artifacts)) {
+    throw new Error('work order artifacts must be an array');
+  }
+  const hasResult = workOrder.result !== undefined;
+  if (workOrder.artifacts.length === 0 && !hasResult) {
+    throw new Error('work order must request artifacts or one structured result');
+  }
+  let result = null;
+  if (hasResult) {
+    if (!isPlainObject(workOrder.result)) {
+      throw new Error('work order result must be an object');
+    }
+    assertExactFields(workOrder.result, RESULT_DESCRIPTOR_FIELDS, 'work order result');
+    assertNonEmptyString(workOrder.result.resultId, 'work order result.resultId');
+    assertNonEmptyString(workOrder.result.resultType, 'work order result.resultType');
+    result = {
+      resultId: workOrder.result.resultId.trim(),
+      resultType: workOrder.result.resultType.trim(),
+    };
   }
   const artifactIds = new Set();
   const targetPaths = new Set();
@@ -153,6 +172,7 @@ function normalizeWorkOrder(workOrder, { projectRoot, fileSystem = fs } = {}) {
     workOrderId: workOrder.workOrderId,
     inputFingerprint: workOrder.inputFingerprint,
     artifacts,
+    result,
   };
 }
 
@@ -218,6 +238,7 @@ function validateArtifact(artifact, index, requestedById, projectRoot, fileSyste
 function parseAgentEnvelope(responseText, workOrder, {
   projectRoot,
   fileSystem = fs,
+  validateStructuredResult = () => [],
 } = {}) {
   if (!projectRoot) throw new Error('projectRoot is required');
   const normalizedWorkOrder = normalizeWorkOrder(workOrder, { projectRoot, fileSystem });
@@ -239,6 +260,9 @@ function parseAgentEnvelope(responseText, workOrder, {
   const contentReady = ['ready', 'ready_with_concerns'].includes(envelope.status);
   if (!contentReady && envelope.artifacts.length !== 0) {
     throw new Error(`${envelope.status} responses must not contain artifacts`);
+  }
+  if (!contentReady && envelope.result !== undefined && envelope.result !== null) {
+    throw new Error(`${envelope.status} responses must not contain a structured result`);
   }
   if (envelope.status === 'ready' && envelope.concerns.length !== 0) {
     throw new Error('ready responses must not contain concerns');
@@ -272,12 +296,33 @@ function parseAgentEnvelope(responseText, workOrder, {
   )) {
     throw new Error('ready response is missing one or more requested artifacts');
   }
+  let result = null;
+  if (normalizedWorkOrder.result && contentReady) {
+    if (!isPlainObject(envelope.result)) {
+      throw new Error('ready response is missing the requested structured result');
+    }
+    const findings = validateStructuredResult(
+      envelope.result,
+      normalizedWorkOrder.result,
+    );
+    if (!Array.isArray(findings)) {
+      throw new Error('validateStructuredResult must return an array');
+    }
+    if (findings.length > 0) {
+      throw new Error(`structured result failed validation: ${findings.join('; ')}`);
+    }
+    result = structuredClone(envelope.result);
+  } else if (!normalizedWorkOrder.result
+    && envelope.result !== undefined && envelope.result !== null) {
+    throw new Error('response contains an unrequested structured result');
+  }
   return {
     schemaVersion: SCHEMA_VERSION,
     status: envelope.status,
     agent: envelope.agent,
     inputFingerprint: envelope.inputFingerprint,
     artifacts,
+    result,
     concerns: envelope.concerns.map((item) => item.trim()),
     clarification,
   };
@@ -438,6 +483,7 @@ function materializeEnvelopeSet(entries, {
 module.exports = {
   SCHEMA_VERSION,
   STATUSES,
+  assertSafeTarget,
   fingerprintInput,
   lexicalCompare,
   materializeEnvelopeSet,

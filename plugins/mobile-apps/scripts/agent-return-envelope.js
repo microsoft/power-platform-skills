@@ -229,6 +229,10 @@ function run(args, { fileSystem = fs } = {}) {
     envelopeCount: envelopes.length,
     agentDispatchCount: envelopes.length,
     agentToolCallCount: 0,
+    responsePayloadBytes: entries.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.responseText, 'utf8'),
+      0,
+    ),
     concerns: envelopes.flatMap((envelope) => envelope.concerns.map((concern) => ({
       agent: envelope.agent,
       concern,
@@ -241,6 +245,17 @@ function run(args, { fileSystem = fs } = {}) {
       artifactId: artifact.artifactId,
       targetPath: artifact.targetPath,
     }))),
+    results: envelopes.flatMap((envelope, index) => {
+      if (!envelope.result) return [];
+      const descriptor = entries[index].workOrder.result;
+      return [{
+        agent: envelope.agent,
+        inputFingerprint: envelope.inputFingerprint,
+        resultId: descriptor.resultId,
+        resultType: descriptor.resultType,
+        value: envelope.result,
+      }];
+    }),
     materialized,
   };
   if (args.output) {

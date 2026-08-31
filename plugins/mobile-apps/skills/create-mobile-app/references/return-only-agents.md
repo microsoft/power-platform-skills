@@ -23,7 +23,8 @@ The foreground owns:
 
 ## Execution Mode
 
-Use exactly one execution mode for a host/runtime/plugin-version session:
+Cache exactly one base execution mode for a host/runtime/plugin-version
+session:
 
 - `parallel-return`: custom-agent dispatch works. Dispatch independent work
   orders concurrently when the host exposes concurrency; otherwise use the
@@ -35,6 +36,11 @@ Use exactly one execution mode for a host/runtime/plugin-version session:
 Never attempt a write-capable child first. Never load a separately specified
 inline implementation. Sequential mode uses the same semantic rules,
 artifacts, validators, and gates as concurrent mode.
+
+An individual work order may switch from the `parallel-return` base mode to
+`foreground-return` after its transport retry is exhausted. This scoped
+override does not change the cached base mode or the channels of successful
+siblings.
 
 Cache the mode in `.tmp/agent-execution-mode.json`, bound to host ID, runtime or
 session ID, and plugin version:
@@ -81,6 +87,24 @@ that the child must read:
 }
 ```
 
+A work order requests file `artifacts`, one typed structured `result`, or both.
+The Data Model work order requests no files or target paths:
+
+```json
+{
+  "schemaVersion": 1,
+  "agent": "data-model-architect",
+  "workOrderId": "planning:data-model",
+  "attempt": 1,
+  "context": { "completeRoleSpecificContext": "inline" },
+  "artifacts": [],
+  "result": {
+    "resultId": "semantic:data-model",
+    "resultType": "data-model-semantic-v1"
+  }
+}
+```
+
 For any structured artifact, complete context includes the exact current JSON
 schema and applicable semantic-rule requirements read by the foreground from
 the plugin. A schema path alone is insufficient. Product Experience, Product
@@ -113,6 +137,37 @@ The child echoes it verbatim and never computes it. Any context, artifact,
 attempt, clarification answer, or validator finding change requires resealing.
 On a targeted repair, only the affected work order changes.
 
+### Payload budgets and Data Model partitions
+
+Before dispatch, measure the exact UTF-8 byte length of every sealed work order,
+including inline context, schema, and fingerprint. Data Model planning uses
+`data-model-agent-partitions.js`; do not estimate from token counts or source
+object size. The default limit is 65,536 bytes, configurable through
+`MOBILE_AGENT_MAX_PAYLOAD_BYTES` or `--max-payload-bytes` with an 8,192-byte
+minimum.
+
+- A fitting Data Model request remains one `data-model-semantic-v1` call.
+- An oversized request dispatches one `data-model-topology-v1` call, then
+  deterministic parent-before-child `data-model-detail-v1` partitions.
+- Topology owns global requirement coverage, entity shells, relationships,
+  operation assignments, and fixtures. Detail owns complete fields and
+  operations for exact assigned entity IDs.
+- Every detail result echoes the topology hash. The strict foreground merger
+  rejects missing, duplicate, drifting, or cross-partition content before the
+  canonical semantic compiler runs.
+- A partition is indivisible. If it cannot fit, stop with measured bytes rather
+  than dropping evidence or product scope. Screen work orders are unchanged.
+
+Checkpoint state lives at `.tmp/data-model-partition-state.json`, bound to the
+run ID and hash of `.tmp/data-model-partition-request.json`. Resume verifies
+work-order fingerprints and completed result-file hashes, then returns only
+pending partition IDs. A detail failure repairs only that detail; a topology
+repair invalidates all details because their hashes no longer match.
+When bounded `needs_context` evidence arrives, increment the request attempt and
+run `data-model-agent-partitions.js --refresh-request`: topology/summary changes
+invalidate all details, while detail-only changes rebuild only owning partitions
+and preserve completed siblings.
+
 Dispatch the complete sealed JSON object inline. Do not tell the child to read
 the work-order path. Capture the exact response as text under
 `.tmp/agent-responses/`; do not extract JSON from prose or Markdown fences.
@@ -139,12 +194,34 @@ Every child returns exactly one JSON object and nothing outside it:
 }
 ```
 
+For a typed structured-result work order, `artifacts` is empty and `result`
+contains the object directly. It contains no escaped files or target paths:
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "ready",
+  "agent": "data-model-architect",
+  "inputFingerprint": "foreground-generated-value-echoed-verbatim",
+  "artifacts": [],
+  "result": { "schemaVersion": 1, "status": "ready", "mode": "dataverse-required" },
+  "concerns": [],
+  "clarification": null
+}
+```
+
 Unknown fields, schema versions, roles, fingerprints, artifact IDs, and target
 paths are rejected. Content must be complete and non-empty, with no truncation
 marker. Every `content` value is serialized UTF-8 file text represented as a
 JSON string. A `.json` target contains a complete serialized JSON document
 string, not a nested object. Duplicate artifact IDs or target paths within or
 across concurrent responses are rejected before any final write.
+
+The Data Model semantic result is validated against the exact inline
+`schema-data-model-semantic-result.json`, then
+`compile-data-model-semantic-result.js` deterministically renders the Markdown,
+Dataverse contract, and equivalence receipt. Mechanical rendering may not add
+an entity, field, relationship, operation, fixture, or requirement.
 
 Validate structure without materializing:
 
@@ -179,6 +256,22 @@ order. Role-validator repair is targeted to one artifact, includes exact
 findings, and is capped at two repair dispatches. Never regenerate successful
 siblings or replan the whole app for one failed artifact.
 
+After each malformed response, record the transport failure against that run
+and work order:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/agent-return-runtime.js" \
+  --project-root "<working_dir>" --record-transport-failure \
+  --run-id "<current-run-id>" \
+  --agent "<role>" --work-order-id "<stable-id>" \
+  --input-fingerprint "<sealed-fingerprint>"
+```
+
+The first failure returns `nextAction: transport_retry`; record and dispatch
+that byte-identical retry once. The second returns
+`nextAction: foreground_return` and changes only that work order's channel.
+Do not regenerate successful siblings or change the cached host-level mode.
+
 Before each dispatch, record the stable work-order ID, reason, and sealed
 fingerprint. Allowed reasons are `initial`, `transport_retry`, `needs_context`,
 `needs_clarification`, and `targeted_repair`; there is no approval redispatch:
@@ -186,9 +279,16 @@ fingerprint. Allowed reasons are `initial`, `transport_retry`, `needs_context`,
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/agent-return-runtime.js" \
   --project-root "<working_dir>" --record-dispatch \
+  --run-id "<current-run-id>" \
   --agent "<role>" --work-order-id "<stable-id>" \
   --reason "<allowed-reason>" --input-fingerprint "<sealed-fingerprint>"
 ```
+
+Generate one opaque run ID when a fresh `/create-mobile-app` run begins and
+reuse it for every dispatch and deliberate resume in that run. A new run gets a
+new ID, so dispatches and retry budgets from a failed or abandoned run cannot
+poison its initial work orders. Never reuse a prior run ID for an ordinary fresh
+start.
 
 ## Questions and Approvals
 
@@ -209,7 +309,8 @@ revision, and the complete pending interaction:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/agent-return-runtime.js" \
-  --project-root "<working_dir>" --wait --phase "<phase>" \
+  --project-root "<working_dir>" --wait --run-id "<current-run-id>" \
+  --phase "<phase>" \
   --kind "<clarification|approval>" --section-id "<section>" \
   --question "<question>" --affected-decisions "<comma-separated IDs>" \
   --revision "<revision>"
@@ -219,10 +320,12 @@ On the next user message:
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/../../scripts/agent-return-runtime.js" \
-  --project-root "<working_dir>" --resume --answer "<answer>"
+  --project-root "<working_dir>" --resume \
+  --run-id "<current-run-id>" --answer "<answer>"
 ```
 
 Resume the same phase and revision. Do not restart from the original prompt.
+Reject a resume whose run ID does not match the persisted waiting interaction.
 Gated mode retains the existing four sections; consolidated mode retains its
 single review of those same sections.
 
@@ -298,8 +401,19 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
   --execution-mode "<parallel-return|foreground-return>" \
   --agent-dispatch-count "<count>" --agent-retry-count "<count>" \
   --agent-tool-call-count 0 \
+  --request-payload-bytes "<bytes>" \
+  --response-payload-bytes "<bytes>" \
+  --work-order-count "<count>" \
+  --detail-partition-count "<count>" \
+  --completed-work-order-count "<count>" \
+  --resumed-work-order-count "<count>" \
   --foreground-materialization-ms "<milliseconds>" \
   --foreground-validation-ms "<milliseconds>"
 ```
+
+Record the channel actually used by each dispatch/materialization batch. If a
+run starts in `parallel-return` and one or more exhausted work orders fall back
+to `foreground-return`, the timing summary reports `executionMode:
+mixed-return` plus separate dispatch counts for both channels.
 
 For converted children, `agentToolCallCount` must always be zero.

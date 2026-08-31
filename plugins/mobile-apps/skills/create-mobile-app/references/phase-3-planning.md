@@ -291,7 +291,7 @@ Substantive `blocked` stops. Tool-surface absence is a dispatch-mode concern,
 never a product block.
 
 Before Data Model architecture, require the validated planner draft to contain
-complete `## Native Capabilities` and `## Connectors` sections consistent with
+the exact resolved `## Native Capabilities` and `## Connectors` sections consistent with
 the work order's resolved architecture facts. Read those exact heading-bounded
 sections into the architect work order; do not summarize them from memory. The
 foreground also passes the original structured native-capability decisions,
@@ -300,26 +300,84 @@ can validate cross-section consistency. This changes reasoning and handoff
 order only: final plan heading order and existing Gate 1–2/consolidated approval
 content remain unchanged, and no additional user prompt is introduced.
 
-#### 3.2 — Data Model work order
+#### 3.2 — Data Model semantic work order and foreground compilation
 
-After Product Experience and Product Scope validate, build one
-`data-model-architect` work order. Its inline context contains the confirmed
-brief, complete approved/pending Product Scope content, planning mode, detected
-publisher prefix, exact resolved `## Native Capabilities` and `## Connectors`
-draft sections, structured native-capability decisions, structured
-connector/system-of-record decisions, the complete persistence boundary,
-compact architect evidence content, relevant verified snapshot facts,
-screen-operation facts when this is a targeted cross-entity audit, exact
-normalized Dataverse contract shape and semantic validation requirements, prior
-section content for incremental repair, and output descriptors.
+After Product Experience and Product Scope validate, the foreground creates
+`.tmp/data-model-partition-request.json`. It contains the run ID, attempt, and
+all decision-bearing architect input split without loss into:
 
-Request `_dm_section.md` as `section:data-model`. In `required`, also request
-`.tmp/dataverse-schema-contract.json` as `contract:dataverse-schema`. In
-`connector-only`, request no schema contract.
+- `sharedContext`: confirmed brief, complete approved/pending Product Scope,
+  planning mode, publisher facts, resolved architecture sections, structured
+  native-capability decisions, structured connector/system-of-record decisions,
+  complete persistence boundary, semantic cross-reference rules, and prior canonical
+  semantic content needed for repair;
+- `topologyContext`: compact facts needed to decide requirements, entity
+  identity/lifecycle, relationships, operation ownership, and fixture intent;
+- `contextItems`: every detailed evidence unit as a stable `contextItemId`, a
+  lossless topology summary, and complete `detail`. Relevant verified snapshot
+  facts and compact architect evidence content belong here. Never drop an item to fit a
+  budget.
 
-Dispatch `mobile-app:data-model-architect` in return mode, or perform the same
-work order in `foreground-return`. For `needs_context`, accept only the existing
-bounded signals in `concerns`:
+Measure and plan the fully serialized sealed work order before any Data Model
+dispatch:
+
+The foreground reads the exact current
+`schema-data-model-semantic-result.json`; the planner derives and embeds strict
+topology/detail schemas from that authority rather than relying on model memory.
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --initialize --json
+```
+
+The default maximum is 65,536 UTF-8 bytes and can be overridden with
+`MOBILE_AGENT_MAX_PAYLOAD_BYTES` or `--max-payload-bytes`; values below 8,192
+are rejected. Measurement includes inline context, the exact current result
+schema, and the sealed fingerprint. If the complete request fits, the command
+emits one sealed `.tmp/agent-work-orders/data-model.json`. Otherwise it emits
+only a sealed topology work order first. If even one indivisible topology or
+detail work order cannot fit, stop with the measured byte count; do not truncate
+context or reduce product scope.
+
+Every Data Model work order requests no file artifacts and no target paths. Set `artifacts: []`.
+The single-call work order requests:
+
+```json
+{
+  "result": {
+    "resultId": "semantic:data-model",
+    "resultType": "data-model-semantic-v1"
+  }
+}
+```
+
+The topology work order requests `data-model-topology-v1`. First run
+`agent-return-envelope.js --validate-only` for the topology pair and write its
+wrapper to `.tmp/agent-results/data-model-topology.json`. That validated wrapper
+includes the exact raw `responsePayloadBytes`. Expand only that wrapper:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --expand-topology \
+  --result ".tmp/agent-results/data-model-topology.json" --json
+```
+
+This validates complete context-item assignment, freezes the topology hash, and
+emits stable `planning:data-model:detail-NNN` work orders in deterministic
+parent-before-child dependency order. Each detail work order contains only its
+assigned complete evidence, the locked topology, and the exact
+`data-model-detail-v1` schema. Independent detail work orders may dispatch in a
+bounded concurrent wave, but record, validate, checkpoint, repair, and merge
+them by lexical work-order ID.
+
+Dispatch `mobile-app:data-model-architect` in return mode, or perform each same
+sealed work order in `foreground-return`. Every work order has its own stable
+ID and existing run-scoped transport/context/repair budget. For
+`needs_context`, accept only the existing bounded signals in `concerns`:
 
 - `detailed-dataverse-metadata:<sorted logical names>`;
 - `proposed-dataverse-names:<sorted logical names>`;
@@ -328,12 +386,110 @@ bounded signals in `concerns`:
 - `resolved-architecture-inputs:<comma-separated native-capabilities,connectors,persistence-boundary>`.
 
 The foreground performs exact-name expansion below, refreshes inline evidence,
-or supplies only a missing validated architecture input, reseals only this work
-order, and redispatches once. Before materialization in
-`required`, the validation plan normalizes the staged schema contract and runs
-`validate-dataverse-planning-decisions.js` against the full foreground snapshot.
-Exit `3` becomes the existing exact detail request; exit `2` is substantive
-`blocked`. Never approve Reuse, Extend, or Adapt from core/missing detail.
+or supplies only a missing validated architecture input. Update the owning
+context item and rebuild the affected work order(s); topology changes invalidate
+all detail checkpoints because every detail is hash-bound to it. A detail-only
+finding repairs only that partition. A ready response contains the requested
+typed object in `result` and no escaped Markdown or contract JSON.
+
+After writing refreshed facts to the same request with an incremented `attempt`,
+run:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --refresh-request --json
+```
+
+A shared/topology-context, context-item membership, or summary change rebuilds
+the topology work order and invalidates every hash-bound detail. A detail-only
+change rebuilds only detail partitions assigned to that context item and keeps
+completed siblings unchanged. Record those revised work orders with dispatch
+reason `needs_context`, not `initial`.
+
+After structural envelope validation, checkpoint each accepted single/detail
+result. Use the exact validated wrapper path; its `responsePayloadBytes` came
+from the raw response before semantic extraction:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --record-result --partition-id "<single|detail-NNN>" \
+  --result ".tmp/agent-results/<id>.json" --json
+```
+
+On a deliberate resume, verify sealed-work-order fingerprints and completed
+result-file hashes, then dispatch only `pendingPartitionIds`:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --resume --json
+```
+
+Do not reuse a checkpoint if the run ID or complete request hash changed. For a
+targeted validator or merge finding, add only exact findings to the owning
+work order and record dispatch reason `targeted_repair`:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --prepare-repair --partition-id "<topology|single|detail-NNN>" \
+  --finding "<exact finding>" --json
+```
+
+When all required results are complete, merge them before compilation. The
+strict merger rejects missing/duplicate partitions, topology drift, unassigned
+or duplicate entities/operations, cross-partition field references, and any
+failure of the complete semantic schema. Its error includes only the
+`repairPartitionIds` that own the findings:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/data-model-agent-partitions.js" \
+  --project-root "<working_dir>" \
+  --request ".tmp/data-model-partition-request.json" \
+  --merge --output ".tmp/agent-results/data-model-merged.json" --json
+```
+
+Validate and capture the envelope, then compile all Data Model outputs from the
+same canonical result:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/agent-return-envelope.js" \
+  --project-root "<working_dir>" \
+  --work-order ".tmp/agent-work-orders/data-model.json" \
+  --response ".tmp/agent-responses/data-model.json" \
+  --validate-only \
+  --output ".tmp/agent-results/data-model.json"
+
+node "${CLAUDE_SKILL_DIR}/../../scripts/compile-data-model-semantic-result.js" \
+  --project-root "<working_dir>" \
+  --semantic-result ".tmp/agent-results/data-model-merged.json" \
+  --publisher-prefix "<detected-prefix; omit outside Dataverse mode>" \
+  --snapshot "<SNAPSHOT_PATH; omit outside Dataverse mode>" \
+  --product-scope-revision "<approved Product Scope revision>" \
+  --materialize
+```
+
+The compiler writes `.tmp/data-model-semantic-result.json`, `_dm_section.md`,
+`.tmp/data-model-compilation-receipt.json`, and, in required mode only,
+`.tmp/dataverse-schema-contract.json`. It uses the existing transactional
+materializer, so no final target changes until semantic, contract, and shared
+hash validation pass. In required mode, then run
+`validate-dataverse-planning-decisions.js` against the compiled contract and
+full foreground snapshot. Exit `3` becomes the existing exact detail request;
+exit `2` is substantive `blocked`. Never approve Reuse, Extend, or Adapt from
+core/missing detail.
+
+After merge, record the partition state's additive `requestPayloadBytes`,
+`responsePayloadBytes`, `workOrderCount`, `detailPartitionCount`,
+`completedWorkOrderCount`, and `resumedWorkOrderCount` through
+`planning-timings.js --record-agent-execution`. These local planning metrics
+contain counts and byte sizes only, never prompts, results, paths, or IDs.
 
 #### 3.3 — Canonical response handling
 
@@ -501,6 +657,12 @@ downstream hashes until the owning review approves it again.
 Record `executionMode`, dispatch/retry counts, zero child tool calls,
 foreground validation time, and foreground materialization time through
 `planning-timings.js --record-agent-execution`.
+
+For Data Model approval, bind the canonical semantic-result hash, rendered
+Markdown hash, compiled contract hash, and snapshot hash from
+`.tmp/data-model-compilation-receipt.json`. Both rendered outputs must identify
+the same `semanticResultHash`; never prove equivalence by parsing prose or
+Mermaid back into schema.
 
 The planner does not render or open HTML. The single interactive experience
 preview is produced at Step 6.75 from the approved Product Experience,

@@ -112,6 +112,7 @@ function normalizeInteraction(interaction) {
 }
 
 function writeWaitingInteraction(file, {
+  runId,
   phase,
   pendingInteraction,
   revision = 1,
@@ -124,6 +125,7 @@ function writeWaitingInteraction(file, {
   }
   const value = {
     schemaVersion: SCHEMA_VERSION,
+    runId: requiredString(runId, 'runId'),
     phase: requiredString(phase, 'phase'),
     status: 'waiting_for_user',
     revision,
@@ -135,10 +137,12 @@ function writeWaitingInteraction(file, {
 }
 
 function resumeWaitingInteraction(file, answer, {
+  runId,
   fileSystem = fs,
   nowIso = () => new Date().toISOString(),
 } = {}) {
   const resolved = path.resolve(file);
+  const normalizedRunId = requiredString(runId, 'runId');
   if (!fileSystem.existsSync(resolved)) throw new Error('interaction state is missing');
   const previous = JSON.parse(fileSystem.readFileSync(resolved, 'utf8'));
   if (previous.schemaVersion !== SCHEMA_VERSION
@@ -146,8 +150,12 @@ function resumeWaitingInteraction(file, answer, {
     || !previous.pendingInteraction) {
     throw new Error('interaction state is not waiting for a user');
   }
+  if (previous.runId !== normalizedRunId) {
+    throw new Error('interaction state belongs to a different run');
+  }
   const value = {
     schemaVersion: SCHEMA_VERSION,
+    runId: normalizedRunId,
     phase: previous.phase,
     status: 'ready_to_resume',
     revision: previous.revision,
@@ -164,6 +172,7 @@ function resumeWaitingInteraction(file, answer, {
 }
 
 function recordAgentDispatch(file, {
+  runId,
   agent,
   workOrderId,
   reason,
@@ -172,6 +181,7 @@ function recordAgentDispatch(file, {
   fileSystem = fs,
   nowIso = () => new Date().toISOString(),
 } = {}) {
+  const normalizedRunId = requiredString(runId, 'runId');
   const normalizedAgent = requiredString(agent, 'agent');
   const normalizedWorkOrderId = requiredString(workOrderId, 'workOrderId');
   const normalizedReason = requiredString(reason, 'reason');
@@ -189,8 +199,12 @@ function recordAgentDispatch(file, {
       throw new Error('agent dispatch state is invalid');
     }
   }
+  // Work-order IDs are stable across retries and may recur in a later app run.
+  // Scope history to the run so an abandoned run cannot consume fresh budgets.
   const prior = state.dispatches.filter((entry) => (
-    entry.agent === normalizedAgent && entry.workOrderId === normalizedWorkOrderId
+    entry.runId === normalizedRunId
+      && entry.agent === normalizedAgent
+      && entry.workOrderId === normalizedWorkOrderId
   ));
   const sameReason = prior.filter((entry) => entry.reason === normalizedReason);
   if (normalizedReason === 'initial' && prior.length > 0) {
@@ -214,6 +228,7 @@ function recordAgentDispatch(file, {
   }
   state.dispatches.push({
     sequence: state.dispatches.length + 1,
+    runId: normalizedRunId,
     agent: normalizedAgent,
     workOrderId: normalizedWorkOrderId,
     reason: normalizedReason,
@@ -222,6 +237,75 @@ function recordAgentDispatch(file, {
   });
   atomicWriteJson(file, state, fileSystem);
   return state;
+}
+
+function recordTransportFailure(file, {
+  runId,
+  agent,
+  workOrderId,
+  inputFingerprint,
+}, {
+  fileSystem = fs,
+  nowIso = () => new Date().toISOString(),
+} = {}) {
+  const normalizedRunId = requiredString(runId, 'runId');
+  const normalizedAgent = requiredString(agent, 'agent');
+  const normalizedWorkOrderId = requiredString(workOrderId, 'workOrderId');
+  const fingerprint = requiredString(inputFingerprint, 'inputFingerprint');
+  if (!/^[a-f0-9]{64}$/i.test(fingerprint)) {
+    throw new Error('inputFingerprint must be a SHA-256 value');
+  }
+  const resolved = path.resolve(file);
+  if (!fileSystem.existsSync(resolved)) throw new Error('agent dispatch state is missing');
+  const state = JSON.parse(fileSystem.readFileSync(resolved, 'utf8'));
+  if (state.schemaVersion !== SCHEMA_VERSION || !Array.isArray(state.dispatches)) {
+    throw new Error('agent dispatch state is invalid');
+  }
+  const dispatches = state.dispatches.filter((entry) => (
+    entry.runId === normalizedRunId
+      && entry.agent === normalizedAgent
+      && entry.workOrderId === normalizedWorkOrderId
+  ));
+  const latestDispatch = dispatches.at(-1);
+  if (!latestDispatch) throw new Error('transport failure requires a recorded dispatch');
+  if (latestDispatch.inputFingerprint !== fingerprint) {
+    throw new Error('transport failure must match the latest sealed work order');
+  }
+  state.transportFailures = Array.isArray(state.transportFailures)
+    ? state.transportFailures
+    : [];
+  const priorFailures = state.transportFailures.filter((entry) => (
+    entry.runId === normalizedRunId
+      && entry.agent === normalizedAgent
+      && entry.workOrderId === normalizedWorkOrderId
+  ));
+  if (priorFailures.length >= 2) {
+    throw new Error(`${normalizedAgent} transport failure limit reached`);
+  }
+  // Retry malformed transport once. A second malformed response changes only
+  // this work order's channel; the host-level parallel capability remains valid.
+  const transportFailureCount = priorFailures.length + 1;
+  const executionMode = transportFailureCount === 2
+    ? 'foreground-return'
+    : 'parallel-return';
+  const event = {
+    sequence: state.transportFailures.length + 1,
+    runId: normalizedRunId,
+    agent: normalizedAgent,
+    workOrderId: normalizedWorkOrderId,
+    inputFingerprint: fingerprint,
+    transportFailureCount,
+    executionMode,
+    recordedAt: nowIso(),
+  };
+  state.transportFailures.push(event);
+  atomicWriteJson(file, state, fileSystem);
+  return {
+    ...event,
+    nextAction: executionMode === 'foreground-return'
+      ? 'foreground_return'
+      : 'transport_retry',
+  };
 }
 
 module.exports = {
@@ -233,6 +317,7 @@ module.exports = {
   atomicWriteJson,
   readExecutionMode,
   recordAgentDispatch,
+  recordTransportFailure,
   resumeWaitingInteraction,
   writeExecutionMode,
   writeWaitingInteraction,

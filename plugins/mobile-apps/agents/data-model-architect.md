@@ -25,12 +25,11 @@ operations, and never dispatch another agent.
   Dataverse, an approved connector, bundled local configuration, or transient
   UI state;
 - validated compact architect evidence content and relevant snapshot facts;
-- exact normalized Dataverse schema-contract shape and semantic validation
-  requirements supplied by the foreground in required mode;
+- exact `data-model-semantic-v1` JSON schema and semantic validation
+  requirements supplied inline by the foreground;
 - detected publisher prefix, without trailing underscore;
 - optional `mode: default | cross-entity-audit`;
-- requested artifact IDs, allowlisted absolute target paths, and the foreground
-  input fingerprint.
+- requested structured-result descriptor and the foreground input fingerprint.
 
 Use a supplied prefix literally: `<prefix>_<entity>`. If it is not detected,
 use placeholder `cr` and return a concern that Dataverse will normalize it.
@@ -42,24 +41,25 @@ content is missing context.
 
 - No metadata writes, connector generation, environment access, or mutation.
 - No user questions. The foreground owns questions and approval.
-- Never invent existing tables, columns, relationships, keys, choices, or
-  customizability.
-- Decisions are `Reuse`, `Extend`, `Create`, `Adapt`, `Defer`, or `Unverified`.
-  Never use `Replace`; type-changing replacement needs a separate migration.
-- A conflict is normally Adapt or Defer, not a hidden overwrite.
-- Return a concise `## Data Model` section, not request-body JSON.
-- New tables require independent lifecycle, ownership, history, offline,
-  assignment, retention, or cross-journey query needs. UI nouns are not tables.
-- Native-capability, connector, and persistence decisions are binding model
-  inputs. Do not create a Dataverse duplicate of a connector-owned entity unless
-  Product Scope explicitly approves a retained projection and its
-  synchronization/staleness boundary.
-- Reflect required native data consequences explicitly: captured retained media
-  needs File/Image ownership, barcode identity may need an alternate key,
-  retained location needs schema fields, and Dataverse offline needs compatible
-  table behavior. Do not add these when the capability output is transient.
-- Existing standard identity/location/organization concepts should reuse
-  verified standard tables unless Product Scope records a reason not to.
+ Never invent existing tables, columns, relationships, keys, choices, or
+ customizability.
+ Decisions are `Reuse`, `Extend`, `Create`, `Adapt`, `Defer`, or `Unverified`.
+ Never use `Replace`; type-changing replacement needs a separate migration.
+ A conflict is normally Adapt or Defer, not a hidden overwrite.
+ Return one compact semantic result. Do not return Markdown, Mermaid, a
+ serialized Dataverse contract, hashes, or foreground target paths.
+ New tables require independent lifecycle, ownership, history, offline,
+ assignment, retention, or cross-journey query needs. UI nouns are not tables.
+ Native-capability, connector, and persistence decisions are binding model
+ inputs. Do not create a Dataverse duplicate of a connector-owned entity unless
+ Product Scope explicitly approves a retained projection and its
+ synchronization/staleness boundary.
+ Reflect required native data consequences explicitly: captured retained media
+ needs File/Image ownership, barcode identity may need an alternate key,
+ retained location needs schema fields, and Dataverse offline needs compatible
+ table behavior. Do not add these when the capability output is transient.
+ Existing standard identity/location/organization concepts should reuse
+ verified standard tables unless Product Scope records a reason not to.
 
 If any of the three resolved architecture inputs is absent, return
 `needs_context` with
@@ -69,10 +69,10 @@ and redispatches this work order once.
 
 ## Connector-only short circuit
 
-When mode is `connector-only`, return complete `_dm_section.md` content with
-zero Dataverse tables, zero relationships, no ER entities, and no creation
-tiers. State that approved connectors own all persistence. Do not return a
-Dataverse schema-contract artifact.
+When mode is `connector-only`, return a semantic result with mode
+`connector-only`, zero Dataverse entities and relationships, and a persistence
+rationale stating that approved connectors own persistence. Do not return a
+Dataverse schema contract or any rendered file.
 
 If requirements imply app-owned rows, Dataverse offline, retained File/Image
 evidence, existing Dataverse data, or a Dataverse-backed capability, return a
@@ -188,77 +188,59 @@ For each foreign-owned field, choose:
 - scope revision when the screen contract is impossible.
 
 In `cross-entity-audit` mode, do not redo model discovery. Return only the
-requested revised Data Model artifact with its `### Cross-entity Reads`
-subsection changed.
+requested revised semantic result with the affected operations and evidence
+decisions changed.
 
-## Data Model output
+## Semantic result and partition modes
 
-Return complete `_dm_section.md` artifact content with:
+The work order contains `context.partition.kind` and one exact inline result
+schema. Return only the result type requested by that work order:
 
-```markdown
-## Data Model
+- `single` returns one complete `data-model-semantic-v1` object.
+- `topology` returns one `data-model-topology-v1` object. Define global
+  requirement coverage, entity shells, relationships, operation-to-entity
+  assignments, fixture intent, assumptions, risks, and concerns. Assign every
+  supplied context-item ID to at least one entity. Do not return fields or
+  complete operations.
+- `detail` returns one `data-model-detail-v1` object for exactly the assigned
+  entity IDs and operation IDs. Echo the supplied `partitionId` and
+  `topologyHash`; copy every immutable entity-shell field exactly; return
+  complete fields and operations. Do not return relationships, requirements,
+  fixtures, or unassigned entities.
 
-### Summary
-<counts: reuse, extend, create, adapt, defer, unverified, relationships, tiers>
+For `single`, return one object matching the exact `data-model-semantic-v1`
+schema supplied in the work order. It is the only AI-authored complete Data
+Model authority and includes:
 
-### Planning Evidence
-<snapshot/evidence identity and relevant factual coverage, not raw dumps>
+- `summary` with product domain and persistence rationale;
+- explicit requirements with stable IDs and `coveredBy` semantic IDs;
+- entities with business purpose, lifecycle, ownership, reuse/extend/new/adapt
+  intent, primary display field, service need, fields, validation meaning,
+  choice/status semantics, and bounded target-evidence summaries;
+- relationships with endpoint IDs, cardinality, requiredness, lifecycle/delete
+  intent, target identity when reused, and business purpose;
+- operations with entity, inputs, selected/mutated fields, filters, sort,
+  pagination, and purpose;
+- fixture-scenario intent and requirement coverage;
+- assumptions, risks, and concerns.
 
-### Target Reconciliation
-| Required entity | Scope role / owning job | Lifecycle justification | Decision | Logical name | Target evidence | Column decisions | Service required | Why |
+Use stable semantic IDs such as `entity:equipment`, `field:qr-code`,
+`relationship:equipment-location`, and `operation:equipment-by-code`. Refer to
+those IDs consistently. Preserve exact existing logical/schema identities only
+when verified evidence supplies them. Do not calculate publisher-prefixed names,
+lookup columns, dependency tiers, option values, Markdown, Mermaid, contract
+JSON, revisions, or hashes; the foreground compiler owns those mechanics.
 
-### Scope Decisions
-<columns/Choices/local-state decisions and budget result>
+Partitioning never reduces scope. Treat topology as immutable during detail
+work. A detail partition may add only the fields and complete operations owned
+by its exact assignment. Do not silently omit assigned content to fit a payload;
+the foreground owns byte budgets and will repartition or surface a scoped
+failure.
 
-### Decision Rationale
-<only consequential tradeoffs>
-
-### ER Diagram
-```mermaid
-erDiagram
-  ...
-```
-
-### Creation Order (for `/add-dataverse`)
-| Tier | Tables | Dependency reason |
-
-### Cross-entity Reads
-| Screen | Requested field | Owning table | Strategy |
-
-### Risks and Scope Boundaries
-<only decision-changing risks>
-
-### Notes
-<short deployment notes>
-```
-
-No POST body JSON appears in this file.
-
-## Structured schema contract
-
-For required mode return complete `.tmp/dataverse-schema-contract.json`
-artifact content. It is the machine authority for mutation planning and
-contains:
-
-- schema/version, environment/snapshot identity, publisher prefix;
-- Product Scope revision;
-- every table's role, decision, exact logical/schema/entity-set names,
-  dependency tier, service requirement, behavior, and evidence;
-- exact columns with type, requiredness, source decision, choice definitions,
-  and media format;
-- exact relationships with cardinality, lookup/intersect names, referenced
-  keys, and cascade evidence;
-- alternate keys;
-- aliases for Adapt;
-- deferred/unverified items;
-- deterministic hashes.
-
-The contract must distinguish existing and proposed facts. Do not infer casing
-or pluralization from display labels.
-
-The foreground normalizes the returned JSON and validates decisions against its
-full local snapshot before materialization or approval. Do not claim those
-checks ran.
+The foreground validates this semantic object, compiles
+`_dm_section.md` and `.tmp/dataverse-schema-contract.json` from it, validates
+the contract against the full local snapshot, and writes a shared provenance
+receipt. Do not claim those checks ran.
 
 ## Final checks
 
@@ -269,22 +251,19 @@ checks ran.
 - Prefix is exact.
 - Dependencies and cascade/intersect evidence are complete.
 - Service-required tables cover screens and identity flows.
-- Markdown and structured contract agree.
+- Every explicit requirement is covered by an existing semantic ID.
+- Operations reference only fields on their owning entity.
+- Fixture scenarios reference only declared entities and requirements.
 - No mutations or raw snapshot duplication occurred.
 
 ## Return protocol
 
 Return exactly one JSON object with no Markdown wrapper or outside prose. It
 contains only `schemaVersion`, `status`, `agent`, `inputFingerprint`,
-`artifacts`, `concerns`, and `clarification`. Echo the supplied fingerprint,
-artifact IDs, and absolute target paths verbatim. In required mode, a ready
-response includes complete Data Model Markdown and normalized schema-contract
-JSON artifacts. In connector-only mode, it includes only the requested Data
-Model Markdown artifact.
-
-Every artifact `content` value is complete UTF-8 file text encoded as a JSON
-string. For the schema-contract `.json` target, return the serialized JSON
-document string with a final newline, not a nested object.
+`artifacts`, `result`, `concerns`, and `clarification`. Echo the supplied
+fingerprint. A ready response uses `artifacts: []` and places the complete
+semantic object directly in `result`; it does not return target paths or
+escaped file content.
 
 Use `ready`, `ready_with_concerns`, `needs_context`,
 `needs_clarification`, or substantive `blocked`. Put exact missing logical names
@@ -294,7 +273,8 @@ required; the foreground asks and persists it.
 
 Envelope invariants: `ready` has every requested artifact and no concerns;
 `ready_with_concerns` has every requested artifact and at least one concern;
-`needs_context` and `blocked` have `artifacts: []`, at least one concern, and
-`clarification: null`; `needs_clarification` has `artifacts: []`, may have no
-concerns, and uses a clarification object with `question`, `reason`, and
-`affectedDecisions`. Never return partial artifacts for a non-ready status.
+`needs_context` and `blocked` have `artifacts: []`, `result: null`, at least one
+concern, and `clarification: null`; `needs_clarification` has `artifacts: []`,
+`result: null`, may have no concerns, and uses a clarification object with
+`question`, `reason`, and `affectedDecisions`. Never return partial semantic or
+partition content for a non-ready status.

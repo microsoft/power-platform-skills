@@ -38,6 +38,15 @@ function parseArgs(argv) {
     else if (argv[index] === '--agent-dispatch-count') args.agentDispatchCount = argv[++index];
     else if (argv[index] === '--agent-retry-count') args.agentRetryCount = argv[++index];
     else if (argv[index] === '--agent-tool-call-count') args.agentToolCallCount = argv[++index];
+    else if (argv[index] === '--request-payload-bytes') args.requestPayloadBytes = argv[++index];
+    else if (argv[index] === '--response-payload-bytes') args.responsePayloadBytes = argv[++index];
+    else if (argv[index] === '--work-order-count') args.workOrderCount = argv[++index];
+    else if (argv[index] === '--detail-partition-count') args.detailPartitionCount = argv[++index];
+    else if (argv[index] === '--completed-work-order-count') {
+      args.completedWorkOrderCount = argv[++index];
+    } else if (argv[index] === '--resumed-work-order-count') {
+      args.resumedWorkOrderCount = argv[++index];
+    }
     else if (argv[index] === '--foreground-materialization-ms') {
       args.foregroundMaterializationMs = argv[++index];
     } else if (argv[index] === '--foreground-validation-ms') {
@@ -62,6 +71,12 @@ function recordAgentExecutionMetrics(artifact, {
   agentDispatchCount = 0,
   agentRetryCount = 0,
   agentToolCallCount = 0,
+  requestPayloadBytes = 0,
+  responsePayloadBytes = 0,
+  workOrderCount = 0,
+  detailPartitionCount = 0,
+  completedWorkOrderCount = 0,
+  resumedWorkOrderCount = 0,
   foregroundMaterializationMs = 0,
   foregroundValidationMs = 0,
 }) {
@@ -79,27 +94,79 @@ function recordAgentExecutionMetrics(artifact, {
   const previous = artifact.agentExecution || {
     executionMode,
     agentDispatchCount: 0,
+    agentDispatchesByMode: {
+      'parallel-return': 0,
+      'foreground-return': 0,
+    },
     agentRetryCount: 0,
     agentToolCallCount: 0,
+    requestPayloadBytes: 0,
+    responsePayloadBytes: 0,
+    workOrderCount: 0,
+    detailPartitionCount: 0,
+    completedWorkOrderCount: 0,
+    resumedWorkOrderCount: 0,
     foregroundMaterializationMs: 0,
     foregroundValidationMs: 0,
   };
-  if (previous.executionMode !== executionMode) {
-    throw new Error('agent execution mode cannot change within one timing artifact');
-  }
+  const dispatchCount = nonNegativeNumber(
+    agentDispatchCount,
+    'agentDispatchCount',
+    { integer: true },
+  );
+  const priorDispatchesByMode = {
+    'parallel-return': previous.agentDispatchesByMode?.['parallel-return']
+      ?? (previous.executionMode === 'parallel-return' ? previous.agentDispatchCount : 0),
+    'foreground-return': previous.agentDispatchesByMode?.['foreground-return']
+      ?? (previous.executionMode === 'foreground-return' ? previous.agentDispatchCount : 0),
+  };
+  // A host can remain parallel-capable while one exhausted work order falls
+  // back to foreground execution, so preserve both channel counts truthfully.
   artifact.agentExecution = {
-    executionMode,
-    agentDispatchCount: previous.agentDispatchCount + nonNegativeNumber(
-      agentDispatchCount,
-      'agentDispatchCount',
-      { integer: true },
-    ),
+    executionMode: previous.executionMode === executionMode
+      ? executionMode
+      : 'mixed-return',
+    agentDispatchCount: previous.agentDispatchCount + dispatchCount,
+    agentDispatchesByMode: {
+      ...priorDispatchesByMode,
+      [executionMode]: priorDispatchesByMode[executionMode] + dispatchCount,
+    },
     agentRetryCount: previous.agentRetryCount + nonNegativeNumber(
       agentRetryCount,
       'agentRetryCount',
       { integer: true },
     ),
     agentToolCallCount: 0,
+    requestPayloadBytes: (previous.requestPayloadBytes || 0) + nonNegativeNumber(
+      requestPayloadBytes,
+      'requestPayloadBytes',
+      { integer: true },
+    ),
+    responsePayloadBytes: (previous.responsePayloadBytes || 0) + nonNegativeNumber(
+      responsePayloadBytes,
+      'responsePayloadBytes',
+      { integer: true },
+    ),
+    workOrderCount: (previous.workOrderCount || 0) + nonNegativeNumber(
+      workOrderCount,
+      'workOrderCount',
+      { integer: true },
+    ),
+    detailPartitionCount: (previous.detailPartitionCount || 0) + nonNegativeNumber(
+      detailPartitionCount,
+      'detailPartitionCount',
+      { integer: true },
+    ),
+    completedWorkOrderCount: (previous.completedWorkOrderCount || 0) + nonNegativeNumber(
+      completedWorkOrderCount,
+      'completedWorkOrderCount',
+      { integer: true },
+    ),
+    resumedWorkOrderCount: (previous.resumedWorkOrderCount || 0) + nonNegativeNumber(
+      resumedWorkOrderCount,
+      'resumedWorkOrderCount',
+      { integer: true },
+    ),
     foregroundMaterializationMs: previous.foregroundMaterializationMs + nonNegativeNumber(
       foregroundMaterializationMs,
       'foregroundMaterializationMs',
@@ -300,8 +367,18 @@ function summarizePlanningTimings(artifact) {
     userApprovalWaitingMs: stageDuration(artifact, 'userApproval'),
     executionMode: agentExecution.executionMode || null,
     agentDispatchCount: agentExecution.agentDispatchCount || 0,
+    agentDispatchesByMode: agentExecution.agentDispatchesByMode || {
+      'parallel-return': 0,
+      'foreground-return': 0,
+    },
     agentRetryCount: agentExecution.agentRetryCount || 0,
     agentToolCallCount: agentExecution.agentToolCallCount || 0,
+    requestPayloadBytes: agentExecution.requestPayloadBytes || 0,
+    responsePayloadBytes: agentExecution.responsePayloadBytes || 0,
+    workOrderCount: agentExecution.workOrderCount || 0,
+    detailPartitionCount: agentExecution.detailPartitionCount || 0,
+    completedWorkOrderCount: agentExecution.completedWorkOrderCount || 0,
+    resumedWorkOrderCount: agentExecution.resumedWorkOrderCount || 0,
     foregroundMaterializationMs: agentExecution.foregroundMaterializationMs || 0,
     foregroundValidationMs: agentExecution.foregroundValidationMs || 0,
     retries: Object.fromEntries(Object.entries(artifact.stages || {})
@@ -349,7 +426,10 @@ function main(argv = process.argv) {
       + '--execution-mode <parallel-return|foreground-return> '
       + '[--agent-dispatch-count <n>] [--agent-retry-count <n>] '
       + '[--agent-tool-call-count 0] [--foreground-materialization-ms <n>] '
-      + '[--foreground-validation-ms <n>] [--output <path>] [--json]\n'
+      + '[--foreground-validation-ms <n>] [--request-payload-bytes <n>] '
+      + '[--response-payload-bytes <n>] [--work-order-count <n>] '
+      + '[--detail-partition-count <n>] [--completed-work-order-count <n>] '
+      + '[--resumed-work-order-count <n>] [--output <path>] [--json]\n'
       + '       node planning-timings.js --project-root <dir> --summary [--output <path>]\n',
     );
     return 2;

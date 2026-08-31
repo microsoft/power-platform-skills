@@ -63,6 +63,17 @@ test('binding changes only deterministic revision fields', () => {
   assert.deepEqual(withoutRevision(bound), withoutRevision(wrong));
 });
 
+test('mechanical binding rejects missing semantic content instead of creating it', () => {
+  const { experience, scope } = bundleFor('commerce');
+  const incomplete = structuredClone(scope);
+  delete incomplete.coreJobs;
+  assert.throws(
+    () => bindContracts({ experience, scope: incomplete }),
+    /semantic shape is invalid before binding/,
+  );
+  assert.equal(Object.hasOwn(incomplete, 'coreJobs'), false);
+});
+
 test('journey binding does not rewrite read-only upstream contract inputs', (context) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'return-bind-'));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));

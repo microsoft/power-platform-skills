@@ -1,0 +1,352 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Data Model Semantic Result",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "status",
+    "mode",
+    "summary",
+    "requirements",
+    "entities",
+    "relationships",
+    "operations",
+    "fixtureScenarios",
+    "assumptions",
+    "risks",
+    "concerns"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "const": "ready" },
+    "mode": {
+      "enum": ["dataverse-required", "connector-only", "local-prototype", "no-persistence"]
+    },
+    "summary": {
+      "type": "object",
+      "required": ["productDomain", "persistenceRationale"],
+      "properties": {
+        "productDomain": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "persistenceRationale": { "type": "string", "minLength": 10, "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "requirements": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/requirement" }
+    },
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/entity" }
+    },
+    "relationships": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/relationship" }
+    },
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/operation" }
+    },
+    "fixtureScenarios": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/fixtureScenario" }
+    },
+    "assumptions": { "$ref": "#/definitions/stringArray" },
+    "risks": { "$ref": "#/definitions/stringArray" },
+    "concerns": { "$ref": "#/definitions/stringArray" }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "semanticId": {
+      "type": "string",
+      "pattern": "^(requirement|entity|field|relationship|operation|scenario):[a-z0-9][a-z0-9-]*$"
+    },
+    "requirementId": {
+      "type": "string",
+      "pattern": "^requirement:[a-z0-9][a-z0-9-]*$"
+    },
+    "entityId": {
+      "type": "string",
+      "pattern": "^entity:[a-z0-9][a-z0-9-]*$"
+    },
+    "fieldId": {
+      "type": "string",
+      "pattern": "^field:[a-z0-9][a-z0-9-]*$"
+    },
+    "relationshipId": {
+      "type": "string",
+      "pattern": "^relationship:[a-z0-9][a-z0-9-]*$"
+    },
+    "operationId": {
+      "type": "string",
+      "pattern": "^operation:[a-z0-9][a-z0-9-]*$"
+    },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^scenario:[a-z0-9][a-z0-9-]*$"
+    },
+    "logicalName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "decision": {
+      "enum": ["reuse", "extend", "new", "adapt", "defer", "unverified"]
+    },
+    "requirement": {
+      "type": "object",
+      "required": ["requirementId", "statement", "coveredBy"],
+      "properties": {
+        "requirementId": { "$ref": "#/definitions/requirementId" },
+        "statement": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "coveredBy": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/semanticId" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "entity": {
+      "type": "object",
+      "required": [
+        "entityId",
+        "displayName",
+        "pluralDisplayName",
+        "purpose",
+        "ownershipIntent",
+        "decision",
+        "primaryDisplayField",
+        "serviceRequired",
+        "fields"
+      ],
+      "properties": {
+        "entityId": { "$ref": "#/definitions/entityId" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "pluralDisplayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "purpose": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "lifecycle": { "type": "string", "minLength": 10, "maxLength": 500 },
+        "scopeRole": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "ownershipIntent": { "enum": ["organization", "user-or-team"] },
+        "decision": { "$ref": "#/definitions/decision" },
+        "decisionRationale": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "existingLogicalName": { "$ref": "#/definitions/logicalName" },
+        "approvedLogicalName": { "$ref": "#/definitions/logicalName" },
+        "primaryDisplayField": { "$ref": "#/definitions/fieldId" },
+        "serviceRequired": { "type": "boolean" },
+        "owningRequirementIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/requirementId" },
+          "uniqueItems": true
+        },
+        "behavior": {
+          "type": "object",
+          "properties": {
+            "activities": { "type": "boolean" },
+            "notes": { "type": "boolean" },
+            "offlineAvailable": { "type": "boolean" },
+            "changeTracking": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "targetEvidence": {
+          "type": "object",
+          "required": ["status", "summary"],
+          "properties": {
+            "status": { "enum": ["verified-full", "verified-core", "missing", "not-applicable"] },
+            "summary": { "type": "string", "minLength": 2, "maxLength": 500 }
+          },
+          "additionalProperties": false
+        },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/field" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "field": {
+      "type": "object",
+      "required": ["fieldId", "displayName", "typeIntent", "required", "purpose", "decision"],
+      "properties": {
+        "fieldId": { "$ref": "#/definitions/fieldId" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "typeIntent": {
+          "enum": [
+            "text",
+            "long-text",
+            "whole-number",
+            "big-integer",
+            "decimal",
+            "floating-point",
+            "currency",
+            "date",
+            "date-time",
+            "boolean",
+            "choice",
+            "multi-choice",
+            "image",
+            "file"
+          ]
+        },
+        "required": { "type": "boolean" },
+        "purpose": { "type": "string", "minLength": 3, "maxLength": 500 },
+        "decision": { "$ref": "#/definitions/decision" },
+        "existingLogicalName": { "$ref": "#/definitions/logicalName" },
+        "approvedLogicalName": { "$ref": "#/definitions/logicalName" },
+        "uniqueIntent": { "type": "boolean" },
+        "uniqueDecision": { "$ref": "#/definitions/decision" },
+        "existingKeySchemaName": { "$ref": "#/definitions/logicalName" },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/choiceOption" }
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "maxLength": { "type": "integer", "minimum": 1 },
+            "minValue": { "type": "number" },
+            "maxValue": { "type": "number" },
+            "precision": { "type": "integer", "minimum": 0, "maximum": 10 },
+            "format": { "type": "string", "minLength": 1 },
+            "dateTimeBehavior": { "type": "string", "minLength": 1 },
+            "maxSizeInKB": { "type": "integer", "minimum": 1 },
+            "maxWidth": { "type": "integer", "minimum": 1 },
+            "maxHeight": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "choiceOption": {
+      "type": "object",
+      "required": ["optionId", "label", "order"],
+      "properties": {
+        "optionId": { "type": "string", "pattern": "^option:[a-z0-9][a-z0-9-]*$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "order": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "relationship": {
+      "type": "object",
+      "required": [
+        "relationshipId",
+        "fromEntityId",
+        "toEntityId",
+        "cardinalityIntent",
+        "required",
+        "purpose",
+        "decision",
+        "deleteBehaviorIntent"
+      ],
+      "properties": {
+        "relationshipId": { "$ref": "#/definitions/relationshipId" },
+        "fromEntityId": { "$ref": "#/definitions/entityId" },
+        "toEntityId": { "$ref": "#/definitions/entityId" },
+        "cardinalityIntent": { "enum": ["many-to-one", "one-to-many", "many-to-many"] },
+        "required": { "type": "boolean" },
+        "purpose": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "decision": { "$ref": "#/definitions/decision" },
+        "existingSchemaName": { "$ref": "#/definitions/logicalName" },
+        "approvedSchemaName": { "$ref": "#/definitions/logicalName" },
+        "existingLookupLogicalName": { "$ref": "#/definitions/logicalName" },
+        "approvedLookupLogicalName": { "$ref": "#/definitions/logicalName" },
+        "existingIntersectTable": { "$ref": "#/definitions/logicalName" },
+        "approvedIntersectTable": { "$ref": "#/definitions/logicalName" },
+        "deleteBehaviorIntent": { "enum": ["remove-link", "restrict", "cascade"] },
+        "serviceRequired": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "required": [
+        "operationId",
+        "kind",
+        "entityId",
+        "inputIntent",
+        "selectFieldIds",
+        "filterIntent",
+        "sortIntent",
+        "mutationFieldIds",
+        "paginationIntent",
+        "purpose"
+      ],
+      "properties": {
+        "operationId": { "$ref": "#/definitions/operationId" },
+        "kind": { "enum": ["read-one", "read-many", "create", "update", "delete", "upsert"] },
+        "entityId": { "$ref": "#/definitions/entityId" },
+        "inputIntent": { "$ref": "#/definitions/stringArray" },
+        "selectFieldIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/fieldId" },
+          "uniqueItems": true
+        },
+        "filterIntent": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/filter" }
+        },
+        "sortIntent": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/sort" }
+        },
+        "mutationFieldIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/fieldId" },
+          "uniqueItems": true
+        },
+        "paginationIntent": { "enum": ["not-applicable", "bounded", "cursor"] },
+        "purpose": { "type": "string", "minLength": 5, "maxLength": 500 }
+      },
+      "additionalProperties": false
+    },
+    "filter": {
+      "type": "object",
+      "required": ["fieldId", "operator", "input"],
+      "properties": {
+        "fieldId": { "$ref": "#/definitions/fieldId" },
+        "operator": { "enum": ["equals", "not-equals", "contains", "starts-with", "greater-than", "less-than", "in"] },
+        "input": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sort": {
+      "type": "object",
+      "required": ["fieldId", "direction", "order"],
+      "properties": {
+        "fieldId": { "$ref": "#/definitions/fieldId" },
+        "direction": { "enum": ["ascending", "descending"] },
+        "order": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "fixtureScenario": {
+      "type": "object",
+      "required": ["scenarioId", "purpose", "entityIds", "requirementIds"],
+      "properties": {
+        "scenarioId": { "$ref": "#/definitions/scenarioId" },
+        "purpose": { "type": "string", "minLength": 5, "maxLength": 500 },
+        "entityIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/entityId" },
+          "uniqueItems": true
+        },
+        "requirementIds": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/requirementId" },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

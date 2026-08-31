@@ -74,8 +74,8 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 
     The foreground owns every read, write, question, approval, command,
     validation, mutation, timing record, and resume checkpoint. It computes and
-    seals the complete work-order fingerprint; children echo that fingerprint,
-    artifact IDs, and allowlisted absolute target paths verbatim. The foreground
+    seals the complete work-order fingerprint; children echo that fingerprint
+    and either requested artifact descriptors or one typed result. The foreground
     rejects unknown fields, mismatches, incomplete content, truncation markers,
     and duplicate targets before any final write. Independent children may
     reason concurrently, but all validated artifacts are materialized in
@@ -90,6 +90,15 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     [`skills/create-mobile-app/references/return-only-agents.md`](./skills/create-mobile-app/references/return-only-agents.md)
     for the canonical contract. Unrelated agents not listed above retain their
     documented compatibility protocol until separately migrated.
+
+    Data Model work orders are measured as sealed UTF-8 payloads before
+    dispatch. Fitting requests use one typed semantic result; oversized requests
+    use one topology result plus deterministic dependency-ordered detail
+    results. The foreground checkpoints completed partitions, repairs only
+    owning partitions, strictly merges all results, and then renders Markdown
+    and the executable Dataverse contract from the one merged semantic object.
+    Partitioning never removes evidence or reduces product scope, and it does
+    not apply to screen work orders.
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.

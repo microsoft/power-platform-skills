@@ -1074,7 +1074,9 @@ test('planning contracts require the snapshot-only path and bounded expansion', 
   assert.match(architect, /validated snapshot facts and compact architect\s+evidence inline/);
   assert.match(architect, /detailed-dataverse-metadata:<comma-separated-logical-names>/);
   assert.match(architect, /proposed-dataverse-names:<comma-separated-logical-names>/);
-  assert.match(architect, /foreground normalizes the returned JSON and validates decisions/);
+  assert.match(architect, /foreground validates this semantic object, compiles/);
+  assert.match(architect, /`_dm_section\.md` and `\.tmp\/dataverse-schema-contract\.json` from it/);
+  assert.match(architect, /validates\s+the contract against the full local snapshot/);
   assert.match(architect, /A path without its required\s+content is missing context/);
   assert.match(architect, /resolved connector decisions/);
   assert.match(architect, /complete persistence boundary/);

@@ -58,7 +58,9 @@ test('converted child agents require the common return-only envelope', () => {
     assert.match(value, /Return exactly one JSON object/, fileName);
     assert.match(value, /Make no tool calls/, fileName);
     assert.match(value, /never\s+dispatch\s+another agent/i, fileName);
-    assert.match(value, /UTF-8[\s\S]*JSON\s+string/, fileName);
+    if (fileName !== 'data-model-architect.md') {
+      assert.match(value, /UTF-8[\s\S]*JSON\s+string/, fileName);
+    }
     assert.match(value, /`needs_context` and `blocked` have `artifacts: \[\]`/, fileName);
     assert.match(value, /Never return partial/, fileName);
     for (const field of requiredFields) assert.match(value, new RegExp(`\\b${field}\\b`), fileName);
@@ -107,6 +109,19 @@ test('native and connector decisions constrain Data Model architecture first', (
   assert.match(architect, /complete persistence boundary/);
   assert.match(architect, /Do not create a Dataverse duplicate of a connector-owned entity/);
   assert.match(architect, /resolved-architecture-inputs:/);
+});
+
+test('data model architect returns one compact semantic result for foreground compilation', () => {
+  const architect = source('data-model-architect.md');
+  assert.match(architect, /data-model-semantic-v1/);
+  assert.match(architect, /places the complete\s+semantic object directly in `result`/i);
+  assert.match(architect, /`artifacts: \[\]`/);
+  assert.match(architect, /Do not return Markdown, Mermaid, a\s+serialized Dataverse contract/i);
+  assert.doesNotMatch(architect, /complete `_dm_section\.md` artifact content/i);
+  assert.match(architect, /`single` returns one complete `data-model-semantic-v1`/);
+  assert.match(architect, /`topology` returns one `data-model-topology-v1`/);
+  assert.match(architect, /`detail` returns one `data-model-detail-v1`/);
+  assert.match(architect, /Partitioning never reduces scope/);
 });
 
 test('screen planning uses hard boundaries instead of entity or state counts', () => {

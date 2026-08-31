@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   readExecutionMode,
   recordAgentDispatch,
+  recordTransportFailure,
   resumeWaitingInteraction,
   writeExecutionMode,
   writeWaitingInteraction,
@@ -21,6 +22,7 @@ function parseArgs(argv) {
     else if (token === '--wait') args.action = 'wait';
     else if (token === '--resume') args.action = 'resume';
     else if (token === '--record-dispatch') args.action = 'record-dispatch';
+    else if (token === '--record-transport-failure') args.action = 'record-transport-failure';
     else if (token === '--host-id') args.hostId = argv[++index];
     else if (token === '--runtime-id') args.runtimeId = argv[++index];
     else if (token === '--plugin-version') args.pluginVersion = argv[++index];
@@ -32,6 +34,7 @@ function parseArgs(argv) {
     else if (token === '--affected-decisions') args.affectedDecisions = argv[++index];
     else if (token === '--answer') args.answer = argv[++index];
     else if (token === '--revision') args.revision = Number(argv[++index]);
+    else if (token === '--run-id') args.runId = argv[++index];
     else if (token === '--agent') args.agent = argv[++index];
     else if (token === '--work-order-id') args.workOrderId = argv[++index];
     else if (token === '--reason') args.reason = argv[++index];
@@ -73,6 +76,7 @@ function run(args) {
   }
   if (args.action === 'wait') {
     return writeWaitingInteraction(projectState(args, 'agent-interaction-state.json'), {
+      runId: args.runId,
       phase: args.phase,
       revision: args.revision || 1,
       pendingInteraction: {
@@ -90,12 +94,14 @@ function run(args) {
     return resumeWaitingInteraction(
       projectState(args, 'agent-interaction-state.json'),
       args.answer,
+      { runId: args.runId },
     );
   }
   if (args.action === 'record-dispatch') {
     return recordAgentDispatch(
       projectState(args, 'agent-dispatch-state.json'),
       {
+        runId: args.runId,
         agent: args.agent,
         workOrderId: args.workOrderId,
         reason: args.reason,
@@ -103,7 +109,21 @@ function run(args) {
       },
     );
   }
-  throw new Error('choose --read-mode, --write-mode, --wait, --resume, or --record-dispatch');
+  if (args.action === 'record-transport-failure') {
+    return recordTransportFailure(
+      projectState(args, 'agent-dispatch-state.json'),
+      {
+        runId: args.runId,
+        agent: args.agent,
+        workOrderId: args.workOrderId,
+        inputFingerprint: args.inputFingerprint,
+      },
+    );
+  }
+  throw new Error(
+    'choose --read-mode, --write-mode, --wait, --resume, --record-dispatch, '
+      + 'or --record-transport-failure',
+  );
 }
 
 function main(argv = process.argv) {

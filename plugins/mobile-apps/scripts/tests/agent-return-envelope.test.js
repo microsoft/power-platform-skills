@@ -56,6 +56,107 @@ test('parses an exact ready envelope and preserves supplied identities', (contex
   assert.deepEqual(parsed.artifacts.map((artifact) => artifact.artifactId), ['screen:home']);
 });
 
+test('parses one requested structured result without file artifacts', (context) => {
+  const { projectRoot } = fixture(context);
+  const workOrder = sealWorkOrder({
+    schemaVersion: 1,
+    agent: 'data-model-architect',
+    workOrderId: 'planning:data-model',
+    attempt: 1,
+    context: { requirements: ['Track equipment'] },
+    artifacts: [],
+    result: {
+      resultId: 'semantic:data-model',
+      resultType: 'data-model-semantic-v1',
+    },
+  });
+  const semanticResult = {
+    schemaVersion: 1,
+    mode: 'dataverse-required',
+    entities: [],
+  };
+  const parsed = parseAgentEnvelope(JSON.stringify({
+    schemaVersion: 1,
+    status: 'ready',
+    agent: workOrder.agent,
+    inputFingerprint: workOrder.inputFingerprint,
+    artifacts: [],
+    result: semanticResult,
+    concerns: [],
+    clarification: null,
+  }), workOrder, {
+    projectRoot,
+    validateStructuredResult(result, descriptor) {
+      assert.equal(descriptor.resultType, 'data-model-semantic-v1');
+      return result.mode === 'dataverse-required' ? [] : ['wrong mode'];
+    },
+  });
+  assert.deepEqual(parsed.result, semanticResult);
+  assert.deepEqual(parsed.artifacts, []);
+});
+
+test('rejects missing, unrequested, and invalid structured results', (context) => {
+  const { projectRoot, workOrder } = fixture(context);
+  assert.throws(() => parseAgentEnvelope(response(workOrder, {
+    result: { schemaVersion: 1 },
+  }), workOrder, { projectRoot }), /unrequested structured result/);
+
+  const resultWorkOrder = sealWorkOrder({
+    schemaVersion: 1,
+    agent: 'data-model-architect',
+    workOrderId: 'planning:data-model',
+    attempt: 1,
+    context: {},
+    artifacts: [],
+    result: { resultId: 'semantic:data-model', resultType: 'data-model-semantic-v1' },
+  });
+  const base = {
+    schemaVersion: 1,
+    status: 'ready',
+    agent: resultWorkOrder.agent,
+    inputFingerprint: resultWorkOrder.inputFingerprint,
+    artifacts: [],
+    concerns: [],
+    clarification: null,
+  };
+  assert.throws(
+    () => parseAgentEnvelope(JSON.stringify(base), resultWorkOrder, { projectRoot }),
+    /missing the requested structured result/,
+  );
+  assert.throws(
+    () => parseAgentEnvelope(JSON.stringify({ ...base, result: { invalid: true } }), resultWorkOrder, {
+      projectRoot,
+      validateStructuredResult: () => ['invalid semantic result'],
+    }),
+    /invalid semantic result/,
+  );
+});
+
+test('typed work orders preserve non-ready statuses with a null result', (context) => {
+  const { projectRoot } = fixture(context);
+  const workOrder = sealWorkOrder({
+    schemaVersion: 1,
+    agent: 'data-model-architect',
+    workOrderId: 'planning:data-model',
+    attempt: 1,
+    context: {},
+    artifacts: [],
+    result: { resultId: 'semantic:data-model', resultType: 'data-model-semantic-v1' },
+  });
+  const parsed = parseAgentEnvelope(JSON.stringify({
+    schemaVersion: 1,
+    status: 'needs_context',
+    agent: workOrder.agent,
+    inputFingerprint: workOrder.inputFingerprint,
+    artifacts: [],
+    result: null,
+    concerns: ['matching-dataverse-snapshot-and-evidence'],
+    clarification: null,
+  }), workOrder, { projectRoot });
+  assert.equal(parsed.status, 'needs_context');
+  assert.equal(parsed.result, null);
+});
+
 test('accepts ready_with_concerns and structured clarification statuses', (context) => {
   const { projectRoot, workOrder } = fixture(context);
   const concerned = parseAgentEnvelope(response(workOrder, {
@@ -108,6 +209,15 @@ test('rejects malformed, wrapped, truncated, and unknown-version responses', (co
   assert.throws(() => parseAgentEnvelope(response(workOrder, {
     schemaVersion: 2,
   }), workOrder, options), /schemaVersion must equal 1/);
+});
+
+test('rejects a valid envelope followed by a duplicated JSON suffix', (context) => {
+  const { projectRoot, workOrder } = fixture(context);
+  const valid = response(workOrder);
+  assert.throws(
+    () => parseAgentEnvelope(`${valid}\n${valid}`, workOrder, { projectRoot }),
+    /invalid JSON/,
+  );
 });
 
 test('rejects wrong roles, fingerprints, missing content, and unknown fields', (context) => {
@@ -404,6 +514,49 @@ test('foreground CLI validates and materializes response files', (context) => {
   assert.equal(state.phase, 'screen-wave-1');
   assert.equal(state.revision, 1);
   assert.match(state.artifacts['screen:home'].sha256, /^[a-f0-9]{64}$/);
+});
+
+test('foreground CLI exposes typed structured results without materializing files', (context) => {
+  const { projectRoot } = fixture(context);
+  const workOrder = sealWorkOrder({
+    schemaVersion: 1,
+    agent: 'data-model-architect',
+    workOrderId: 'planning:data-model',
+    attempt: 1,
+    context: {},
+    artifacts: [],
+    result: { resultId: 'semantic:data-model', resultType: 'data-model-semantic-v1' },
+  });
+  fs.mkdirSync(path.join(projectRoot, '.tmp'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, '.tmp', 'work-order.json'), JSON.stringify(workOrder));
+  fs.writeFileSync(path.join(projectRoot, '.tmp', 'response.json'), JSON.stringify({
+    schemaVersion: 1,
+    status: 'ready',
+    agent: workOrder.agent,
+    inputFingerprint: workOrder.inputFingerprint,
+    artifacts: [],
+    result: { schemaVersion: 1, mode: 'dataverse-required' },
+    concerns: [],
+    clarification: null,
+  }));
+  const result = run({
+    projectRoot,
+    workOrders: ['.tmp/work-order.json'],
+    responses: ['.tmp/response.json'],
+    validateOnly: true,
+  });
+  assert.deepEqual(result.results, [{
+    agent: 'data-model-architect',
+    inputFingerprint: workOrder.inputFingerprint,
+    resultId: 'semantic:data-model',
+    resultType: 'data-model-semantic-v1',
+    value: { schemaVersion: 1, mode: 'dataverse-required' },
+  }]);
+  assert.deepEqual(result.artifacts, []);
+  assert.equal(
+    result.responsePayloadBytes,
+    Buffer.byteLength(fs.readFileSync(path.join(projectRoot, '.tmp', 'response.json'), 'utf8')),
+  );
 });
 
 test('targeted materialization state revision preserves successful sibling hashes', (context) => {

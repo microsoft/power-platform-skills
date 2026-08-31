@@ -143,8 +143,18 @@ test('planning timing summary keeps outer wall, model, and approval durations se
     userApprovalWaitingMs: 60,
     executionMode: null,
     agentDispatchCount: 0,
+    agentDispatchesByMode: {
+      'parallel-return': 0,
+      'foreground-return': 0,
+    },
     agentRetryCount: 0,
     agentToolCallCount: 0,
+    requestPayloadBytes: 0,
+    responsePayloadBytes: 0,
+    workOrderCount: 0,
+    detailPartitionCount: 0,
+    completedWorkOrderCount: 0,
+    resumedWorkOrderCount: 0,
     foregroundMaterializationMs: 0,
     foregroundValidationMs: 0,
     retries: { nativePlanner: 1 },
@@ -161,6 +171,12 @@ test('planning timing records return-only execution metrics', () => {
     agentToolCallCount: 0,
     foregroundMaterializationMs: 12.5,
     foregroundValidationMs: 8,
+    requestPayloadBytes: 3000,
+    responsePayloadBytes: 1500,
+    workOrderCount: 3,
+    detailPartitionCount: 2,
+    completedWorkOrderCount: 3,
+    resumedWorkOrderCount: 1,
   });
   recordAgentExecutionMetrics(artifact, {
     executionMode: 'parallel-return',
@@ -171,14 +187,45 @@ test('planning timing records return-only execution metrics', () => {
   const summary = summarizePlanningTimings(artifact);
   assert.equal(summary.executionMode, 'parallel-return');
   assert.equal(summary.agentDispatchCount, 5);
+  assert.deepEqual(summary.agentDispatchesByMode, {
+    'parallel-return': 5,
+    'foreground-return': 0,
+  });
   assert.equal(summary.agentRetryCount, 1);
   assert.equal(summary.agentToolCallCount, 0);
+  assert.equal(summary.requestPayloadBytes, 3000);
+  assert.equal(summary.responsePayloadBytes, 1500);
+  assert.equal(summary.workOrderCount, 3);
+  assert.equal(summary.detailPartitionCount, 2);
+  assert.equal(summary.completedWorkOrderCount, 3);
+  assert.equal(summary.resumedWorkOrderCount, 1);
   assert.equal(summary.foregroundMaterializationMs, 17);
   assert.equal(summary.foregroundValidationMs, 10);
   assert.throws(() => recordAgentExecutionMetrics(artifact, {
     executionMode: 'parallel-return',
     agentToolCallCount: 1,
   }), /must have agentToolCallCount 0/);
+});
+
+test('planning timing represents mixed execution channels truthfully', () => {
+  const artifact = { schemaVersion: 1, stages: {} };
+  recordAgentExecutionMetrics(artifact, {
+    executionMode: 'parallel-return',
+    agentDispatchCount: 4,
+  });
+  recordAgentExecutionMetrics(artifact, {
+    executionMode: 'foreground-return',
+    agentDispatchCount: 1,
+    agentRetryCount: 1,
+  });
+  const summary = summarizePlanningTimings(artifact);
+  assert.equal(summary.executionMode, 'mixed-return');
+  assert.equal(summary.agentDispatchCount, 5);
+  assert.equal(summary.agentRetryCount, 1);
+  assert.deepEqual(summary.agentDispatchesByMode, {
+    'parallel-return': 4,
+    'foreground-return': 1,
+  });
 });
 
 test('planning timing separates nested planner work from post-failure fallback work', () => {
