@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.1
+version: 3.0.2
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -129,6 +129,30 @@ unrecognized. Confirm it matches a remaining dispatch row and leave it in place.
 
 After all builders finish:
 
+- Build a final functional acceptance matrix from `## Action Contracts`. For every row,
+  record the generated entry control, event property, mutated or queried source, and
+  observable-result control. Inspect the generated YAML rather than trusting builder
+  summaries. A row passes only when all four are present and use the contract's source of
+  truth.
+- Apply a primary-record lifecycle gate whenever the request includes creation,
+  correction, removal/cancellation, or review:
+  - creation writes every required field and exposes the created record immediately;
+  - edit loads a selected record by stable identity, preserves unchanged fields, writes
+    changed fields, and exposes the updated values;
+  - delete/remove has reachable confirmation and cancel paths and removes or transitions
+    the selected record by stable identity;
+  - approve/reject actions update the same status field rendered by lists, filters, and
+    dashboards.
+  Repair the owning screen in place when any lifecycle link is missing.
+- Apply a shared-source gate to every search, filter, ordering, alert, KPI, dashboard, and
+  report. Trace its visible result back to the collection or source changed by mutations.
+  Reject copied counters, seed-only collections, screen-local snapshots, or filters and
+  metrics that read a different source.
+- Apply an initial-viewport action gate to every primary destination and required action.
+  Confirm its control is visible, enabled when its preconditions hold, at least 44px in
+  each interactive dimension, inside the screen bounds, and not covered by another
+  visible control. A button below a clipped form or inside a zero-height container does
+  not pass.
 - Check each builder's `Functional:` section before accepting its `QA:` line. It must
   contain exactly one `PASS` trace per Required Action in that screen's brief, and each
   trace must name the precondition, control event, source/stable-ID operation,
@@ -205,6 +229,8 @@ After all builders finish:
   `[working directory]/_EditorState.pa.yaml` after all builders finish. If it says `None`, leave the
   file unchanged.
 - Read `${PLUGIN_ROOT}/references/ValidationWorkflow.md` and follow it.
+- After the final successful compile, do not call `Write`, `Edit`, or any mutation tool.
+  If any app YAML changes afterward, compile again before reporting completion.
 
 ## Shared Invariants
 
@@ -235,9 +261,13 @@ After all builders finish:
 8. Keep mock data compact: roughly 5-8 short rows per collection.
 9. Builders own exactly one screen file. The planner owns CREATE-mode `App.pa.yaml`.
    The orchestrator owns EDIT-mode `App.pa.yaml`.
-10. Compile early and often. `App.pa.yaml` is validated before builders are dispatched,
-    and again as soon as the first builder returns. Never defer the first compile until
-    every file is written.
-11. Do not report completion until the workspace compiles clean and the functional
-    conformance gate passes, or remaining compile and functional defects are explicitly
-    reported.
+10. Compile `App.pa.yaml` before dispatching builders and compile again after each builder
+    wave. Never defer the first compile until every file is written.
+11. Do not report completion until the workspace compiles clean, every Action Contract
+    passes the final functional acceptance matrix, and no app YAML mutation occurred after
+    the final successful compile. Otherwise report the exact blocked contract or remaining
+    diagnostic.
+12. Require only prompt- or approved-plan-derived actions. Never add universal CRUD across
+    every entity as a default. Treat role-scoped management of all primary records as a
+    lifecycle requirement, and never omit or hide an action once it is included in an
+    Action Contract.

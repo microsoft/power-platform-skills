@@ -69,6 +69,12 @@ are not part of the identifier.
 - Check 39 — `QACHK-VISUAL-CONTRACT` — screen styling diverges from the shared visual system
 - Check 40 — `QACHK-EXCESS-WHITESPACE` — layout sizing creates unintended empty regions
 - Check 41 — `QACHK-CORE-VISUALIZATION` — core visualization is blank, static, or incomplete
+- Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` — required action is clipped, covered,
+  undersized, or unavailable from the initial task path
+- Check 43 — `QACHK-LIFECYCLE-IDENTITY` — edit, delete, or review targets an unstable or
+  incorrect record identity
+- Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` — filters, ordering, alerts, metrics, or
+  reports read a different source from mutations
 
 Agents that write `.pa.yaml` files MUST run these checks against their own
 output before returning, and fix every issue inline. Report the outcome of
@@ -130,6 +136,12 @@ QA: 1 PASS · 2 PASS · 3 PASS · 4 FIXED(7) · 5 PASS · 6 FIXED(2) · 7 FIXED(
   spacing, or visibility.
 - `QACHK-CORE-VISUALIZATION` is `N/A` only when the screen brief names no hierarchy,
   chart, comparison, board, timeline, map, or other core visualization.
+- `QACHK-PRIMARY-ACTION-REACHABILITY` applies to every screen owning a Required Actions
+  entry point.
+- `QACHK-LIFECYCLE-IDENTITY` is `N/A` only when the screen owns no edit, delete/remove,
+  cancel, approve, reject, or other selected-record mutation.
+- `QACHK-SHARED-SOURCE-DERIVATION` is `N/A` only when the screen owns no mutation,
+  search, filter, ordering, alert, KPI, dashboard, visualization, or report binding.
 
 `PASS` is valid when every applicable control was inspected and no defect was found.
 Never infer that a check was skipped solely from the number of controls on the screen.
@@ -1502,3 +1514,82 @@ by the brief. Remove placeholder surfaces and overlays that obscure the result.
 **Exception:** None when the screen brief names a core visualization. If the discovered
 controls cannot implement the requested interaction exactly, render the strongest truthful
 approximation and report it as blocked or approximate; never ship a blank region.
+
+---
+
+## Check 42 — `QACHK-PRIMARY-ACTION-REACHABILITY` (required action cannot be used)
+
+**Problem:** A required action can exist in YAML but remain unusable because it is below a
+clipped form, inside a zero-height container, covered by an overlay, permanently disabled,
+or too small to target reliably.
+
+**Detect:** For every Required Actions entry point:
+
+1. Trace the visible path from the screen's initial state to the action.
+2. Confirm every control on that path has a visible ancestor chain and is not permanently
+   disabled.
+3. Confirm the action is at least 44px high and 44px wide, or is a full-width row action
+   with an equivalent target area.
+4. Evaluate its bounds at desktop, tablet, and phone widths and reject clipping or
+   intersection with another visible control.
+5. When the action is below the initial viewport, require an obvious working scroll or
+   menu affordance whose own control passes these checks.
+
+**Fix:** Move the action into the initial task path, repair the containing layout, enlarge
+its target, or expose it through an immediately visible menu. Do not satisfy reachability
+with hidden text, a disabled placeholder, or an ambiguous card click.
+
+**Exception:** A destructive confirmation action may begin hidden when a reachable
+delete/remove entry point makes it visible.
+
+---
+
+## Check 43 — `QACHK-LIFECYCLE-IDENTITY` (selected-record mutation targets the wrong row)
+
+**Problem:** Edit, delete, approve, reject, and delivery/status actions can appear wired
+while targeting display text, gallery position, a stale copied record, or the first row
+instead of the record selected by the user.
+
+**Detect:** For every selected-record mutation:
+
+1. Identify the selected record and its stable ID or stable selected-record object.
+2. Confirm edit inputs load from that selection before save.
+3. Confirm `Patch`, `UpdateIf`, `Remove`, or `RemoveIf` targets the same identity.
+4. Confirm unchanged fields are preserved and the handler does not construct a partial
+   replacement that drops required data.
+5. Confirm the immediate result list/detail selects or removes the same identity.
+6. For review/status transitions, confirm every decision writes the same status field that
+   downstream filters, badges, dashboards, and reports render.
+
+**Fix:** Store the selected stable ID or record, load the edit state from it, and perform
+all lifecycle mutations against that identity. Bind post-action evidence to the same
+source and identity.
+
+**Exception:** A create action has no prior identity, but it must assign a unique stable ID
+that later edit and delete actions use.
+
+---
+
+## Check 44 — `QACHK-SHARED-SOURCE-DERIVATION` (derived UI reads stale or unrelated data)
+
+**Problem:** CRUD can update one collection while search, filters, ordering, alerts, KPIs,
+dashboards, and reports read seed data, copied counters, or another screen-local
+collection. Each surface looks plausible but does not react to user actions.
+
+**Detect:** For every mutable entity:
+
+1. Identify the authoritative mutable source named by the plan.
+2. Confirm create, edit, delete, and state-transition handlers write that source.
+3. Confirm search and filter `Items` formulas read that source directly.
+4. Confirm ordering uses an explicit sort over that source and the field mutations update.
+5. Confirm alerts and KPIs derive their predicates and counts from that source at render
+   time rather than values copied during navigation or initialization.
+6. Confirm dashboards, visualizations, and reports group and aggregate that source with
+   the same field semantics used by forms and lists.
+
+**Fix:** Remove duplicate or copied state and bind all dependent surfaces to the
+authoritative source or a named formula derived from it. If caching is required, update or
+refresh the cache in every successful mutation path.
+
+**Exception:** An immutable version snapshot may use a separate source when the plan
+explicitly defines snapshot identity and comparison semantics.

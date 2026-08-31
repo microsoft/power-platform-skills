@@ -88,6 +88,15 @@ Do not fix unrelated pre-existing issues.
 
 ### Both
 
+- Treat stable record identity as part of every lifecycle action. Edit and delete must
+  operate on the selected record's stable ID or selected record object, never on display
+  text, gallery position, or a newly constructed partial record.
+- Keep one mutable source of truth per domain entity. Search, filters, ordering, alerts,
+  KPIs, dashboards, and reports must derive from that same source rather than a copied
+  counter, seed-only collection, or screen-local duplicate.
+- Give every required primary action a concrete initial-viewport path. Its control must
+  remain visible, enabled when preconditions hold, at least 44px in each interactive
+  dimension, inside its parent bounds, and unobscured by overlays or sibling panels.
 - Every control you **add** carries your assigned control name prefix. Control names are
   unique across the whole app, and you cannot see the other screens — the prefix is the
   only thing preventing a collision. This applies to repeated UI blocks such as nav bars
@@ -231,7 +240,8 @@ incomplete, and the orchestrator will send the screen back.
 
 The `Functional:` section must contain exactly one trace per Required Action. A trace that
 omits the source/ID, postcondition, or observer/evidence is incomplete even when Check 33,
-34, or 35 says `PASS`.
+34, or 35 says `PASS`. Never return `Status: Done` when lifecycle identity,
+shared-source derivation, or initial-viewport reachability is unresolved.
 
 ## Constraints
 
