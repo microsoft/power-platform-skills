@@ -419,14 +419,34 @@ const SPEC_TYPE_FROM_ATTRIBUTE_TYPE = {
 
 // Types whose App Spec declaration REQUIRES a companion field this hydrator cannot supply: a
 // `Choice`/`MultiChoice` column must carry `options[]` or a `globalChoice` reference, and reading
-// those needs a per-column typed-metadata expand the download does not perform.
+// those needs a per-column typed-metadata expand the download does not perform. (Verified to be the
+// ONLY such dependency: every other companion rule in `validateAppSpec` / `spec-lint` — AutoNumber's
+// format, Calculated/Rollup's formula, Customer's description — is a warning, not an error.)
 //
 // So the column is emitted WITHOUT a type rather than with one that makes the whole spec fail
 // validation ("column X: Choice needs options[] or a globalChoice reference") — which is what
-// happened the moment types started being carried, live. A type-less column is exactly the prior
-// behaviour and is harmless here: the build reuses a downloaded table's columns by discovery and
-// never creates them. Full choice round-trip is a separate piece of work.
+// happened the moment types started being carried, live.
+//
+// This is NOT free, and the cost is surfaced rather than described as harmless. On a rebuild into an
+// org that does NOT already have the table, `provisionDataModel` decides create-vs-reuse from org
+// DISCOVERY (not from `existing`) and computes buildable columns as `SDK_COLUMN_TYPE[c.type ||
+// 'Text']` — so a type-less Choice column is created as TEXT. The now-asymmetric result (Memo, Money
+// and DateTime round-trip while Choice quietly degrades) is harder to notice than the old
+// everything-is-Text, so the affected columns are warned about by name.
 const TYPES_NEEDING_COMPANION_DATA = new Set(['Choice', 'MultiChoice']);
+
+// Columns whose type could not be substantiated, so a `download -> rebuild into a fresh org` round
+// trip does not silently create them as Text. `entity.type` is absent for exactly two reasons:
+// a Choice/MultiChoice (above), or an attribute type with no App Spec equivalent.
+function untypedColumnNames(entities) {
+  const out = [];
+  for (const e of entities || []) {
+    for (const c of (e.columns || [])) {
+      if (c && c.schemaName && c.type === undefined) out.push(`${e.schemaName}.${c.schemaName}`);
+    }
+  }
+  return out;
+}
 
 function entityFromMetadata(meta, logical) {
   const primary = meta && (meta.primaryNameAttribute || meta.primaryNameLogicalName);
@@ -881,6 +901,15 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   if (droppedComponents.length) {
     process.stderr.write(`WARNING: ${droppedComponents.length} app component table(s) were omitted from the spec because Dataverse reported no primary-name column (${withReason(droppedComponents)}) — they are NOT in the app's navigation, and the deployed app still references them; declare them by hand if a rebuild needs them.\n`);
   }
+  // A column whose App Spec type could not be substantiated — a Choice/MultiChoice (whose options
+  // this download does not read) or an attribute type the spec cannot declare. Rebuilding into an
+  // org that ALREADY has the table reuses the column and this is inert; rebuilding into a FRESH org
+  // creates it as Text, because the data-model phase falls back to `c.type || 'Text'`. That silent
+  // downgrade is the reason this is announced by name rather than left to be discovered later.
+  const untyped = untypedColumnNames(entities);
+  if (untyped.length) {
+    process.stderr.write(`WARNING: ${untyped.length} column(s) were captured WITHOUT a type (${untyped.join(', ')}) — most likely Choice/MultiChoice columns, whose options this download does not read. Rebuilding this spec into an environment that already has the table is unaffected, but rebuilding into a FRESH environment would create them as single-line Text. Add the type and options[] (or a globalChoice reference) by hand before a cross-environment rebuild.\n`);
+  }
 
   // App identity comes from the app's REAL, immutable uniquename (`appUnique`, captured from Dataverse as
   // `appmodule.uniquename`; guaranteed present here because runDownload bails at the sitemap gate above).
@@ -1085,4 +1114,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };
+module.exports = { untypedColumnNames, resolveAppId, collectSitemap, appComponentEntities, parseDownloadedPages, assignPageKeys, missingDownloads, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, recoverAppSolution, runDownload, preserveAuthoredLanguageCode };

@@ -474,6 +474,13 @@ function compileFormIntent(spec, formSpec, opts) {
     }];
   }
 
+  // Every form-level anchor is recorded, not just those for fields THIS layout places. The reconcile
+  // resolves anchors against the DEPLOYED form, and positioning a control an explicit layout does not
+  // re-declare is precisely the `prune: false` case the anchor exists to serve — recording only
+  // placed fields made that documented (and validation-permitted) combination silently do nothing.
+  // Harmless for the compile-time reorder: an unplaced field is simply not found in the cell list.
+  for (const key of Object.keys(formOptions)) recordPosition(formOptions[key]);
+
   // Notes section (opt-in: formSpec.notes or entity.hasNotes) — Main forms only.
   // Quick-create / quick-view forms don't host the activity timeline.
   // Appended to the first tab's single FormColumn so it renders below the field sections.

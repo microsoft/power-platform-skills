@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { untypedColumnNames, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -319,7 +319,7 @@ test('entityFromMetadata emits ONLY custom columns — a downloaded spec must no
   // A Choice column is emitted WITHOUT a type: declaring `type: "Choice"` obliges the spec to carry
   // `options[]` or a `globalChoice`, which this hydrator cannot read, and the resulting spec fails
   // its own validation. Live-caught — the download errored with
-  // "column ffo_status: Choice needs options[] or a globalChoice reference".
+  // "column contoso_status: Choice needs options[] or a globalChoice reference".
   assert.ok(!('type' in e.columns.find((c) => c.schemaName === 'new_status')),
     'a Choice column must not claim a type it cannot substantiate');
 });
@@ -356,6 +356,41 @@ test('enrichesDefaultViews is FALSE for an existing:true table (download flags e
   assert.strictEqual(enrichesDefaultViews(spec, spec.entities[0]), false);
   const owned = { ...spec.entities[0], existing: false };
   assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [owned] }, owned), true, 'a table this build owns still enriches');
+  // The opt-in must remain reachable: judging "this reused table really is mine" is exactly the call
+  // an author can make and this code cannot, and the gate ran BEFORE the flag check at first.
+  const optedIn = { ...spec.entities[0], enrichDefaultViews: true };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [optedIn] }, optedIn), true,
+    'an explicit enrichDefaultViews:true must override the existing:true skip');
+  const optedOut = { ...spec.entities[0], existing: false, enrichDefaultViews: false };
+  assert.strictEqual(enrichesDefaultViews({ ...spec, entities: [optedOut] }, optedOut), false, 'the opt-out still works');
+});
+
+test('untypedColumnNames names every column whose type could not be substantiated', () => {
+  // These are the columns a rebuild into a FRESH org would create as Text, because the data-model
+  // phase falls back to `SDK_COLUMN_TYPE[c.type || 'Text']`. Rebuilding into an org that already has
+  // the table reuses them and this is inert — which is why the loss has to be announced by name
+  // rather than left for someone to discover after a cross-environment rebuild.
+  assert.deepStrictEqual(untypedColumnNames([
+    { schemaName: 'new_ticket', columns: [
+      { schemaName: 'new_status' },                 // Choice — options not read, so no type
+      { schemaName: 'new_notes', type: 'Memo' },
+      { schemaName: 'new_choices' },                // MultiChoice
+    ] },
+    { schemaName: 'new_order', columns: [{ schemaName: 'new_total', type: 'Money' }] },
+  ]), ['new_ticket.new_status', 'new_ticket.new_choices']);
+  assert.deepStrictEqual(untypedColumnNames([]), []);
+  assert.deepStrictEqual(untypedColumnNames(undefined), []);
+});
+
+test('a downloaded Choice column is reported as untyped, so the Text downgrade is never silent', () => {
+  const meta = {
+    logicalName: 'new_ticket', schemaName: 'new_ticket', displayName: 'Ticket', primaryNameAttribute: 'new_name',
+    attributes: [
+      { logicalName: 'new_status', displayName: 'Status', attributeType: 'Picklist', isCustomAttribute: true },
+      { logicalName: 'new_notes', displayName: 'Notes', attributeType: 'Memo', isCustomAttribute: true },
+    ],
+  };
+  assert.deepStrictEqual(untypedColumnNames([entityFromMetadata(meta, 'new_ticket')]), ['new_ticket.new_status']);
 });
 
 test('iconWebResources looks up web resources by NAME (not id) and maps type from webresourcetype', async () => {

@@ -265,6 +265,23 @@ test('after: an anchored field CONVERGES in a 2-column section — a rebuild of 
     'c6 must be flat-adjacent after c1 — this is the condition the reconcile uses to skip the move');
 });
 
+test('after: an anchor is recorded even for a field this layout does not place (the prune:false case)', () => {
+  // Validation permits a form-level anchor for a field an explicit layout does not list — that IS
+  // the documented `prune: false` use: position a control on a deployed form without re-declaring
+  // the rest of it. Recording anchors only for PLACED fields made that combination silently inert.
+  const spec = specWithBigInt({
+    layout: 'explicit',
+    prune: false,
+    fieldOptions: { new_daysremaining: { after: 'new_duedate' } },
+    tabs: [{ label: 'G', sections: [{ columns: 1, fields: ['new_name'] }] }],
+  });
+  const intent = compileFormIntent(spec, spec.forms[0]);
+  assert.deepStrictEqual(logicalsOf(intent), ['new_name'], 'the layout still places only what it lists');
+  assert.deepStrictEqual(intent.__fieldPositions, { new_daysremaining: 'new_duedate' },
+    'the anchor must survive for the reconcile to apply against the deployed form');
+  assert.deepStrictEqual(validateAppSpec(spec, { profile: 'deploy' }).errors, []);
+});
+
 test('prune: __prune defaults true and is false only when the form opts out', () => {
   const base = specWithBigInt({ layout: 'explicit', tabs: [{ label: 'G', sections: [{ fields: ['new_name'] }] }] });
   assert.strictEqual(compileFormIntent(base, base.forms[0]).__prune, true);

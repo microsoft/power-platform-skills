@@ -1617,6 +1617,68 @@ test('form reconcile: a field SHARING a row is moved as a CELL, with the same in
   assert.deepStrictEqual(order, ['new_tier', 'new_name', 'new_other'], 'cell landed one slot too far right');
 });
 
+test('form reconcile: a lone-row field anchored to a NON-last cell uses the CELL move, so it converges', async () => {
+  // The row move inserts a row after the ANCHOR'S ROW, i.e. after the last cell of that row. That is
+  // flat-adjacent only when the anchor IS the last cell. With a left-column anchor the row move
+  // overshoots, the flat check never reports converged, and a no-op move is re-issued forever.
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_late: { after: 'new_tier' } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: [] });
+  await sdk.fetchArtifact('form', 'form-existing');
+  const seeded = await sdk.getArtifact('form', 'form-existing');
+  // A 2-column shape: new_tier is the LEFT cell of row 0; new_late is alone in its own row.
+  seeded.tabs[0].columns[0].sections[0].rows = [
+    { cells: [{ control: { fieldName: 'new_tier' } }, { control: { fieldName: 'new_name' } }] },
+    { cells: [{ control: { fieldName: 'new_late' } }] },
+  ];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+
+  const move = find(calls, 'moveElement')[0];
+  assert.ok(move, 'no moveElement issued');
+  assert.strictEqual(move.args[2], '/tabs/0/columns/0/sections/0/rows/1/cells/0', 'must move the CELL, not the row');
+  assert.strictEqual(move.args[3], '/tabs/0/columns/0/sections/0/rows/0/cells');
+  assert.deepStrictEqual(move.args[4], { index: 1 }, 'lands directly after the anchor cell');
+
+  const form = await sdk.getArtifact('form', 'form-existing');
+  const rows = form.tabs[0].columns[0].sections[0].rows;
+  assert.deepStrictEqual(rows.map((r) => r.cells.map((c) => c.control.fieldName)), [['new_tier', 'new_late', 'new_name']],
+    'the emptied source row must also be removed, or a blank row accumulates per anchored field');
+});
+
+test('form reconcile: a lone-row field anchored to a LAST cell still uses the cheaper ROW move', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_late: { after: 'new_tier' } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: [] });
+  await sdk.fetchArtifact('form', 'form-existing');
+  const seeded = await sdk.getArtifact('form', 'form-existing');
+  // new_tier is now the LAST cell of its row, so inserting the row after it IS flat-adjacent.
+  seeded.tabs[0].columns[0].sections[0].rows = [
+    { cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] },
+    { cells: [{ control: { fieldName: 'new_other' } }] },
+    { cells: [{ control: { fieldName: 'new_late' } }] },
+  ];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  const move = find(calls, 'moveElement')[0];
+  assert.ok(move, 'no moveElement issued');
+  assert.strictEqual(move.args[2], '/tabs/0/columns/0/sections/0/rows/2', 'the whole ROW moves');
+  assert.strictEqual(move.args[3], '/tabs/0/columns/0/sections/0/rows');
+});
+
+test('form reconcile: a second build over an anchored 2-column form issues NO move (it converges)', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', fieldOptions: { new_late: { after: 'new_tier' } } }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: [] });
+  await sdk.fetchArtifact('form', 'form-existing');
+  const seeded = await sdk.getArtifact('form', 'form-existing');
+  // Already correct: new_late is flat-adjacent after new_tier, across a row boundary.
+  seeded.tabs[0].columns[0].sections[0].rows = [
+    { cells: [{ control: { fieldName: 'new_name' } }, { control: { fieldName: 'new_tier' } }] },
+    { cells: [{ control: { fieldName: 'new_late' } }] },
+  ];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.strictEqual(find(calls, 'moveElement').length, 0, 'a converged 2-column form was shuffled anyway');
+});
+
 test('form reconcile: an explicit layout with prune:false keeps fields it does not list', async () => {
   const spec = makeSpec();
   spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit', prune: false,

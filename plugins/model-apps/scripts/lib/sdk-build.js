@@ -481,7 +481,17 @@ function subgridLabel(spec, sg) {
 // nothing. This matters most for a `download -> rebuild` round trip: `download-model-app` flags
 // every recovered table `existing: true` precisely because ownership is unprovable.
 function enrichesDefaultViews(spec, entity) {
-  if (!entity || entity.existing === true) return false;
+  if (!entity) return false;
+  // An `existing: true` table is excluded UNLESS the author explicitly opts in. Enrichment REPLACES
+  // the Active/Inactive views' column set, and `existing` means this build did not create the table
+  // and cannot prove it owns it — the same reasoning that stops teardown from deleting it. Rewriting
+  // another app's default views is destructive and unrecoverable from here. This matters most for a
+  // `download -> rebuild` round trip: `download-model-app` flags every recovered table `existing`
+  // precisely because ownership is unprovable.
+  //
+  // `enrichDefaultViews: true` is honoured as a deliberate override, because judging "this reused
+  // table really is mine" is exactly the call an author can make and this code cannot.
+  if (entity.existing === true && entity.enrichDefaultViews !== true) return false;
   return entity.enrichDefaultViews !== false && defaultViewColumns(spec, entity).length >= 2;
 }
 
@@ -1217,19 +1227,34 @@ async function runSdkBuild(spec, opts = {}) {
     }
   };
 
+  // Resolve a `/tabs/T/columns/C/sections/S/rows/R` pointer to the row object. Deliberately narrow —
+  // it exists only so the reconcile can tell whether a cell move emptied the row it came from.
+  const jsonPointerRow = (formJson, pointer) => {
+    const t = String(pointer).split('/').filter(Boolean);
+    // ['tabs', T, 'columns', C, 'sections', S, 'rows', R]
+    if (t.length !== 8 || t[0] !== 'tabs' || t[2] !== 'columns' || t[4] !== 'sections' || t[6] !== 'rows') return null;
+    const tab = (formJson.tabs || [])[Number(t[1])];
+    const col = tab && (tab.columns || [])[Number(t[3])];
+    const sec = col && (col.sections || [])[Number(t[5])];
+    return (sec && (sec.rows || [])[Number(t[7])]) || null;
+  };
+
   // Move each anchored field so it immediately follows its anchor (`fieldOptions[x].after`).
   //
   // This is the non-destructive alternative to re-declaring a whole form just to move one control
   // (ADO 6651439). It is a no-op when the field is already in place, so a rebuild converges instead
   // of shuffling the form on every run.
   //
-  // Two mechanics, chosen by the shape of the field's row, so the section grid is never left ragged:
-  //   * the field is ALONE in its row -> move the whole ROW after the anchor's row. A field added by
-  //     the reconcile above always lands this way (it is appended as `{ cells: [cell] }`), so this is
-  //     the common path.
-  //   * the field SHARES a row (a 2-column section) -> move just the CELL into the anchor's row,
-  //     directly after the anchor cell. The anchor's row then holds one extra cell; Dataverse renders
-  //     the overflow on the next line rather than rejecting it.
+  // "Immediately after" is measured in SECTION-FLAT reading order, because a section is a grid: in a
+  // 2-column section `[a|b] [c|d]` the order is a, b, c, d. Two mechanics, chosen by whether one can
+  // actually reach that position (see the branch comments below) rather than by row shape alone:
+  //   * ROW move — the field is alone in its row AND the anchor is the last cell of its row. The
+  //     field's row is inserted after the anchor's row, which is flat-adjacent only under that
+  //     second condition.
+  //   * CELL move — everything else. The cell is spliced into the anchor's own row directly after
+  //     it, which always satisfies flat adjacency. The anchor's row then holds one extra cell;
+  //     Dataverse renders the overflow on the next line rather than rejecting it, and a row emptied
+  //     by the move is removed so blank rows cannot accumulate.
   const applyFieldPositions = async (formId, def) => {
     const positions = def.__fieldPositions || {};
     for (const logical of Object.keys(positions)) {
@@ -1250,7 +1275,17 @@ async function runSdkBuild(spec, opts = {}) {
       // to 2 columns above 6 fields, so this was the common case, not an edge case.
       if (from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + 1) continue;
 
-      if (from.rowCellCount === 1) {
+      // Which mechanic can actually SATISFY that check?
+      //
+      // A ROW move inserts the field's row after the anchor's row, so it lands after the LAST cell
+      // of that row. That is flat-adjacent to the anchor only when the anchor IS the last cell in
+      // its row — always true in a 1-column section, a coin-flip in a 2-column one. When the anchor
+      // sits in a left-hand column the row move overshoots by the rest of the row, the flat check
+      // stays false forever, and the reconcile re-issues a no-op move on every single rebuild.
+      // So the row move is used only where it can succeed; otherwise the cell is moved into the
+      // anchor's own row, directly after it, which always satisfies flat adjacency.
+      const anchorIsLastInRow = to.cellIndex === to.rowCellCount - 1;
+      if (from.rowCellCount === 1 && anchorIsLastInRow) {
         // moveElement resolves the TARGET ARRAY first, then removes the source, then splices. When
         // both live in the same array the removal shifts every later index down by one, so a target
         // computed against the pre-removal array overshoots by one. Compensate explicitly.
@@ -1263,6 +1298,16 @@ async function runSdkBuild(spec, opts = {}) {
       let index = to.cellIndex + 1;
       if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
       await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });
+      // Moving the only cell out of a row leaves an empty `<row/>`, which renders as a blank line and
+      // would accumulate one per anchored field. Row indices are unchanged by a cell move (cells
+      // move between rows; the row count does not change), so the source row is still where it was.
+      if (from.rowCellCount === 1 && from.rowPointer !== to.rowPointer) {
+        const after = await provision.getArtifact('form', formId) || {};
+        const stranded = jsonPointerRow(after, from.rowPointer);
+        if (stranded && (stranded.cells || []).length === 0) {
+          await provision.removeElement('form', formId, from.rowPointer);
+        }
+      }
     }
   };
 

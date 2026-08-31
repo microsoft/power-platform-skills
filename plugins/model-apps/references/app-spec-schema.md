@@ -214,7 +214,9 @@ partial rebuildable artifacts. Null or absent Dataverse descriptions are omitted
                                           //   The build reuses it; teardown NEVER deletes it. System
                                           //   tables are auto-detected and skipped by teardown even
                                           //   without this flag — set it for a REUSED CUSTOM table
-                                          //   you want protected from teardown.
+                                          //   you want protected from teardown. ALSO skips
+                                          //   default-view enrichment (which replaces a view's
+                                          //   column set) — override with enrichDefaultViews: true.
   "description": "A customer support ticket, from intake through resolution.",
                                           // RECOMMENDED — see "description" below. Written to
                                           //   Dataverse at create time; the grounding an agent reads
@@ -372,9 +374,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - **Default-view enrichment (automatic):** the auto-generated **"Active &lt;Entity&gt;"** and
   **"Inactive &lt;Entity&gt;"** system views ship with only the primary column. The build enriches
   them with the primary column plus up to 6 meaningful declared columns (in declared order, skipping
-  wide/opaque types like MultilineText). This runs by default for every table that has extra columns;
-  opt a table out with **`"enrichDefaultViews": false`** on its `entities[]` entry. Author-declared
-  `views[]` are separate and always win.
+  wide/opaque types like MultilineText). This runs by default for every table the build **owns** that
+  has extra columns; opt a table out with **`"enrichDefaultViews": false`** on its `entities[]` entry.
+  A table marked **`"existing": true`** is skipped by default — enrichment *replaces* a view's column
+  set, and `existing` means the build cannot prove it owns the table, so rewriting another app's
+  default views is not a safe default. Set **`"enrichDefaultViews": true`** to override that when you
+  know the reused table is yours. Author-declared `views[]` are separate and always win.
 
 ## charts[]
 ```jsonc
