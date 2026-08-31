@@ -1,4 +1,4 @@
-# EvalCnvasApp Workflow
+# EvalCanvasApp Workflow
 
 Run the governed AppGen functional scenarios for one Power Apps Canvas App through `power-platform-evals`, retain its canonical evidence and Product report, and publish structured metrics to the OneDS-backed Kusto stream.
 
