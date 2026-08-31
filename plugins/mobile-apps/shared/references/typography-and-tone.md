@@ -122,13 +122,22 @@ Complete copy-paste block for `expo-font` + Tamagui wiring:
 
 ```tsx
 // app/_layout.tsx
+import {
+  darkTheme,
+  lightTheme,
+  PowerAppsProvider,
+} from '@microsoft/power-apps-native-host'
 import { useFonts } from 'expo-font'
 import * as SplashScreen from 'expo-splash-screen'
 import { useEffect } from 'react'
+import { useColorScheme } from 'react-native'
+
+import tamaguiConfig from '../tamagui.config'
 
 SplashScreen.preventAutoHideAsync()
 
 export default function RootLayout() {
+  const colorScheme = useColorScheme()
   const [fontsLoaded] = useFonts({
     // Replace with your chosen pairing
     Lora: require('../assets/fonts/Lora-Regular.ttf'),
@@ -143,18 +152,26 @@ export default function RootLayout() {
   if (!fontsLoaded) return null
 
   return (
-    <TamaguiProvider config={tamaguiConfig} defaultTheme={colorScheme}>
+    <PowerAppsProvider
+      // Keep the existing msalConfig, powerConfig, and schemaMap props.
+      tamaguiConfig={tamaguiConfig}
+      defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
+      theme={lightTheme}
+      darkTheme={darkTheme}
+    >
       {/* ... */}
-    </TamaguiProvider>
+    </PowerAppsProvider>
   )
 }
 ```
 
 ```tsx
 // tamagui.config.ts
-// Inside the Tamagui 2 + Config v5 customization markers.
+// Keep the existing imports, factory call, exports, and module augmentation.
+// Replace only customConfig inside the customization markers.
+import { createPowerAppsTamaguiConfig } from '@microsoft/power-apps-native-host/config/tamaguiConfig'
+import { defaultConfig } from '@tamagui/config/v5'
 import { createFont } from '@tamagui/core'
-import { animations } from '@tamagui/config/v5-rn'
 
 const headingFont = createFont({ /* from pairing above */ })
 const bodyFont = createFont({ /* from pairing above */ })
@@ -167,6 +184,9 @@ const customConfig = {
     mono: defaultConfig.fonts.body,
   },
 }
+
+export const tamaguiConfig = createPowerAppsTamaguiConfig(customConfig)
+export default tamaguiConfig
 ```
 
 Usage in components:

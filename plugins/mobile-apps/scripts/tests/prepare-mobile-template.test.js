@@ -224,6 +224,39 @@ export default function RootLayout() {
   assert.match(result, /<CustomNavigation>/);
 });
 
+test('root preparation reuses semicolonless combined, named, and default imports', () => {
+  const projectRoot = writeLayoutFixture(`import { Slot } from 'expo-router'
+import ReactNative, { useColorScheme } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
+import { PowerAppsProvider } from '@microsoft/power-apps-native-host'
+import tamaguiConfig from '../tamagui.config'
+import authConfig from '../auth.config.json'
+import { offlineProfile } from '../offline'
+
+export default function RootLayout() {
+  const colorScheme = useColorScheme()
+  return (${providerBody}
+  )
+}
+`);
+  prepareRootLayout(projectRoot);
+  const result = fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8');
+
+  assert.strictEqual((result.match(/from ['"]react-native['"]/g) || []).length, 1);
+  assert.strictEqual(
+    (result.match(/from ['"]react-native-safe-area-context['"]/g) || []).length,
+    1,
+  );
+  assert.strictEqual(
+    (result.match(/from ['"]@microsoft\/power-apps-native-host['"]/g) || []).length,
+    1,
+  );
+  assert.strictEqual((result.match(/from ['"]\.\.\/tamagui\.config['"]/g) || []).length, 1);
+  assert.match(result, /import ReactNative,\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*'react-native'/s);
+  assert.match(result, /import\s*\{[^}]*\blightTheme\b[^}]*\bdarkTheme\b[^}]*\}\s*from\s*'@microsoft\/power-apps-native-host'/s);
+  assert.match(result, /<SafeAreaProvider>[\s\S]*<PowerAppsProvider/);
+});
+
 test('root preparation creates the required colorScheme binding when the hook uses another name', () => {
   const projectRoot = writeLayoutFixture(`${fixtureImports}
 import { useColorScheme } from 'react-native';

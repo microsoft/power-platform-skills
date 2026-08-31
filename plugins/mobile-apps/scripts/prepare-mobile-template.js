@@ -178,7 +178,7 @@ function verifyHostTsconfig(projectRoot) {
 function ensureNamedImports(source, moduleName, requiredNames) {
   const modulePattern = escapeRegExp(moduleName);
   const importPattern = new RegExp(
-    `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${modulePattern}['"]\\s*;`,
+    `import\\s+(?!type\\b)(?:([A-Za-z_$][\\w$]*)\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*['"]${modulePattern}['"][ \\t]*;?`,
   );
   const match = source.match(importPattern);
 
@@ -186,22 +186,23 @@ function ensureNamedImports(source, moduleName, requiredNames) {
     return `import { ${requiredNames.join(', ')} } from '${moduleName}';\n${source}`;
   }
 
-  const existingNames = match[1]
+  const existingNames = match[2]
     .split(',')
     .map((entry) => entry.trim().split(/\s+as\s+/)[0])
     .filter(Boolean);
   const missingNames = requiredNames.filter((name) => !existingNames.includes(name));
   if (missingNames.length === 0) return source;
 
-  const updatedNames = [...match[1].split(',').map((entry) => entry.trim()).filter(Boolean), ...missingNames];
-  const replacement = `import {\n  ${updatedNames.join(',\n  ')},\n} from '${moduleName}';`;
+  const updatedNames = [...match[2].split(',').map((entry) => entry.trim()).filter(Boolean), ...missingNames];
+  const defaultImport = match[1] ? `${match[1]}, ` : '';
+  const replacement = `import ${defaultImport}{\n  ${updatedNames.join(',\n  ')},\n} from '${moduleName}';`;
   return source.replace(importPattern, replacement);
 }
 
 function ensureDefaultImport(source, moduleName, localName) {
   const modulePattern = escapeRegExp(moduleName);
   const importPattern = new RegExp(
-    `import\\s+${escapeRegExp(localName)}\\s+from\\s*['"]${modulePattern}['"]\\s*;`,
+    `import\\s+${escapeRegExp(localName)}\\s+from\\s*['"]${modulePattern}['"][ \\t]*;?`,
   );
   if (importPattern.test(source)) return source;
   return `import ${localName} from '${moduleName}';\n${source}`;
@@ -391,11 +392,11 @@ function ensureSafeAreaProviderWrapper(source) {
 
 function verifyRootLayout(source) {
   const requiredChecks = [
-    ['SafeAreaProvider import', /import\s*\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
-    ['useColorScheme import', /import\s*\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
+    ['SafeAreaProvider import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bSafeAreaProvider\b[^}]*\}\s*from\s*['"]react-native-safe-area-context['"]/],
+    ['useColorScheme import', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\buseColorScheme\b[^}]*\}\s*from\s*['"]react-native['"]/],
     ['colorScheme binding', /\b(?:const|let)\s+colorScheme\s*=\s*useColorScheme\s*\(\s*\)/],
-    ['host light theme', /import\s*\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
-    ['host dark theme', /import\s*\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
+    ['host light theme', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
+    ['host dark theme', /import\s+(?!type\b)(?:[A-Za-z_$][\w$]*\s*,\s*)?\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],
   ];
 
