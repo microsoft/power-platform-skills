@@ -20,10 +20,12 @@ usage telemetry for this plugin. Default to `status` when no argument is given.
 - `off` stops transmission to Microsoft. **Nothing leaves the machine.**.
 - `on` re-enables transmission. The choice is **per-user and per-plugin** and
   takes effect on the next event (no restart).
-- **No personal data is ever collected.** Telemetry is anonymous: it records only
-  things like skill name, plugin version, OS, and Node version. It never includes
-  file paths, prompts, tool inputs, site names, URLs, credentials, usernames, or
-  hostnames.
+- Telemetry records usage fields such as skill/configuration choices,
+  canonical locales, public package names/versions, plugin/OS/Node/PAC/agent
+  versions, and Dataverse organization, tenant, and Entra object IDs when
+  available. It never includes file paths, prompts, tool inputs, site names,
+  free-text requirements, URLs, credentials, usernames, hostnames, private-use
+  locale subtags, or raw errors.
 - **Automation/CI** can disable telemetry by setting the opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
   `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1`) instead of running this

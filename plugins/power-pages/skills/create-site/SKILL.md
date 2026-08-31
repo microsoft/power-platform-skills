@@ -161,6 +161,20 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    site name, technical slug, framework, purpose, audience, project location,
    `SITE_LANGUAGE` (`SITE_LOCALE`, `SITE_DIRECTION`), and the explicit statement
    that Dataverse and Power Pages system messages remain English.
+8. After confirmation, emit the approved, taxonomy-only site configuration:
+
+   - Map the purpose to `company-portal`, `blog-content`, `dashboard`,
+     `landing-page`, or `other`. Never pass the maker's free-text purpose.
+   - Set `choiceSource` to `arguments` only when both framework and content
+     locale came from the initial request; otherwise use `prompt`.
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/emit-skill-configured-telemetry.js" --skillName "create-site" --projectRoot "<PROJECT_ROOT>" --framework "<react|vue|angular|astro>" --siteContentLocale "<SITE_LOCALE>" --purpose "<PURPOSE_TAXONOMY>" --audience "<internal|external>" --choiceSource "<arguments|prompt>"
+   ```
+
+   The telemetry helper is fail-closed and removes locale extensions/private-use
+   subtags. Do not add the site name, description, pages, routes, components,
+   feature labels, or any other free-text requirement to this command.
 
 **Audience influences site generation:**
 

@@ -10,7 +10,12 @@ Zero npm dependencies. Node stdlib only.
 
 ## What it does
 
-Anonymous `skill_started` telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
+Anonymous skill telemetry over the 1DS Common Schema 4.0 envelope. All
+adopters emit `skill_started`; plugins may also emit allowlisted configuration,
+validation, and completion events. A detached dispatcher child resolves the
+destination iKey + collector URL (env override → plugin `resolver.js` → static
+key in `ikey.json`), then POSTs the event; the process that emitted it returns
+before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -92,11 +97,34 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 **Per-event:**
 
 - `skillName` (on every event)
-- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for not putting PII in this payload. Power Pages populates it with `aadObjectId` (the signed-in user's Entra ID / AAD directory object id, parsed from `pac auth who`) when available; the field is omitted when `pac auth who` doesn't surface an object id. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects — the Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). The caller is responsible for using a documented, allowlisted schema and not putting customer content in this payload. Power Pages populates it with `aadObjectId` (the signed-in user's Entra ID / AAD directory object id, parsed from `pac auth who`) when available; the field is omitted when `pac auth who` doesn't surface an object id. On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects — the Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+
+Power Pages additionally emits:
+
+- `skill_configured` for approved `create-site` and `add-localization`
+  configuration. Create-site records framework, canonical content locale,
+  fixed purpose/audience categories, and whether the choice came from the
+  initial request or a prompt. Localization records framework, operation,
+  invocation source, existing-setup flag, mode, canonical default/added/resulting
+  locales, package name/version/selection/verification, and `agent` versus
+  `blank` translation population.
+- `localization_package_validation` for each package-validation attempt. It
+  records intended canonical locales, package/mode selection, validation
+  status, prerelease/unverified flags, and stable failure codes. Raw npm errors,
+  exception messages, and evidence URLs are never included.
+- `skill_completed` only for Power Pages `add-localization`. It records outcome,
+  duration, a stable error class on failure, validation outcome, readiness
+  status, configured/unavailable locale counts, and translation method.
+
+Locale telemetry strips private-use (`-x-*`) and extension sequences before
+emission. Private-use-only identifiers are dropped.
 
 ## What is NEVER sent
 
-File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, site descriptions, page/route/component
+names, free-text requirements, Dataverse URLs, stack traces, `err.message` text,
+raw npm errors, evidence URLs, skill arguments, tool inputs, prompt text,
+usernames, hostnames, or private-use locale subtags.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any field that bypasses the builders is dropped before it reaches the wire.
 
@@ -124,7 +152,7 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 shared/telemetry/
 ├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
+│  ├─ events.js              # FIELD_TYPES allowlist + event builders
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started

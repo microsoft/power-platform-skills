@@ -9,7 +9,7 @@ const crypto = require("node:crypto");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader, invocationState;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
@@ -17,6 +17,7 @@ try {
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
   resolverLoader = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
+  invocationState = require(path.join(TELEMETRY_DIR, "invocation-state"));
 } catch {
   process.exit(0);
 }
@@ -110,6 +111,24 @@ function readStdin() {
   }
   if (!provisioned) process.exit(0);
 
+  const resolvedSessionId = sessionLib.getSessionId(
+    sessionLib.resolveHostSessionId(parsed)
+  );
+  // Configuration/package/completion events are emitted by later Node
+  // processes. Persist only the host session id, start time, and a one-way cwd
+  // hash so those events can correlate with this start without storing a path.
+  if (skillName === "create-site" || skillName === "add-localization") {
+    try {
+      invocationState.recordStart(
+        skillName,
+        resolvedSessionId,
+        typeof parsed.cwd === "string" ? parsed.cwd : process.cwd()
+      );
+    } catch {
+      // Correlation state is best-effort and must never block the skill start.
+    }
+  }
+
   const correlation_id = crypto.randomUUID();
 
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
@@ -135,7 +154,7 @@ function readStdin() {
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
-    sessionId: sessionLib.getSessionId(sessionLib.resolveHostSessionId(parsed)),
+    sessionId: resolvedSessionId,
     correlationId: correlation_id,
     osName: osFriendlyName(process.platform),
     osVersion: os.release(),

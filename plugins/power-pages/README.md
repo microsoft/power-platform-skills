@@ -436,7 +436,7 @@ Enables, disables, or checks the status of anonymous usage telemetry. Per-user a
 - `/power-pages:telemetry status` — show the current setting
 - `/power-pages:telemetry off` — stop sending telemetry (nothing leaves your machine)
 - `/power-pages:telemetry on` — resume sending telemetry
-- No personal data is ever collected (anonymous: skill name, plugin version, OS, Node version)
+- Records usage context and approved create-site/localization choices; never records site names, prompts, paths, free-text requirements, credentials, or raw errors
 - Automation/CI: set `POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT=1` to disable (highest precedence — overrides any saved choice)
 
 ## Agents
@@ -553,10 +553,13 @@ This Dataverse relationship check is intended for local validation only and shou
 
 ## Telemetry & privacy
 
-This plugin sends **anonymous** usage telemetry by default to help Microsoft
-improve it. **No personal data is ever collected** — only things like skill name,
-plugin version, OS, and Node version. It never includes file paths, prompts, tool
-inputs, site names, URLs, credentials, usernames, or hostnames.
+This plugin sends anonymous usage telemetry by default to help Microsoft
+improve it. It records skill/runtime context, approved create-site and
+localization choices, canonical locales, public localization package/version
+choices, stable validation failure codes, and Dataverse organization, tenant,
+and Entra object IDs when available. It never includes file paths, prompts,
+tool inputs, site names, free-text requirements, URLs, credentials, usernames,
+hostnames, private-use locale subtags, or raw errors.
 
 **Turn it on or off (per-user, applies to every project):**
 

@@ -8,11 +8,11 @@ const { setTelemetryChoice, effectiveTelemetryChoice } = require("./user-config"
 const { pluginLogDir, latestSessionLog } = require("./local-log");
 
 const ANONYMITY =
-  "ℹ️  No personal data is collected. Telemetry is anonymous — it records only\n" +
-  "   operational fields like skill name, plugin version, OS/Node versions,\n" +
-  "   PAC CLI and agent versions, and Dataverse org/tenant IDs when available.\n" +
-  "   It never includes file paths, prompts, tool inputs, site names, URLs,\n" +
-  "   credentials, usernames, or hostnames.";
+  "ℹ️  Telemetry records usage fields such as skill/configuration choices,\n" +
+  "   canonical locales, public package names/versions, plugin/OS/Node/PAC/agent\n" +
+  "   versions, and Dataverse org/tenant/user object IDs when available.\n" +
+  "   It never includes file paths, prompts, tool inputs, site names, free-text\n" +
+  "   requirements, URLs, credentials, usernames, hostnames, or raw errors.";
 
 function getArg(name) {
   const i = process.argv.indexOf(`--${name}`);

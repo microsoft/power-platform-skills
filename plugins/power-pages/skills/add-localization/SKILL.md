@@ -192,8 +192,15 @@ For new setup or relevant repair, use `AskUserQuestion`:
 Skip for Astro built-in i18n and add-languages mode. Validate alternatives:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>"
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
 ```
+
+Pass the same telemetry context on every rerun, including unsupported,
+inconclusive, prerelease-confirmation, official-evidence, and explicitly
+unverified attempts. The script emits only the normalized package name,
+resolved public version when available, intended canonical locales, validation
+status, and stable failure codes. It never emits npm error text or evidence
+URLs.
 
 <!-- not-a-gate: prerelease acknowledgement still precedes the approved plan and any install -->
 
@@ -302,6 +309,18 @@ Use `AskUserQuestion`:
 | How should the localization plan proceed? | Plan | Approve and implement (Recommended), Revise configuration, Cancel |
 
 Loop through Phase 2 for revisions. Do not install or edit before approval.
+
+After approval, emit the final configuration before Phase 4 changes any files:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-skill-configured-telemetry.js" --skillName "add-localization" --projectRoot "<PROJECT_ROOT>" --framework "<react|vue|angular|astro>" --operation "<create|add-languages|repair|reconfigure>" --invocationSource "<direct|create-site>" --existingLocalizationDetected "<true|false>" --mode "<runtime|static>" --defaultLocale "<DEFAULT_LOCALE>" --addedLocales "<CANONICAL_ADDED_LOCALES>" --resultingLocales "<CANONICAL_RESULTING_LOCALES>" --packageName "<PACKAGE_NAME>" --packageVersion "<RESOLVED_VERSION_OR_BUILT_IN>" --packageSelection "<recommended|alternative|preserved>" --packageVerification "<verified|unverified>" --translationMethod "<agent|blank>"
+```
+
+`invocationSource` is `create-site` only when `$ARGUMENTS` contains
+`[FROM_CREATE_SITE]`; otherwise it is `direct`. For add-languages mode,
+`addedLocales` contains only genuinely new locales while `resultingLocales`
+contains the complete resulting set. The helper strips private-use and extension
+subtags before emission.
 
 ---
 

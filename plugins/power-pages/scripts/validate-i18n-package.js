@@ -11,6 +11,7 @@ const {
   LOCALIZATION_CAPABILITIES,
   detectFramework,
 } = require('./lib/localization-config');
+const telemetry = require('./lib/telemetry/power-pages-telemetry');
 
 const ALLOWED_LICENSES = new Set([
   'MIT',
@@ -271,25 +272,47 @@ function evaluatePackage(metadata, options) {
     }[framework]]: frameworkVersion,
   };
   const failures = [];
+  const failureCodes = [];
   const warnings = [];
   const license = normalizeLicense(metadata.license);
   const publishedAt = metadata.time?.[version] || metadata.publishedAt;
   const ageLimit = new Date(now);
   ageLimit.setUTCMonth(ageLimit.getUTCMonth() - 24);
 
-  if (!version) failures.push('No resolvable package version was returned.');
-  if (metadata.deprecated) failures.push(`Package version is deprecated: ${metadata.deprecated}`);
+  function addFailure(code, message) {
+    failureCodes.push(code);
+    failures.push(message);
+  }
+
+  if (!version) {
+    addFailure('package-not-resolvable', 'No resolvable package version was returned.');
+  }
+  if (metadata.deprecated) {
+    addFailure('package-deprecated', `Package version is deprecated: ${metadata.deprecated}`);
+  }
   if (isPrerelease(version) && !options.allowPrerelease) {
-    failures.push('Selected version is a prerelease and requires explicit confirmation.');
+    addFailure(
+      'prerelease-not-approved',
+      'Selected version is a prerelease and requires explicit confirmation.'
+    );
   }
   if (!ALLOWED_LICENSES.has(license)) {
-    failures.push(`License "${license || 'unknown'}" is not in the approved permissive-license list.`);
+    addFailure(
+      'license-not-approved',
+      `License "${license || 'unknown'}" is not in the approved permissive-license list.`
+    );
   }
   if (!publishedAt || new Date(publishedAt) < ageLimit) {
-    failures.push('Selected package has not published this version within the previous 24 months.');
+    addFailure(
+      'package-stale',
+      'Selected package has not published this version within the previous 24 months.'
+    );
   }
   if (!packageSupportsFramework(packageName, framework, peerDependencies)) {
-    failures.push(`Package metadata does not demonstrate ${framework} framework support.`);
+    addFailure(
+      'framework-not-supported',
+      `Package metadata does not demonstrate ${framework} framework support.`
+    );
   }
   const relevantPeers =
     LOCALIZATION_CAPABILITIES.frameworks[framework]?.frameworkPeers || [];
@@ -298,7 +321,8 @@ function evaluatePackage(metadata, options) {
     const projectVersion = frameworkVersions[peerName];
     if (!projectVersion ||
         !rangeSatisfies(peerName, projectVersion, peerDependencies[peerName])) {
-      failures.push(
+      addFailure(
+        'framework-peer-incompatible',
         `Peer dependency ${peerName} "${peerDependencies[peerName]}" ` +
         `does not support project version "${projectVersion || 'not installed'}".`
       );
@@ -307,13 +331,17 @@ function evaluatePackage(metadata, options) {
   if (framework === 'angular') {
     const projectMajor = majorOf(frameworkVersion);
     if (packageName.startsWith('@angular/') && majorOf(version) !== projectMajor) {
-      failures.push(
+      addFailure(
+        'angular-major-mismatch',
         `Official Angular package major ${majorOf(version)} must match project major ${projectMajor}.`
       );
     }
   }
   if (!metadata.homepage && !metadata.repository) {
-    failures.push('Package metadata does not provide official documentation or a repository.');
+    addFailure(
+      'documentation-missing',
+      'Package metadata does not provide official documentation or a repository.'
+    );
   }
   const modeEvidence = assessModeSupport(
     packageName,
@@ -322,11 +350,13 @@ function evaluatePackage(metadata, options) {
     options.modeEvidenceText
   );
   if (modeEvidence.status === 'unsupported') {
-    failures.push(modeEvidence.detail);
+    addFailure('mode-unsupported', modeEvidence.detail);
   } else if (modeEvidence.status === 'inconclusive') {
+    failureCodes.push('mode-inconclusive');
     warnings.push(modeEvidence.detail);
   }
   if (options.modeEvidenceError) {
+    failureCodes.push('documentation-fetch-failed');
     warnings.push(`Official mode evidence could not be read: ${options.modeEvidenceError}`);
   }
   const approvedUnverified = failures.length === 0 &&
@@ -362,6 +392,7 @@ function evaluatePackage(metadata, options) {
       evidenceUrl: options.modeEvidenceUrl || null,
       fetchError: options.modeEvidenceError || null,
     },
+    failureCodes: [...new Set(failureCodes)],
     failures,
     warnings,
   };
@@ -434,7 +465,10 @@ async function runCli() {
       'Usage: validate-i18n-package.js --projectRoot <path> --package <name> ' +
       '[--framework <detected-candidate>] [--version <range>] ' +
       '--mode <runtime|static> [--modeEvidenceUrl <official-https-url>] ' +
-      '[--allowPrerelease] [--allowUnverifiedMode]'
+      '[--allowPrerelease] [--allowUnverifiedMode] ' +
+      '[--telemetryLocales <canonical-tags>] ' +
+      '[--telemetryOperation <operation>] ' +
+      '[--telemetryPackageSelection <selection>]'
     );
   }
   const projectRoot = path.resolve(args.projectRoot);
@@ -495,12 +529,51 @@ async function runCli() {
     modeEvidenceError,
     rangeSatisfies: versionSatisfiesRangeWithNpm,
   });
+  try {
+    telemetry.emitPackageValidation(
+      projectRoot,
+      telemetry.buildPackageValidationEventInfo({
+        framework,
+        operation: args.telemetryOperation,
+        intendedLocales: args.telemetryLocales,
+        packageName: args.package,
+        resolvedVersion: result.version,
+        packageSelection: args.telemetryPackageSelection,
+        mode: args.mode,
+        validationStatus: result.status,
+        failureCodes: result.failureCodes,
+        prerelease: result.prerelease,
+        unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+      })
+    );
+  } catch {
+    // Package validation results must not depend on telemetry availability.
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.viable ? 0 : 1;
 }
 
 if (require.main === module) {
   runCli().catch((error) => {
+    try {
+      const args = parseArgs(process.argv.slice(2));
+      telemetry.emitPackageValidation(
+        args.projectRoot,
+        telemetry.buildPackageValidationEventInfo({
+          framework: args.framework,
+          operation: args.telemetryOperation,
+          intendedLocales: args.telemetryLocales,
+          packageName: args.package,
+          packageSelection: args.telemetryPackageSelection,
+          mode: args.mode,
+          validationStatus: 'error',
+          failureCodes: ['npm-resolution-failed'],
+          unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+        })
+      );
+    } catch {
+      // Preserve the original validation failure.
+    }
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
   });
