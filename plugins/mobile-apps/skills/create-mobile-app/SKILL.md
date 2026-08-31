@@ -87,13 +87,8 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 **Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
-After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
-```
-
-`app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
+Do not initialize app identity yet. Step 2c is the last zero-side-effect exit,
+so `app.json` must remain byte-identical until the user chooses `proceed`.
 
 ### Step 1 — Prerequisites
 
@@ -401,9 +396,20 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Continue to Step 3. Default. |
+| `proceed` (or empty / Enter) | Initialize app identity, then continue to Step 3. Default. |
 | `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
+
+After `proceed`, and only after `proceed`, initialize the app identity:
+
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
+```
+
+`app-identity.js` mints `app.json`
+`expo.extra.telemetry.appInstanceId`. It is idempotent and contains no app
+name, path, environment data, or credential. An `edit` or `abort` response
+must not run this command.
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -894,22 +900,33 @@ If any required template file is missing, STOP:
 If `node_modules/expo` is missing, STOP:
 > "Dependencies are not installed. Run `npm install` in the template folder, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`."
 
-If already-created markers appear (`memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP:
+If already-created markers appear (`memory-bank.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts`) and Step 0 did not enter the resume path, STOP. `native-app-plan.md` is expected here because Step 3 writes the approved plan before template preparation:
 > "This folder already looks like a created app. For a new app, materialize a fresh `expo-app-standalone` template with `degit` into a new folder and rerun this skill there."
 
-Then apply these **safe idempotent** prep steps:
+Run the deterministic preparation script once:
 
-1. Update app identity in `app.config.js` and `package.json` from Step 2 answers (`displayName`, `slug`) using targeted string replacements only.
-2. Ensure `src/generated/index.ts` exists with the empty generated barrel if no generated services exist.
-3. Ensure `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`, and `src/native/` directories exist.
-4. Copy shared helper files from plugin samples only when the destination file is missing. Do not overwrite user-edited files.
-5. Merge the six path aliases into `tsconfig.json` (`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native`) without deleting existing aliases.
-6. Verify `app/_layout.tsx` imports `PowerAppsProvider` from `@microsoft/power-apps-native-host` and imports `tamaguiConfig`. If either is missing, patch `_layout.tsx` conservatively; do not rewrite custom navigation or unrelated provider code.
-7. Remove placeholder `power.config.json` if its `environmentId` is empty or missing. `npx power-apps init` in Step 6 writes the real file for the selected environment.
+```bash
+node "${CLAUDE_SKILL_DIR}/../../scripts/prepare-mobile-template.js" \
+  --working-dir "<working_dir>" \
+  --display-name "<displayName>" \
+  --slug "<slug>"
+```
 
-Do **not** preserve placeholder `power.config.json` from the template. Keeping it would let downstream steps read an empty or stale environment.
+The script is the only owner of Step 5 mutations. It updates identity, removes
+only recognized legacy example hooks/query-client files, copies shared helpers
+only when missing, merges aliases without `baseUrl`, and structurally verifies
+the root provider/theme/safe-area contract. It preserves custom navigation,
+existing helper bytes, `offlineProfile`, provider props, and the template's
+`@ts-ignore` generation boundaries.
 
-After preparation, continue to Step 6.
+**Generated ownership boundary:** Step 5 must not create, reset, delete, or
+write anything under `src/generated/`. Only Power Apps schema/data-source
+generation commands own that directory. A generated file required later is
+created by its owning command, never by a placeholder barrel.
+
+The script fails visibly for unsupported root-layout shapes or dangling legacy
+imports. Do not fall back to a full-file rewrite or regex patch. After it
+returns successfully, continue to Step 6.
 
 **Fix 1 — App identity in `app.config.js` and `package.json`**
 
@@ -923,63 +940,33 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
-**Fix 2 — Delete `power.config.json`**
+**Fix 2 — Remove only an empty placeholder `power.config.json`**
 
-`npx power-apps init` in Step 6 creates the correct one for the user's environment. Remove the template copy:
+The preparation script parses `power.config.json` and removes it only when
+`environmentId` is empty or missing. A populated file is preserved and later
+validated against the approved environment. Do not use an unconditional
+delete.
 
-```bash
-rm -f "<working_dir>/power.config.json"
-```
+**Fix 3 — Remove recognized legacy examples without touching generated code**
 
-**Fix 3 — Clean `src/generated/` and `src/hooks/` (idempotent)**
+Newer snapshots do not ship the Contacts / Accounts / UserProfile example
+hooks or the old app-owned query client. The preparation script removes only
+those recognized files when present. It never traverses or mutates
+`src/generated/`; generated models, services, schemas, and barrels remain
+owned by Power Apps generation commands.
 
-Newer template snapshots **no longer ship** the example models / services / hooks (Contacts / Accounts / UserProfile / Office365Users) — `src/` only contains app infrastructure files such as `global.d.ts` and `playerConfig.ts`. Older snapshots still do. If a copied template includes `src/queryClient.ts`, remove it: `PowerAppsProvider` already owns the React Query `QueryClientProvider` and screen code should use `useQueryClient()`, not an app-owned singleton. The block below is **idempotent** — a no-op on the new template, a real cleanup on the old one. Always run it; never assume one snapshot.
-
-```bash
-# Remove example generated artefacts if present (no error if missing)
-rm -rf "<working_dir>/src/generated/models" \
-        "<working_dir>/src/generated/services" \
-        "<working_dir>/src/generated/index.ts"
-
-# Wipe example React Query hooks and stale app-owned query client if present
-rm -f  "<working_dir>/src/hooks/useContacts.ts" \
-  "<working_dir>/src/hooks/useAccounts.ts" \
-  "<working_dir>/src/hooks/useUserProfile.ts" \
-  "<working_dir>/src/queryClient.ts"
-
-# Reset the generated barrel so `import … from '../generated'` resolves to nothing
-mkdir -p "<working_dir>/src/generated"
-printf '// Populated by npx power-apps add-data-source. Do not edit.\nexport {};\n' \
-  > "<working_dir>/src/generated/index.ts"
-```
-
-**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a minimal RN stub (`View` + `Text` from `react-native`) that compiles cleanly. Our screen-builder replaces it at Step 11. Replacing it with a Tamagui stub before Fix 8 (which threads brand `tamaguiConfig` into `PowerAppsProvider`) would render under the upstream default Tamagui config instead of the project's brand tokens.
+**Do NOT overwrite `app/(app)/home.tsx` here.** The current template ships a
+safe-area-aware, semantic-token starter route. The screen-builder replaces it
+only when the approved Screen Map assigns that route.
 
 Keep `src/hooks/` itself — screen-builders write new hooks into it.
 
 **Fix 3b — Scan for dangling imports referencing deleted files (back-compat only)**
 
-Only meaningful on older template snapshots that shipped the example hooks. On the current template the scan returns zero matches and you can skip it. Run it unconditionally — it is fast and self-skipping.
-
-```bash
-# Scan for any remaining imports of the deleted modules
-grep -rn \
-  -e "useContacts" \
-  -e "useAccounts" \
-  -e "useUserProfile" \
-  -e "from.*generated/services" \
-  -e "from.*generated/models" \
-  --include="*.ts" --include="*.tsx" \
-  "<working_dir>/app/" "<working_dir>/src/" \
-  || true
-```
-
-**If matches found:**
-- For screen files (`app/(app)/*.tsx`): replace the entire file with the same minimal stub used for `home.tsx` (screen-builder will overwrite at Step 11).
-- For layout files (`_layout.tsx`): remove only the import lines and any code referencing the deleted symbols. Do NOT replace the whole file — layouts have navigation structure that must be preserved.
-- For barrel/index files: remove the re-export lines.
-
-**If no matches:** Continue — template is clean.
+The preparation script scans `app/` and non-generated `src/` files after
+cleanup. Any remaining legacy example import is an explicit failure. Do not
+replace whole screens or layouts to make the scan pass; use a supported fresh
+template or repair the precise stale import before continuing.
 
 **Fix 6 — Schema generation boundary**
 
@@ -989,116 +976,38 @@ Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a sp
 
 **Why `tsc` already passes post-clone (current template, PR #30):** the template's `app/_layout.tsx` and `src/playerConfig.ts` carry `// @ts-ignore` comments above the `power.config.json` and `connectorSchemas` imports specifically so the project type-checks before `power.config.json` and `connectorSchemas.ts` exist. **Never strip these `@ts-ignore` lines** — Fix 8 below preserves them when patching `app/_layout.tsx` to thread the project's `tamaguiConfig` into `PowerAppsProvider`, and any future `Edit` to either file MUST keep them. Removing them resurfaces a `tsc` failure against missing generated files.
 
-**Fix 7 — Create `src/components/`, `src/hooks/`, `src/utils/`, `src/tokens/`**
+**Fix 7 — Seed shared code only when missing**
 
-Copy the shared code structure into the project. This gives screen-builders a production-grade layout with path aliases:
-
-```bash
-mkdir -p "<working_dir>/src/components"
-mkdir -p "<working_dir>/src/hooks"
-mkdir -p "<working_dir>/src/utils"
-mkdir -p "<working_dir>/src/tokens"
-
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/components/index.tsx" "<working_dir>/src/components/index.tsx"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/index.ts" "<working_dir>/src/hooks/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useCursorListData.ts" "<working_dir>/src/hooks/useCursorListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useListData.ts" "<working_dir>/src/hooks/useListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useSearchFilter.ts" "<working_dir>/src/hooks/useSearchFilter.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/index.ts" "<working_dir>/src/utils/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/formatters.ts" "<working_dir>/src/utils/formatters.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/text.ts" "<working_dir>/src/utils/text.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/choices.ts" "<working_dir>/src/utils/choices.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/dataverse.ts" "<working_dir>/src/utils/dataverse.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/tokens/index.ts" "<working_dir>/src/tokens/index.ts"
-```
+The preparation script creates the shared source directories and copies each
+approved sample helper only when its destination does not exist. Existing
+helpers are byte-for-byte preserved, so reruns cannot overwrite user or
+builder changes.
 
 **Fix 8 — Thread the project's `tamaguiConfig` into the host provider** (required so screens render under brand tokens, not upstream defaults)
 
 The template ships `PowerAppsProvider` (composed-tree API, v0.2.0+). Fix 8 adds `tamaguiConfig`, `defaultTheme`, `theme`, and `darkTheme` props so screens render under brand tokens. Do NOT add an outer `<TamaguiProvider>` — `PowerAppsProvider` composes it internally and duplicating triggers "useTheme must be used within a TamaguiProvider" warnings on hot reload.
 
-Write `app/_layout.tsx` (run AFTER `npm install`):
-
-```tsx
-import { Slot } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import { useColorScheme } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { PowerAppsProvider, lightTheme, darkTheme } from '@microsoft/power-apps-native-host';
-import type { ThemeTokens } from '@microsoft/power-apps-native-host';
-
-import authConfig from '../auth.config.json';
-// @ts-ignore - power.config.json is auto-generated at build time
-import powerConfig from '../power.config.json';
-// @ts-ignore - connectorSchemas is auto-generated at build time
-import { schemaMap } from '../src/generated/connectorSchemas';
-import tamaguiConfig from '../tamagui.config';
-
-// lightTheme / darkTheme are the built-in defaults from @microsoft/power-apps-native-host.
-// When brand/tokens.ts exists, the Brand-token wiring block (Step 9b) replaces
-// these props with brand-derived ThemeTokens objects instead.
-
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  return (
-    <SafeAreaProvider>
-      <PowerAppsProvider
-        msalConfig={authConfig.msal}
-        powerConfig={powerConfig}
-        schemaMap={schemaMap}
-        tamaguiConfig={tamaguiConfig}
-        defaultTheme={colorScheme === 'dark' ? 'dark' : 'light'}
-        theme={lightTheme}
-        darkTheme={darkTheme}
-      >
-        <StatusBar style="auto" />
-        <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>
-          <Slot />
-        </SafeAreaView>
-      </PowerAppsProvider>
-    </SafeAreaProvider>
-  );
-}
-```
+The preparation script edits the existing root layout structurally. It adds
+missing imports and provider props, then wraps `PowerAppsProvider` with
+`SafeAreaProvider` only when needed. It does not replace the file and it does
+not wrap `<Slot />` with `SafeAreaView`; each rendered route owns its content
+edges to avoid double insets.
 
 Key points:
 - **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
-- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. `SafeAreaView` around `<Slot />` keeps content out of the status-bar / home-indicator areas — required by `validate-screen-quality.js`.
+- **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
-Write the file directly when applying this fix.
-
 **Fix 4 — Path aliases in `tsconfig.json` (idempotent JSON merge)**
 
-The upstream template's `tsconfig.json` only ships `paths` polyfills for `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser` — it does NOT define the `@/components`, `@/hooks`, `@/utils`, `@/tokens` aliases that screens (and the helpers Fix 7 just copied) import from. Without this fix, every `import { lookupName, formattedValue, newId } from '@/utils'` at screen-build time fails to resolve at both `tsc --noEmit` and Metro bundle time. Run this merge script in `<working_dir>`:
-
-```bash
-node -e '
-  const fs = require("fs");
-  const file = "tsconfig.json";
-  const json = JSON.parse(fs.readFileSync(file, "utf8"));
-  json.compilerOptions = json.compilerOptions || {};
-  json.compilerOptions.baseUrl = json.compilerOptions.baseUrl || ".";
-  json.compilerOptions.paths = json.compilerOptions.paths || {};
-  const aliases = {
-    "@/components": ["src/components"],
-    "@/hooks":      ["src/hooks"],
-    "@/utils":      ["src/utils"],
-    "@/tokens":     ["src/tokens"],
-    "@/generated":  ["src/generated"],
-    "@/native":     ["src/native"],
-  };
-  for (const [k, v] of Object.entries(aliases)) json.compilerOptions.paths[k] = v;
-  fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
-'
-```
-
-Key points:
-- **Idempotent.** Re-running the script (e.g. on `/create-mobile-app` resume) overwrites the six alias keys with the same values — it does NOT touch `react-native`, `expo-auth-session`, `expo-secure-store`, `expo-web-browser`, or any other existing `paths` entries.
-- **Six aliases, not four.** `@/generated` and `@/native` are pre-wired so `npx power-apps add-data-source` output (`src/generated/services/...`) and `/add-native` output (`src/native/camera.ts`, etc.) can be imported via the alias too. Costs nothing now and avoids a second tsconfig patch later.
-- **`baseUrl: "."`** is preserved if already set (the template ships it). The merge script defaults it to `"."` only if missing.
-- Metro auto-resolves `paths` defined in `tsconfig.json` for any project running `expo`-based bundling, so this single edit covers both the type checker AND the bundler. No `babel.config.js` plugin needed.
+The upstream template's `tsconfig.json` includes runtime polyfill paths but may
+not include the six shared-code aliases. The preparation script merges
+`@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
+`@/native`, preserves unrelated aliases, and deletes deprecated `baseUrl`.
+Modern TypeScript bundler resolution supports these `paths` entries directly,
+so no Babel alias plug-in is required.
 
 `<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
 
@@ -1113,10 +1022,22 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 
 ```bash
 cd <working_dir>
-npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id <environment-id> --non-interactive
+CONFIG_ENV_ID=$(node -e "try { console.log(require('./power.config.json').environmentId || '') } catch { console.log('') }")
+if [ -n "$CONFIG_ENV_ID" ]; then
+  test "$(printf '%s' "$CONFIG_ENV_ID" | tr '[:upper:]' '[:lower:]')" = \
+       "$(printf '%s' "$ACTIVE_ENV_ID" | tr '[:upper:]' '[:lower:]')" || {
+    echo "BLOCKED: existing power.config.json targets $CONFIG_ENV_ID, but the approved environment is $ACTIVE_ENV_ID"
+    exit 2
+  }
+  echo "↷ Step 6 initialization skipped — power.config.json already targets the approved environment."
+else
+  npx power-apps init -t MobileApp --display-name '<displayName>' --environment-id "$ACTIVE_ENV_ID" --non-interactive
+fi
 ```
 
-Verify `power.config.json` was created and `environmentId` matches Step 4. If `npx power-apps init` fails, report the exact error and STOP — do not proceed.
+Verify `power.config.json` exists and its `environmentId` matches Step 4. If
+initialization fails, report the exact error and STOP. Never run `init` over a
+populated configuration; the CLI requires a new or placeholder-free target.
 
 ### Step 6.5 — Verify dependencies
 
@@ -1128,57 +1049,13 @@ This step verifies dependencies only. The user must have run `npm install` befor
 
 If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
 
-### Step 6.5b — Ensure SafeAreaProvider wraps the root layout (always runs, idempotent)
+### Step 6.5b — Root runtime contract verification
 
-> **Why this step exists.** This step idempotently ensures safe-area context is present in the root layout so screens do not render under system bars.
-
-**Print before starting:**
-> "→ [Step 6.5b/13] Verifying SafeAreaProvider wraps the root layout (idempotent — usually a no-op)…"
-
-```bash
-cd <working_dir>
-
-if [ -f app/_layout.tsx ] && ! grep -q 'SafeAreaProvider' app/_layout.tsx; then
-  echo "→ [6.5b] Patching app/_layout.tsx to add SafeAreaProvider + SafeAreaView"
-  node -e '
-    const fs = require("fs");
-    const FILE = "app/_layout.tsx";
-    let src = fs.readFileSync(FILE, "utf8");
-    // 1. Add the import if missing — splice in right after the react-native
-    //    import; fallback is prepend after the first import line.
-    if (!/from\s*["\047]react-native-safe-area-context["\047]/.test(src)) {
-      const importLine = "import { SafeAreaProvider, SafeAreaView } from \"react-native-safe-area-context\";\n";
-      if (/^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?/m.test(src)) {
-        src = src.replace(/(^import\s*\{[^}]*\}\s*from\s*["\047]react-native["\047];?\n)/m, "$1" + importLine);
-      } else {
-        src = src.replace(/(^import[^\n]*\n)/m, "$1" + importLine);
-      }
-    }
-    // 2. Wrap the outermost <PowerAppsProvider> ... </PowerAppsProvider> with
-    //    <SafeAreaProvider> AND wrap the inner <Slot /> with <SafeAreaView>.
-    src = src.replace(
-      /<PowerAppsProvider([\s\S]*?)>([\s\S]*?)<\/PowerAppsProvider>/,
-      "<SafeAreaProvider>\n      <PowerAppsProvider$1>$2</PowerAppsProvider>\n    </SafeAreaProvider>"
-    );
-    if (!/<SafeAreaView/.test(src)) {
-      src = src.replace(
-        /<Slot\s*\/>/,
-        "<SafeAreaView edges={[\"top\", \"bottom\"]} style={{ flex: 1 }}>\n          <Slot />\n        </SafeAreaView>"
-      );
-    }
-    fs.writeFileSync(FILE, src);
-    console.log("  ✓ app/_layout.tsx wrapped with SafeAreaProvider + SafeAreaView");
-  ' || { echo "SafeArea patch of app/_layout.tsx failed — see error above"; exit 19; }
-elif [ ! -f app/_layout.tsx ]; then
-  echo "  ↷ app/_layout.tsx does not exist yet, skipping patch"
-else
-  echo "  ↷ SafeAreaProvider already present, skipping"
-fi
-
-echo "✓ [Step 6.5b] SafeAreaProvider verified"
-```
-
-**If the patch fails:** the node script exits with an error. The most common cause is an unusual `_layout.tsx` shape (custom rewrite). Fix manually by importing `SafeAreaProvider` + `SafeAreaView` from `react-native-safe-area-context`, wrapping the outermost provider with `<SafeAreaProvider>`, and wrapping the inner `<Slot />` with `<SafeAreaView edges={['top', 'bottom']} style={{ flex: 1 }}>`.
+Step 5 already performs the idempotent structural update and postcondition
+checks. Do not mutate `_layout.tsx` again here. Verify only that the prepared
+layout still contains `SafeAreaProvider`, `tamaguiConfig`, `offlineProfile`,
+and the host light/dark theme props; if any are missing, rerun the Step 5
+preparation script and stop if it reports an unsupported layout.
 
 ### Step 6.6 — Scaffold TypeScript gate
 
