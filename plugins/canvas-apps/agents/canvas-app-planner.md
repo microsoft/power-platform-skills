@@ -308,7 +308,10 @@ write any plan artifact. You are the only agent that knows the collection schema
 this is the cheapest point in the whole workflow to catch a bad field name. Ignore
 diagnostics from screen files — they are not written yet.
 
-Report the resulting `App.pa.yaml` compile status in your handoff.
+Report the resulting `App.pa.yaml` compile status in your handoff. If `compile_canvas`
+returns `HTTP 401 Unauthorized: Invalid session state` instead of diagnostics, stop here —
+it is not a diagnostic you can fix and you have no `connect` tool — and return the handoff
+with `Session: stale` (see "Return the Handoff" and Constraints).
 
 ### EDIT
 
@@ -438,7 +441,16 @@ Shared plan: `[working directory]/canvas-app-shared.md`
 App file: [`[working directory]/App.pa.yaml` for CREATE, "unchanged" for EDIT]
 App compile: [Clean / diagnostics remaining, with detail]
 Functional scenarios: [N total; all assigned to screen briefs / defects]
+Session: stale
 ```
+
+Include the `Session:` line **only** when a `canvas-authoring` MCP call in this run failed
+with `HTTP 401 Unauthorized: Invalid session state` — the literal `Invalid session state`
+text together with a 401. Its only value is `stale`, and it tells the orchestrator the
+coauthoring session expired mid-plan so it can run its one bounded reconnect. Omit the line
+entirely on every other handoff, including one that still has ordinary compile diagnostics.
+A generic `401`/`403` **without** that text is a sign-in failure: describe it in
+`App compile:` or the prose and do **not** write `Session: stale`.
 
 ## Constraints
 
@@ -446,6 +458,11 @@ Functional scenarios: [N total; all assigned to screen briefs / defects]
 - Do not edit existing `.pa.yaml` files in EDIT mode.
 - Call `compile_canvas` only to validate CREATE-mode `App.pa.yaml`. Do not use it to
   chase screen-file diagnostics; the orchestrator owns full-app validation.
+- If any `canvas-authoring` MCP call (discovery or the CREATE-mode `App.pa.yaml` compile)
+  returns `HTTP 401 Unauthorized: Invalid session state` — the literal text with a 401, not
+  a generic `401`/`403` and not a compile diagnostic — stop that step, do not retry it in a
+  loop, and return the handoff immediately with `Session: stale`. You have no `connect`
+  tool; reconnecting and retrying is the orchestrator's decision.
 - Do not edit `[working directory]/_EditorState.pa.yaml`; record ordering work in `## Editor State Changes` for the top-level orchestrator.
 - Do not embed all discovery output in the index or shared plan.
 - Every screen brief must be self-sufficient when read with the shared plan.

@@ -50,6 +50,14 @@ Do not load both workflow documents.
 
 CREATE and complex EDIT workflows return here after the planner finishes.
 
+If the planner's handoff contains `Session: stale`, its CREATE-mode discovery or
+`App.pa.yaml` compile hit the known expired coauthoring session (`401 Invalid session
+state`). Do **not** run the checks below or re-invoke the planner for defects yet: follow
+`${PLUGIN_ROOT}/references/ValidationWorkflow.md` → "Recovering from an expired coauthoring
+session" → B — one `connect`, then either recompile the existing `App.pa.yaml` once or
+re-dispatch the same planner invocation once (never both, no second `connect`). A second
+`Session: stale` or `Invalid session state` stops recovery and goes to the manual fallback.
+
 1. Read `[working directory]/canvas-app-plan.md` returned by the planner.
 2. Verify its `## Requirement Coverage` table maps every concrete requested noun and
    interaction to a visible affordance. Any approximation must be explicit and must not
@@ -98,7 +106,8 @@ CREATE and complex EDIT workflows return here after the planner finishes.
 8. Confirm the planner reported a clean `compile_canvas` for `[working directory]/App.pa.yaml`. If it
    did not, compile now and resolve every `App`-level diagnostic before dispatching.
    For EDIT mode, compile after applying the before-builder app changes and resolve
-   App-level diagnostics before dispatching.
+   App-level diagnostics before dispatching. A `Session: stale` handoff is not an ordinary
+   unclean compile — handle it via the stale-session step above before this check.
 9. Invoke `canvas-screen-builder` once per dispatch row, in waves of
    **at most three**. Fire the wave's invocations together in one message, wait for that
    wave to return, then dispatch the next.
@@ -247,17 +256,28 @@ After all builders finish:
 11. Do not report completion until the workspace compiles clean and the functional
     conformance gate passes, or remaining compile and functional defects are explicitly
     reported.
-12. **Expired coauthoring session recovery is an orchestrator-only agent instruction,
-    bounded to one attempt.** A long-lived Studio tab has been reported to lose its
-    coauthoring session after roughly 25–30 minutes (observed, not a guaranteed lifetime);
-    `sync_canvas` / `compile_canvas` then return `HTTP 401 Unauthorized: Invalid session
-    state` on every call. Only on that specific error — the `Invalid session state` text
-    with a 401, not a generic `401`/`403`, which stays a sign-in problem — and only the
-    orchestrator: call `connect` **once** with the parameters from the last successful
-    `connect` in this conversation, then retry the failed operation **once**. Do not loop,
-    do not repeatedly `connect`/retry, do not re-dispatch the planner or a builder. If the
-    one reconnect + one retry still fails, or the parameters are unknown, stop and give the
-    user the manual recovery steps from
+12. **Expired coauthoring session recovery is orchestrator-decided and bounded to one
+    attempt.** A long-lived Studio tab has been reported to lose its coauthoring session
+    after roughly 25–30 minutes (observed, not a guaranteed lifetime); `sync_canvas` /
+    `compile_canvas` then return `HTTP 401 Unauthorized: Invalid session state` on every
+    call. Act only on that specific error — the `Invalid session state` text with a 401,
+    not a generic `401`/`403`, which stays a sign-in problem — and **only the orchestrator
+    ever calls `connect`**.
+    - **Orchestrator's own call failed:** `connect` **once** with the parameters from the
+      last successful `connect` in this conversation, then retry the failed operation
+      **once**.
+    - **Failure came back inside the planner** (CREATE-mode discovery or the planner's own
+      `App.pa.yaml` compile — the planner is a spawned agent with no `connect` tool and
+      returns `Session: stale` in its handoff): `connect` **once**, then complete that
+      operation **once** — either re-run `compile_canvas` on the already-written
+      `App.pa.yaml` yourself, or, if the planner's discovery or plan artifacts are
+      incomplete, re-dispatch the **same** planner invocation once. This one re-dispatch is
+      permitted only for this known stale-session case.
+    At most one `connect` and one retry-or-re-dispatch per stale-session failure — never
+    both, never twice, no loop, no builder re-dispatch, no reconnect from inside a
+    sub-agent. This recovery does not consume the compile-convergence, liveness, or
+    functional-retry budgets. If it still fails, or the parameters are unknown, stop and
+    give the user the manual recovery steps from
     `${PLUGIN_ROOT}/references/ValidationWorkflow.md` (reload Studio → reconnect MCP →
     re-run `compile_canvas`). Builders never call `connect`; a builder that hits the error
     reports it upward for the orchestrator to handle once.

@@ -98,9 +98,15 @@ package, not here — the only recovery lever in this repo is skill instructions
 - **Detection signal:** the literal `Invalid session state` text with a 401. A generic
   401/403 without it stays an authentication problem (`force_account_select`, `login_hint`,
   `auth_flow`) — not an expired session.
-- **Recovery (orchestrator-only, agent instruction):** one `connect` reusing the earlier
-  parameters, then one retry of the failed operation. No loop, no repeated connect/retry, no
-  planner/builder re-dispatch. Builders never call `connect`.
+- **Recovery (orchestrator decides, agent instruction):** one `connect` reusing the earlier
+  parameters, then one retry of the failed operation. If the 401 surfaced inside the
+  planner (it calls discovery tools and compiles `App.pa.yaml` during CREATE, has no
+  `connect` tool, and returns `Session: stale` in its handoff), the orchestrator reconnects
+  once and then either re-compiles the written `App.pa.yaml` itself or re-dispatches that
+  one planner invocation once. At most one
+  `connect` and one retry / re-dispatch per failure — no loop, no repeated connect/retry,
+  no builder re-dispatch, no reconnect from inside a sub-agent. Builders never call
+  `connect`.
 - **Manual fallback if that fails:** reload Studio → reconnect MCP (`/configure-canvas-mcp`
   or `connect`) → re-run `compile_canvas`. Local `.pa.yaml` files are not lost.
 

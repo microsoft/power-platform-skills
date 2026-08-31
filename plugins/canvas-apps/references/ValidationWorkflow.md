@@ -58,9 +58,15 @@ This is **not** a compile diagnostic and **not** a generic authentication failur
   `403` **without** that text is a sign-in problem — do not reconnect for it; surface it
   as-is. Do not treat every authentication failure as an expired session.
 - The convergence budget and liveness rules below do **not** apply — a stale session never
-  "converges" by editing YAML.
+  "converges" by editing YAML. This recovery is a separate, bounded path; it does not
+  consume the compile-and-fix, liveness, or functional-retry budgets.
 
-Recovery is an agent orchestration step, **orchestrator-only**, and bounded:
+Recovery is an agent orchestration step. **Only the orchestrator ever calls `connect`.**
+The planner and builders have no `connect` tool, never reconnect, and never start this
+recovery; a sub-agent that hits the error reports it upward and the orchestrator handles it
+once. The shape depends on which component's tool call failed.
+
+#### A. The orchestrator's own `compile_canvas` / `sync_canvas` call failed
 
 1. On the known `Invalid session state` condition, treat the session as invalid.
 2. Call `connect` **once**, reusing the `environment_id`, `app_id`,
@@ -71,16 +77,51 @@ Recovery is an agent orchestration step, **orchestrator-only**, and bounded:
    tell the user their Studio tab may still show the grey loading screen and should be
    reloaded so its view resyncs.
 4. If the reconnect fails, the parameters are unknown, or the single retry still returns
-   `Invalid session state`, **stop**. Give the user the manual recovery steps from
-   `skills/configure-canvas-mcp/SKILL.md` → "Manual recovery": reload the Power Apps Studio
-   tab (fresh `authoringsession`) → reconnect the MCP (`/configure-canvas-mcp` or `connect`)
-   → re-run `compile_canvas` to push the local `.pa.yaml` files. No local `.pa.yaml` work is
-   lost.
+   `Invalid session state`, **stop** and give the manual recovery steps (below).
 
-Exactly one `connect` and exactly one retry per stale-session failure. No retry loop, no
-planner/builder re-dispatch, no spawned agent. Builders and sub-agents never call `connect`
-for recovery — a builder that hits the error reports it upward for the orchestrator to
-handle once.
+#### B. The failure happened inside the planner
+
+The planner is a spawned agent (`canvas-app-planner`, invoked with `Task`). During CREATE
+it calls MCP discovery tools and then compiles `[working directory]/App.pa.yaml` itself
+(`canvas-app-planner.md` → "Write App YAML", `compile_canvas`); during EDIT it may still
+call discovery tools. It has **no `connect` tool**, so it cannot recover a stale session —
+it stops the failing step and returns its handoff with a **`Session: stale`** line (and
+describes the failure in `App compile:` / prose). The planner emits `Session: stale` **only**
+for `HTTP 401 Unauthorized: Invalid session state`; a generic `401`/`403` is a sign-in
+problem it reports without that line, and you do **not** reconnect for it.
+
+When the planner's handoff contains `Session: stale`:
+
+1. Call `connect` **once**, with the parameters from the last successful `connect` in this
+   conversation. If they are unavailable, **stop** and give the manual recovery steps.
+2. Complete the planner's failed operation **once** — exactly one of these, never both:
+   - **Compile only, `App.pa.yaml` already written:** re-run `compile_canvas` on
+     `[working directory]/App.pa.yaml` yourself. No re-dispatch — the file is on disk and
+     the orchestrator owns full-app compilation anyway.
+   - **Discovery incomplete, or plan artifacts missing / partial:** re-dispatch the **same**
+     planner invocation once (same mode, working directory, and approved plan). This single
+     re-dispatch is permitted **only** for this known stale-session case — it is not a
+     regeneration for compile diagnostics.
+3. The re-dispatched planner runs under its normal bounded rules and still cannot
+   `connect`. If it again returns `Session: stale` (or the recompile still returns
+   `Invalid session state`) — **stop** and give the manual recovery steps. No second
+   reconnect, no second re-dispatch.
+
+#### Manual recovery steps
+
+Give the user the steps from `skills/configure-canvas-mcp/SKILL.md` → "Manual recovery":
+reload the Power Apps Studio tab (fresh `authoringsession`) → reconnect the MCP
+(`/configure-canvas-mcp` or `connect`) → re-run `compile_canvas` to push the local
+`.pa.yaml` files. No local `.pa.yaml` work is lost.
+
+#### The hard bound
+
+Per stale-session failure: **at most one `connect`, and at most one retry — one operation
+re-run *or* one planner re-dispatch, never both, never twice.** Never
+`connect` → re-dispatch → `connect` → re-dispatch. A stale session that survives one
+reconnect is a manual-recovery case, not a second automatic attempt. No builder
+re-dispatch, no general-purpose "fix it" agent, and no reconnect initiated from inside any
+sub-agent.
 
 If compilation fails, fix diagnostics in this order:
 
@@ -205,6 +246,11 @@ diagnostic history, and a fresh agent would have to rediscover all of it.
 - The only sanctioned re-delegation is back to `canvas-app-planner` when a builder
   returned `Status: Blocked` because its brief was genuinely missing a definition or an
   assignment field — never for a diagnostic on a file that already exists.
+- A stale coauthoring session inside the planner's own discovery or CREATE-mode
+  `App.pa.yaml` compile is the one other case: see "Recovering from an expired coauthoring
+  session" → B. That is a single, bounded re-dispatch to recover the session — not a
+  regeneration for compile diagnostics — and it neither resets nor consumes the convergence
+  budget.
 - Modify `[working directory]/_EditorState.pa.yaml` when a diagnostic identifies it or when the requested
   screen or component-definition order requires correction. Preserve valid names and
   repair only the affected order entries.

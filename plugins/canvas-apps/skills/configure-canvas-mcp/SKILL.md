@@ -144,6 +144,15 @@ Do this at most once per failed operation. Do not repeatedly `connect` and retry
 reconnect or the single retry still returns `Invalid session state`, stop and give the
 manual recovery steps below.
 
+If the failure surfaced **inside the `canvas-app-planner` agent** — it calls discovery
+tools and compiles `App.pa.yaml` during CREATE, and has no `connect` tool of its own — the
+planner returns `Session: stale` in its handoff and the **orchestrator** does the
+same single `connect`, then completes that operation once: re-running `compile_canvas` on
+the already-written `App.pa.yaml` itself, or re-dispatching the same planner invocation
+exactly once if the planner's discovery or plan output is incomplete. Still one `connect`
+and one retry / re-dispatch in total, then manual recovery. Builders and sub-agents never
+call `connect` themselves.
+
 ### Manual recovery
 
 `connect` re-establishes the MCP server's authoring session, but it **cannot refresh the
