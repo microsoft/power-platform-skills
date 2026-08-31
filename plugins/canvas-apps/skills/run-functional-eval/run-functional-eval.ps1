@@ -20,6 +20,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if (-not $IsWindows) {
+    throw "run-functional-eval.ps1 currently supports Windows only (requires Edge/Win32 process APIs)."
+}
+
 function Get-CanvasAppUrlDetails {
     param([Uri]$Uri)
 
