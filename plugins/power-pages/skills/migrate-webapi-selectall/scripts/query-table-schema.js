@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {
@@ -10,7 +9,7 @@ const {
   validateDataverseEnvironmentUrl,
 } = require('../../../scripts/lib/validation-helpers');
 
-// Refresh tokens between bounded metadata request batches.
+// Refresh the token every few tables so long runs never expire.
 const TABLES_PER_TOKEN_REFRESH = 4;
 // Retry ceilings bound transient Dataverse throttling delays safely.
 const MAX_RETRY_ATTEMPTS = 6;
@@ -48,17 +47,6 @@ function parseArgs(argv) {
 
 function sleep(milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function schemaRequestFingerprint(environmentUrl, tables) {
-  return sha256(JSON.stringify({
-    environmentUrl,
-    tables: [...tables].sort(),
-  }));
 }
 
 function isTransientError(error) {
@@ -285,13 +273,11 @@ async function queryTableSchemas(environmentUrl, requested, dependencies = {}) {
     wait
   );
   const selected = resolveRequestedTables(definitions, requested);
-  const tables = [...(dependencies.initialTables || [])];
-  const completed = new Set(tables.map(table => table.logicalName.toLowerCase()));
+  const tables = [];
   let queried = 0;
 
   for (let index = 0; index < selected.length; index += 1) {
     const definition = selected[index];
-    if (completed.has(definition.LogicalName.toLowerCase())) continue;
     if (queried > 0 && queried % TABLES_PER_TOKEN_REFRESH === 0) {
       token = getToken(environmentUrl);
       if (!token) throw new Error('Authentication expired while querying table schemas.');
@@ -308,11 +294,7 @@ async function queryTableSchemas(environmentUrl, requested, dependencies = {}) {
       manyToMany
     );
     tables.push(table);
-    completed.add(table.logicalName.toLowerCase());
     queried += 1;
-    if (dependencies.onProgress) {
-      await dependencies.onProgress([...tables], queried);
-    }
   }
 
   return {
@@ -398,37 +380,8 @@ async function main() {
   try {
     validated = validateOptions(parseArgs(process.argv.slice(2)));
     const tables = loadTableIdentifiers(validated);
-    const requestedSha256 = schemaRequestFingerprint(validated.environmentUrl, tables);
-    const checkpointPath = resolveOutputPath(
-      validated.projectRoot,
-      `${validated.output}.checkpoint.json`
-    );
-    let initialTables = [];
-    if (fs.existsSync(checkpointPath)) {
-      const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
-      if (checkpoint.requestedSha256 !== requestedSha256) {
-        throw new Error('Existing schema checkpoint targets different table identifiers.');
-      }
-      initialTables = checkpoint.tables || [];
-    }
-    const result = await queryTableSchemas(
-      validated.environmentUrl,
-      tables,
-      {
-        initialTables,
-        onProgress: async (completed, queried) => {
-          if (queried % TABLES_PER_TOKEN_REFRESH !== 0) return;
-          // Checkpoints bound rework after long metadata batches.
-          writeAtomicJson(validated.projectRoot, checkpointPath, {
-            schemaVersion: 1,
-            requestedSha256,
-            tables: completed,
-          });
-        },
-      }
-    );
+    const result = await queryTableSchemas(validated.environmentUrl, tables);
     writeAtomicJson(validated.projectRoot, validated.output, result);
-    if (fs.existsSync(checkpointPath)) fs.unlinkSync(checkpointPath);
     process.stdout.write(`${JSON.stringify({
       output: path.relative(validated.projectRoot, validated.output).split(path.sep).join('/'),
       tableCount: result.tables.length,
@@ -452,7 +405,6 @@ module.exports = {
   parseArgs,
   queryTableSchemas,
   resolveRequestedTables,
-  schemaRequestFingerprint,
   loadTableIdentifiers,
   validateOptions,
 };

@@ -7,13 +7,13 @@ description: >-
   fields settings containing *, data-exposure review, wildcard deprecation
   readiness, or Web API failures after wildcard retirement. Applies to both
   traditional sites using HTML, CSS, JavaScript, Liquid, and downloaded YAML,
-  and code/SPA sites using React, Vue, Angular, Astro, or TypeScript. The agent
+  and SPA sites using React, Vue, Angular, Astro, or TypeScript. The agent
   must inspect every source Web API call and consumer, report exact fixes for every
   wildcard, report every already-explicit configuration, apply approved edits,
   and verify no wildcard remains.
 user-invocable: true
 argument-hint: Optional Power Pages project path
-allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Grep, Glob, AskUserQuestion, TaskCreate, TaskUpdate, TaskList
 model: opus
 ---
 
@@ -32,7 +32,7 @@ Support both:
 
 - traditional sites with HTML, JavaScript, Liquid, web templates, and
   aggregate YAML;
-- code/SPA sites with React, Vue, Angular, Astro, TypeScript, downloaded
+- SPA sites with React, Vue, Angular, Astro, TypeScript, downloaded
   deployment YAML, or mixed custom JavaScript.
 
 **Initial request:** $ARGUMENTS
@@ -52,19 +52,15 @@ Support both:
 7. Never apply a partial wildcard plan. Resolve all wildcards and call-site
    rows first.
 8. Keep reports free of absolute local paths, tokens, URLs, data values,
-   filter literals, request bodies, response bodies, and source snippets.
-9. Build every report from the bundled HTML template; never invent another
-   layout.
-10. Preserve unrelated YAML structure and values.
-11. Verify with a fresh discovery pass, not remembered inventory.
+   filter literals, request bodies, response bodies, and source snippets, and
+   build them only from the bundled HTML template.
+9. Preserve unrelated YAML structure and values.
+10. Verify with a fresh discovery pass, not remembered inventory.
 
 Read [references/column-analysis.md](references/column-analysis.md) before
 analyzing calls. Read
 [references/configuration-and-reporting.md](references/configuration-and-reporting.md)
-before inventorying settings or writing the report. Read
-[references/large-scale-batching.md](references/large-scale-batching.md) before
-processing any inventory that may exceed 500 configurations or call
-candidates.
+before inventorying settings or writing the report.
 
 ## Phase 1: Prepare
 
@@ -73,7 +69,7 @@ candidates.
 1. Create all seven tasks from [Progress tracking](#progress-tracking).
 2. Resolve `PROJECT_ROOT` from `$ARGUMENTS` or the current directory.
 3. Detect site markers independently:
-   - `powerpages.config.json` indicates a code/SPA site;
+   - `powerpages.config.json` indicates an SPA site;
    - root `website.yml`, root `sitesetting.yml`, or `.powerpages-site/`
      indicates downloaded declarative artifacts;
    - when both appear, scan both layouts.
@@ -81,10 +77,8 @@ candidates.
    settings; do not create or select another solution.
 5. Inspect git status. Never discard, hide, or include unrelated user changes.
 6. Run `node --version`.
-7. Read
-   `${PLUGIN_ROOT}/skills/migrate-webapi-selectall/assets/report-assets.json`
-   and every template it lists. Stop if the manifest or any required template
-   is missing, unreadable, duplicated, or has a different schema version.
+7. Confirm `assets/migration-report-template.html` is readable, and stop if it
+   is missing.
 
 **Output:** Project root, site layouts, solution context, and git state.
 
@@ -115,18 +109,14 @@ Do not treat identical settings in different deployment profiles as
 duplicates. Record every profile name and which settings it overrides. Never
 assume the `default` profile is the intended deployment profile.
 
-Estimate inventory size before loading records into context. When it can
-exceed 500 rows, copy every `large-scale` CSV template from the asset manifest
-before appending rows, then follow `references/large-scale-batching.md`. The
-same workflow must remain reliable for 10,000, 50,000, and 100,000+
-configurations. Never create one task or metadata request per configuration.
+Query Dataverse once per unique table, never once per configuration.
 
 ### 2.2 Inventory source calls
 
 Analyze only authoritative, editable source files. Never inspect compiled or
 generated code.
 
-For code/SPA sites:
+For SPA sites:
 
 1. Read `powerpages.config.json`, `package.json`, and present framework or
    bundler configuration before searching calls.
@@ -161,16 +151,11 @@ Search for:
 
 For each source candidate, record relative path, line, method, endpoint
 expression, and wrapper chain. A comment, example, or non-table endpoint still
-needs an explicit disposition. Excluded build outputs never receive API
-coverage rows.
+needs an explicit disposition. Excluded build outputs are never recorded.
 
-For large inventories, append every completed row to
-`api-call-coverage.csv` and reconcile input/output counts before releasing
-that batch from context. Keep unresolved rows in the current batch.
-
-Copy the manifest's HTML template unchanged to
+Copy `assets/migration-report-template.html` unchanged to
 `docs/webapi-selectall-migration/migration-report.html`. Populate its tokens
-and fixed table bodies with all inventory rows. Preserve the template version,
+and table bodies with the settings inventory. Preserve the template version,
 element IDs, headings, table columns, and CSS. Do not propose fields yet.
 
 Stop if any in-scope source or configuration file cannot be read.
@@ -203,16 +188,13 @@ access token.
 
 <!-- not-a-gate: environment URL supplies read-only metadata query input only -->
 
-Copy the manifest's line-list template to
-`docs/webapi-selectall-migration/table-identifiers.txt`, replace
-`<table-1>`, and append remaining deduplicated identifiers one per line. Run:
+Write every deduplicated identifier, one per line, to
+`docs/webapi-selectall-migration/table-identifiers.txt`. Run:
 
 ```bash
 node "${PLUGIN_ROOT}/skills/migrate-webapi-selectall/scripts/query-table-schema.js" --project-root "<PROJECT_ROOT>" --environment-url "<ENVIRONMENT_URL>" --tables-file "<PROJECT_ROOT>/docs/webapi-selectall-migration/table-identifiers.txt" --output "<PROJECT_ROOT>/docs/webapi-selectall-migration/table-schema.json"
 ```
 
-The utility retrieves names and relationships only. It does not scan source,
-infer required columns, build a plan, edit configuration, or verify migration.
 If an identifier does not resolve, trace the code or obtain the correct
 contract; do not guess.
 
@@ -228,10 +210,8 @@ After the initial snapshot:
    resolved.
 
 Treat `table-schema.json` and all numbered snapshots as one schema package.
-Never requery a logical table already present in that package. The utility
-deduplicates identifiers, processes tables sequentially, retries transient
-throttling, refreshes tokens in bounded batches, and checkpoints progress.
-Never launch concurrent schema queries.
+Never requery a logical table already present in that package, and never
+launch concurrent schema queries.
 
 ### 3.2 Analyze every call and consumer
 
@@ -248,10 +228,11 @@ For every source inventory row:
 7. Classify the row as `mapped`, `non-table`, or `not-a-call`.
 8. Leave the row unresolved if any runtime branch or consumer remains unknown.
 
-Process large inventories sequentially using the bounded API batches in the
-large-scale reference. Persist each complete batch before starting the next,
-and update the compact table/column evidence matrix so global unions never
-require reloading every call row.
+One logical table is normally reached from several places. Collect every call
+site for a table before proposing its fields: duplicated or competing
+wrappers, per-page scripts, different query shapes, and repeated calls in the
+same file. A later call site for an already-analyzed table can still add
+columns, so never stop at the first one.
 
 For normal record GETs without `$select`, derive output fields from every
 consumer and propose a source edit adding the smallest explicit projection.
@@ -266,8 +247,8 @@ existing `$select` unless a response consumer also reads it.
 
 For each wildcard setting:
 
-1. Union the proven requirements for that logical table within the applicable
-   site behavior.
+1. Union the proven requirements from every call site that reaches that
+   logical table within the applicable site behavior.
 2. Validate each proposed name against the schema package.
 3. Link every proposed column to source path and line or a user-confirmed
    external contract.
@@ -287,12 +268,7 @@ For each already-explicit setting:
 - include an exact proposed fix for every gap;
 - do not silently change it.
 
-Update every report section. Resolve all wildcard and call-site rows before
-continuing.
-
-At large scale, the HTML report remains authoritative and must contain every
-row. Reconcile its counts with the working CSV ledgers before the approval
-gate.
+Update the report. Resolve all wildcard and call-site rows before continuing.
 
 **Output:** Evidence-complete report with exact wildcard replacements and all
 already-explicit configurations.
@@ -307,7 +283,7 @@ Show:
 - evidence for every proposed column;
 - source GETs requiring `$select`;
 - already-explicit settings and any missing or excess columns;
-- missing or duplicate settings;
+- any missing or duplicate settings found during inventory;
 - zero unresolved call sites.
 
 <!-- gate: migrate-webapi-selectall:4.apply-plan | category=consent | cancel-leaves=reviewed-migration-report -->
@@ -338,10 +314,6 @@ Never offer a subset of wildcard fixes.
 4. Apply already-explicit changes only when included in the selected approval.
 5. Re-read every changed block immediately and update report status.
 
-For large inventories, apply one approved batch at a time, never edit the same
-file concurrently, verify each scoped diff, and checkpoint after manageable
-groups. Keep all later batches pending when one batch fails.
-
 If any edit fails or a file changed since review, stop. Do not continue with a
 partial configuration set and do not perform a broad rollback over user work.
 
@@ -360,20 +332,12 @@ partial configuration set and do not perform a broad rollback over user work.
    - required setting columns are present;
    - normal record GETs use explicit `$select`;
    - expanded, lookup, write, FetchXML, file, and image columns remain covered.
-5. Run the existing project build for code/SPA sites. For traditional sites,
+5. Run the existing project build for SPA sites. For traditional sites,
    inspect edited JavaScript and Liquid syntax and use existing site tests when
    available.
-6. Confirm the report retains template version `1`, contains every required
+6. Confirm the report retains template version `1`, keeps every static
    section, and contains no unresolved `__TOKEN__` values.
-7. Confirm every retained companion file has the exact header or line-list
-   format declared by asset manifest version `1`.
-8. Finalize the report with found, fixed, remaining, explicit-review, and
-   verification counts.
-
-For large inventories, use a new verification ledger and fresh bounded
-batches. Create it from the manifest's `verification` CSV template. Reconcile
-every count using the equations in the large-scale reference; never infer
-completion from samples.
+7. Finalize the report status and counts.
 
 Do not claim full hardening while explicit configuration gaps remain. Use the
 partial status defined in the reporting contract when applicable.
@@ -396,7 +360,7 @@ different environment or profile requires a separate deployment approval.
 Use `AskUserQuestion`: `Deploy now` or `Keep local only`.
 
 - Reconfirm that the active PAC environment matches the confirmed target.
-- For code/SPA sites, confirm `.powerpages-site` contains the approved
+- For SPA sites, confirm `.powerpages-site` contains the approved
   configuration edits, run the existing production build, then run
   `pac pages upload-code-site --rootPath "<PROJECT_ROOT>"`.
 - For traditional sites, run

@@ -10,6 +10,12 @@ const schema = require(
   '../../skills/migrate-webapi-selectall/scripts/query-table-schema'
 );
 
+const SKILL_ROOT = path.join(
+  __dirname,
+  '../../skills/migrate-webapi-selectall'
+);
+const ASSETS_ROOT = path.join(SKILL_ROOT, 'assets');
+
 const ENVIRONMENT_URL_1 = 'https://placeholder.crm.dynamics.com';
 const TABLE_LOGICAL_NAME_1 = 'table_1';
 const TABLE_ENTITY_SET_NAME_1 = 'table_1_set';
@@ -48,24 +54,6 @@ test('resolves both logical names and entity sets', () => {
     ),
     definitions
   );
-});
-
-test('binds checkpoints to tables and environment', () => {
-  const first = schema.schemaRequestFingerprint(
-    '<environment-url-1>',
-    [TABLE_LOGICAL_NAME_2, TABLE_LOGICAL_NAME_1]
-  );
-  const reordered = schema.schemaRequestFingerprint(
-    '<environment-url-1>',
-    [TABLE_LOGICAL_NAME_1, TABLE_LOGICAL_NAME_2]
-  );
-  const otherEnvironment = schema.schemaRequestFingerprint(
-    '<environment-url-2>',
-    [TABLE_LOGICAL_NAME_1, TABLE_LOGICAL_NAME_2]
-  );
-
-  assert.equal(first, reordered);
-  assert.notEqual(first, otherEnvironment);
 });
 
 test('rejects project root as schema output', () => {
@@ -230,4 +218,84 @@ test('retries transient metadata throttling sequentially', async () => {
 
   assert.equal(result.tables.length, 1);
   assert.deepEqual(delays, [1000]);
+});
+
+test('keeps the HTML report responsive and accessible', () => {
+  const template = fs.readFileSync(
+    path.join(ASSETS_ROOT, 'migration-report-template.html'),
+    'utf8'
+  );
+  const requiredTokens = [
+    'REPORT_STATUS',
+    'GENERATED_AT',
+    'WILDCARD_FOUND_COUNT',
+    'WILDCARD_FIXED_COUNT',
+    'WILDCARD_REMAINING_COUNT',
+    'EXPLICIT_SETTING_COUNT',
+    'SCOPE_NOTE',
+    'WILDCARD_ROWS',
+    'EXPLICIT_ROWS',
+  ];
+
+  assert.match(template, /class="skip-link"/);
+  assert.match(template, /<main class="content" id="main-content"/);
+  assert.equal(template.match(/class="table-region"/g)?.length, 2);
+  assert.equal(
+    template.match(/role="region"[^>]+aria-labelledby="[^"]+"[^>]+tabindex="0"/g)
+      ?.length,
+    2
+  );
+  assert.equal(template.match(/<caption/g)?.length, 2);
+  assert.ok((template.match(/<th scope="col">/g)?.length ?? 0) > 5);
+  assert.match(template, /@media \(max-width: 900px\)/);
+  assert.match(template, /@media \(max-width: 560px\)/);
+  assert.match(template, /@media \(max-width: 360px\)/);
+  assert.match(template, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(template, /@media \(forced-colors: active\)/);
+  assert.match(template, /@media print/);
+  assert.match(template, /"Segoe UI Web \(West European\)"/);
+  assert.match(template, /--accent: #0078d4/);
+  assert.doesNotMatch(template, /<script\b/i);
+  assert.doesNotMatch(template, /<link\b/i);
+  assert.doesNotMatch(template, /https?:\/\//i);
+  assert.doesNotMatch(template, /\{\{[A-Z_]+\}\}/);
+
+  for (const token of requiredTokens) {
+    const pattern = new RegExp(`__${token}__`, 'g');
+    assert.equal(
+      template.match(pattern)?.length,
+      1,
+      `${token} must occur exactly once`
+    );
+  }
+});
+
+test('bundles only the report template asset', () => {
+  assert.deepEqual(fs.readdirSync(ASSETS_ROOT), [
+    'migration-report-template.html',
+  ]);
+});
+
+test('limits SPA review to authoritative editable source', () => {
+  const sourceContract = [
+    fs.readFileSync(path.join(SKILL_ROOT, 'SKILL.md'), 'utf8'),
+    fs.readFileSync(
+      path.join(SKILL_ROOT, 'references', 'column-analysis.md'),
+      'utf8'
+    ),
+  ].join('\n');
+
+  assert.match(
+    sourceContract,
+    /Analyze only authoritative, editable source files/
+  );
+  assert.match(sourceContract, /compiledPath/);
+  assert.match(sourceContract, /\.powerpages-site\/web-files\//);
+  assert.match(sourceContract, /content-hashed assets/);
+  assert.match(sourceContract, /missing-source/);
+  assert.match(sourceContract, /Do not infer columns from that output/);
+  assert.match(
+    sourceContract,
+    /Do not exclude an authored traditional\s+web\s+file/
+  );
 });

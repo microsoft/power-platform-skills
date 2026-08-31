@@ -404,11 +404,11 @@ Migrates a traditional Power Pages site (Liquid web templates, not code sites) f
 
 > "Replace every wildcard Web API fields setting with the columns my site actually uses"
 
-Reviews every authored Power Pages Web API source call and response consumer, maps entity sets through Dataverse metadata, and replaces deprecated `Webapi/<table>/fields = *` values with evidence-backed explicit columns. Compiled and generated output is excluded. Works with both traditional/Liquid sites and React, Vue, Angular, or Astro code sites.
+Reviews every authored Power Pages Web API source call and response consumer, maps entity sets through Dataverse metadata, and replaces deprecated `Webapi/<table>/fields = *` values with evidence-backed explicit columns. Compiled and generated output is excluded. Works with both traditional/Liquid sites and React, Vue, Angular, or Astro SPA sites.
 
 - Reports every wildcard with its exact proposed fix and every already-explicit configuration
 - Adds missing `$select` projections where normal record reads relied on implicit selection
-- Uses bounded, resumable review batches and complete CSV appendices for 100,000+ configurations
+- Traces every call site reaching a table, including duplicated wrappers and differing query shapes
 - Verifies all configuration scopes and deployment profiles contain zero wildcards
 
 ### Support
