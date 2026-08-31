@@ -2,12 +2,13 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const Module = require('module');
 const os = require('os');
 const path = require('path');
 const test = require('node:test');
 
 const {
-  REQUIRED_ALIASES,
+  HOST_TSCONFIG,
   assertFreshTemplate,
   prepareMobileTemplate,
   prepareRootLayout,
@@ -25,6 +26,30 @@ function copyTemplate() {
   fs.cpSync(templateRoot, projectRoot, { recursive: true });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
+}
+
+function loadAppConfig(configPath) {
+  const originalLoad = Module._load;
+  Module._load = function load(request, parent, isMain) {
+    if (request === '@microsoft/power-apps-native-host/config/expoConfig') {
+      return {
+        createPowerAppsExpoConfig(baseConfig, settings, customize) {
+          return customize({
+            ...baseConfig,
+            name: settings.name,
+            slug: settings.slug,
+          });
+        },
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    delete require.cache[require.resolve(configPath)];
+    return require(configPath);
+  } finally {
+    Module._load = originalLoad;
+  }
 }
 
 function fileSnapshot(projectRoot) {
@@ -50,6 +75,8 @@ function assertSnapshotsEqual(left, right) {
 
 test('preparation is idempotent and preserves generated and existing helper files', () => {
   const projectRoot = copyTemplate();
+  const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
+  const originalTsconfig = fs.readFileSync(tsconfigPath);
   const generatedPath = path.join(projectRoot, 'src', 'generated', 'index.ts');
   const existingHelperPath = path.join(projectRoot, 'src', 'components', 'index.tsx');
   fs.mkdirSync(path.dirname(generatedPath), { recursive: true });
@@ -79,11 +106,9 @@ test('preparation is idempotent and preserves generated and existing helper file
   assert.strictEqual(require(path.join(projectRoot, 'package.json')).name, 'inspectors-workspace');
 
   const tsconfig = require(path.join(projectRoot, 'tsconfig.json'));
-  assert.ok(!Object.hasOwn(tsconfig.compilerOptions, 'baseUrl'));
-  for (const [alias, targets] of Object.entries(REQUIRED_ALIASES)) {
-    assert.deepStrictEqual(tsconfig.compilerOptions.paths[alias], targets);
-  }
-  assert.deepStrictEqual(tsconfig.compilerOptions.paths['react-native'], ['./node_modules/react-native']);
+  assert.strictEqual(tsconfig.extends, HOST_TSCONFIG);
+  assert.strictEqual(tsconfig.compilerOptions, undefined);
+  assert.deepStrictEqual(fs.readFileSync(tsconfigPath), originalTsconfig);
 
   const layout = fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8');
   assert.match(layout, /<SafeAreaProvider>/);
@@ -119,9 +144,26 @@ test('preparation round-trips JavaScript line terminators in app display names',
   const configPath = path.join(projectRoot, 'app.config.js');
   const source = fs.readFileSync(configPath, 'utf8');
   assert.match(source, /Line 1\\nLine 2\\rLine 3\\u2028Line 4\\u2029Inspector\\'s App/);
-  delete require.cache[require.resolve(configPath)];
-  const createConfig = require(configPath);
+  const createConfig = loadAppConfig(configPath);
   assert.strictEqual(createConfig({ config: {} }).name, displayName);
+});
+
+test('preparation rejects a template that does not inherit the host tsconfig', () => {
+  const projectRoot = copyTemplate();
+  const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
+  fs.writeFileSync(tsconfigPath, JSON.stringify({
+    extends: 'expo/tsconfig.base',
+    compilerOptions: { paths: {} },
+  }, null, 2));
+  const before = fileSnapshot(projectRoot);
+
+  assert.throws(() => prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName: 'Unsupported Template',
+    slug: 'unsupported-template',
+  }), /must extend @microsoft\/power-apps-native-host\/config\/tsconfig/);
+
+  assertSnapshotsEqual(before, fileSnapshot(projectRoot));
 });
 
 test('fresh-template validation allows the approved plan but blocks created-app markers', () => {

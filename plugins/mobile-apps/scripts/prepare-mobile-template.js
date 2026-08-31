@@ -14,20 +14,7 @@ const REQUIRED_FILES = [
   'tsconfig.json',
 ];
 
-const REQUIRED_ALIASES = {
-  '@/components': ['./src/components'],
-  '@/components/*': ['./src/components/*'],
-  '@/hooks': ['./src/hooks'],
-  '@/hooks/*': ['./src/hooks/*'],
-  '@/utils': ['./src/utils'],
-  '@/utils/*': ['./src/utils/*'],
-  '@/tokens': ['./src/tokens'],
-  '@/tokens/*': ['./src/tokens/*'],
-  '@/generated': ['./src/generated'],
-  '@/generated/*': ['./src/generated/*'],
-  '@/native': ['./src/native'],
-  '@/native/*': ['./src/native/*'],
-};
+const HOST_TSCONFIG = '@microsoft/power-apps-native-host/config/tsconfig';
 
 const SHARED_FILES = [
   ['components/index.tsx', 'src/components/index.tsx'],
@@ -104,6 +91,8 @@ function assertFreshTemplate(projectRoot) {
   if (createdMarkers.length > 0) {
     throw new Error(`Template already contains created-app markers: ${createdMarkers.join(', ')}`);
   }
+
+  verifyHostTsconfig(projectRoot);
 }
 
 function updateIdentity(projectRoot, displayName, slug) {
@@ -175,30 +164,15 @@ function copySharedFiles(projectRoot, samplesRoot) {
   return { copied, preserved };
 }
 
-function mergeAliases(projectRoot) {
+function verifyHostTsconfig(projectRoot) {
   const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
   const tsconfig = readJson(tsconfigPath);
-  tsconfig.compilerOptions = tsconfig.compilerOptions || {};
-  tsconfig.compilerOptions.paths = tsconfig.compilerOptions.paths || {};
-  delete tsconfig.compilerOptions.baseUrl;
-
-  for (const [alias, targets] of Object.entries(tsconfig.compilerOptions.paths)) {
-    if (!Array.isArray(targets)) {
-      throw new Error(`tsconfig path alias ${alias} must contain an array of targets`);
-    }
-    tsconfig.compilerOptions.paths[alias] = targets.map((target) => {
-      if (typeof target !== 'string' || !target) {
-        throw new Error(`tsconfig path alias ${alias} contains an invalid target`);
-      }
-      return target.startsWith('.') || path.isAbsolute(target) ? target : `./${target}`;
-    });
+  const inheritedConfigs = Array.isArray(tsconfig.extends)
+    ? tsconfig.extends
+    : [tsconfig.extends];
+  if (!inheritedConfigs.includes(HOST_TSCONFIG)) {
+    throw new Error(`tsconfig.json must extend ${HOST_TSCONFIG}`);
   }
-
-  for (const [alias, targets] of Object.entries(REQUIRED_ALIASES)) {
-    tsconfig.compilerOptions.paths[alias] = targets;
-  }
-
-  writeJson(tsconfigPath, tsconfig);
 }
 
 function ensureNamedImports(source, moduleName, requiredNames) {
@@ -438,8 +412,8 @@ function verifyRootLayout(source) {
     const providerChecks = [
       ['Tamagui config provider prop', attributes.get('tamaguiConfig') === '{tamaguiConfig}'],
       ['default theme provider prop', attributes.has('defaultTheme')],
-      ['light theme provider prop', attributes.get('theme') === '{lightTheme}'],
-      ['dark theme provider prop', attributes.get('darkTheme') === '{darkTheme}'],
+      ['light theme provider prop', attributes.has('theme')],
+      ['dark theme provider prop', attributes.has('darkTheme')],
     ];
     missing.push(...providerChecks.filter(([, valid]) => !valid).map(([label]) => label));
   }
@@ -519,7 +493,6 @@ function capturePreparationState(projectRoot) {
     'app.config.js',
     'package.json',
     'power.config.json',
-    'tsconfig.json',
     'app/_layout.tsx',
     ...LEGACY_EXAMPLE_FILES,
     ...SHARED_FILES.map(([, destinationRelativePath]) => destinationRelativePath),
@@ -597,7 +570,6 @@ function prepareMobileTemplate(options) {
     removedPowerConfig = removeEmptyPowerConfig(projectRoot);
     removedLegacyFiles = removeLegacyExamples(projectRoot);
     sharedFiles = copySharedFiles(projectRoot, samplesRoot);
-    mergeAliases(projectRoot);
     prepareRootLayout(projectRoot);
     assertNoDanglingLegacyImports(projectRoot);
   } catch (error) {
@@ -638,17 +610,17 @@ if (require.main === module) {
 }
 
 module.exports = {
-  REQUIRED_ALIASES,
+  HOST_TSCONFIG,
   SHARED_FILES,
   assertFreshTemplate,
   copySharedFiles,
   ensureProviderProps,
   ensureSafeAreaProviderWrapper,
-  mergeAliases,
   prepareMobileTemplate,
   prepareRootLayout,
   removeEmptyPowerConfig,
   restorePreparationState,
   updateIdentity,
+  verifyHostTsconfig,
   verifyRootLayout,
 };

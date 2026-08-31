@@ -8,6 +8,7 @@ import {
   lightTheme,
 } from '@microsoft/power-apps-native-host';
 
+import appConfig from '../app.json';
 import authConfig from '../auth.config.json';
 import tamaguiConfig from '../tamagui.config';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -37,6 +38,7 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <PowerAppsProvider
+        appConfig={appConfig}
         msalConfig={authConfig.msal}
         powerConfig={powerConfig}
         schemaMap={schemaMap}

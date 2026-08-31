@@ -160,12 +160,11 @@ const headingFont = createFont({ /* from pairing above */ })
 const bodyFont = createFont({ /* from pairing above */ })
 
 const customConfig = {
-  ...defaultConfig,
-  animations,
   fonts: {
     ...defaultConfig.fonts,
     heading: headingFont,
     body: bodyFont,
+    mono: defaultConfig.fonts.body,
   },
 }
 ```

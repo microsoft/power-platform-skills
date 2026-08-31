@@ -12,7 +12,11 @@
       },
       "powerappsNative": {
         "schemaVersion": 1,
-        "templateVersion": 1
+        "templateVersion": 1,
+        "nativeRuntimeVersions": {
+          "android": 1,
+          "ios": 1
+        }
       }
     }
   }

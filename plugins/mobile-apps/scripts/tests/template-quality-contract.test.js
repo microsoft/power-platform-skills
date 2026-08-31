@@ -14,82 +14,12 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
-function loadReadableForeground(source) {
-  const match = source.match(
-    /function parseColorChannels[\s\S]*?function readableForeground[\s\S]*?\r?\n}/,
-  );
-  assert.ok(match, 'color parsing and readableForeground implementation');
-  const javascript = match[0]
-    .replace('color: string', 'color')
-    .replace('background: string | undefined', 'background')
-    .replace('fallback: string', 'fallback');
-  return Function(`"use strict"; ${javascript}; return readableForeground;`)();
-}
-
-function contrastRatio(foreground, background) {
-  const luminance = (hex) => {
-    const channels = [1, 3, 5].map((offset) => {
-      const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
-      return value <= 0.04045
-        ? value / 12.92
-        : ((value + 0.055) / 1.055) ** 2.4;
-    });
-    return (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
-  };
-  const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
-  return (values[0] + 0.05) / (values[1] + 0.05);
-}
-
-test('base Tamagui config exposes the complete generated-screen semantic contract', () => {
+test('base Tamagui config inherits the generated-screen semantic contract from the host', () => {
   const config = read('template/tamagui.config.ts');
-  const tokens = [
-    'surface0', 'surface1', 'surface2', 'surface3', 'mediaSurface',
-    'accentDeep', 'accentBase', 'accentSoft', 'accentOnAccent',
-    'text0', 'text1', 'text2', 'text3',
-    'statusComplete', 'statusCompleteBg',
-    'statusPending', 'statusPendingBg',
-    'statusOverdue', 'statusOverdueBg',
-    'statusInProgress', 'statusInProgressBg',
-    'statusDraft', 'statusDraftBg',
-    'statusCancelled', 'statusCancelledBg',
-  ];
-  for (const token of tokens) assert.match(config, new RegExp(`\\b${token}:`));
-  assert.match(config, /surface1:\s*brand\.surface \?\? theme\.color3/);
-  assert.match(config, /surface2:\s*theme\.color4/);
-  assert.match(config, /surface3:\s*brand\.border \?\? theme\.color5/);
-  assert.match(config, /accentOnAccent:\s*brand\.onPrimary[\s\S]*readableForeground\(brand\.primary \?\? theme\.blue10/);
-  assert.match(config, /luminance > 0\.179 \? '#000000' : '#ffffff'/);
-  assert.match(config, /mono:\s*defaultConfig\.fonts\.body/);
-  assert.match(config, /declare module '@tamagui\/core'/);
-  assert.doesNotMatch(config, /declare module 'tamagui'/);
-});
-
-test('accent foregrounds meet WCAG AA for default and representative brand colors', () => {
-  const source = read('template/tamagui.config.ts');
-  for (const readableForeground of [
-    loadReadableForeground(source),
-    loadReadableForeground(source.replace(/\n/g, '\r\n')),
-  ]) {
-    for (const [background, normalized] of [
-      ['#0588f0', '#0588f0'], // Config v5 light blue10
-      ['#3b9eff', '#3b9eff'], // Config v5 dark blue10
-      ['hsl(208, 90%, 46%)', '#0c7cdf'],
-      ['hsla(208, 90%, 46%, 1)', '#0c7cdf'],
-      ['rgb(5, 136, 240)', '#0588f0'],
-      ['#ffffff', '#ffffff'],
-      ['#000000', '#000000'],
-      ['#ffd60a', '#ffd60a'],
-      ['#7a1f5c', '#7a1f5c'],
-    ]) {
-      const foreground = readableForeground(background, '#ffffff');
-      assert.ok(
-        contrastRatio(foreground, normalized) >= 4.5,
-        `${foreground} on ${background}`,
-      );
-    }
-    assert.strictEqual(readableForeground('rgba(0, 0, 0, 0)', '#123456'), '#123456');
-    assert.strictEqual(readableForeground('hsla(0, 0%, 0%, 0.5)', '#123456'), '#123456');
-  }
+  assert.match(config, /createPowerAppsTamaguiConfig/);
+  assert.match(config, /const customConfig = \{\}/);
+  assert.match(config, /declare module 'tamagui'/);
+  assert.doesNotMatch(config, /createTamagui|withSemanticAliases|parseColorChannels/);
 });
 
 test('shipped routes own safe-area edges and avoid forbidden icons and raw hex colors', () => {
@@ -134,6 +64,7 @@ test('navigation ref guards must reset unless the route performs a terminal repl
 test('root runtime owns context but not route content edges', () => {
   const layout = read('template/app/_layout.tsx');
   assert.match(layout, /<SafeAreaProvider>/);
+  assert.match(layout, /appConfig=\{appConfig\}/);
   assert.match(layout, /offlineProfile=\{offlineProfile\}/);
   assert.match(layout, /defaultTheme=/);
   assert.match(layout, /theme=\{lightTheme\}/);
@@ -143,14 +74,40 @@ test('root runtime owns context but not route content edges', () => {
 
 test('native configuration follows the system light or dark appearance', () => {
   const config = read('template/app.config.js');
-  assert.match(config, /userInterfaceStyle:\s*'automatic'/);
+  assert.match(config, /createPowerAppsExpoConfig/);
+  assert.doesNotMatch(config, /userInterfaceStyle:\s*'automatic'/);
+});
+
+test('Babel and Metro configuration are delegated to native-host factories', () => {
+  assert.match(read('template/babel.config.js'), /createPowerAppsBabelConfig/);
+  assert.match(read('template/metro.config.js'), /createPowerAppsMetroConfig/);
+  assert.doesNotMatch(read('template/metro.config.js'), /power-apps-native-host\/metro-logger/);
+});
+
+test('bundled dependencies match the current host-factory template boundary', () => {
+  const packageJson = JSON.parse(read('template/package.json'));
+  assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.3.1');
+  assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
+  assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
+  assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  assert.strictEqual(packageJson.overrides.metro, '0.83.8');
 });
 
 test('create flow keeps host theme foregrounds aligned with Tamagui brand accents', () => {
   const skill = read('skills/create-mobile-app/SKILL.md');
-  assert.match(skill, /const brandAccentForeground = readableForeground\(brandTokens\.color\.primary\)/);
-  assert.match(skill, /const brandedLightTheme:[\s\S]*accentOnAccent: brandAccentForeground/);
-  assert.match(skill, /const brandedDarkTheme:[\s\S]*accentOnAccent: brandAccentForeground/);
+  const integration = read('skills/design-system/references/tamagui-integration.md');
+  assert.match(skill, /appLightTheme/);
+  assert.match(skill, /appDarkTheme/);
+  assert.match(skill, /accentOnAccent:\s*appLightTheme\.accentOnAccent/);
+  assert.match(skill, /accentOnAccent:\s*appDarkTheme\.accentOnAccent/);
+  assert.match(skill, /surface4:\s*appLightTheme\.color6/);
+  assert.match(skill, /surface4:\s*appDarkTheme\.color6/);
+  assert.doesNotMatch(skill, /function parseColorChannels/);
+  assert.match(integration, /createPowerAppsTamaguiConfig/);
+  assert.match(integration, /withPowerAppsSemanticAliases/);
+  assert.match(integration, /export const appLightTheme/);
+  assert.match(integration, /export const appDarkTheme/);
+  assert.doesNotMatch(integration, /function parseColorChannels/);
 });
 
 test('shared components preserve token literals and accessible row selection semantics', () => {
@@ -164,17 +121,8 @@ test('shared components preserve token literals and accessible row selection sem
   assert.doesNotMatch(components, /<Ionicons[^>]*color="\$[A-Za-z]/);
 });
 
-test('template path aliases do not depend on deprecated baseUrl', () => {
+test('template path aliases are inherited from the host tsconfig', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
-  assert.ok(!Object.hasOwn(tsconfig.compilerOptions, 'baseUrl'));
-  for (const alias of [
-    '@/components', '@/components/*',
-    '@/hooks', '@/hooks/*',
-    '@/utils', '@/utils/*',
-    '@/tokens', '@/tokens/*',
-    '@/generated', '@/generated/*',
-    '@/native', '@/native/*',
-  ]) {
-    assert.ok(tsconfig.compilerOptions.paths[alias], alias);
-  }
+  assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
+  assert.strictEqual(tsconfig.compilerOptions, undefined);
 });

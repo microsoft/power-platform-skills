@@ -917,10 +917,10 @@ NODE
 
 The script is the only owner of Step 5 mutations. It updates identity, removes
 only recognized legacy example hooks/query-client files, copies shared helpers
-only when missing, merges aliases without `baseUrl`, and structurally verifies
-the root provider/theme/safe-area contract. It preserves custom navigation,
-existing helper bytes, `offlineProfile`, provider props, and the template's
-`@ts-ignore` generation boundaries.
+only when missing, verifies that TypeScript inherits the host configuration,
+and structurally verifies the root provider/theme/safe-area contract. It
+preserves custom navigation, existing helper bytes, `offlineProfile`, provider
+props, and the template's `@ts-ignore` generation boundaries.
 
 **Generated ownership boundary:** Step 5 must not create, reset, delete, or
 write anything under `src/generated/`. Only Power Apps schema/data-source
@@ -1003,14 +1003,15 @@ Key points:
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
 - `defaultTheme` flips between light/dark via `useColorScheme()`. `/design-system --add-dark-mode` later wires per-token dark variants.
 
-**Fix 4 — Path aliases in `tsconfig.json` (idempotent JSON merge)**
+**Fix 4 — Shared TypeScript configuration**
 
-The upstream template's `tsconfig.json` includes runtime polyfill paths but may
-not include the six shared-code aliases. The preparation script merges
+The current template extends
+`@microsoft/power-apps-native-host/config/tsconfig`. That host configuration
+owns the runtime package paths and the six shared-code aliases:
 `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, and
-`@/native`, preserves unrelated aliases, and deletes deprecated `baseUrl`.
-Modern TypeScript bundler resolution supports these `paths` entries directly,
-so no Babel alias plug-in is required.
+`@/native`. The preparation script verifies this inheritance and does not
+create a second template-local alias map. Expo Metro consumes the resulting
+effective TypeScript paths, so no Babel alias plug-in is required.
 
 `<Gradient>` (used by `components/index.tsx`) requires `expo-linear-gradient`. **Assume the upstream template ships it** — do NOT edit `package.json` to add it. If `npm install` (Step 6.5) later reveals the dep is missing, STOP and ask the user to wait for the next template release; do not work around by adding the dep here (same lockdown rule as `/add-native`).
 
@@ -1520,110 +1521,82 @@ Gate 4b approval is consent for exactly the packages and versions in the table. 
 
 ### Step 9b — Apply design system
 
-`/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
+`/design-system` owns user-facing brand/design choices. The native-host
+`createPowerAppsTamaguiConfig` factory owns the baseline semantic aliases,
+contrast handling, animations, and font fallback. This step applies generated
+brand tokens without copying that host logic into the app.
 
 Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/design-planning.md):
 
 | Condition | Action |
 |---|---|
-| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, then wire brand `ThemeTokens` into `app/_layout.tsx` (see below). |
+| `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, export the resolved app light/dark themes, then wire matching `ThemeTokens` into `app/_layout.tsx`. |
 | `## Design` says `required` | Apply the same reference using the approved `## Design` section. Builds custom token system + aliases. |
-| `## Design` says `add-aliases` | Apply the same reference in alias-only mode. Adds semantic surface/accent aliases over `defaultConfig`. |
-| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx` + `add-aliases` mode. |
+| `## Design` says `add-aliases` | Verify `tamagui.config.ts` uses `createPowerAppsTamaguiConfig`; the host already provides the semantic aliases. |
+| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
 
-**No skip path.** Screen-builders require `$surface0`–`$surface3` and `$accent*` aliases. Minimum action is always `add-aliases`. Pass the complete `## Design` section verbatim — not a summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+**No unchecked path.** Screen-builders require `$surface0`–`$surface3` and
+`$accent*` aliases. On the default path, verify the host factory rather than
+rewriting the config. Pass the complete `## Design` section verbatim — not a
+summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
 
-**Brand-token wiring** — when `brand/tokens.ts` exists, update `app/_layout.tsx` to spread brand values over the built-in `lightTheme`/`darkTheme` with nullish fallback:
+**Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
+exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
+into the host themes so `useTheme()` and `useThemeTokens()` cannot drift:
 
 ```tsx
-import { tokens as brandTokens } from '../brand/tokens';
-import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
+import {
+  PowerAppsProvider,
+  lightTheme as hostLightTheme,
+  darkTheme as hostDarkTheme,
+} from '@microsoft/power-apps-native-host';
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
+import tamaguiConfig, {
+  appDarkTheme,
+  appLightTheme,
+} from '../tamagui.config';
 
-function parseColorChannels(color: string) {
-  const hexMatch = color.match(/^#([\da-f]{3}|[\da-f]{6})$/i);
-  if (hexMatch) {
-    const hex = hexMatch[1].length === 3
-      ? [...hexMatch[1]].map((value) => `${value}${value}`).join('')
-      : hexMatch[1];
-    return [0, 2, 4].map((offset) => (
-      Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
-    ));
-  }
-
-  const rgbMatch = color.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
-  if (rgbMatch) {
-    const values = rgbMatch.slice(1, 4).map(Number);
-    if (values.some((value) => value < 0 || value > 255)) return null;
-    if (rgbMatch[4] !== undefined && Number(rgbMatch[4]) !== 1) return null;
-    return values.map((value) => value / 255);
-  }
-
-  const hslMatch = color.match(/^hsla?\(\s*([-\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%(?:\s*,\s*([\d.]+))?\s*\)$/i);
-  if (!hslMatch) return null;
-  if (hslMatch[4] !== undefined && Number(hslMatch[4]) !== 1) return null;
-  const hue = ((Number(hslMatch[1]) % 360) + 360) % 360;
-  const saturation = Number(hslMatch[2]) / 100;
-  const lightness = Number(hslMatch[3]) / 100;
-  if (saturation < 0 || saturation > 1 || lightness < 0 || lightness > 1) return null;
-  const chroma = (1 - Math.abs((2 * lightness) - 1)) * saturation;
-  const intermediate = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
-  const offset = lightness - (chroma / 2);
-  const segment = Math.floor(hue / 60);
-  const rgb = [
-    [chroma, intermediate, 0],
-    [intermediate, chroma, 0],
-    [0, chroma, intermediate],
-    [0, intermediate, chroma],
-    [intermediate, 0, chroma],
-    [chroma, 0, intermediate],
-  ][segment];
-  return rgb.map((value) => value + offset);
-}
-
-function readableForeground(background: string) {
-  const channels = parseColorChannels(background);
-  if (!channels) {
-    throw new Error(`Brand primary must be a hex, rgb, or hsl color: ${background}`);
-  }
-  const linearChannels = channels.map((value) => {
-    return value <= 0.04045
-      ? value / 12.92
-      : ((value + 0.055) / 1.055) ** 2.4;
-  });
-  const luminance = (0.2126 * linearChannels[0])
-    + (0.7152 * linearChannels[1])
-    + (0.0722 * linearChannels[2]);
-  return luminance > 0.179 ? '#000000' : '#ffffff';
-}
-
-const brandAccentForeground = readableForeground(brandTokens.color.primary);
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
-  accentOnAccent: brandAccentForeground,
-  surface0: brandTokens.color.bg,
-  surface1: brandTokens.color.surface,
-  surface2: brandTokens.color.surface,
-  surface3: brandTokens.color.border,
-  text0: brandTokens.color.text,
-  text1: brandTokens.color.textMuted,
+  surface0: appLightTheme.surface0,
+  surface1: appLightTheme.surface1,
+  surface2: appLightTheme.surface2,
+  surface3: appLightTheme.surface3,
+  surface4: appLightTheme.color6,
+  text0: appLightTheme.text0,
+  text1: appLightTheme.text1,
+  text2: appLightTheme.text2,
+  text3: appLightTheme.text3,
+  accentDeep: appLightTheme.accentDeep,
+  accentBase: appLightTheme.accentBase,
+  accentSoft: appLightTheme.accentSoft,
+  accentOnAccent: appLightTheme.accentOnAccent,
 };
 const brandedDarkTheme: ThemeTokens = {
   ...hostDarkTheme,
-  accentDeep: brandTokens.color.primary,
-  accentBase: brandTokens.color.primary,
-  accentSoft: brandTokens.color.accent,
-  accentOnAccent: brandAccentForeground,
+  surface0: appDarkTheme.surface0,
+  surface1: appDarkTheme.surface1,
+  surface2: appDarkTheme.surface2,
+  surface3: appDarkTheme.surface3,
+  surface4: appDarkTheme.color6,
+  text0: appDarkTheme.text0,
+  text1: appDarkTheme.text1,
+  text2: appDarkTheme.text2,
+  text3: appDarkTheme.text3,
+  accentDeep: appDarkTheme.accentDeep,
+  accentBase: appDarkTheme.accentBase,
+  accentSoft: appDarkTheme.accentSoft,
+  accentOnAccent: appDarkTheme.accentOnAccent,
 };
 
 // In RootLayout:
 <PowerAppsProvider ... theme={brandedLightTheme} darkTheme={brandedDarkTheme}>
 ```
 
-The generated schema has one brand palette, so dark surfaces and text retain the host defaults while brand accents carry across modes. For runtime theme switching (in-app theme pickers, per-tenant branding), use `useThemeControl()` from `@microsoft/power-apps-native-host`: `setTheme({ ...hostLightTheme, accentBase: color })` / `resetTheme()`.
+The generated schema has one brand palette, so the exported dark app theme
+retains Config v5 dark surfaces and text while carrying brand accents and
+statuses. For runtime theme switching, use `useThemeControl()` from
+`@microsoft/power-apps-native-host`.
 
 ### Step 10 — Add connectors
 

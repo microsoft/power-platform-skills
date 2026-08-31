@@ -40,8 +40,8 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 | `package.json`: `name` | Replace `'powerapps-dev-app'` with the app slug |
 | Delete `power.config.json` | `npx power-apps init` regenerates for the user's environment |
 | Reset `src/generated/` + `src/hooks/` | Remove any example stubs — `npx power-apps add-data-source` repopulates |
-| `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` props | Screens render under brand tokens, not upstream defaults |
-| `tsconfig.json`: merge `@/` path aliases | `@/components`, `@/hooks`, `@/utils`, `@/tokens`, `@/generated`, `@/native` resolve |
+| `app/_layout.tsx`: add `tamaguiConfig` + theme props | Tamagui and host theme consumers share generated brand values |
+| `tsconfig.json`: verify the host base | Package shims and `@/` aliases remain centralized in the native host |
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 

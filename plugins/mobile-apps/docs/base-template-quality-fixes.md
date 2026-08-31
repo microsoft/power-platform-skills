@@ -7,9 +7,9 @@ production-ready baseline. These rules apply to the bundled template and to
 
 ## Visual and Runtime Baseline
 
-- The Tamagui configuration always exposes semantic surfaces, media, accents,
-  text hierarchy, status foreground/background pairs, and a `fonts.mono` role
-  in both light and dark themes.
+- The native-host Tamagui factory always exposes semantic surfaces, media,
+  accents, text hierarchy, status foreground/background pairs, and a
+  `fonts.mono` role in both light and dark themes.
 - Shared components use literal-safe semantic tokens, minimum touch targets,
   accessible roles and labels, selected-state semantics, and readable
   on-accent foregrounds.
@@ -32,8 +32,8 @@ production-ready baseline. These rules apply to the bundled template and to
    client.
 4. Creates shared source directories and copies approved helpers only when a
    destination is missing.
-5. Merges the six shared-code aliases and their subpath mappings, makes every
-   path target explicitly relative, and removes deprecated `baseUrl`.
+5. Verifies that `tsconfig.json` inherits package shims and shared-code aliases
+   from `@microsoft/power-apps-native-host/config/tsconfig`.
 6. Structurally adds missing root provider, theme, Tamagui, and safe-area
    wiring without replacing custom navigation or unrelated providers.
 7. Verifies postconditions and fails for unsupported layouts or dangling
