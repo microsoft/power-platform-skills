@@ -21,9 +21,9 @@ This skill runs the native AppGen integration from the current branch of `power-
 
 ## Phase 2: Run the packaged function
 
-Execute this command with Bash in PowerShell:
+Execute this command with Bash:
 
-```powershell
+```bash
 pwsh -NoProfile -ExecutionPolicy Bypass -File "${PLUGIN_ROOT}/skills/run-functional-eval/run-functional-eval.ps1" \
   -PpevalRepoPath "<resolved repo path>" \
   -AppUrl "<published app URL>" \
