@@ -107,6 +107,23 @@ test('preparation is idempotent and preserves generated and existing helper file
   assertSnapshotsEqual(beforeSecondRun, afterSecondRun);
 });
 
+test('preparation round-trips JavaScript line terminators in app display names', () => {
+  const projectRoot = copyTemplate();
+  const displayName = "Line 1\nLine 2\rLine 3\u2028Line 4\u2029Inspector's App";
+  prepareMobileTemplate({
+    workingDir: projectRoot,
+    displayName,
+    slug: 'line-safe-app',
+  });
+
+  const configPath = path.join(projectRoot, 'app.config.js');
+  const source = fs.readFileSync(configPath, 'utf8');
+  assert.match(source, /Line 1\\nLine 2\\rLine 3\\u2028Line 4\\u2029Inspector\\'s App/);
+  delete require.cache[require.resolve(configPath)];
+  const createConfig = require(configPath);
+  assert.strictEqual(createConfig({ config: {} }).name, displayName);
+});
+
 test('fresh-template validation allows the approved plan but blocks created-app markers', () => {
   const projectRoot = copyTemplate();
   fs.writeFileSync(path.join(projectRoot, 'native-app-plan.md'), '# Approved plan\n');
@@ -233,6 +250,35 @@ export default function RootLayout() {
   prepareRootLayout(projectRoot);
   const result = fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8');
   assert.ok(result.includes(multilineValue));
+});
+
+test('provider preparation preserves JSX and callback prop values byte-for-byte', () => {
+  const jsxValue = 'customHeader={<Header title="A > B" tamaguiConfig={nestedConfig} theme={nestedLight} darkTheme={nestedDark} />}';
+  const callbackValue = 'renderHeader={() => <Header compact />}';
+  const projectRoot = writeLayoutFixture(`${fixtureImports}
+export default function RootLayout() {
+  return (
+    <PowerAppsProvider
+      ${jsxValue}
+      ${callbackValue}
+    >
+      <Slot />
+    </PowerAppsProvider>
+  );
+}
+`);
+  prepareRootLayout(projectRoot);
+  const first = fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8');
+  assert.ok(first.includes(jsxValue));
+  assert.ok(first.includes(callbackValue));
+  assert.match(first, /\n\s+tamaguiConfig=\{tamaguiConfig\}\n/);
+  assert.match(first, /\n\s+theme=\{lightTheme\}\n/);
+  assert.match(first, /\n\s+darkTheme=\{darkTheme\}\n/);
+  prepareRootLayout(projectRoot);
+  assert.strictEqual(
+    fs.readFileSync(path.join(projectRoot, 'app', '_layout.tsx'), 'utf8'),
+    first,
+  );
 });
 
 test('root preparation rejects a root-owned SafeAreaView around Slot', () => {

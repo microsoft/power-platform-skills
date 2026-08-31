@@ -55,7 +55,13 @@ function escapeRegExp(value) {
 }
 
 function singleQuoted(value) {
-  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  return `'${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
+    .replace(/'/g, "\\'")}'`;
 }
 
 function readJson(filePath) {
@@ -239,12 +245,124 @@ function ensureColorSchemeHook(source) {
   return source.replace(rootPattern, '$1\n  const colorScheme = useColorScheme();');
 }
 
+function findJsxOpeningTagEnd(source, startIndex) {
+  let braceDepth = 0;
+  let quote = null;
+
+  for (let index = startIndex; index < source.length; index += 1) {
+    const character = source[index];
+
+    if (quote) {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+        slashCount += 1;
+      }
+      if (character === quote && slashCount % 2 === 0) quote = null;
+      continue;
+    }
+    if (character === '\'' || character === '"' || character === '`') {
+      quote = character;
+      continue;
+    }
+    if (character === '{') {
+      braceDepth += 1;
+      continue;
+    }
+    if (character === '}') {
+      braceDepth -= 1;
+      if (braceDepth < 0) {
+        throw new Error('PowerAppsProvider opening tag contains an unmatched closing brace');
+      }
+      continue;
+    }
+    if (character === '>' && braceDepth === 0) return index;
+  }
+
+  throw new Error('PowerAppsProvider opening tag is not terminated');
+}
+
+function readJsxAttributeValue(source, startIndex) {
+  const opening = source[startIndex];
+  if (opening === '\'' || opening === '"') {
+    for (let index = startIndex + 1; index < source.length; index += 1) {
+      let slashCount = 0;
+      for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+        slashCount += 1;
+      }
+      if (source[index] === opening && slashCount % 2 === 0) return index + 1;
+    }
+    throw new Error('PowerAppsProvider opening tag contains an unterminated quoted prop');
+  }
+  if (opening === '{') {
+    let depth = 0;
+    let quote = null;
+    for (let index = startIndex; index < source.length; index += 1) {
+      const character = source[index];
+      if (quote) {
+        let slashCount = 0;
+        for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+          slashCount += 1;
+        }
+        if (character === quote && slashCount % 2 === 0) quote = null;
+        continue;
+      }
+      if (character === '\'' || character === '"' || character === '`') {
+        quote = character;
+      } else if (character === '{') {
+        depth += 1;
+      } else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) return index + 1;
+      }
+    }
+    throw new Error('PowerAppsProvider opening tag contains an unterminated expression prop');
+  }
+  let index = startIndex;
+  while (index < source.length && !/\s/.test(source[index])) index += 1;
+  return index;
+}
+
+function getTopLevelJsxAttributes(providerProps) {
+  const attributes = new Map();
+  let index = 0;
+  while (index < providerProps.length) {
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    if (index >= providerProps.length || providerProps[index] === '/') break;
+    if (providerProps[index] === '{') {
+      index = readJsxAttributeValue(providerProps, index);
+      continue;
+    }
+
+    const nameMatch = providerProps.slice(index).match(/^([A-Za-z_$][\w$:.-]*)/);
+    if (!nameMatch) {
+      index += 1;
+      continue;
+    }
+    const name = nameMatch[1];
+    index += name.length;
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    if (providerProps[index] !== '=') {
+      attributes.set(name, true);
+      continue;
+    }
+    index += 1;
+    while (index < providerProps.length && /\s/.test(providerProps[index])) index += 1;
+    const valueStart = index;
+    index = readJsxAttributeValue(providerProps, valueStart);
+    attributes.set(name, providerProps.slice(valueStart, index));
+  }
+  return attributes;
+}
+
 function ensureProviderProps(source) {
-  const providerPattern = /<PowerAppsProvider\b([\s\S]*?)>/;
-  const match = source.match(providerPattern);
+  const match = /<PowerAppsProvider\b/.exec(source);
   if (!match) {
     throw new Error('app/_layout.tsx does not contain a PowerAppsProvider opening tag');
   }
+  const tagNameEnd = match.index + match[0].length;
+  const tagEnd = findJsxOpeningTagEnd(source, tagNameEnd);
+  const providerProps = source.slice(tagNameEnd, tagEnd);
+  const providerAttributes = getTopLevelJsxAttributes(providerProps);
 
   const requiredProps = [
     ['tamaguiConfig', 'tamaguiConfig={tamaguiConfig}'],
@@ -253,17 +371,17 @@ function ensureProviderProps(source) {
     ['darkTheme', 'darkTheme={darkTheme}'],
   ];
   const additions = requiredProps
-    .filter(([name]) => !new RegExp(`\\b${name}\\s*=`).test(match[1]))
+    .filter(([name]) => !providerAttributes.has(name))
     .map(([, text]) => text);
   if (additions.length === 0) return source;
 
   const indentMatch = source.slice(0, match.index).match(/(^|\n)([ \t]*)[^\n]*$/);
   const propIndent = `${indentMatch ? indentMatch[2] : ''}  `;
-  const existingProps = match[1].trimEnd();
+  const existingProps = providerProps.trimEnd();
   const replacement = `<PowerAppsProvider${existingProps}${existingProps ? '\n' : ' '}${additions
     .map((prop) => `${propIndent}${prop}`)
     .join('\n')}\n${indentMatch ? indentMatch[2] : ''}>`;
-  return source.replace(providerPattern, replacement);
+  return `${source.slice(0, match.index)}${replacement}${source.slice(tagEnd + 1)}`;
 }
 
 function isWrappedBySafeAreaProvider(source, powerOpenIndex, powerCloseEnd) {
@@ -305,15 +423,26 @@ function verifyRootLayout(source) {
     ['host light theme', /import\s*\{[^}]*\blightTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['host dark theme', /import\s*\{[^}]*\bdarkTheme\b[^}]*\}\s*from\s*['"]@microsoft\/power-apps-native-host['"]/],
     ['Tamagui config import', /tamaguiConfig\s+from\s*['"]\.\.\/tamagui\.config['"]/],
-    ['Tamagui config provider prop', /\btamaguiConfig\s*=\s*\{tamaguiConfig\}/],
-    ['default theme provider prop', /\bdefaultTheme\s*=/],
-    ['light theme provider prop', /\btheme\s*=\s*\{lightTheme\}/],
-    ['dark theme provider prop', /\bdarkTheme\s*=\s*\{darkTheme\}/],
   ];
 
   const missing = requiredChecks
     .filter(([, pattern]) => !pattern.test(source))
     .map(([label]) => label);
+  const providerMatch = /<PowerAppsProvider\b/.exec(source);
+  if (!providerMatch) {
+    missing.push('PowerAppsProvider opening tag');
+  } else {
+    const tagNameEnd = providerMatch.index + providerMatch[0].length;
+    const tagEnd = findJsxOpeningTagEnd(source, tagNameEnd);
+    const attributes = getTopLevelJsxAttributes(source.slice(tagNameEnd, tagEnd));
+    const providerChecks = [
+      ['Tamagui config provider prop', attributes.get('tamaguiConfig') === '{tamaguiConfig}'],
+      ['default theme provider prop', attributes.has('defaultTheme')],
+      ['light theme provider prop', attributes.get('theme') === '{lightTheme}'],
+      ['dark theme provider prop', attributes.get('darkTheme') === '{darkTheme}'],
+    ];
+    missing.push(...providerChecks.filter(([, valid]) => !valid).map(([label]) => label));
+  }
   if (missing.length > 0) {
     throw new Error(`Root layout preparation failed postconditions: ${missing.join(', ')}`);
   }

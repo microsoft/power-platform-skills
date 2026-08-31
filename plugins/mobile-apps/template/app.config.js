@@ -36,6 +36,7 @@ module.exports = ({ config }) => customizeExpoConfig({
   slug: APP_SLUG,
   version: APP_VERSION,
   scheme: APP_SCHEME,
+  userInterfaceStyle: 'automatic',
   // Icon — only set when APP_ICON_PATH is provided (production builds via wrap.js).
   // Expo generates all required sizes from this single 1024×1024 PNG.
   ...(APP_ICON_PATH ? { icon: APP_ICON_PATH } : {}),

@@ -1540,11 +1540,70 @@ import { tokens as brandTokens } from '../brand/tokens';
 import { PowerAppsProvider, lightTheme as hostLightTheme, darkTheme as hostDarkTheme } from '@microsoft/power-apps-native-host';
 import type { ThemeTokens } from '@microsoft/power-apps-native-host';
 
+function parseColorChannels(color: string) {
+  const hexMatch = color.match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+  if (hexMatch) {
+    const hex = hexMatch[1].length === 3
+      ? [...hexMatch[1]].map((value) => `${value}${value}`).join('')
+      : hexMatch[1];
+    return [0, 2, 4].map((offset) => (
+      Number.parseInt(hex.slice(offset, offset + 2), 16) / 255
+    ));
+  }
+
+  const rgbMatch = color.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
+  if (rgbMatch) {
+    const values = rgbMatch.slice(1, 4).map(Number);
+    if (values.some((value) => value < 0 || value > 255)) return null;
+    if (rgbMatch[4] !== undefined && Number(rgbMatch[4]) !== 1) return null;
+    return values.map((value) => value / 255);
+  }
+
+  const hslMatch = color.match(/^hsla?\(\s*([-\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%(?:\s*,\s*([\d.]+))?\s*\)$/i);
+  if (!hslMatch) return null;
+  if (hslMatch[4] !== undefined && Number(hslMatch[4]) !== 1) return null;
+  const hue = ((Number(hslMatch[1]) % 360) + 360) % 360;
+  const saturation = Number(hslMatch[2]) / 100;
+  const lightness = Number(hslMatch[3]) / 100;
+  if (saturation < 0 || saturation > 1 || lightness < 0 || lightness > 1) return null;
+  const chroma = (1 - Math.abs((2 * lightness) - 1)) * saturation;
+  const intermediate = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const offset = lightness - (chroma / 2);
+  const segment = Math.floor(hue / 60);
+  const rgb = [
+    [chroma, intermediate, 0],
+    [intermediate, chroma, 0],
+    [0, chroma, intermediate],
+    [0, intermediate, chroma],
+    [intermediate, 0, chroma],
+    [chroma, 0, intermediate],
+  ][segment];
+  return rgb.map((value) => value + offset);
+}
+
+function readableForeground(background: string) {
+  const channels = parseColorChannels(background);
+  if (!channels) {
+    throw new Error(`Brand primary must be a hex, rgb, or hsl color: ${background}`);
+  }
+  const linearChannels = channels.map((value) => {
+    return value <= 0.04045
+      ? value / 12.92
+      : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = (0.2126 * linearChannels[0])
+    + (0.7152 * linearChannels[1])
+    + (0.0722 * linearChannels[2]);
+  return luminance > 0.179 ? '#000000' : '#ffffff';
+}
+
+const brandAccentForeground = readableForeground(brandTokens.color.primary);
 const brandedLightTheme: ThemeTokens = {
   ...hostLightTheme,
   accentDeep: brandTokens.color.primary,
   accentBase: brandTokens.color.primary,
   accentSoft: brandTokens.color.accent,
+  accentOnAccent: brandAccentForeground,
   surface0: brandTokens.color.bg,
   surface1: brandTokens.color.surface,
   surface2: brandTokens.color.surface,
@@ -1557,6 +1616,7 @@ const brandedDarkTheme: ThemeTokens = {
   accentDeep: brandTokens.color.primary,
   accentBase: brandTokens.color.primary,
   accentSoft: brandTokens.color.accent,
+  accentOnAccent: brandAccentForeground,
 };
 
 // In RootLayout:
