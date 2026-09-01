@@ -368,10 +368,12 @@ function planFor(spec, opts) {
   if (has('pages') && (spec.pages || []).length && appHasPageSubareas(spec)) items.push({ phase: 'pages', label: 'finalize sitemap (genpage subareas)' });
   if (has('ai-features') && spec.ai !== undefined && spec.ai !== null) {
     items.push({ phase: 'ai-features', label: 'enable app AI features' });
-    if (!(spec.ai.summaries && spec.ai.summaries.default === 'off')) {
-      for (const logical of selectSummaryTables(spec)) {
-        items.push({ phase: 'ai-features', label: `row summary for ${logical}` });
-      }
+    // Do NOT short-circuit on `summaries.default === 'off'`. `selectSummaryTables` already implements
+    // the documented semantics — `default` is the app-level DEFAULT and `tables[x].enabled: true` is
+    // a per-table OVERRIDE that wins over it — and bailing here made that opt-in branch unreachable,
+    // silently dropping a summary the author explicitly asked for.
+    for (const logical of selectSummaryTables(spec)) {
+      items.push({ phase: 'ai-features', label: `row summary for ${logical}` });
     }
   }
   if (has('security')) for (const p of spec.personas || []) {
@@ -814,6 +816,16 @@ function appDef(spec, result, opts = {}) {
     if (s.url) return { ...withVector, type: 'URL', url: s.url };
     return { ...withVector, type: 'Entity', entity: s.entity && s.entity.toLowerCase() };
   };
+  // `appShell` is OPTIONAL to validation (the deploy profile deliberately accepts a spec without
+  // one — download and many callers rely on that), but it is NOT optional here: without it there is
+  // no sitemap to build. Dereferencing it unguarded produced a bare
+  // `Cannot read properties of undefined (reading 'areas')` at this phase, AFTER the solution,
+  // tables, columns, views and the generated app icon were already created — a half-built app plus
+  // an error naming nothing the author could act on. Fail with the same actionable shape the
+  // subarea errors above use.
+  if (!spec.appShell || !Array.isArray(spec.appShell.areas)) {
+    throw new Error("the spec has no appShell.areas, so the app has no navigation to build — add appShell: { areas: [ { label, groups: [ { label, subAreas: [ { entity: '<table>', title: '<label>' } ] } ] } ] }");
+  }
   const areas = (spec.appShell.areas || []).map((a, ai) => ({ id: `area_${ai}`, title: a.label,
     // Same rule as subAreaJson: preserve a platform icon path VERBATIM (case-sensitive OOB/WebResources
     // path); lower-case only a bare local web-resource NAME. Leaving the area icon unconditionally
@@ -1054,7 +1066,7 @@ async function runSdkBuild(spec, opts = {}) {
     return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
   }
 
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, app: null }, skipped: { businessRules: [], aiSummaries: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -2475,7 +2487,72 @@ async function runSdkBuild(spec, opts = {}) {
       if (pendingAiReconfirm.length) parts.push(`retrying after publish: ${pendingAiReconfirm.map((p) => p.feature).join(', ')}`);
       return parts.length ? parts.join('; ') : '(none \u2014 admin gate off)';
     });
-    const tables = (spec.ai.summaries && spec.ai.summaries.default === 'off') ? [] : selectSummaryTables(spec);
+    // Same rule as the plan: `selectSummaryTables` owns the default-vs-override decision, so calling
+    // it unconditionally is what lets `default: 'off'` + `tables[x].enabled: true` opt a single table
+    // back in. Short-circuiting here made the plan and the execution agree only by both being wrong.
+    const tables = selectSummaryTables(spec);
+    // Row summaries are an AI Builder / Copilot-LICENSED capability, gated per environment
+    // INDEPENDENTLY of the `EnableFormInsights` org setting: an environment can report the feature
+    // "on" and still refuse the publish. Live-observed on an environment whose gate reads on:
+    //   HTTP 403 from .../api/data/v9.0/AIModelPublish
+    //   {"operationStatus":"Error","error":{"type":"Error","code":"ModelNotSupported",
+    //     "message":"This scenario is not supported in this environment.",
+    //     "properties":{"exceptionStackTrace":"   at Microsoft.PowerAI...LicenseChecker..."}}}
+    // — i.e. a licence check, reported as a 6 KB .NET stack trace the operator can do nothing with.
+    //
+    // Halting there abandons a build that already created the solution, tables, columns, views, the
+    // app and its AI feature settings, for a reason no change to the spec can fix. So degrade the way
+    // business rules and `app.newLook` already do: skip the artifact, say so specifically, and let the
+    // rest of the build finish. Nothing wrong is written — the summary simply does not exist, and the
+    // skip is recorded on the result so the run summary reports it instead of implying it was created.
+    let aiSummaryGateWarned = false;
+    // Tables whose skipped publish may have left a committed `msdyn_aimodel` row behind.
+    const pendingAiSummarySweeps = [];
+    const aiSummaryUnsupported = (err) => {
+      const detail = `${(err && err.message) || ''} ${JSON.stringify((err && err.cause) || '')}`;
+      // Match the platform's own error CODE, not the prose: the message is localized and the status
+      // alone (403/400) is also what a plain privilege or validation failure returns, which must
+      // still halt.
+      //
+      // `DuplicateRecordKey` is in this set for a specific, measured reason. `configureRowSummary`
+      // CREATES the `msdyn_aimodel` row and THEN publishes it, so on a gated environment the licence
+      // check fails at publish with the row already committed:
+      //   HTTP 400 ... "code":"DuplicateRecordKey" ... Cannot insert duplicate key row in object
+      //   'dbo.msdyn_AIModelBase' with unique index 'ndx_Uniquename'. The duplicate key value is
+      //   (zza_ticket row summary, ...)
+      // on the NEXT build. Without this, skipping the licence gate would make the first build pass
+      // and every rebuild fail — strictly worse than failing consistently. The orphan is also swept
+      // below so the row does not accumulate.
+      return /ModelNotSupported|not supported in this environment|DuplicateRecordKey/i.test(detail)
+        ? 'unsupported in this environment'
+        : false;
+    };
+    // Best-effort sweep of the row the failed publish left behind. The SDK names the model
+    // "<entity> row summary" — which is also the value the platform quotes back in the duplicate-key
+    // error above ("The duplicate key value is (zza_ticket row summary, ...)"), so this matches the
+    // real stored name rather than a guess.
+    //
+    // FILTERED SERVER-SIDE, not fetched-and-scanned. `msdyn_aimodel` is a shared system table written
+    // by AI Builder, Copilot Studio and other features, so a real org can hold far more rows than any
+    // safety cap — an unfiltered page would silently fail to contain the orphan, leaving it forever
+    // and making every rebuild fail on the duplicate key. That is the exact failure this sweep exists
+    // to prevent, so the query must not depend on the orphan happening to land in the first page.
+    //
+    // Failure here is never fatal: the build already decided to skip, and a leftover row degrades the
+    // next run at worst — it must not turn a warn-and-continue back into a halt.
+    const sweepOrphanSummaryModel = async (logical) => {
+      const modelName = `${String(logical).toLowerCase()} row summary`;
+      try {
+        const rows = await provision.queryRecords('msdyn_aimodel', {
+          select: ['msdyn_aimodelid'],
+          filter: `msdyn_name eq '${odataLit(modelName)}'`,
+          top: 5,
+        });
+        for (const row of rows || []) {
+          try { await provision.deleteRecord('msdyn_aimodel', row.msdyn_aimodelid); } catch { /* leave it; the next run reports it again */ }
+        }
+      } catch { /* no read access to msdyn_aimodel is not a build failure */ }
+    };
     for (const logical of tables) {
       const ent = (spec.entities || []).find((e) => String(e.schemaName).toLowerCase() === String(logical).toLowerCase());
       if (!ent) continue;
@@ -2485,8 +2562,24 @@ async function runSdkBuild(spec, opts = {}) {
         const res = await provision.configureRowSummary(promptSpec, { solutionUniqueName });
         result.created.ai.summaries[logical] = res;
         return res.modelId;
+      }, {
+        skipIf: (err) => {
+          const reason = aiSummaryUnsupported(err);
+          if (!reason) return false;
+          result.skipped.aiSummaries.push(logical);
+          pendingAiSummarySweeps.push(logical);
+          // Warn ONCE per build: on a gated environment every table skips for the same reason, and
+          // N copies of the same paragraph buries the rest of the output.
+          if (!aiSummaryGateWarned && typeof opts.warn === 'function') {
+            aiSummaryGateWarned = true;
+            opts.warn(`AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
+          }
+          return reason;
+        },
       });
     }
+    // Sweep AFTER the loop: `skipIf` is synchronous, so the cleanup cannot be awaited inside it.
+    for (const logical of pendingAiSummarySweeps) await sweepOrphanSummaryModel(logical);
   }
 
   // 7c. Security (persona roles). Author ONE security role per persona (role name = persona), sized to

@@ -63,6 +63,15 @@ an environment that supports them**.
   `HTTP 500 — Error generating UiData` failures is gone with the compiler. ([#481])
 - **The async-surface guard is AST-based** — a regex could not decide the remaining cases. ([#475])
 - **A malformed `businessRules` is a validation error**, not a raw `TypeError`.
+- **`ai.summaries.default: "off"` no longer discards a per-table `enabled: true`.** `default` is the
+  app-level default; a `tables[]` entry overrides it. The build short-circuited before the helper
+  that already implemented this, so an explicitly requested summary was silently never created.
+- **A row summary an environment cannot license is skipped, not fatal.** The publish is refused even
+  where the org's `EnableFormInsights` reads on, and it fails *after* the AI model row is committed —
+  so the orphan is swept too, otherwise the first build passed and every rebuild failed on a
+  duplicate key. Unrelated failures (e.g. missing privileges) still stop the build.
+- **A spec with no `appShell` reports what to add** instead of dying with
+  `Cannot read properties of undefined (reading 'areas')` after the app was already half-created.
 - **Duplicate-cleanup warnings report the real failure** instead of asserting a wedged platform row.
 - **Column visualizations are cleared on teardown for a table the spec keeps** (`existing: true`).
 

@@ -2389,6 +2389,120 @@ test('ai-features phase: summaries.default=off skips all row-summary calls', asy
   assert.strictEqual(find(calls, 'configureRowSummary').length, 0, 'no row summaries when default is off');
 });
 
+// `default` is the app-level DEFAULT; `tables[x]` is a per-table OVERRIDE that beats it. The build
+// used to short-circuit on `default === 'off'` BEFORE calling `selectSummaryTables`, which made that
+// helper's own `override.enabled === true` branch unreachable and silently dropped a summary the
+// author had explicitly asked for. Live-found: a build reported success with `summaries: {}`.
+test('ai-features phase: summaries.default=off still honours an explicit per-table opt-in', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true, instruction: 'Summarise the ticket.' } } } } });
+  const { sdk, calls } = mockSdk();
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'] });
+  const summaryCalls = find(calls, 'configureRowSummary');
+  assert.strictEqual(summaryCalls.length, 1, 'exactly the opted-in table gets a summary');
+  assert.strictEqual(summaryCalls[0].args[0].entityLogicalName, 'new_ticket', 'and it is the right table');
+  assert.ok(result.created.ai.summaries.new_ticket, 'the opted-in summary is reported on the result');
+});
+
+// Row summaries are AI-Builder LICENSED, gated independently of the `EnableFormInsights` org setting:
+// an environment can report the feature on and still answer the publish with
+//   HTTP 403 ... {"error":{"code":"ModelNotSupported","message":"This scenario is not supported in this environment."}}
+// Halting there abandons a build that already created everything else, for a reason no spec change
+// can fix — so it degrades like business rules and `app.newLook` do. Live-observed; without this the
+// opt-in fix above would turn a previously-succeeding build into a failing one on unlicensed orgs.
+const modelNotSupported = () => {
+  const err = new Error('HTTP 403 from https://example.crm.dynamics.com/api/data/v9.0/AIModelPublish: {"operationStatus":"Error","error":{"type":"Error","code":"ModelNotSupported","message":"This scenario is not supported in this environment."}}');
+  err.statusCode = 403;
+  return err;
+};
+
+test('ai-features phase: an unlicensed row-summary environment SKIPS the summary and keeps building', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => { throw modelNotSupported(); };
+  const warnings = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (m) => warnings.push(m) });
+  assert.ok(result.ok, 'the build must not fail for an environment gate');
+  assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket'], 'the skip is recorded, not silent');
+  assert.ok(!result.created.ai.summaries.new_ticket, 'nothing is reported as created');
+  assert.ok(warnings.some((w) => /row summaries were NOT created/i.test(w)), `expected a specific warning; got ${JSON.stringify(warnings)}`);
+});
+
+test('ai-features phase: the unlicensed warning is emitted ONCE even for several tables', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true }, new_customer: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => { throw modelNotSupported(); };
+  const warnings = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.skipped.aiSummaries.length, 2, 'both tables recorded as skipped');
+  assert.strictEqual(warnings.filter((w) => /row summaries were NOT created/i.test(w)).length, 1, 'but only one warning');
+});
+
+test('ai-features phase: an UNRELATED row-summary failure still halts — the skip is narrow', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  // A plain privilege failure is also a 403; it must NOT be swallowed as an environment gate.
+  sdk.configureRowSummary = async () => { const e = new Error('HTTP 403 from .../AIModelPublish: principal does not have Create privilege'); e.statusCode = 403; throw e; };
+  await assert.rejects(
+    () => runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} }),
+    /privilege/i,
+    'a non-gate failure must still surface',
+  );
+});
+
+// `configureRowSummary` CREATES the msdyn_aimodel row and THEN publishes it, so a licence rejection
+// at publish leaves the row committed. Skipping without sweeping made the FIRST build pass and every
+// rebuild fail with DuplicateRecordKey — strictly worse than failing consistently. Live-observed.
+test('ai-features phase: a skipped summary sweeps the orphan msdyn_aimodel row it left behind', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk, calls } = mockSdk();
+  sdk.configureRowSummary = async () => { throw modelNotSupported(); };
+  // The mock HONOURS `filter` and `top` on purpose. `msdyn_aimodel` is a shared system table that
+  // other features also write, so an unfiltered page-scan would miss the orphan on any real org
+  // holding more rows than the cap — and a mock that ignored query options would happily pass a
+  // fetch-and-scan implementation that is broken in production. So: many decoy rows, a cap smaller
+  // than the decoy count, and the orphan deliberately placed LAST.
+  const decoys = Array.from({ length: 60 }, (_, i) => ({ msdyn_aimodelid: `decoy-${i}`, msdyn_name: `unrelated model ${i}` }));
+  const table = [...decoys, { msdyn_aimodelid: 'orphan-1', msdyn_name: 'new_ticket row summary' }];
+  const queries = [];
+  sdk.queryRecords = async (entity, opts = {}) => {
+    if (entity !== 'msdyn_aimodel') return [];
+    queries.push(opts);
+    // Model the server: apply $filter first, then $top — the order Dataverse uses.
+    const m = /msdyn_name eq '(.*)'/.exec(opts.filter || '');
+    const rows = m ? table.filter((r) => r.msdyn_name === m[1]) : table;
+    return rows.slice(0, opts.top || rows.length);
+  };
+  sdk.deleteRecord = async (entity, id) => { calls.push({ name: 'deleteRecord', args: [entity, id] }); };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.ok(result.ok, 'still a successful build');
+  const deletes = find(calls, 'deleteRecord').filter((c) => c.args[0] === 'msdyn_aimodel');
+  assert.deepStrictEqual(deletes.map((d) => d.args[1]), ['orphan-1'], 'sweeps the orphan and only the orphan');
+  assert.ok(queries.length && queries[0].filter, 'the sweep MUST filter server-side, not page-scan');
+});
+
+test('ai-features phase: DuplicateRecordKey (the orphan from a previous gated run) also skips, not halts', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => {
+    const e = new Error('HTTP 400 from .../AIModelPublish: {"error":{"code":"DuplicateRecordKey","message":"Cannot insert duplicate key row in object \'dbo.msdyn_AIModelBase\' with unique index \'ndx_Uniquename\'."}}');
+    e.statusCode = 400;
+    throw e;
+  };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.ok(result.ok, 'a rebuild against a gated org must not fail where the first build passed');
+  assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+});
+
+test('ai-features phase: a failing orphan sweep never turns the skip back into a halt', async () => {
+  const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
+  const { sdk } = mockSdk();
+  sdk.configureRowSummary = async () => { throw modelNotSupported(); };
+  sdk.queryRecords = async () => { throw new Error('no read access to msdyn_aimodel'); };
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  assert.ok(result.ok, 'cleanup is best-effort and must stay non-fatal');
+  assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+});
+
 test('ai-features phase: spec without spec.ai is a no-op', async () => {
   const { sdk, calls } = mockSdk();
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['ai-features'] });
