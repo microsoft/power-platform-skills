@@ -27,6 +27,12 @@ const PHASE_SLICES = {
   views: (s) => s.views,
   charts: (s) => s.charts,
   forms: (s) => s.forms,
+  // business-rules / business-process-flows were MISSING here, which made a spec whose only change
+  // was a rule or a flow diff as "nothing changed" — so `--changed-only` classified a real edit as a
+  // no-op and did nothing at all. Both phases are additive discover-reconcile (see classifyAdditive),
+  // so their edits force a full build and record debt rather than a silent skip.
+  'business-rules': (s) => s.businessRules,
+  'business-process-flows': (s) => s.businessProcessFlows,
   commands: (s) => s.commands,
   dashboards: (s) => s.dashboards,
   'app-shell': (s) => ({ app: s.app, appShell: s.appShell }),

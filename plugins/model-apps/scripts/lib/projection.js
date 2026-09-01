@@ -5,7 +5,7 @@
 // `--changed-only` fast path, so a spec-side projection and a deployed-side projection can be compared
 // EXACTLY (a mis-placed field add, a stale page, or an out-of-band sitemap edit all produce a different
 // projection hash). Static classification alone is NOT trusted — these projections are the post-apply
-// EXACT verifiers (Sol design review, High #4).
+// EXACT verifiers.
 //
 // Three projections, one per convergent shape that has structure worth verifying:
 //   · formProjection  — placement-exact: tab/section/row/cell + binding + isRequired + subgrid, NO ids.

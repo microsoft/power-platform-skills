@@ -239,7 +239,7 @@ test('deploy: a rebuild re-binds ids from the live enumeration and issues only U
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-// Sol review (dup-page-name fix): validateAppSpec TOLERATES a duplicate name when both pages carry a
+// Duplicate page names: validateAppSpec TOLERATES a duplicate name when both pages carry a
 // pageId, but a pageId is only a CLAIM. A STALE snapshot (a page deleted in Maker since download) reconciles
 // its id as ABSENT, so the upload loop would CREATE it fresh and re-materialize the duplicate. The
 // post-reconcile gate must HALT before any write; a fresh download (both ids live) must still build.
@@ -264,7 +264,7 @@ function makeDupNamePageApp() {
   return { appDir, spec, GA, GB, manifest };
 }
 
-test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe (Sol review)', async () => {
+test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe', async () => {
   const { appDir, spec, GA, manifest } = makeDupNamePageApp();
   try {
     const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
