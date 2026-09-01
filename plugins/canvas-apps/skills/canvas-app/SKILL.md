@@ -1,6 +1,6 @@
 ---
 name: canvas-app
-version: 3.0.1
+version: 3.0.3
 description: Creates or edits a Power Apps Canvas App through the Canvas Authoring MCP coauthoring session. Handles new app generation, direct targeted edits, complex multi-screen changes, responsive layout, per-screen self-QA, and compile-error convergence. Trigger on requests to create, build, generate, modify, update, change, fix, or edit a Canvas App or .pa.yaml files.
 author: Microsoft Corporation
 user-invocable: true
@@ -115,11 +115,11 @@ After all builders finish:
   - `QACHK-GALLERY-ROW-FITS-CONTENT` is `N/A` despite the screen containing a Gallery;
   - `QACHK-ACTION-LABEL-FIT` is `PASS` while a multiword action directly under vertical
     AutoLayout lacks `Width: =Parent.Width`;
-  `PASS` is valid after a complete inspection finds no defect; never reject it solely
-  because the screen has many controls.
-  This costs one cheap turn. The defects these checks catch — clipped headings, invisible
-  buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
-  app ships broken while reporting clean.
+    `PASS` is valid after a complete inspection finds no defect; never reject it solely
+    because the screen has many controls.
+    This costs one cheap turn. The defects these checks catch — clipped headings, invisible
+    buttons, placeholder cards — are invisible to `compile_canvas`, so if you skip this the
+    app ships broken while reporting clean.
 - A self-QA follow-up is not a rebuild or a screen-generation re-dispatch. Tell the
   builder to inspect and repair the existing target file, then return the corrected
   `QA:` line without regenerating the screen.
