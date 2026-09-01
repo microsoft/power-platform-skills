@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
@@ -148,7 +149,7 @@ test('snapshot timings partition initial and expansion network and local stages'
     },
     rmSync: (file) => writes.delete(file),
   };
-  const file = '/virtual/timings.json';
+  const file = path.resolve('virtual', 'timings.json');
   appendSnapshotPlanningTimings(file, {
     timings: {
       inventoryRetrievalMs: 20,

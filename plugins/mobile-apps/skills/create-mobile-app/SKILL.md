@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Task, Enter
 model: opus
 ---
 
-**📋 Shared instructions: [shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
+**📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first. Covers safety guardrails, memory bank usage, preferred-environment policy, connector-first rule, Windows CLI compat, command-failure handling.
 
 # Create Power Apps Code App (Native)
 
@@ -20,9 +20,9 @@ Top-level orchestrator. Owns the user-visible flow; delegates planning to the `n
 
 ## Fresh-template working-directory mode
 
-This skill assumes the user already has a **fresh** `pa-wrap-tools/templates/expo-app-standalone` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
+This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `expo-app-standalone` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
 
 Use these markers:
 
@@ -31,7 +31,7 @@ Use these markers:
 | Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
 | Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
 | Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
-| Not template | Required template files are missing | STOP: ask user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`. |
+| Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
 
 This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
 
@@ -82,13 +82,18 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 - If `memory-bank.md` exists and the user confirms resume, resume as documented above.
 - If any already-created-app marker exists and there is no approved resume path, STOP and tell the user to materialize a fresh template into a new folder with `degit`.
-- If required template files are missing, STOP and tell the user to materialize `pa-wrap-tools/templates/expo-app-standalone` into the working directory with `degit` and run `npm install`.
+- If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
 - If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `pa-wrap-tools-1` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
 
-Do not initialize app identity yet. Step 2c is the last zero-side-effect exit,
-so `app.json` must remain byte-identical until the user chooses `proceed`.
+After the fresh-template gate succeeds, or after the user confirms a resume, initialize the app identity before continuing:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/app-identity.js" "<working_dir>"
+```
+
+`app-identity.js` mints `app.json` `expo.extra.telemetry.appInstanceId` — a random per-project ID that lets usage telemetry tell this app apart from other apps built in the same session, and recognize it again in later sessions. It is idempotent, so a resume or re-run keeps the original ID. It contains no app name, path, or environment data. Commit it: it is the app's identity, not a per-machine cache.
 
 ### Step 1 — Prerequisites
 
@@ -112,7 +117,7 @@ az account show --query "user.name" -o tsv          # Azure CLI logged in (neede
 git --version                                       # optional
 ```
 
-**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${CLAUDE_SKILL_DIR}/../../shared/version-check.md) — only the **Always required** tier matters here.
+**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
 
 | Missing | Action |
 |---|---|
@@ -139,7 +144,8 @@ if [ -z "$TARGET_ENV" ] && [ -f power.config.json ]; then
   TARGET_ENV=$(node -e "try { const id=require('./power.config.json').environmentId || ''; console.log(id); } catch { console.log(''); }")
 fi
 test -n "$TARGET_ENV" || { echo "✗ Environment missing. Provide an environment ID."; exit 2; }
-ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$TARGET_ENV" --no-cache)
+ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$TARGET_ENV")
+printf '%s\n' "$ENV_JSON" > .resolved-environment.json
 ACTIVE_ENV_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentId || '')" "$ENV_JSON")
 ACTIVE_ENV_NAME=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.displayName || j.environmentUrl || '')" "$ENV_JSON")
 ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$ENV_JSON")
@@ -167,7 +173,7 @@ execute the block below. Connector-only runs set
 
 ```bash
 PUBLISHER_PREFIX_STARTED_MS=$(node -e 'process.stdout.write(String(Date.now()))')
-PUBLISHER_PREFIX_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/detect-publisher-prefix.js" \
+PUBLISHER_PREFIX_JSON=$(node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" \
   "$ACTIVE_ENV_URL" --tenant-id "$ACTIVE_TENANT_ID")
 PUBLISHER_PREFIX_DURATION_MS=$(node -e \
   'process.stdout.write(String(Math.max(0, Date.now() - Number(process.argv[1]))))' \
@@ -175,9 +181,8 @@ PUBLISHER_PREFIX_DURATION_MS=$(node -e \
 echo "$PUBLISHER_PREFIX_JSON"
 ```
 
-Keep `PUBLISHER_PREFIX_DURATION_MS` in memory only. Step 2c is still the last
-zero-side-effect exit; persist this measurement only after `proceed` creates the
-Step 3 `.tmp` directory.
+Keep `PUBLISHER_PREFIX_DURATION_MS` in memory until the Step 3 timing artifact
+directory exists.
 
 Output is one line of JSON, e.g.:
 
@@ -279,7 +284,7 @@ Print the chosen tier so the user knows which path is running:
 
 #### Step 2b.1 — Walk-through path (only when tier = `walk-through`)
 
-Read [`references/requirements-discovery.md`](${CLAUDE_SKILL_DIR}/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
+Read [`references/requirements-discovery.md`](${PLUGIN_ROOT}/skills/create-mobile-app/references/requirements-discovery.md). Infer context-aware options from the user's description, ask exactly one structured `AskUserQuestion`, and never use markdown checkboxes in the question text.
 
 Wait for the user's response. Summarize their answers into a **requirements brief** — 4–8 bullet points covering what users can do, what data is tracked, and integrations.
 
@@ -405,20 +410,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 
 | User answer | Action |
 |---|---|
-| `proceed` (or empty / Enter) | Initialize app identity, then continue to Step 3. Default. |
+| `proceed` (or empty / Enter) | Continue to Step 3. Default. |
 | `edit` | Jump back to Step 2b. Re-confirm the brief with the user's changes. After 2b re-confirms, return here for a fresh preview. **No working dir mutations** — Step 2c runs before `mkdir -p <working_dir>` in Step 3. |
 | `abort` | Print `"Aborted at Step 2c. No files created. Re-run /create-mobile-app when ready."` and exit cleanly. No working dir, no memory bank, no scaffold. |
-
-After `proceed`, and only after `proceed`, initialize the app identity:
-
-```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/lib/app-identity.js" "<working_dir>"
-```
-
-`app-identity.js` mints `app.json`
-`expo.extra.telemetry.appInstanceId`. It is idempotent and contains no app
-name, path, environment data, or credential. An `edit` or `abort` response
-must not run this command.
 
 **Why "always show" is correct in v0** (do not skip without explicit user request):
 - Cost when user proceeds: ~30s (read + decide). Token cost ~500/run = ~$0.008.
@@ -453,7 +447,7 @@ First, create the working and planning-artifact directories:
 mkdir -p <working_dir> <working_dir>/.tmp
 PLANNING_TIMINGS_PATH="<working_dir>/.tmp/mobile-planning-timings.json"
 if [ -n "${PUBLISHER_PREFIX_DURATION_MS:-}" ]; then
-  node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+  node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
     --project-root "<working_dir>" --stage publisherPrefixDetection \
     --action record --duration-ms "$PUBLISHER_PREFIX_DURATION_MS"
 fi
@@ -483,16 +477,16 @@ Planning stays read-only. Branch on `<dataverse_planning_mode>`:
   nested planner or architect rediscover the tenant.
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage environmentResolution --action start
-PLANNING_ENV_JSON=$(node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache)
+PLANNING_ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache)
 ACTIVE_ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentUrl || '')" "$PLANNING_ENV_JSON")
 ACTIVE_TENANT_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.tenantId || '')" "$PLANNING_ENV_JSON")
 test -n "$ACTIVE_ENV_URL" -a -n "$ACTIVE_TENANT_ID" || {
   echo "✗ Foreground planning snapshot requires a resolved Dataverse URL and tenant."; exit 2;
 }
 echo "✓ Planning environment resolved: $ACTIVE_ENV_URL (tenant $ACTIVE_TENANT_ID)"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage environmentResolution --action finish
 ```
 
@@ -536,7 +530,7 @@ ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
 PLANNING_TELEMETRY_PATH="<working_dir>/.tmp/dataverse-planning-telemetry.json"
 INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --output "$SNAPSHOT_PATH" \
@@ -550,12 +544,12 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage artifactValidation --action start
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH"
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --stage artifactValidation --action finish
 
 node -e '
@@ -660,7 +654,7 @@ Prompt:
   Original prompt: <full $ARGUMENTS verbatim>
   Wizard answers: <Step 2 answers>
   Working directory: <absolute path of <working_dir>>
-  Plugin root: ${CLAUDE_SKILL_DIR}/../../
+  Plugin root: ${PLUGIN_ROOT}
   Dataverse planning mode: <required | connector-only>
   Dataverse planning failure reason: none
   Normalized Dataverse foreground planning snapshot: <absolute SNAPSHOT_PATH verbatim for required; otherwise NOT SUPPLIED>
@@ -717,7 +711,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
 3. **Run the gates yourself** — use `EnterPlanMode` four times (data model → native caps + connectors merged → screen graph 4a → screen specs 4b). Same gate prompts as the planner agent would use. Gate 4 is a markdown screen-graph review only — design picking happens unconditionally at Step 6.75 via `/design-system` (no separate style-picker handoff at Gate 4 even in inline mode).
 4. **Write the final approved `native-app-plan.md`** with an `## Approvals` block at the bottom listing each gate, who approved (user), and a timestamp.
 
-   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md) Step 4):**
+   **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 4):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
    - `## App Requirements` is the user's confirmed brief verbatim (the `<requirements_brief>` from Step 2b), capped at ~80 lines. No expansion, no rewriting, no embedded preview of the data model.
    - Discovery failure notes (e.g. `az login` on the wrong tenant, 401 from `dataverse-request.js`, all entities classified Create) go to `<working_dir>/memory-bank.md` under `## Discovery Notes`, NOT into the plan. Keep at most a single one-line breadcrumb in `## Data Model` like `> Discovery skipped — see memory-bank.md.` if relevant.
@@ -740,7 +734,7 @@ If the orchestrator's OWN `Task` tool is unavailable (rare — would mean even l
 
 #### 3.0 — Sub-agent return-status switch (canonical)
 
-Use the plugin-wide protocol in [`AGENTS.md`](${CLAUDE_SKILL_DIR}/../../AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
+Use the plugin-wide protocol in [`AGENTS.md`](${PLUGIN_ROOT}/AGENTS.md) rule #10 for every `Task` return in this skill: planner, parallel screen-builders, and future agent spawns. Parse the literal first line and branch: `DONE` continues; `DONE_WITH_CONCERNS:` surfaces + records in `memory-bank.md`; `NEEDS_CONTEXT:` re-dispatches with missing context, capped at 2 retries; `BLOCKED:` stops and records under `## Blocks`. Unknown first lines are malformed and must be treated as `BLOCKED`.
 
 **Data-model exact-name expansion:** when the planner or direct architect
 returns exactly
@@ -753,7 +747,7 @@ inventory, issue at most one exact-name metadata query for requested names
 absent from it, and do not run another broad inventory query:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
@@ -764,7 +758,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH"
 
@@ -792,7 +786,7 @@ those names. This signal is valid only in `required` mode with a validated
 snapshot. Perform one collision-only foreground expansion:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --base-snapshot "$SNAPSHOT_PATH" \
@@ -803,7 +797,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --telemetry-output "$PLANNING_TELEMETRY_PATH" \
   --planning-timings-output "$PLANNING_TIMINGS_PATH"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/render-dataverse-architect-evidence.js" \
+node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "$SNAPSHOT_PATH" \
   --output "$ARCHITECT_EVIDENCE_PATH"
 ```
@@ -942,10 +936,10 @@ both approved artifacts:
 ```bash
 test -f "$WORKING_DIR/native-app-plan.md"
 test -f "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --output "$WORKING_DIR/.tmp/dataverse-schema-contract.json"
-node "${CLAUDE_SKILL_DIR}/../../scripts/validate-dataverse-planning-decisions.js" \
+node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
   --contract "$WORKING_DIR/.tmp/dataverse-schema-contract.json" \
   --snapshot "$SNAPSHOT_PATH"
 ```
@@ -964,7 +958,7 @@ is missing or malformed.
 ### Step 4 — Auth & environment selection
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID"
 ```
 
 If the resolved environment doesn't match what the planner used in Step 3, ask the user for the intended environment ID and re-run `resolve-environment.js`. Capture the **environment ID** for Step 6.
@@ -1095,17 +1089,17 @@ mkdir -p "<working_dir>/src/hooks"
 mkdir -p "<working_dir>/src/utils"
 mkdir -p "<working_dir>/src/tokens"
 
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/components/index.tsx" "<working_dir>/src/components/index.tsx"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/index.ts" "<working_dir>/src/hooks/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useCursorListData.ts" "<working_dir>/src/hooks/useCursorListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useListData.ts" "<working_dir>/src/hooks/useListData.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/hooks/useSearchFilter.ts" "<working_dir>/src/hooks/useSearchFilter.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/index.ts" "<working_dir>/src/utils/index.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/formatters.ts" "<working_dir>/src/utils/formatters.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/text.ts" "<working_dir>/src/utils/text.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/choices.ts" "<working_dir>/src/utils/choices.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/utils/dataverse.ts" "<working_dir>/src/utils/dataverse.ts"
-cp "${CLAUDE_SKILL_DIR}/../../shared/samples/src/tokens/index.ts" "<working_dir>/src/tokens/index.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/components/index.tsx" "<working_dir>/src/components/index.tsx"
+cp "${PLUGIN_ROOT}/shared/samples/src/hooks/index.ts" "<working_dir>/src/hooks/index.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/hooks/useCursorListData.ts" "<working_dir>/src/hooks/useCursorListData.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/hooks/useListData.ts" "<working_dir>/src/hooks/useListData.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/hooks/useSearchFilter.ts" "<working_dir>/src/hooks/useSearchFilter.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/utils/index.ts" "<working_dir>/src/utils/index.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/utils/formatters.ts" "<working_dir>/src/utils/formatters.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/utils/text.ts" "<working_dir>/src/utils/text.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/utils/choices.ts" "<working_dir>/src/utils/choices.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/utils/dataverse.ts" "<working_dir>/src/utils/dataverse.ts"
+cp "${PLUGIN_ROOT}/shared/samples/src/tokens/index.ts" "<working_dir>/src/tokens/index.ts"
 ```
 
 **Fix 8 — Thread the project's `tamaguiConfig` into the host provider** (required so screens render under brand tokens, not upstream defaults)
@@ -1294,7 +1288,7 @@ This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capt
 ### Step 6.7 — Seed the memory bank
 
 ```bash
-cp "${CLAUDE_SKILL_DIR}/../../shared/memory-bank.md" "<working_dir>/memory-bank.md"
+cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
@@ -1524,20 +1518,20 @@ test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
   -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
   -a -f "<working_dir>/native-app-plan.md"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --plan "<working_dir>/native-app-plan.md" \
   --output "$SCHEMA_CONTRACT"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --reconciliation-scope "$SCHEMA_CONTRACT" \
   --output "$RECONCILIATION_SCOPE"
 
 EXACT_TABLES=$(node -e "console.log(require(process.argv[1]).exactTables.join(','))" "$RECONCILIATION_SCOPE")
 PROPOSED_TABLES=$(node -e "console.log(require(process.argv[1]).proposedTables.join(','))" "$RECONCILIATION_SCOPE")
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
+node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
   --solution "$ACTIVE_SOLUTION_UNIQUE_NAME" \
@@ -1546,7 +1540,7 @@ node "${CLAUDE_SKILL_DIR}/../../scripts/create-dataverse-snapshot.js" \
   --reconcile-exact \
   --output "$EXECUTION_RECONCILIATION"
 
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
@@ -1567,7 +1561,7 @@ conflict and returns to the orchestrator; do not add another opportunistic read
 loop or fall back to agent reconciliation. No operation may execute until:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/build-dataverse-operation-manifest.js" \
+node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --validate "$OPERATION_MANIFEST" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
@@ -1715,7 +1709,7 @@ If the plan says "None — this app uses only standard React Native components a
 
 ### Step 9a — Install approved pure-JavaScript dependencies
 
-Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
+Read and execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for every approved row in `## Screens → ### JavaScript Dependencies`. If the subsection is absent or says `None.`, continue without changing dependencies.
 
 Gate 4b approval is consent for exactly the packages and versions in the table. Install them into `<working_dir>` before any skeleton or builder imports them, validate `package.json` and the lockfile, and verify module resolution. Do not substitute another package/version, infer a package from a compiler error, or route a JS-only package through `/add-native`. If final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and STOP with the exact failed criterion.
 
@@ -1723,7 +1717,7 @@ Gate 4b approval is consent for exactly the packages and versions in the table. 
 
 `/design-system` owns user-facing brand/design choices. This step owns the internal Tamagui integration that makes those choices usable by generated screens. Even if the user accepts the default design path, run the alias-only integration so screens can rely on the semantic token contract.
 
-Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${CLAUDE_SKILL_DIR}/../../shared/references/design-planning.md):
+Read the `## Design` section from `native-app-plan.md` and follow the execution mapping in [`shared/references/design-planning.md`](${PLUGIN_ROOT}/shared/references/design-planning.md):
 
 | Condition | Action |
 |---|---|
@@ -2304,7 +2298,7 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 Then run the canonical route-contract gate from the app root:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/check-routes.js"
+node "${PLUGIN_ROOT}/scripts/check-routes.js"
 ```
 
 This gate is required even when TypeScript passes. It detects duplicate normalized routes, `[id].tsx` plus `[id]/<child>.tsx` file/folder collisions, and sender/destination parameter drift. If it fails, repair the affected route files or re-spawn their screen builders with the consolidated findings, then rerun once. Do not continue to Step 11.4 or start Metro while route findings remain.
@@ -2334,8 +2328,8 @@ Run one controlled stylistic debt sweep after all screen-builder waves and TypeS
 **Available validators in v0:**
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
-node "${CLAUDE_SKILL_DIR}/../../hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <screen-files-or-app-dir>
+node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <screen-files-or-app-dir>
 ```
 
 `validate-screen-quality` includes accessibility-label/role, safe-area, touch-target, raw-hex, token, empty-state, shadow, and status-visual checks. If future stylistic hooks exist (for example `validate-accessibility-labels.js`), include them here only if they support `--report` and emit the same JSON issue shape.
@@ -2472,7 +2466,7 @@ Print a compact status block, then present exactly 4 options with no explanation
 First run the deterministic timing summary:
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/../../scripts/planning-timings.js" \
+node "${PLUGIN_ROOT}/scripts/planning-timings.js" \
   --project-root "<working_dir>" --summary
 ```
 
@@ -2534,6 +2528,6 @@ Which option? (or "none — I'll keep iterating locally")
 
 ## Reference
 
-- [shared/shared-instructions.md](${CLAUDE_SKILL_DIR}/../../shared/shared-instructions.md)
-- [shared/references/screen-templates.md](${CLAUDE_SKILL_DIR}/../../shared/references/screen-templates.md)
-- [agents/native-app-planner.md](${CLAUDE_SKILL_DIR}/../../agents/native-app-planner.md)
+- [shared/shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)
+- [shared/references/screen-templates.md](${PLUGIN_ROOT}/shared/references/screen-templates.md)
+- [agents/native-app-planner.md](${PLUGIN_ROOT}/agents/native-app-planner.md)

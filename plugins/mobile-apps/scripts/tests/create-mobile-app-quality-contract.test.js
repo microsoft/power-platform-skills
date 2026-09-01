@@ -11,16 +11,7 @@ const skillPath = path.resolve(
 );
 const skill = fs.readFileSync(skillPath, 'utf8');
 
-test('environment discovery is non-persisting before the rough plan gate', () => {
-  const previewIndex = skill.indexOf('### Step 2c — Plan preview');
-  const beforePreview = skill.slice(0, previewIndex);
-  assert.match(
-    beforePreview,
-    /resolve-environment\.js" "\$TARGET_ENV" --no-cache/,
-  );
-  assert.doesNotMatch(beforePreview, /printf '%s\\n' "\$ENV_JSON" > \.resolved-environment\.json/);
-  assert.doesNotMatch(beforePreview, /scripts\/lib\/app-identity\.js/);
-
+test('foreground Dataverse planning bypasses cached environment resolution', () => {
   const planningStart = skill.indexOf('### Step 3.0 — Foreground Dataverse planning');
   const planningEnd = skill.indexOf(
     'Build `<working_dir>/.tmp/dataverse-concepts.json`',
