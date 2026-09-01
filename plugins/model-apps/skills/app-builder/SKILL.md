@@ -73,8 +73,9 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   export, and needs no web resource. Use form JS when the logic needs a real API call, cross-record
   work, or anything beyond the four supported actions.
 - **Guided processes** — `businessProcessFlows[]`: the staged bar across the top of a record
-  (ordered stages, each with steps bound to that table's columns; a step with no field is a
-  checklist item). Reach for one when the user describes work moving through **phases** — "triage →
+  (ordered stages, each with steps bound to that table's columns — **every step must bind a `field`**;
+  the platform rejects one without, so use a Boolean flag for a manual check-off). Reach for one when
+  the user describes work moving through **phases** — "triage →
   investigate → resolve", "lead → qualify → close". Author it `Active` (the default) or the stage bar
   does not appear at all. v1 is single-entity and linear: cross-entity stages, branching, stage
   actions and security-role grants are **rejected** by the spec gate, so offer Maker for those rather

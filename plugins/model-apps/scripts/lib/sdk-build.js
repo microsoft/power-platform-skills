@@ -533,13 +533,13 @@ async function resolveExistingFormId(provision, def) {
     const row = rows && rows[0];
     // A pinned id names an EXISTING form to reconcile. If it's ABSENT this is a stale/wrong pin, NOT a
     // create trigger — returning null would drop to the create path and mint a NEW form on EVERY rerun
-    // (the pin stays in the spec), silently accumulating duplicate forms (Sol review). Fail loud instead.
+    // (the pin stays in the spec), silently accumulating duplicate forms. Fail loud instead.
     if (!row) throw new Error(`form "${def.name}": pinned formId ${def.formId} does not exist on this environment — remove the pin to create a new form, or correct the id`);
     // The pin must point at the SAME (table, type, name) the spec intends. reconcileForm blindly pushes the
     // spec layout onto whatever id it gets, so a wrong pin (a Quick View id under formType:"Main", a form on
     // another table, or an unrelated form) would CORRUPT that form. The pin's only legitimate use — two
     // forms with identical (entity, type, name) — matches all three, so validating all three never rejects
-    // a valid pin, only a mistaken one (Opus + Sol review).
+    // a valid pin, only a mistaken one.
     const wantType = FORM_TYPE_CODE[def.formType || 'Main'];
     if (String(row.objecttypecode).toLowerCase() !== String(def.entityLogicalName).toLowerCase()) {
       throw new Error(`form "${def.name}": formId ${def.formId} belongs to table '${row.objecttypecode}', not '${def.entityLogicalName}'`);
@@ -627,7 +627,7 @@ function chartDef(spec, ch) {  const entityLogical = ch.entity.toLowerCase();
 // `spec.app.uniqueName` — return it VERBATIM so the build's existing-app lookup (findArtifact) AND teardown
 // resolve the SAME deployed app even after a display-name RENAME. A Dataverse appmodule uniquename never
 // changes once created, so deriving it from the MUTABLE display name would miss the existing app on a
-// rebuild and CREATE A DUPLICATE (Sol review). An AUTHORED create-fresh spec has no `app.uniqueName`, so
+// rebuild and CREATE A DUPLICATE. An AUTHORED create-fresh spec has no `app.uniqueName`, so
 // derive it deterministically from the publisher prefix + display name — the exact rule the builder creates
 // with. Shared with the teardown engine so both agree on the identity.
 function appUniqueName(spec) {
@@ -952,7 +952,7 @@ function businessRuleDef(rule) {
     scope: rule.scope || 'Entity',
     // Omitted when the spec has none, so a rebuild never blanks one added in the maker.
     ...(rule.description ? { description: rule.description } : {}),
-    // Draft unless the author asks for Active. A rule is inert until activated, so defaulting to
+    // Active unless the author asks for Draft. A rule is inert until activated, so defaulting to
     // Active is what makes `businessRules[]` do something on the first build.
     status: rule.status || 'Active',
     rootCondition: {
@@ -1787,7 +1787,7 @@ async function runSdkBuild(spec, opts = {}) {
     const formIdByEntityName = {};
     // Only QuickView forms are quick-view targets. Keying ALL forms by (entity, name) let a same-named
     // Main form on the SAME entity OVERWRITE the QuickView entry (order-dependent), embedding the wrong
-    // form id — so key QuickView forms only (Sol review).
+    // form id — so key QuickView forms only.
     defs.forEach((d, i) => { if (d.f.name && (d.f.formType || 'Main') === 'QuickView') formIdByEntityName[`${String(d.f.entity).toLowerCase()}|${d.f.name}`] = ids[i]; });
     for (let i = 0; i < defs.length; i++) {
       const f = defs[i].f;
@@ -1799,7 +1799,7 @@ async function runSdkBuild(spec, opts = {}) {
         let changed = false;
         for (const qv of qvs) {
           // A quick-view embeds a QuickView form OF THE TARGET ENTITY — key by (targetEntity, name), not a
-          // global name, so two entities with same-named QuickView forms don't cross-wire (Sol review).
+          // global name, so two entities with same-named QuickView forms don't cross-wire.
           const qvFormId = formIdByEntityName[`${String(qv.targetEntity).toLowerCase()}|${qv.form}`];
           if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();

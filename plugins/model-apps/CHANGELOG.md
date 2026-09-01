@@ -5,86 +5,67 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.5.1
+## [Unreleased] — 2.6.0
 
-SDK uptake. Adds per-form security roles and three column capabilities; **business rules now require
-an environment that supports them**.
+SDK uptake, plus two new authoring surfaces: business process flows and per-form security roles.
+**Business rules now require an environment that supports them.**
 
 ### Changed
 
 - **Business rules are environment-gated.** The SDK writes a rule only through the bound
-  `CreateProcessWithWfomJson` member; the workflow-XAML fallback was removed upstream because it
-  silently narrowed a rule into something you did not write. An environment that does not declare
-  that member **cannot host business rules at all** — the common case, not an edge case. Such rules
-  are **skipped** with a warning; everything else builds normally, and `--verify` reports them as
-  *not applicable on this environment* rather than failing the build.
+  `CreateProcessWithWfomJson` member, and an environment that does not declare it **cannot host
+  business rules at all** — the common case, not an edge case. Such rules are skipped with a warning;
+  everything else builds, and `--verify` reports them as *not applicable on this environment*.
 
 ### Added
 
-- **`businessProcessFlows[]` — guided, staged processes on a table.** Author the stage bar users work
-  through: ordered stages, each with steps bound to that table's columns. **Every step must bind a
-  field** — the platform refuses one without (`datafieldname of ControlStep cannot be null or empty`),
-  so bind a Boolean flag for a manual check-off. Deployed as a category-4 flow and activated on
-  create, because an inactive flow is invisible rather than merely inert. A flow name must be unique
-  across the whole spec (Dataverse derives the stored name from it, ignoring the table), every stage
-  needs at least one step or the platform invents one for you, and the SDK's 30-stage / 30-step
-  ceilings are enforced up front. Additive on rebuild, torn down with the app (including the backing
-  table activation creates), and a new `business-process-flows` build phase (16 now). v1 is
-  single-entity and linear — cross-entity stages, branching, stage actions and security-role grants
-  ([#513]) are rejected rather than silently dropped, so a flow never deploys as something other than
-  what you wrote. Unlike `businessRules[]`, a BPF goes through the SDK's generic artifact surface, so
-  it is **not** subject to the bound-member environment gate above.
+- **`businessProcessFlows[]` — guided, staged processes on a table.** Ordered stages with steps bound
+  to that table's columns, activated on create (an inactive flow is invisible, not merely inert).
+  Every step must bind a `field`; the platform refuses one without. v1 is single-entity and linear —
+  branching, stage actions and role grants ([#513]) are rejected rather than silently dropped.
 - **Per-form security roles** — `forms[].securityRoles`: offer a form to named `personas[]` or to
-  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form;
-  undo with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
+  `everyone`. A form with no assignment is visible to **every** role, so this *restricts* a form; undo
+  with `everyone: true`, not by deleting the block. Takes effect after a publish. (AB#6648526)
 - **Boolean `defaultValue`, whole-number `integerFormat`, and per-column `isValidForCreate` /
-  `isValidForUpdate` / `isValidForRead`** — the last of these is how you make a column read-only.
+  `isValidForUpdate` / `isValidForRead`** — the last is how you make a column read-only.
   ([#495], AB#6648523, AB#6648522, AB#6651276)
 - **Twelve more business-rule operators** and **multi-condition rules** (ANDed). Spelling matters:
-  `IsGreaterThan`, not `GreaterThan` — the SDK resolves an unknown operator to `Equals`, so the spec
-  rejects anything outside its table and suggests the right spelling.
-- **A `description` on every artifact that accepts one.** Written at create time and omitted when
+  `IsGreaterThan`, not `GreaterThan` — the SDK silently resolves an unknown operator to `Equals`, so
+  the spec rejects anything outside its table.
+- **A `description` on every artifact that accepts one**, written at create time and omitted when
   absent, so a rebuild never blanks text typed in the maker.
-- **Per-field form control** — `readOnly`, `hidden` and `after` (reposition), via a form-level
-  `fieldOptions` map or inline on an explicit layout. `prune: false` edits a subset of a form without
-  re-declaring every field, and only the enabled state is written, so a designer edit survives.
+- **Per-field form control** — `readOnly`, `hidden` and `after`, via a form-level `fieldOptions` map
+  or inline on an explicit layout. `prune: false` edits part of a form without re-declaring it.
 - **The AI form-fill family is controllable per capability** — assist toolbar, edit-form predictions,
   smart paste and file upload, instead of one flag that only governed the toolbar.
 
 ### Fixed
 
-- **A `businessRules[]`-only edit is no longer treated as "nothing changed."** The spec diff that
-  drives `--changed-only` had no entry for the business-rules phase, so an edit to a rule classified
-  as a **no-op** and the run did nothing at all. Both it and the new business-process-flows phase now
-  diff correctly and force a full build, recording the edit as debt because the additive engine does
-  not reapply changes to a rule or flow that already exists.
-- **Dashboards survive a download again** — the SDK could not deserialize a dashboard it had
-  serialized, so no tiles were recovered and the download failed without `--allow-lossy-download`.
-  ([#478])
+- **A `businessRules[]`-only edit is no longer treated as "nothing changed."** The diff driving
+  `--changed-only` had no entry for that phase, so the run did nothing at all. ([#478] fixed
+  alongside: the SDK could not deserialize a dashboard it had serialized, so downloads lost tiles.)
 - **Descriptions converge on existing views and charts** — previously written only at create, so the
-  platform's auto-created *"Active &lt;Plural&gt;"* view never got one. ([#496])
-- **Downloaded specs preserve deployed descriptions** where the artifact is reconstructed, and list
-  the rest in a read-only inventory. ([#494])
-- **Teardown removes the activated copy of a business rule**, which previously stranded an
-  undeletable row. ([#493])
-- **Existing columns honour an explicit `required` change on rebuild**; an omitted `required` still
-  leaves the live column alone.
-- **Big Integer columns are no longer placed on auto-generated forms** — Big Integer has no Unified
-  Interface control, so the field rendered *"Error loading control"* on every record.
+  auto-created *"Active &lt;Plural&gt;"* view never got one. ([#496])
+- **Downloaded specs preserve deployed descriptions**, listing the rest in a read-only inventory. ([#494])
+- **Teardown removes the activated copy of a business rule**, previously stranding an undeletable
+  row ([#493]), and clears column visualizations for a table the spec keeps (`existing: true`).
+- **Existing columns honour an explicit `required` change on rebuild**; an omitted one still leaves
+  the live column alone.
+- **Big Integer columns are no longer auto-placed on forms** — they have no Unified Interface control
+  and rendered *"Error loading control"* on every record.
 - **AI on/off is read with the platform's semantics** — `0` = platform default, `1` = disabled,
   `2` = enabled. Treating any non-zero value as "on" reported a disabled feature as enabled.
 - **Presence operators** (`ContainsData` / `DoesNotContainData`) deploy; the compiler bug behind the
-  `HTTP 500 — Error generating UiData` failures is gone with the compiler. ([#481])
+  `HTTP 500 — Error generating UiData` failures went with the compiler. ([#481])
 - **The async-surface guard is AST-based** — a regex could not decide the remaining cases. ([#475])
 - **`ai.summaries.default: "off"` no longer discards a per-table `enabled: true`**, and a
   differently-cased `tables[]` key keeps its `instruction` and `columns`.
-- **A row summary an environment cannot license is skipped, not fatal** — and the AI model row the
-  refused publish leaves behind is swept, so a rebuild does not then fail on a duplicate key.
+- **A row summary an environment cannot license is skipped, not fatal** — and the model row the
+  refused publish leaves behind is swept, so a rebuild does not fail on a duplicate key.
 - **A spec with no `appShell` reports what to add** instead of dying with
-  `Cannot read properties of undefined (reading 'areas')` after the app was already half-created.
+  `Cannot read properties of undefined (reading 'areas')` after the app was half-created.
 - **A malformed `businessRules` is a validation error**, not a raw `TypeError`; duplicate-cleanup
   warnings report the real failure instead of asserting a wedged platform row.
-- **Column visualizations are cleared on teardown for a table the spec keeps** (`existing: true`).
 
 [#475]: https://github.com/microsoft/power-platform-skills/issues/475
 [#478]: https://github.com/microsoft/power-platform-skills/issues/478

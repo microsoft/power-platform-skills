@@ -716,8 +716,7 @@ custom control), but the spec validator emits a warning.
 ## businessProcessFlows[] (optional — guided, staged process on a table)
 
 A BPF is the stage bar across the top of a record: an ordered set of stages, each with steps the user
-works through. See
-[Create a business process flow](https://learn.microsoft.com/en-us/power-automate/create-business-process-flow).
+works through.
 
 ```jsonc
 { "entity": "new_ticket", "name": "Ticket Handling",

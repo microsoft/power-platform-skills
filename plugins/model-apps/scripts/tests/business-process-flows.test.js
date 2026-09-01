@@ -168,6 +168,24 @@ test('a step that binds no field is rejected — the platform requires a datafie
   assert.deepStrictEqual(errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'Call the customer', field: 'new_owner' }] }] }]), []);
 });
 
+test('a BLANK or null field is the same defect as a missing one, and says so', () => {
+  // Treating only `undefined` as missing let these fall through to the column check, which reported
+  // `references ''` — or `references 'null'` from stringifying the value — instead of the actionable
+  // message. Same defect, same guidance.
+  for (const bad of ['', '   ', null]) {
+    const errs = errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'X', field: bad }] }] }]);
+    assert.ok(
+      errs.some((e) => /binds no field/.test(e)),
+      `field ${JSON.stringify(bad)} must report "binds no field"; got ${JSON.stringify(errs)}`,
+    );
+    assert.ok(!errs.some((e) => /references '/.test(e)), `field ${JSON.stringify(bad)} must not report a bogus column reference`);
+  }
+  // A real column name that simply does not exist STILL reports the column error — the blank check
+  // must not swallow that case.
+  assert.ok(errorsFor([{ ...FLOW, stages: [{ name: 'A', steps: [{ name: 'X', field: 'new_nope' }] }] }])
+    .some((e) => /references 'new_nope'/.test(e)));
+});
+
 test('status and order are constrained', () => {
   assert.ok(errorsFor([{ ...FLOW, status: 'Published' }]).some((e) => /status must be Active\|Draft/.test(e)));
   assert.ok(errorsFor([{ ...FLOW, order: 0 }]).some((e) => /order must be a positive integer/.test(e)));

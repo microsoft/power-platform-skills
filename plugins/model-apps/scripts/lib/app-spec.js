@@ -1093,7 +1093,7 @@ function validateAppSpec(spec, opts = {}) {
       if (!qv.targetEntity || !entityByLower.has(String(qv.targetEntity).toLowerCase())) errors.push(`form ${f.entity}: quickView references unknown targetEntity '${qv.targetEntity}'`);
       if (!qv.form) { errors.push(`form ${f.entity}: quickView is missing form (the name of a QuickView form in forms[])`); continue; }
       // Resolve by (name, targetEntity) AND prefer the QuickView — a same-named Main on the target entity
-      // must not shadow the intended QuickView (order-dependent otherwise; Sol review). The build keys the
+      // must not shadow the intended QuickView (order-dependent otherwise). The build keys the
       // quick-view lookup by (entity, QuickView, name) too.
       const qvCandidates = (spec.forms || []).filter((x) => x.name === qv.form && String(x.entity).toLowerCase() === String(qv.targetEntity || '').toLowerCase());
       const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
@@ -1134,7 +1134,7 @@ function validateAppSpec(spec, opts = {}) {
   }
   // Two QuickView forms sharing (entity, name) make a quick-view reference — which resolves a QuickView by
   // (targetEntity, name) — ambiguous (the build map keeps only one, order-dependently). Reject the
-  // ambiguity at author time (Sol review). Main/Card share the "Information" name harmlessly (they're not
+  // ambiguity at author time. Main/Card share the "Information" name harmlessly (they're not
   // quick-view targets), so this is scoped to QuickView.
   const qvIdentity = new Set();
   for (const f of spec.forms || []) {
@@ -1404,7 +1404,13 @@ function validateAppSpec(spec, opts = {}) {
         // shape here meant the build HALTED after the solution, table, columns, views and forms were
         // already created — the author got a half-built app and a platform error naming an internal
         // XAML element they never wrote. So it is rejected up front, where it is actionable.
-        if (step.field === undefined) {
+        //
+        // `null` and a blank/whitespace string are the SAME defect as `undefined` and must give the
+        // same message. Treating only `undefined` as missing let them fall through to the column
+        // check, which reported `references ''` — or, worse, `references 'null'` from stringifying
+        // the value — instead of saying what was actually wrong.
+        const fieldGiven = step.field !== undefined && step.field !== null && String(step.field).trim() !== '';
+        if (!fieldGiven) {
           errors.push(`${label}: stage '${st.name}' step '${step.name}' binds no field — every step must set 'field' (the platform rejects a step with no column: "datafieldname of ControlStep cannot be null or empty"). For a manual check-off, bind a Boolean column such as a "Confirmed" flag.`);
         } else if (cols.size && !cols.has(String(step.field).toLowerCase())) {
           errors.push(`${label}: stage '${st.name}' step '${step.name}' references '${step.field}', which is not a column on ${p.entity}`);
